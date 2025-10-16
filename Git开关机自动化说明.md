@@ -36,13 +36,21 @@
 manage_git_tasks.bat
 ```
 
-管理工具提供以下功能：
-1. 设置关机提交 + 开机拉取任务
-2. 删除所有Git任务
-3. 手动执行关机提交
-4. 手动执行开机拉取
-5. 查看任务状态
-6. 测试脚本功能
+**首次使用流程：**
+1. 运行管理工具后，首先需要设置Git路径
+2. 选择选项1，输入你的Git仓库完整路径
+3. 系统会自动验证路径是否为有效的Git仓库
+4. 验证通过后，可以选择其他功能
+
+**管理工具功能：**
+1. 设置Git路径（首次使用必需）
+2. 设置关机提交 + 开机拉取任务
+3. 删除所有Git任务
+4. 手动执行关机提交
+5. 手动执行开机拉取
+6. 查看任务状态
+7. 测试脚本功能
+8. 重新设置Git路径
 
 ### 方法2：手动设置
 
@@ -61,22 +69,38 @@ manage_git_tasks.bat
    .\setup_shutdown_startup_tasks.ps1 -Remove
    ```
 
-### 方法3：手动执行脚本
+### 方法3：测试Git路径
+
+在设置任务之前，可以先测试Git路径是否有效：
+```batch
+test_git_path.bat
+```
+
+### 方法4：手动执行脚本
 
 - **手动执行关机提交**：双击 `shutdown_git_commit.bat`
 - **手动执行开机拉取**：双击 `startup_git_pull.bat`
 
 ## ⚙️ 配置说明
 
-### 修改目标目录
-如果需要修改Git操作的目录，请编辑以下文件中的 `TARGET_DIR` 变量：
+### Git路径设置
+现在支持动态设置Git路径，无需手动修改脚本文件：
 
-1. `shutdown_git_commit.bat` 第12行
-2. `startup_git_pull.bat` 第12行
+1. **通过管理工具设置**（推荐）：
+   - 运行 `manage_git_tasks.bat`
+   - 选择"设置Git路径"选项
+   - 输入完整的Git仓库路径
 
-```batch
-set "TARGET_DIR=D:\frontend\my-journal-planning"
-```
+2. **路径验证**：
+   - 系统会自动验证路径是否存在
+   - 检查是否为有效的Git仓库
+   - 验证Git命令是否可用
+   - 检查仓库状态是否正常
+
+3. **支持的路径格式**：
+   - 绝对路径：`D:\frontend\my-journal-planning`
+   - 带空格的路径：`C:\Users\eason\Documents\my project`
+   - 网络路径：`\\server\share\project`
 
 ### 修改提交信息格式
 可以修改提交信息的格式：

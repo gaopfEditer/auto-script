@@ -1,123 +1,124 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-REM 设置颜色
+REM 璁剧疆棰滆壊
 color 0B
 
-REM 显示标题
+REM 鏄剧ず鏍囬
 echo ========================================
-echo        开机时Git自动拉取脚本
+echo        寮€鏈烘椂Git鑷姩鎷夊彇鑴氭湰
 echo ========================================
 echo.
 
-REM 设置目标目录
+REM 璁剧疆鐩爣鐩綍
 set "TARGET_DIR=D:\frontend\my-journal-planning"
 
-REM 检查目录是否存在
+REM 妫€鏌ョ洰褰曟槸鍚﹀瓨鍦?
 if not exist "%TARGET_DIR%" (
-    echo [错误] 目录不存在: %TARGET_DIR%
-    echo 请检查路径是否正确
+    echo [閿欒] 鐩綍涓嶅瓨鍦? %TARGET_DIR%
+    echo 璇锋鏌ヨ矾寰勬槸鍚︽纭?
     goto :end
 )
 
-REM 切换到目标目录
+REM 鍒囨崲鍒扮洰鏍囩洰褰?
 cd /d "%TARGET_DIR%"
 
-echo [信息] 当前目录: %CD%
-echo [信息] 开始执行Git拉取操作...
+echo [淇℃伅] 褰撳墠鐩綍: %CD%
+echo [淇℃伅] 寮€濮嬫墽琛孏it鎷夊彇鎿嶄綔...
 echo.
 
-REM 检查是否为Git仓库
+REM 妫€鏌ユ槸鍚︿负Git浠撳簱
 if not exist ".git" (
-    echo [错误] 当前目录不是Git仓库
-    echo 请先初始化Git仓库: git init
+    echo [閿欒] 褰撳墠鐩綍涓嶆槸Git浠撳簱
+    echo 璇峰厛鍒濆鍖朑it浠撳簱: git init
     goto :end
 )
 
-REM 获取当前时间
+REM 鑾峰彇褰撳墠鏃堕棿
 for /f "tokens=2 delims==" %%a in ('wmic OS Get localdatetime /value') do set "dt=%%a"
 set "YY=%dt:~2,2%" & set "YYYY=%dt:~0,4%" & set "MM=%dt:~4,2%" & set "DD=%dt:~6,2%"
 set "HH=%dt:~8,2%" & set "Min=%dt:~10,2%" & set "Sec=%dt:~12,2%"
 set "TIMESTAMP=%YYYY%-%MM%-%DD% %HH%:%Min%:%Sec%"
 
-REM 检查远程仓库配置
-echo [步骤1] 检查远程仓库配置...
+REM 妫€鏌ヨ繙绋嬩粨搴撻厤缃?
+echo [姝ラ1] 妫€鏌ヨ繙绋嬩粨搴撻厤缃?..
 git remote -v >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [错误] 未配置远程仓库
-    echo 请先添加远程仓库: git remote add origin <url>
+    echo [閿欒] 鏈厤缃繙绋嬩粨搴?
+    echo 璇峰厛娣诲姞杩滅▼浠撳簱: git remote add origin <url>
     goto :end
 )
-echo [成功] 远程仓库配置正常
+echo [鎴愬姛] 杩滅▼浠撳簱閰嶇疆姝ｅ父
 
-REM 获取远程分支信息
-echo [步骤2] 获取远程分支信息...
+REM 鑾峰彇杩滅▼鍒嗘敮淇℃伅
+echo [姝ラ2] 鑾峰彇杩滅▼鍒嗘敮淇℃伅...
 git fetch origin
 if %errorlevel% neq 0 (
-    echo [错误] 获取远程分支信息失败
-    echo 请检查网络连接和远程仓库地址
+    echo [閿欒] 鑾峰彇杩滅▼鍒嗘敮淇℃伅澶辫触
+    echo 璇锋鏌ョ綉缁滆繛鎺ュ拰杩滅▼浠撳簱鍦板潃
     goto :end
 )
-echo [成功] 远程分支信息获取完成
+echo [鎴愬姛] 杩滅▼鍒嗘敮淇℃伅鑾峰彇瀹屾垚
 
-REM 检查当前分支
-echo [步骤3] 检查当前分支...
+REM 妫€鏌ュ綋鍓嶅垎鏀?
+echo [姝ラ3] 妫€鏌ュ綋鍓嶅垎鏀?..
 for /f "tokens=*" %%i in ('git branch --show-current') do set "CURRENT_BRANCH=%%i"
-echo 当前分支: %CURRENT_BRANCH%
+echo 褰撳墠鍒嗘敮: %CURRENT_BRANCH%
 
-REM 检查是否有未提交的更改
-echo [步骤4] 检查工作区状态...
+REM 妫€鏌ユ槸鍚︽湁鏈彁浜ょ殑鏇存敼
+echo [姝ラ4] 妫€鏌ュ伐浣滃尯鐘舵€?..
 git status --porcelain >nul 2>&1
 if %errorlevel% equ 0 (
     for /f %%i in ('git status --porcelain ^| find /c /v ""') do set "UNCOMMITTED_COUNT=%%i"
     if !UNCOMMITTED_COUNT! gtr 0 (
-        echo [警告] 检测到未提交的更改，正在暂存...
-        git stash push -m "开机前自动暂存 - %TIMESTAMP%"
+        echo [璀﹀憡] 妫€娴嬪埌鏈彁浜ょ殑鏇存敼锛屾鍦ㄦ殏瀛?..
+        git stash push -m "寮€鏈哄墠鑷姩鏆傚瓨 - %TIMESTAMP%"
         if %errorlevel% equ 0 (
-            echo [成功] 未提交的更改已暂存
+            echo [鎴愬姛] 鏈彁浜ょ殑鏇存敼宸叉殏瀛?
         ) else (
-            echo [错误] 暂存失败
+            echo [閿欒] 鏆傚瓨澶辫触
             goto :end
         )
     ) else (
-        echo [信息] 工作区干净，无需暂存
+        echo [淇℃伅] 宸ヤ綔鍖哄共鍑€锛屾棤闇€鏆傚瓨
     )
 )
 
-REM 拉取最新代码
-echo [步骤5] 拉取最新代码...
+REM 鎷夊彇鏈€鏂颁唬鐮?
+echo [姝ラ5] 鎷夊彇鏈€鏂颁唬鐮?..
 git pull origin %CURRENT_BRANCH%
 if %errorlevel% neq 0 (
-    echo [错误] Git pull 失败
-    echo 请检查网络连接和分支状态
+    echo [閿欒] Git pull 澶辫触
+    echo 璇锋鏌ョ綉缁滆繛鎺ュ拰鍒嗘敮鐘舵€?
     goto :end
 )
-echo [成功] 代码拉取完成
+echo [鎴愬姛] 浠ｇ爜鎷夊彇瀹屾垚
 
-REM 恢复暂存的更改（如果有）
+REM 鎭㈠鏆傚瓨鐨勬洿鏀癸紙濡傛灉鏈夛級
 if defined UNCOMMITTED_COUNT if !UNCOMMITTED_COUNT! gtr 0 (
-    echo [步骤6] 恢复暂存的更改...
+    echo [姝ラ6] 鎭㈠鏆傚瓨鐨勬洿鏀?..
     git stash pop
     if %errorlevel% equ 0 (
-        echo [成功] 暂存的更改已恢复
+        echo [鎴愬姛] 鏆傚瓨鐨勬洿鏀瑰凡鎭㈠
     ) else (
-        echo [警告] 恢复暂存更改时出现冲突，请手动处理
+        echo [璀﹀憡] 鎭㈠鏆傚瓨鏇存敼鏃跺嚭鐜板啿绐侊紝璇锋墜鍔ㄥ鐞?
     )
 )
 
-REM 显示最新提交信息
-echo [步骤7] 显示最新提交信息...
-echo 最新提交:
+REM 鏄剧ず鏈€鏂版彁浜や俊鎭?
+echo [姝ラ7] 鏄剧ず鏈€鏂版彁浜や俊鎭?..
+echo 鏈€鏂版彁浜?
 git log --oneline -1
 
 echo.
 echo ========================================
-echo          开机拉取完成！
+echo          寮€鏈烘媺鍙栧畬鎴愶紒
 echo ========================================
-echo 拉取时间: %TIMESTAMP%
-echo 当前分支: %CURRENT_BRANCH%
+echo 鎷夊彇鏃堕棿: %TIMESTAMP%
+echo 褰撳墠鍒嗘敮: %CURRENT_BRANCH%
 echo.
 
 :end
-echo 脚本执行完成
+echo 鑴氭湰鎵ц瀹屾垚
+
