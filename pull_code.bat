@@ -24,12 +24,12 @@ git status --porcelain
 echo.
 
 :: 询问是否继续
-set /p confirm="是否继续拉取代码？(y/n): "
-if /i not "%confirm%"=="y" (
-    echo 操作已取消。
-    pause
-    exit /b 0
-)
+:: set /p confirm="是否继续拉取代码？(y/n): "
+:: if /i not "%confirm%"=="y" (
+::     echo 操作已取消。
+::     pause
+::     exit /b 0
+:: )
 
 echo.
 echo 正在拉取最新代码...

@@ -96,30 +96,32 @@ echo 代码提交成功！
 echo.
 
 :: 询问是否推送到远程
-set /p push_confirm="是否推送到远程仓库？(y/n): "
-if /i "%push_confirm%"=="y" (
+:: set /p push_confirm="是否推送到远程仓库？(y/n): "
+:: if /i "%push_confirm%"=="y" (
+::     
+:: ) else (
+::     echo 代码已提交到本地，但未推送到远程仓库。
+::     echo 您可以稍后使用 git push 命令推送。
+:: )
+
+echo.
+echo 正在推送到远程仓库...
+git push
+
+if errorlevel 1 (
     echo.
-    echo 正在推送到远程仓库...
-    git push
-    
-    if errorlevel 1 (
-        echo.
-        echo 错误：推送失败！
-        echo 可能的原因：
-        echo 1. 网络连接问题
-        echo 2. 远程仓库有新的提交需要先拉取
-        echo 3. 没有推送权限
-        echo.
-        echo 建议先运行 pull_code.bat 拉取最新代码。
-    ) else (
-        echo.
-        echo ==========================================
-        echo 代码推送成功！
-        echo ==========================================
-    )
+    echo 错误：推送失败！
+    echo 可能的原因：
+    echo 1. 网络连接问题
+    echo 2. 远程仓库有新的提交需要先拉取
+    echo 3. 没有推送权限
+    echo.
+    echo 建议先运行 pull_code.bat 拉取最新代码。
 ) else (
-    echo 代码已提交到本地，但未推送到远程仓库。
-    echo 您可以稍后使用 git push 命令推送。
+    echo.
+    echo ==========================================
+    echo 代码推送成功！
+    echo ==========================================
 )
 
 echo.
