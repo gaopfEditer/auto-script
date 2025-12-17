@@ -56,7 +56,7 @@ def cleanup_backup_files():
     
     # 遍历所有子目录，找到备份文件
     for root, dirs, files in os.walk('.'):
-        # 跳过一些不需要处理的目录
+        # 跳过以 . 开头的目录（如 .git, .vscode 等）以及其他不需要处理的目录
         dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'vendor' and d != 'node_modules' and d != 'target' and d != 'build' and d != 'dist']
         
         for file in files:
@@ -88,7 +88,7 @@ def main():
         '.dockerfile', '.dockerignore', '.gitignore', '.gitattributes', '.editorconfig',
         '.env', '.env.local', '.env.development', '.env.production', '.env.test',
         '.csv', '.tsv', '.xlsx', '.docx', '.pptx', '.rtf', '.tex', '.rst', '.adoc',
-        '.svg', '.graphql', '.gql', '.prisma', '.proto', '.thrift', '.avro', '.parquet'
+        '.svg', '.graphql', '.gql', '.prisma', '.proto', '.thrift', '.avro', '.parquet', '.dat', '.lst'
     }
     
     # 遍历项目目录，找到所有文本文件
@@ -96,7 +96,7 @@ def main():
     
     # 遍历所有子目录
     for root, dirs, files in os.walk('.'):
-        # 跳过一些不需要处理的目录
+        # 跳过以 . 开头的目录（如 .git, .vscode 等）以及其他不需要处理的目录
         dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'vendor' and d != 'node_modules' and d != 'target' and d != 'build' and d != 'dist']
         
         for file in files:

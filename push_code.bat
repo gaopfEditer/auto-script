@@ -117,6 +117,8 @@ if errorlevel 1 (
     echo 3. 没有推送权限
     echo.
     echo 建议先运行 pull_code.bat 拉取最新代码。
+    echo.
+    pause
 ) else (
     echo.
     echo ==========================================
