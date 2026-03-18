@@ -19,7 +19,8 @@ import os
 import sys
 import time
 import urllib.request
-from dataclasses import dataclass, field
+import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -50,6 +51,10 @@ def load_env() -> dict:
         value = value.strip().strip('"').strip("'")
         if key and key not in env:
             env[key] = value
+    # 环境变量优先级更高
+    for k, v in os.environ.items():
+        if k.startswith("TASK_"):
+            env[k] = v
     return env
 
 
@@ -83,6 +88,7 @@ class TaskNode:
     task_type: str   # daily | long_term | intermittent
     task_id: str
     title: str
+    message: str
     trigger_at: datetime
     extra: str = ""  # 如里程碑名称、第几次间歇等
     last_notified: float = 0  # 上次提示时间戳，用于冷却
@@ -97,7 +103,7 @@ def parse_time_today(hhmm: str) -> datetime:
     return now.replace(hour=h, minute=m, second=s, microsecond=0)
 
 
-def parse_datetime(s: str) -> datetime | None:
+def parse_datetime(s: str) -> Optional[datetime]:
     """解析 'YYYY-MM-DD HH:MM' 或类似格式。"""
     s = s.strip()
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
@@ -126,6 +132,7 @@ def build_nodes(data: dict) -> list[TaskNode]:
                     task_type="daily",
                     task_id=str(t.get("id", "")),
                     title=str(t.get("title", "日度任务")),
+                    message=str(t.get("message", "")) if t.get("message") is not None else "",
                     trigger_at=trigger_at,
                     extra="",
                 ))
@@ -147,6 +154,7 @@ def build_nodes(data: dict) -> list[TaskNode]:
                 task_type="long_term",
                 task_id=str(t.get("id", "")),
                 title=str(t.get("title", "长期任务")),
+                message=str(m.get("message", "")) if m.get("message") is not None else "",
                 trigger_at=trigger_at,
                 extra=str(m.get("name", "")),
             ))
@@ -164,6 +172,7 @@ def build_nodes(data: dict) -> list[TaskNode]:
             task_type="intermittent",
             task_id=str(t.get("id", "")),
             title=str(t.get("title", "间歇调整")),
+            message=str(t.get("message", "")) if t.get("message") is not None else "",
             trigger_at=now + timedelta(minutes=interval),
             extra=f"每 {interval} 分钟",
         ))
@@ -177,11 +186,21 @@ def sort_and_dedup_nodes(nodes: list[TaskNode]) -> list[TaskNode]:
 
 
 def show_notification(title: str, message: str) -> None:
-    """系统提示：Windows 用 MessageBox，其他用控制台 + 响铃。"""
+    """系统提示：Windows/macOS 全局弹窗；其他回退控制台 + 响铃。"""
     if sys.platform == "win32":
         try:
             import ctypes
             ctypes.windll.user32.MessageBoxW(0, message, title, 0x40)
+        except Exception:
+            print(f"\n【{title}】\n{message}\n")
+            print("\a", end="", flush=True)
+    elif sys.platform == "darwin":
+        # 全局弹窗（可打断当前操作）：display dialog
+        safe_title = title.replace('"', '\\"')
+        safe_msg = message.replace('"', '\\"')
+        script = f'display dialog "{safe_msg}" with title "{safe_title}" buttons {{"OK"}} default button "OK"'
+        try:
+            subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True)
         except Exception:
             print(f"\n【{title}】\n{message}\n")
             print("\a", end="", flush=True)
@@ -231,6 +250,7 @@ def run_loop(config_path: Optional[Path], api_url: Optional[str], interval: int 
                             task_type=n.task_type,
                             task_id=n.task_id,
                             title=n.title,
+                            message=n.message,
                             trigger_at=next_t,
                             extra=n.extra,
                         ))
@@ -249,7 +269,10 @@ def run_loop(config_path: Optional[Path], api_url: Optional[str], interval: int 
                 # 触发提示
                 type_label = {"daily": "日度任务", "long_term": "长期任务", "intermittent": "间歇调整"}.get(n.task_type, "任务")
                 title = f"[{type_label}] {n.title}"
-                msg = f"节点已到达。\n{n.extra}" if n.extra else "请处理。"
+                msg_main = (n.message or "").strip()
+                if not msg_main:
+                    msg_main = "请处理。"
+                msg = f"{msg_main}\n{n.extra}".strip() if n.extra else msg_main
                 show_notification(title, msg)
                 notified.add((n.task_id, node_key, n.trigger_at.timestamp()))
                 # 间歇任务：排下一次
