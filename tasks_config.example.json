@@ -1,0 +1,36 @@
+{
+  "daily_tasks": [
+    {
+      "id": "d1",
+      "title": "晨会",
+      "trigger_at": "09:00"
+    },
+    {
+      "id": "d2",
+      "title": "日报提交",
+      "trigger_at": "18:00"
+    }
+  ],
+  "long_term_tasks": [
+    {
+      "id": "l1",
+      "title": "项目阶段一",
+      "milestones": [
+        { "at": "2025-03-20 17:00", "name": "提交初稿" },
+        { "at": "2025-03-25 12:00", "name": "评审会" }
+      ]
+    }
+  ],
+  "intermittent_tasks": [
+    {
+      "id": "i1",
+      "title": "休息 / 喝水",
+      "interval_minutes": 45
+    },
+    {
+      "id": "i2",
+      "title": "间歇调整：活动一下",
+      "interval_minutes": 120
+    }
+  ]
+}
