@@ -8,17 +8,24 @@
   python git_repos.py -p       # 同上
   python git_repos.py -p --auto-commit            # 有变更则自动提交并推送
   python git_repos.py -p --auto-commit --message "msg"  # 指定提交信息
+
+pull / push 网络等原因失败时，会自动重试最多 5 次（每次间隔约 2 秒）。
+可在脚本顶部修改 GIT_MAX_RETRIES、GIT_RETRY_DELAY_SEC。
 """
 
 import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # 脚本所在目录（.env 默认放这里）
 SCRIPT_DIR = Path(__file__).resolve().parent
 ENV_FILE = SCRIPT_DIR / ".env"
+# pull / push 失败时的重试次数（不含首次），例如 5 表示最多共尝试 6 次
+GIT_MAX_RETRIES = 5
+GIT_RETRY_DELAY_SEC = 2.0
 
 
 def load_env(path: Path) -> dict:
@@ -97,6 +104,28 @@ def run_git(path: Path, args: list[str]) -> tuple[bool, str]:
         return False, str(e)
 
 
+def run_git_with_retries(
+    path: Path, args: list[str], name: str = "git"
+) -> tuple[bool, str, int]:
+    """
+    执行 git 命令，失败则重试 GIT_MAX_RETRIES 次。
+    返回 (是否成功, 最后一次输出, 总尝试次数)。
+    """
+    last_out = ""
+    total = GIT_MAX_RETRIES + 1
+    for attempt in range(1, total + 1):
+        ok, last_out = run_git(path, args)
+        if ok:
+            return True, last_out, attempt
+        if attempt < total:
+            print(
+                f"       [{name}] 第 {attempt}/{total} 次失败，"
+                f"{GIT_RETRY_DELAY_SEC:.0f}s 后重试…"
+            )
+            time.sleep(GIT_RETRY_DELAY_SEC)
+    return False, last_out, total
+
+
 def get_git_status_porcelain(path: Path) -> tuple[bool, str]:
     return run_git(path, ["status", "--porcelain"])
 
@@ -165,9 +194,11 @@ def main():
             continue
 
         if not push_mode:
-            ok, out = run_git(d, ["pull"])
+            ok, out, tries = run_git_with_retries(d, ["pull"], name="pull")
             if ok:
                 print(f"[成功] {d}")
+                if tries > 1:
+                    print(f"       （第 {tries} 次尝试成功）")
                 if out:
                     for line in out.splitlines()[:5]:
                         print(f"       {line}")
@@ -232,10 +263,12 @@ def main():
             print("       没有可推送的提交（本地未领先远端）。")
             continue
 
-        ok, out = run_git(d, ["push"])
+        ok, out, tries = run_git_with_retries(d, ["push"], name="push")
         if ok:
             print(f"[成功] {d}")
             print(f"       已推送提交数: {ahead}")
+            if tries > 1:
+                print(f"       （第 {tries} 次尝试成功）")
             if out:
                 for line in out.splitlines()[:5]:
                     print(f"       {line}")

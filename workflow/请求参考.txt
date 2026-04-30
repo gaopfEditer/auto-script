@@ -1,0 +1,36 @@
+import requests
+import json
+
+def dispatch_task(message, agent_id):
+    # 你的验证通过的路径
+    url = "http://localhost:18789/api/openclaw/webhook/webhook"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer webhook-secret-token"
+    }
+    
+    payload = {
+        "message": message,
+        "agentId": agent_id,
+        "wakeMode": "now"
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        if response.status_code == 202:
+            print(f"任务已投递成功！RunID: {response.json().get('runId')}")
+        else:
+            print(f"投递失败，状态码: {response.status_code}, 内容: {response.text}")
+    except Exception as e:
+        print(f"网络异常: {e}")
+
+# 直接在这里调用它
+dispatch_task("Hello from Python!", "main")
+
+
+curl -v -X POST http://localhost:18789/api/openclaw/webhook/webhook ^
+     --noproxy "*" ^
+     -H "Content-Type: application/json" ^
+     -H "Authorization: Bearer webhook-secret-token" ^
+     -d "{\"message\": \"Hello from orchestrator!\", \"agentId\": \"main\", \"wakeMode\": \"now\"}"
