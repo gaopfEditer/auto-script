@@ -1,0 +1,7 @@
+# 每行一个已加入的超级群或频道 peer id（多为 -100xxxxxxxxxx）
+# 勿填私聊「用户 id」（正数）：无 access_hash 时无法拉消息，会被 poll_groups 跳过。
+# 复制本文件为 monitored_groups.txt 后编辑；monitored_groups.txt 已加入 .gitignore
+
+# -1001234567890
+-1002161599183
+-1001525379130
