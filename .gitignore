@@ -1,0 +1,8 @@
+.env
+# Telethon 登录态，勿提交
+*.session
+*.session-journal
+*.session.runlock
+telegram/monitored_groups.txt
+telegram/.poll_state.json
+telegram/media/
