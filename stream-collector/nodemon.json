@@ -1,0 +1,9 @@
+{
+  "watch": ["src"],
+  "ext": "js,mjs,cjs,json",
+  "ignore": ["node_modules/**", "data/**", "*.log"],
+  "delay": 400,
+  "env": {
+    "NODE_OPTIONS": "--enable-source-maps"
+  }
+}

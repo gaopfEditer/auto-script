@@ -1,0 +1,37 @@
+{
+  "name": "stream-collector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generic CDP WebSocket frame listener + MySQL ingest + replay scheduler",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test-ws": "node src/ws-bridge.js --payloads-only",
+    "collect": "node src/index.js --mode=collect",
+    "replay": "node src/index.js --mode=replay",
+    "bridge": "node src/ws-bridge.js",
+    "collect:persistent": "node src/persistent-profile-collector.js",
+    "dev:test-ws": "nodemon src/ws-bridge.js -- --payloads-only",
+    "dev:collect": "nodemon src/index.js",
+    "dev:replay": "nodemon src/index.js -- --mode=replay",
+    "dev:bridge": "nodemon src/ws-bridge.js",
+    "dev:persistent": "nodemon src/persistent-profile-collector.js",
+    "collect:ui": "node src/collector-ui-server.js",
+    "ui:build": "vite build --config collector-ui-vue/vite.config.js",
+    "dev:ui-vue": "vite --config collector-ui-vue/vite.config.js"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "nodemon": "^3.1.9",
+    "vite": "^6.3.5"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "mysql2": "^3.12.0",
+    "playwright": "^1.49.0",
+    "vue": "^3.5.16",
+    "vue-router": "^4.5.1",
+    "ws": "^8.18.0"
+  }
+}

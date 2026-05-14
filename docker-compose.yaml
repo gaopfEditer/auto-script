@@ -1,0 +1,13 @@
+services:
+  fish-speech:
+    platform: linux/amd64  # 强行指定 x86 架构
+    image: fishaudio/fish-speech:latest
+    container_name: fish-speech-api
+    ports:
+      - "9011:9011" # API 端口映射
+    volumes:
+      - ./models:/app/checkpoints # 映射模型文件夹
+      - ./references:/app/references # 映射参考音频文件夹
+    environment:
+      - DEVICE=mps # 关键：指定使用 Mac 的 MPS 加速
+    restart: always
