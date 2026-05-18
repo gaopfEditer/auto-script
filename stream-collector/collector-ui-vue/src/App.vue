@@ -14,7 +14,7 @@ import { RouterLink, RouterView } from "vue-router";
     </header>
     <main class="main-outlet">
       <RouterView v-slot="{ Component }">
-        <KeepAlive include="DebugView">
+        <KeepAlive include="DebugView,ShowView">
           <component :is="Component" />
         </KeepAlive>
       </RouterView>

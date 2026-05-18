@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "test-ws": "node src/ws-bridge.js --payloads-only",
     "collect": "node src/index.js --mode=collect",
+    "collect:live": "COLLECTOR_UI_EMBED=1 node src/index.js --mode=collect",
     "replay": "node src/index.js --mode=replay",
     "bridge": "node src/ws-bridge.js",
     "collect:persistent": "node src/persistent-profile-collector.js",

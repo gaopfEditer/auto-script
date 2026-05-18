@@ -18,6 +18,9 @@ except ImportError:
 from telethon import TelegramClient
 from telethon.sessions import SQLiteSession
 
+# 会话 SQLite 固定在本包目录，避免「在 telegram/ 下跑」与「在仓库根目录跑」生成两套 .session 反复要登录。
+TELEGRAM_PACKAGE_DIR = Path(__file__).resolve().parent
+
 from config import (
     describe_telegram_network,
     get_api_hash,
@@ -55,7 +58,7 @@ _SESSION_LOCK_HINT = (
     "请先停掉其它正在跑的 listen.py / poll_groups.py / list_groups.py，或给另一脚本另设 "
     "TELEGRAM_SESSION_NAME（会各用一套登录态）。\n"
     "若已全停仍报错，可稍等几秒再试，或加大 TELEGRAM_SQLITE_BUSY_TIMEOUT（秒）。\n"
-    "本仓库在 POSIX 下默认使用 *.session.runlock 单实例锁；第二次启动会立刻失败并提示，避免「假死」。\n"
+    "本仓库在 POSIX 下于 telegram/ 目录使用 *.session.runlock 单实例锁；第二次启动会立刻失败并提示，避免「假死」。\n"
     "确需并行请设 TELEGRAM_ALLOW_MULTI=1（仍可能因 SQLite 卡住）。"
 )
 
@@ -138,7 +141,7 @@ def _acquire_session_run_lock(session_stem: str, cwd: Path) -> None:
 
 async def create_and_start_client() -> tuple[TelegramClient, Path]:
     """
-    connect + start，返回 (client, 当前工作目录下的 .session 路径)。
+    connect + start，返回 (client, 实际使用的 .session 路径，位于 telegram/ 包目录下)。
     调用方须在结束时 await client.disconnect()。
     """
     api_id = get_api_id()
@@ -147,10 +150,22 @@ async def create_and_start_client() -> tuple[TelegramClient, Path]:
     timeout = get_connect_timeout()
     retries = get_connection_retries()
     cwd = Path.cwd()
-    session_path = (cwd / f"{session}.session").resolve()
+    session_sqlite_base = str((TELEGRAM_PACKAGE_DIR / session).resolve())
+    session_path = Path(session_sqlite_base + ".session").resolve()
 
     print(f"[+] 工作目录: {cwd}", flush=True)
+    print(f"[+] 会话目录（固定）: {TELEGRAM_PACKAGE_DIR}", flush=True)
     print(f"[+] 会话文件: {session_path} (存在={session_path.is_file()})", flush=True)
+    if not session_path.is_file():
+        legacy = (cwd / f"{session}.session").resolve()
+        if legacy.is_file() and legacy != session_path:
+            print(
+                f"[*] 在旧工作目录发现会话文件: {legacy}\n"
+                f"    现统一使用: {session_path}\n"
+                f"    可执行: cp {legacy} {session_path}\n"
+                "    以沿用已有登录，避免再次输验证码。",
+                flush=True,
+            )
     print(
         f"[+] api_id={api_id}  connect_timeout={timeout}s  connection_retries={retries}",
         flush=True,
@@ -158,13 +173,13 @@ async def create_and_start_client() -> tuple[TelegramClient, Path]:
     extra = get_telegram_client_extra_kwargs()
     print(f"[+] 网络: {describe_telegram_network(extra)}", flush=True)
 
-    _acquire_session_run_lock(session, cwd)
+    _acquire_session_run_lock(session, TELEGRAM_PACKAGE_DIR)
 
     client: TelegramClient | None = None
     try:
         print("[+] 正在连接 Telegram（可选 TELEGRAM_LOG_LEVEL=DEBUG）…", flush=True)
         client = TelegramClient(
-            ResilientSQLiteSession(session),
+            ResilientSQLiteSession(session_sqlite_base),
             api_id,
             api_hash,
             timeout=timeout,

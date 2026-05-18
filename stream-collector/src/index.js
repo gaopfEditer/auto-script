@@ -3,15 +3,23 @@
  * 入口：collect = CDP 监听 + 落库；replay = 顺序回放。
  */
 import "dotenv/config";
+import { buildFrameChannelPayload } from "./collect-ws-decode.js";
 import { config } from "./config.js";
+import { startEmbedUiServer } from "./embed-ui-server.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { createLogger, setLogLevel } from "./logger.js";
-import { processBuffer } from "./processor.js";
 import { hashBuffer, openStore } from "./store.js";
+import { createKookMessageIngest } from "./kook-message-ingest.js";
+import { createKookTradeTelegramPush } from "./kook-trade-telegram-push.js";
 import { runReplayScheduler } from "./replay-scheduler.js";
 
 setLogLevel(config.logLevel);
 const log = createLogger("index");
+
+function collectUiEmbedEnabled() {
+  const v = String(process.env.COLLECTOR_UI_EMBED ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(v);
+}
 
 const mode = process.argv.includes("--mode=replay") ? "replay" : "collect";
 const durationArg = process.argv.find((a) => a.startsWith("--duration="));
@@ -47,6 +55,22 @@ async function collect() {
   }
 
   const store = await openStore(config.mysql, createLogger("store"));
+  const tradePush = createKookTradeTelegramPush(createLogger("trade-push"));
+  const kookIngest = createKookMessageIngest(store, createLogger("kook-ingest"), tradePush);
+
+  let embedUi = null;
+  /** @type {{ navigateKookChannel?: (g: string, c: string, t?: { clientTraceId?: string }) => Promise<unknown> }} */
+  const cdpNav = {};
+  if (collectUiEmbedEnabled()) {
+    const port = Number.isFinite(config.collectUiPort) ? config.collectUiPort : 3840;
+    embedUi = await startEmbedUiServer(port, store, log, cdpNav, kookIngest, tradePush);
+  }
+
+  if (!embedUi) {
+    log.info(
+      "联调 Vue：未启用 COLLECTOR_UI_EMBED。若同时运行 `pnpm dev:ui-vue`，请在 .env 设 COLLECTOR_UI_EMBED=1（或改用 `pnpm run collect:ui`），否则前端 /ws 无推送。"
+    );
+  }
 
   const session = await startCdpWebSocketMonitor(
     {
@@ -54,13 +78,30 @@ async function collect() {
       cdpConnectUrl: config.cdpConnectUrl,
       pageReloadIntervalMs: config.pageReloadIntervalMs,
       networkTrace: config.collectNetworkTrace,
+      diagnosticSink: (evt) => {
+        embedUi?.diagnosticSink?.(evt);
+        void kookIngest.onDiag(evt).catch((e) => {
+          log.debug(`kook ingest diag: ${/** @type {Error} */ (e).message}`);
+        });
+      },
       onData(buf, meta) {
         frameCount += 1;
         if (meta.pageUrl) {
           log.debug(`帧 #${frameCount} 来自页面: ${meta.pageUrl}`);
         }
         const hash = hashBuffer(buf);
-        const proc = processBuffer(buf, config.requiredTopLevelKeys);
+        const { payload, proc } = buildFrameChannelPayload(
+          buf,
+          meta,
+          frameCount,
+          config.requiredTopLevelKeys
+        );
+        if (embedUi) {
+          embedUi.broadcast("frame", payload);
+        }
+        void kookIngest.onWsFrame(payload).catch((e) => {
+          log.debug(`kook ingest ws: ${/** @type {Error} */ (e).message}`);
+        });
         if (!proc.ok) {
           log.debug(
             `帧 #${frameCount} 解析未入库 schema | opcode=${meta.opcode} len=${buf.length} hash=${hash.slice(0, 12)}… | ${proc.parseError}`
@@ -89,11 +130,16 @@ async function collect() {
     createLogger("cdp")
   );
 
+  cdpNav.navigateKookChannel = (g, c, t) => session.navigateKookChannel(g, c, t);
+
   const shutdown = async (reason = "shutdown") => {
     log.info(
       `结束 (${reason}) | CDP 收到帧=${frameCount} | 新插入=${insertOk} | 去重跳过=${insertDup} | 写入错误=${insertErr}`
     );
     await session.close().catch((e) => log.warn(`关闭 CDP 会话: ${e.message}`));
+    if (embedUi) {
+      await embedUi.close().catch((e) => log.warn(`关闭嵌入式 UI: ${e.message}`));
+    }
     await store.close().catch((e) => log.warn(`关闭 MySQL 池: ${e.message}`));
     process.exit(0);
   };

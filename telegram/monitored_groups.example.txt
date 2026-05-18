@@ -1,7 +1,25 @@
-# 每行一个已加入的超级群或频道 peer id（多为 -100xxxxxxxxxx）
-# 勿填私聊「用户 id」（正数）：无 access_hash 时无法拉消息，会被 poll_groups 跳过。
-# 复制本文件为 monitored_groups.txt 后编辑；monitored_groups.txt 已加入 .gitignore
+# 统一配置（复制为 monitored_groups.txt 后编辑；该文件已 .gitignore）
+# 格式：key=value，value 里多项用英文逗号分隔；# 开头为注释行。
+# 仍兼容「单独一行纯整数」作为监听群 id（等价于 monitored=）。
 
-# -1001234567890
--1002161599183
--1001525379130
+# 监听来源（超级群/频道 peer id，多为 -100…）
+monitored=-1002161599183,-1001525379130
+
+# 发件人展示名包含以下任一子串时，把该条消息转发到「推送群」（与 listen.py 配合）
+sender_keywords=西西,梵乐,朱桑
+
+# 推送目标群（须本账号已加入）；多个 id 用逗号分隔，将逐一转发
+push_chat=-5123396026
+
+# ---------- 键名别名（任选其一）----------
+# 监听群：monitored | groups | chats | 监听群 | 监控群
+# 关键词：sender_keywords | sender | keywords | 发件人 | 发件人关键字
+# 推送群：push_chat | push | notify_chat | 推送群 | 推送
+#
+# 也可用环境变量覆盖文件：TELEGRAM_SENDER_KEYWORDS、TELEGRAM_PUSH_CHAT_ID
+#
+# ---------- AI 聚合推送（listen.py 默认开启）----------
+# 每群滑动窗口 TELEGRAM_TRADE_CONTEXT_SIZE=30，防抖 TELEGRAM_TRADE_CONTEXT_FLUSH_SEC=45
+# Ollama: OLLAMA_GENERATE_URL、OLLAMA_MODEL=gemma-uncensored
+# 发送: TELEGRAM_SEND_URL=http://127.0.0.1:8000/api/telegram/send
+# 关闭 AI、恢复关键词原样转发: TELEGRAM_AI_TRADE_AGGREGATE=0

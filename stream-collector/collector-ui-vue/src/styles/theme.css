@@ -123,6 +123,12 @@ a:hover {
   height: 100%;
   min-height: 0;
 }
+/* grid 子项默认 min-height:auto 会随内容撑高，导致内部 overflow 不生效、看不到滚动条 */
+.show-app > .guild-rail,
+.show-app > .channel-panel,
+.show-app > .main {
+  min-height: 0;
+}
 .guild-rail {
   background: var(--bg3);
   display: flex;
@@ -145,17 +151,48 @@ a:hover {
   color: #fff;
 }
 .channel-panel {
-  background: var(--sidebar);
+  background: #2b2d31;
   border-right: 1px solid #000;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 .channel-head {
   padding: 0.75rem 1rem;
   font-weight: 700;
   font-size: 0.9rem;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+.kook-cache-banner {
+  flex-shrink: 0;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.72rem;
+  color: #49e57a;
+  background: rgba(59, 165, 93, 0.12);
+  border-bottom: 1px solid #1e1f22;
+}
+.guild-channel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0.35rem 0.5rem 0.5rem;
+}
+.feed-modes {
+  flex-shrink: 0;
+  border-top: 1px solid #1e1f22;
+  padding: 0.5rem 0.35rem 0.65rem;
+  background: #232428;
+}
+.feed-modes-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #949ba4;
+  padding: 0.25rem 0.5rem 0.4rem;
 }
 .channel-list {
   padding: 0.5rem;
@@ -177,28 +214,86 @@ a:hover {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--bg);
 }
 .main-header {
-  height: 48px;
+  height: auto;
+  min-height: 48px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 0 1rem;
+  padding: 0.4rem 1rem;
+  gap: 0.25rem 0.5rem;
   border-bottom: 1px solid #27282d;
   font-weight: 600;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
 }
-.main-header span {
+.main-header .main-sub {
   color: var(--muted);
   font-weight: 400;
   margin-left: 0.5rem;
   font-size: 0.85rem;
+}
+.main-hash {
+  color: #949ba4;
+  margin-right: 0.2rem;
+  font-weight: 600;
+}
+.main-title {
+  font-weight: 700;
+  color: #f2f3f5;
+  font-size: 1rem;
+}
+.main-header-guild-id {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: var(--mono);
+  color: #b5bac1;
+  background: #2b2d31;
+  border: 1px solid #3f4147;
 }
 .msg-scroll {
   flex: 1;
   overflow-y: auto;
   padding: 1rem 1.25rem 2rem;
   min-height: 0;
+}
+
+/* 消息列表：细滚动条 + stable gutter，避免 macOS 叠加滚动条几乎不可见 */
+.msg-scroll,
+.kook-api-msgs-scroll,
+.guild-channel-scroll {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #5c5f66 #2b2d31;
+}
+.msg-scroll::-webkit-scrollbar,
+.kook-api-msgs-scroll::-webkit-scrollbar,
+.guild-channel-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.msg-scroll::-webkit-scrollbar-track,
+.kook-api-msgs-scroll::-webkit-scrollbar-track,
+.guild-channel-scroll::-webkit-scrollbar-track {
+  background: #2b2d31;
+  border-radius: 6px;
+}
+.msg-scroll::-webkit-scrollbar-thumb,
+.kook-api-msgs-scroll::-webkit-scrollbar-thumb,
+.guild-channel-scroll::-webkit-scrollbar-thumb {
+  background: #5c5f66;
+  border-radius: 6px;
+  border: 2px solid #2b2d31;
+}
+.msg-scroll::-webkit-scrollbar-thumb:hover,
+.kook-api-msgs-scroll::-webkit-scrollbar-thumb:hover,
+.guild-channel-scroll::-webkit-scrollbar-thumb:hover {
+  background: #72767d;
 }
 .msg-row {
   display: grid;
@@ -259,6 +354,16 @@ a:hover {
   border-radius: 6px;
   max-height: 180px;
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #5c5f66 #383a40;
+}
+.msg-json::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.msg-json::-webkit-scrollbar-thumb {
+  background: #5c5f66;
+  border-radius: 4px;
 }
 .badge {
   display: inline-block;
@@ -279,4 +384,627 @@ a:hover {
 .badge.muted {
   background: var(--bg2);
   color: var(--muted);
+}
+
+/* Kook guild/view — Discord-like channel list */
+.kook-head {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  padding-bottom: 0.65rem;
+}
+.kook-guild-title {
+  font-size: 0.95rem;
+  color: #f2f3f5;
+}
+.kook-guild-unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ed4245;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px rgba(237, 66, 69, 0.22);
+}
+.kook-guild-id {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #949ba4;
+  font-family: var(--mono);
+}
+.kook-wait {
+  font-size: 0.8rem;
+  color: #949ba4;
+  line-height: 1.45;
+  padding: 0.75rem 0.6rem;
+}
+.kook-wait code {
+  font-size: 0.72rem;
+  color: #b5bac1;
+}
+.kook-cat-block {
+  margin-bottom: 0.25rem;
+}
+.kook-cat-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.35rem 0.45rem;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #949ba4;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-align: left;
+}
+.kook-cat-head:hover {
+  color: #dbdee1;
+  background: rgba(0, 0, 0, 0.18);
+}
+.kook-chev {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #949ba4;
+  transform: rotate(-90deg);
+  transition: transform 0.12s ease;
+  flex-shrink: 0;
+}
+.kook-chev.open {
+  transform: rotate(0);
+}
+.kook-cat-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kook-cat-unread-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ed4245;
+  flex-shrink: 0;
+  margin-left: 0.15rem;
+  box-shadow: 0 0 0 2px rgba(237, 66, 69, 0.2);
+}
+.kook-ch-list {
+  padding: 0.1rem 0 0.15rem 0.15rem;
+}
+.kook-ch-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.35rem 0.45rem;
+  margin: 0.05rem 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: #949ba4;
+}
+.kook-ch-row:hover {
+  background: #35373c;
+  color: #dbdee1;
+}
+.kook-ch-row.active {
+  background: #3f4248;
+  color: #fff;
+}
+.kook-hash {
+  font-weight: 700;
+  font-size: 1rem;
+  line-height: 1.2;
+  color: #80848e;
+  flex-shrink: 0;
+}
+.kook-ch-row.active .kook-hash {
+  color: #fff;
+}
+.kook-ch-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.kook-ch-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.kook-ch-name {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.kook-ch-unread {
+  flex-shrink: 0;
+  min-width: 1.1rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 8px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  background: #ed4245;
+  color: #fff;
+}
+.kook-ch-row.active .kook-ch-unread {
+  background: #ff6b6e;
+  color: #fff;
+}
+.kook-ch-mention {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #faa61a;
+}
+.kook-ch-row.active .kook-ch-mention {
+  color: #ffc56d;
+}
+.kook-ch-last {
+  font-size: 0.72rem;
+  color: #80848e;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+.kook-ch-row.pending {
+  opacity: 0.75;
+  pointer-events: none;
+}
+.kook-nav-alert {
+  flex-shrink: 0;
+  padding: 0.45rem 1rem;
+  font-size: 0.82rem;
+  border-bottom: 1px solid #27282d;
+}
+.kook-nav-alert.err {
+  background: rgba(237, 66, 69, 0.12);
+  color: #ff7a7c;
+}
+.kook-nav-alert.ok {
+  background: rgba(59, 165, 93, 0.12);
+  color: #49e57a;
+}
+.kook-nav-alert.pending {
+  background: rgba(0, 168, 252, 0.1);
+  color: #00a8fc;
+}
+.kook-cdp-url-panel {
+  flex-shrink: 0;
+  padding: 0.55rem 1rem 0.65rem;
+  border-bottom: 1px solid #27282d;
+  background: #232428;
+}
+.kook-cdp-url-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+  margin-bottom: 0.45rem;
+}
+.kook-cdp-url-row:last-of-type {
+  margin-bottom: 0;
+}
+.kook-cdp-url-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #949ba4;
+}
+.kook-cdp-url-code {
+  display: block;
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  background: #1e1f22;
+  border: 1px solid #3f4147;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: #dbdee1;
+  word-break: break-all;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.kook-cdp-url-hint {
+  margin: 0.15rem 0 0;
+  font-size: 0.72rem;
+  color: #80848e;
+  line-height: 1.4;
+}
+.kook-cdp-url-hint code {
+  font-size: 0.68rem;
+  color: #b5bac1;
+}
+.kook-detail-strip {
+  flex-shrink: 0;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid #27282d;
+  background: #1e1f22;
+}
+.kook-detail-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #949ba4;
+  margin-bottom: 0.35rem;
+}
+.kook-detail-body {
+  font-size: 0.88rem;
+  color: #dbdee1;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.empty-msg {
+  color: var(--muted);
+  padding: 1rem;
+}
+
+.kook-show-msgs-only {
+  flex: 1;
+  min-height: 0;
+}
+.kook-show-msgs-only .kook-api-msgs {
+  border-bottom: none;
+}
+
+.kook-show-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+  text-align: center;
+  color: #949ba4;
+}
+.kook-show-empty-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #dbdee1;
+}
+.kook-show-empty-body {
+  margin: 0;
+  max-width: 26rem;
+  line-height: 1.55;
+  font-size: 0.88rem;
+}
+.kook-show-empty-body a {
+  color: #00a8fc;
+  font-weight: 600;
+}
+.kook-show-hint {
+  font-size: 0.78rem;
+  color: #949ba4;
+}
+.kook-show-hint-link {
+  margin-left: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #00a8fc;
+  text-decoration: none;
+}
+.kook-show-hint-link:hover {
+  text-decoration: underline;
+}
+
+/* Show — 频道 REST + CDP 分栏 */
+.main-split {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.kook-api-msgs {
+  position: relative;
+  flex: 1;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid #27282d;
+  min-width: 0;
+}
+.kook-msgs-scroll-fab {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+.kook-msgs-scroll-fab .kook-msgs-scroll-btn {
+  pointer-events: auto;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid #4e5058;
+  border-radius: 6px;
+  background: rgba(30, 31, 34, 0.92);
+  color: #dbdee1;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.kook-msgs-scroll-fab .kook-msgs-scroll-btn:hover {
+  background: #383a40;
+  border-color: #6d6f78;
+}
+.kook-api-msgs-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.65rem 1rem 1rem;
+  min-height: 0;
+}
+.kook-hist-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 0.65rem;
+  padding: 0.5rem 0.35rem;
+  border-radius: 6px;
+  margin-bottom: 0.35rem;
+}
+.kook-hist-row:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+.kook-hist-av {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.kook-hist-av.ph {
+  background: linear-gradient(135deg, #5865f2, #3ba55d);
+}
+.kook-hist-body {
+  min-width: 0;
+}
+.kook-hist-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.5rem;
+  margin-bottom: 0.2rem;
+}
+.kook-hist-name {
+  font-weight: 700;
+  color: #f2f3f5;
+  font-size: 0.95rem;
+}
+.kook-hist-user {
+  font-size: 0.78rem;
+  color: #949ba4;
+}
+.kook-hist-ident {
+  font-size: 0.72rem;
+  color: #6d7480;
+  font-family: var(--mono);
+}
+.kook-hist-id {
+  font-size: 0.68rem;
+  color: #6d7480;
+  font-family: var(--mono);
+}
+.kook-bot-pill {
+  font-size: 0.6rem;
+  font-weight: 800;
+  padding: 0.08rem 0.28rem;
+  border-radius: 3px;
+  background: #5865f2;
+  color: #fff;
+}
+.kook-ws-notice-pill {
+  font-size: 0.58rem;
+  font-weight: 800;
+  padding: 0.08rem 0.28rem;
+  border-radius: 3px;
+  background: #3c4149;
+  color: #faa61a;
+  border: 1px solid rgba(250, 166, 26, 0.35);
+}
+.kook-hist-time {
+  font-size: 0.68rem;
+  color: #6d7480;
+  margin-left: auto;
+}
+.kook-hist-content {
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: #dbdee1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kook-api-empty {
+  font-size: 0.82rem;
+  color: #949ba4;
+  line-height: 1.5;
+  padding: 1rem 0.25rem;
+}
+.kook-api-empty code {
+  font-size: 0.75rem;
+  color: #b5bac1;
+}
+.cdp-feed-wrap {
+  flex: 0 0 auto;
+  max-height: min(38vh, 300px);
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.cdp-feed-label {
+  flex-shrink: 0;
+  padding: 0.35rem 1rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #949ba4;
+  border-bottom: 1px solid #27282d;
+}
+.cdp-msg-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Show — 发车信号 + 结果核验 */
+.kook-hist-row--signal {
+  background: rgba(88, 101, 242, 0.08);
+  border: 1px solid rgba(88, 101, 242, 0.22);
+}
+.kook-signal-pill {
+  font-size: 0.58rem;
+  font-weight: 800;
+  padding: 0.08rem 0.32rem;
+  border-radius: 3px;
+  background: #5865f2;
+  color: #fff;
+}
+.kook-review-status {
+  font-size: 0.65rem;
+  color: #49e57a;
+  font-weight: 600;
+}
+.kook-signal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+.kook-signal-btn {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid #4e5058;
+  background: #2b2d31;
+  color: #dbdee1;
+  cursor: pointer;
+}
+.kook-signal-btn:hover {
+  background: #35373c;
+}
+.kook-signal-btn.primary {
+  background: #5865f2;
+  border-color: #5865f2;
+  color: #fff;
+}
+.kook-signal-btn.muted {
+  color: #949ba4;
+}
+.kook-signal-review-form {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 6px;
+  background: #1e1f22;
+  border: 1px solid #3f4147;
+}
+.kook-signal-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin-bottom: 0.45rem;
+}
+.kook-signal-label {
+  font-size: 0.72rem;
+  color: #949ba4;
+  min-width: 2.2rem;
+}
+.kook-signal-select {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid #4e5058;
+  background: #2b2d31;
+  color: #dbdee1;
+}
+.kook-signal-select.wide {
+  min-width: 8rem;
+}
+.kook-signal-input {
+  width: 6rem;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid #4e5058;
+  background: #2b2d31;
+  color: #dbdee1;
+}
+.kook-signal-textarea {
+  flex: 1;
+  min-width: 12rem;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid #4e5058;
+  background: #2b2d31;
+  color: #dbdee1;
+  resize: vertical;
+}
+.kook-signal-summary-wrap {
+  flex-shrink: 0;
+  padding: 0.55rem 1rem 0.35rem;
+  border-bottom: 1px solid #27282d;
+  background: #232428;
+}
+.kook-signal-summary-wrap > .kook-detail-label {
+  margin-bottom: 0.35rem;
+}
+.kook-signal-summary-strip {
+  margin-top: 0.45rem;
+  padding: 0.5rem 0.65rem 0.55rem;
+  border: 1px solid #2e3036;
+  border-radius: 6px;
+  background: #1e1f22;
+}
+.kook-signal-summary-strip--current {
+  border-color: #5865f2;
+  box-shadow: inset 3px 0 0 #5865f2;
+}
+.kook-signal-summary-guild-title {
+  margin-bottom: 0.35rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #dcddde;
+}
+.kook-signal-summary-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.1rem;
+  font-size: 0.78rem;
+  color: #b5bac1;
+}
+.kook-signal-summary-grid strong {
+  color: #f2f3f5;
+}
+.kook-signal-summary-hint {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: #80848e;
 }

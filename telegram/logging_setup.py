@@ -26,3 +26,7 @@ def setup_telethon_logging() -> None:
 
     log.handlers.clear()
     log.addHandler(handler)
+
+    # INFO 下「Got difference for channel …」刷屏，排错价值低；DEBUG 时仍保留
+    if level > logging.DEBUG:
+        logging.getLogger("telethon.client.updates").setLevel(logging.WARNING)

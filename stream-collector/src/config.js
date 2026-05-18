@@ -78,6 +78,50 @@ export const config = {
   collectNetworkTrace: !["0", "false", "no", "off"].includes(
     String(process.env.COLLECTOR_NETWORK_TRACE ?? "1").toLowerCase()
   ),
-  /** `pnpm run collect:ui` 监听端口 */
+  /** `pnpm run collect:ui` 与嵌入式 UI 监听端口（默认 3840）；`pnpm collect` 联调 Vite 时设 COLLECTOR_UI_EMBED=1 */
   collectUiPort: Number(process.env.COLLECTOR_UI_PORT ?? 3840),
+  /**
+   * 完整做单推送到 Telegram：监听的 Kook 群组 id。
+   * 优先 KOOK_GROUPS_PUSH，并与 KOOK_TRADE_PUSH_GUILD_IDS 合并去重。
+   */
+  kookGroupsPush: process.env.KOOK_GROUPS_PUSH ?? "",
+  /** 与 KOOK_GROUPS_PUSH 同序，逐群对应 style_id；缺项用第一项 */
+  stylesGroupsPush: process.env.STYLES_GROUPS_PUSH ?? "",
+  kookTradePushGuildIds: process.env.KOOK_TRADE_PUSH_GUILD_IDS ?? "",
+  signalPublishUrl: (
+    process.env.SIGNAL_PUBLISH_URL ?? "http://127.0.0.1:8000/api/publish/signal"
+  ).trim(),
+  signalPublishStrategyId: (
+    process.env.SIGNAL_PUBLISH_STRATEGY_ID ?? "strategy_left_ambush"
+  ).trim(),
+  signalPublishComposeMode: (process.env.SIGNAL_PUBLISH_COMPOSE_MODE ?? "manual").trim(),
+  signalPublishPublish: !["0", "false", "no", "off"].includes(
+    String(process.env.SIGNAL_PUBLISH_PUBLISH ?? "1").toLowerCase()
+  ),
+  signalPublishTimeoutMs: Number(process.env.SIGNAL_PUBLISH_TIMEOUT_MS ?? 30_000),
+  /** Telegram 发送 API，默认本机 8000 */
+  telegramSendUrl: (process.env.TELEGRAM_SEND_URL ?? "http://127.0.0.1:8000/api/telegram/send").trim(),
+  /** 目标 chat_id，如 -5289237674 */
+  telegramPushChatId: (() => {
+    const s = String(process.env.TELEGRAM_PUSH_CHAT_ID ?? "").trim();
+    if (!s) return "";
+    const n = Number(s);
+    return Number.isFinite(n) ? n : s;
+  })(),
+  telegramSendTimeoutMs: Number(process.env.TELEGRAM_SEND_TIMEOUT_MS ?? 15_000),
+  /** REST 批量拉历史时，仅推送 create_at 距今不超过该毫秒数的消息（避免打开频道刷历史） */
+  kookTradePushRestMaxAgeMs: Number(process.env.KOOK_TRADE_PUSH_REST_MAX_AGE_MS ?? 180_000),
+  /** Ollama 做单分类（默认开；设 OLLAMA_TRADE_CLASSIFY=0 关闭并回退正则） */
+  ollamaTradeClassifyEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.OLLAMA_TRADE_CLASSIFY ?? "1").toLowerCase()
+  ),
+  ollamaGenerateUrl: (
+    process.env.OLLAMA_GENERATE_URL ?? "http://127.0.0.1:11434/api/generate"
+  ).trim(),
+  ollamaModel: (process.env.OLLAMA_MODEL ?? "gemma-uncensored").trim(),
+  ollamaGenerateTimeoutMs: Number(process.env.OLLAMA_GENERATE_TIMEOUT_MS ?? 60_000),
+  /** AI 不可用或解析失败时是否用正则兜底 */
+  ollamaTradeClassifyFallbackRegex: !["0", "false", "no", "off"].includes(
+    String(process.env.OLLAMA_TRADE_CLASSIFY_FALLBACK_REGEX ?? "1").toLowerCase()
+  ),
 };

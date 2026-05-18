@@ -120,13 +120,20 @@ async def format_message_console(
     *,
     preview: int,
     prefix: str,
+    omit_sender: bool = False,
 ) -> None:
-    """打印一行摘要；若有下载则多打一行路径。"""
-    nick = await sender_display(client, message)
+    """打印一行摘要；若有下载则多打一行路径。
+
+    omit_sender=True 时不在行尾重复「昵称=」（由 prefix 已含发件人展示名时使用）。
+    """
+    nick = "" if omit_sender else await sender_display(client, message)
     body = text_preview(message, preview)
     hint = media_type_hint(message)
     tail = f"{hint} {body!r}".strip() if (hint or body) else ""
-    line = f"{prefix} id={message.id} sender_id={message.sender_id} 昵称={nick}"
+    if omit_sender:
+        line = f"{prefix} id={message.id} sender_id={message.sender_id}"
+    else:
+        line = f"{prefix} id={message.id} sender_id={message.sender_id} 昵称={nick}"
     if tail:
         line = f"{line} {tail}"
     print(line, flush=True)

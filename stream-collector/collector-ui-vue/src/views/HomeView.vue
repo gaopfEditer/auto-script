@@ -10,8 +10,8 @@ import { RouterLink } from "vue-router";
       <code>pnpm run dev:ui-vue</code>（需 collect:ui 已在 3840 端口提供 /api 与 /ws）。
     </p>
     <div class="actions">
-      <RouterLink class="btn primary" to="/debug">CDP 请求 / 响应 / 诊断</RouterLink>
-      <RouterLink class="btn" to="/show">消息流（Discord 风格）</RouterLink>
+      <RouterLink class="btn primary" to="/debug">Debug（网络 / 其它事件 / CDP 消息流）</RouterLink>
+      <RouterLink class="btn" to="/show">Show（Kook 频道与 REST 消息）</RouterLink>
     </div>
   </div>
 </template>

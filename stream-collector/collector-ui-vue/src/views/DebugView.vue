@@ -1,6 +1,7 @@
 <script setup>
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, nextTick } from "vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
+import { extractChatDisplay } from "../lib/chatExtract.js";
 import {
   useDebugNetwork,
   nameFromUrl,
@@ -14,7 +15,14 @@ defineOptions({ name: "DebugView" });
 
 const SPLIT_KEY = "collector-ui-debug-split-fr";
 
-const tab = ref("network");
+/** @typedef {{ id: string, ts: number, author: string, typeLabel: string, text: string, badges: { db?: boolean, decode?: string }, raw?: unknown }} FeedLine */
+
+const tab = ref(/** @type {"network" | "misc" | "frames"} */ ("network"));
+const feedTab = ref(/** @type {"live" | "history" | "all"} */ ("live"));
+const lines = ref(/** @type {FeedLine[]} */ ([]));
+let feedSeq = 0;
+const frameScrollEl = ref(/** @type {HTMLElement | null} */ (null));
+
 const innerTab = ref("response");
 const { netRows, miscEvents, ingest } = useDebugNetwork();
 const selected = ref(/** @type {Record<string, unknown> | null} */ (null));
@@ -36,7 +44,52 @@ watch(selected, () => {
   innerTab.value = "response";
 });
 
-useCollectorSocket(ingest);
+/** @param {Record<string, unknown>} msg */
+function pushFrameFeedFromWire(msg) {
+  if (msg.channel !== "frame" || msg.kind !== "ws_frame") return;
+  const body = msg.body;
+  const j = body && typeof body === "object" && "json" in body ? body.json : null;
+  const display = j != null ? extractChatDisplay(j) : extractChatDisplay(null);
+  feedSeq += 1;
+  lines.value.push({
+    id: `live-${msg.seq ?? feedSeq}-${msg.ts}`,
+    ts: /** @type {number} */ (msg.ts),
+    author: display.author,
+    typeLabel: display.typeLabel,
+    text: display.text,
+    badges: {
+      db: Boolean(msg.dbParseOk),
+      decode: String(msg.decodeFormat ?? ""),
+    },
+    raw: j ?? body,
+  });
+  void nextTick(() => {
+    const el = frameScrollEl.value;
+    el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  });
+}
+
+/** @param {Record<string, unknown>} msg */
+function onSocketMsg(msg) {
+  ingest(msg);
+  pushFrameFeedFromWire(msg);
+}
+
+useCollectorSocket(onSocketMsg);
+
+const visibleFeedLines = computed(() => {
+  if (feedTab.value === "history") {
+    return lines.value.filter((l) => l.id.startsWith("db-"));
+  }
+  if (feedTab.value === "live") {
+    return lines.value.filter((l) => l.id.startsWith("live-"));
+  }
+  return lines.value;
+});
+
+function fmtFeedTime(ts) {
+  return new Date(ts).toLocaleTimeString("zh-CN", { hour12: false });
+}
 
 const filteredNetRows = computed(() => {
   const q = filterText.value.trim().toLowerCase();
@@ -163,6 +216,41 @@ onMounted(() => {
   } catch {
     /* ignore */
   }
+
+  void (async () => {
+    try {
+      const r = await fetch("/api/frames?limit=80");
+      const data = await r.json();
+      if (!data.ok || !Array.isArray(data.rows)) return;
+      const historical = [];
+      for (const row of [...data.rows].reverse()) {
+        let parsed = null;
+        if (row.parsed_json) {
+          try {
+            parsed = typeof row.parsed_json === "string" ? JSON.parse(row.parsed_json) : row.parsed_json;
+          } catch {
+            parsed = null;
+          }
+        }
+        const display =
+          parsed != null
+            ? extractChatDisplay(parsed)
+            : { author: "db", typeLabel: "row", text: row.parse_error || "(无 parsed_json)", extraJson: null };
+        historical.push({
+          id: `db-${row.id}`,
+          ts: new Date(row.received_at).getTime() || Date.now(),
+          author: display.author,
+          typeLabel: display.typeLabel,
+          text: display.text,
+          badges: { db: !row.parse_error, decode: `op${row.opcode}` },
+          raw: parsed,
+        });
+      }
+      lines.value = [...historical, ...lines.value];
+    } catch {
+      /* ignore */
+    }
+  })();
 });
 
 watch([topFr, botFr], ([t, b]) => {
@@ -222,7 +310,7 @@ function onSplitMouseDown(e) {
   <div class="debug-wrap">
     <header class="debug-top">
       <div class="debug-top-left">
-        <strong>网络</strong>
+        <strong>采集调试</strong>
         <nav class="debug-tabs">
           <button type="button" :class="{ on: tab === 'network' }" @click="tab = 'network'">
             网络
@@ -231,9 +319,12 @@ function onSplitMouseDown(e) {
             其它事件
             <span class="pill">{{ miscEvents.length }}</span>
           </button>
+          <button type="button" :class="{ on: tab === 'frames' }" @click="tab = 'frames'">
+            CDP 消息流
+          </button>
         </nav>
       </div>
-      <span class="status">筛选后 {{ filteredNetRows.length }} / 共 {{ netRows.length }} 条</span>
+      <span v-show="tab === 'network'" class="status">筛选后 {{ filteredNetRows.length }} / 共 {{ netRows.length }} 条</span>
     </header>
 
     <div v-show="tab === 'network'" ref="splitRoot" class="split-root" :style="{ gridTemplateRows: `${topFr}fr 6px ${botFr}fr` }">
@@ -377,6 +468,36 @@ function onSplitMouseDown(e) {
         </tbody>
       </table>
     </div>
+
+    <div v-show="tab === 'frames'" class="debug-frames-pane">
+      <div class="debug-frames-toolbar">
+        <span class="debug-frames-toolbar-label">CDP WebSocket 帧</span>
+        <div class="debug-frames-feed-tabs">
+          <button type="button" :class="{ on: feedTab === 'live' }" @click="feedTab = 'live'"># live-feed</button>
+          <button type="button" :class="{ on: feedTab === 'history' }" @click="feedTab = 'history'"># mysql 历史</button>
+          <button type="button" :class="{ on: feedTab === 'all' }" @click="feedTab = 'all'"># 全部合并</button>
+        </div>
+      </div>
+      <div ref="frameScrollEl" class="msg-scroll debug-frames-scroll">
+        <div v-for="line in visibleFeedLines" :key="line.id" class="msg-row">
+          <div class="msg-av" aria-hidden="true" />
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-author">{{ line.author }}</span>
+              <span class="msg-time">{{ fmtFeedTime(line.ts) }}</span>
+              <span class="msg-type">{{ line.typeLabel }}</span>
+              <span v-if="line.badges.db !== undefined" :class="['badge', line.badges.db ? 'ok' : 'err']">
+                MySQL {{ line.badges.db ? "ok" : "fail" }}
+              </span>
+              <span v-if="line.badges.decode" class="badge muted">{{ line.badges.decode }}</span>
+            </div>
+            <div class="msg-text">{{ line.text }}</div>
+            <pre v-if="line.raw != null" class="msg-json">{{ JSON.stringify(line.raw, null, 2) }}</pre>
+          </div>
+        </div>
+        <p v-if="visibleFeedLines.length === 0" class="empty-msg">暂无 WS 帧；请确认 collect:ui 已连接并在页面产生 WebSocket 数据。</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -476,6 +597,61 @@ function onSplitMouseDown(e) {
 .misc-only {
   background: #1e1f22;
   overflow: auto;
+}
+
+.debug-frames-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #313338;
+  overflow: hidden;
+}
+
+.debug-frames-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid #27282d;
+  background: #2b2d31;
+}
+
+.debug-frames-toolbar-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #949ba4;
+}
+
+.debug-frames-feed-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.debug-frames-feed-tabs button {
+  padding: 0.35rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #949ba4;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.debug-frames-feed-tabs button.on {
+  background: #3f4248;
+  color: #f2f3f5;
+  border-color: #1e1f22;
+}
+
+.debug-frames-scroll {
+  flex: 1;
+  min-height: 0;
 }
 
 .debug-detail {

@@ -12,6 +12,54 @@ function shortenUrl(u, max = 180) {
   return s.length <= max ? s : `${s.slice(0, max)}…`;
 }
 
+/**
+ * 官方「打开某服务器某频道」直链（与 Kook.Net `DirectLinks.Channel` 一致），
+ * 不依赖 SPA 路径是 `/app/channels/{guild}/{channel}` 还是反序。
+ * @param {string} g
+ * @param {string} c
+ */
+function kookChannelDirectUrl(g, c) {
+  return `https://www.kookapp.cn/direct/channel?g=${encodeURIComponent(g)}&c=${encodeURIComponent(c)}`;
+}
+
+/**
+ * connectOverCDP 多标签时：优先选已在 Kook 且 URL 与目标 guild/channel 最相关的页签。
+ * 不会解析 DOM 里的 `<a href>`，只看当前 `page.url()`。
+ * @param {string} url
+ * @param {string} g guildId
+ * @param {string} c channelId
+ */
+function scoreKookPageForChannelNav(url, g, c) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return -1;
+  }
+  const host = u.hostname.toLowerCase();
+  if (!host.includes("kook")) return -1;
+  let score = 0;
+  const path = u.pathname || "";
+  const chMatch = path.match(/\/app\/channels\/(\d+)\/(\d+)\b/);
+  if (chMatch) {
+    const [, a, b] = chMatch;
+    if ((a === g && b === c) || (a === c && b === g)) score = 5;
+    else if (a === g || b === g) score = 3;
+    else if (a === c || b === c) score = 2;
+    else score = 2;
+  } else if (path.includes("/app/channels/")) {
+    score = 2;
+  } else {
+    score = 1;
+  }
+  const qpG = u.searchParams.get("g") || u.searchParams.get("guild_id");
+  const qpC = u.searchParams.get("c") || u.searchParams.get("channel_id");
+  if (qpG === g && qpC === c) score = Math.max(score, 5);
+  else if (qpG === g) score = Math.max(score, 3);
+  else if (qpC === c) score = Math.max(score, 2);
+  return score;
+}
+
 /** Document / API / WS 升级请求，便于判断页面是否真的在拉接口 */
 const NET_TRACE_RESOURCE_TYPES = new Set([
   "Document",
@@ -618,6 +666,110 @@ export async function startCdpWebSocketMonitor(opts, log) {
     browser,
     get mounted() {
       return mounted;
+    },
+    /**
+     * 在已挂载 CDP 的 Kook 页签里执行 `goto` 打开目标频道。
+     * 使用官方直链 `https://www.kookapp.cn/direct/channel?g={guildId}&c={channelId}`，
+     * 避免 SPA 路径 `/app/channels/...` 两段数字的先后顺序与侧栏不一致时跳错。
+     * 多标签 connectOverCDP 时按当前 `page.url()` 打分选页（不扫 DOM 里的 `<a href>`）。
+     * @param {string} guildId
+     * @param {string} channelId
+     * @param {{ clientTraceId?: string }} [traceCtx] 可选，会写入 diagnosticSink 便于前端与终端日志对齐
+     */
+    async navigateKookChannel(guildId, channelId, traceCtx) {
+      const tc = traceCtx && typeof traceCtx === "object" ? traceCtx : {};
+      const clientTraceId =
+        typeof tc.clientTraceId === "string" && tc.clientTraceId.trim() ? tc.clientTraceId.trim() : undefined;
+      /** @type {Record<string, string>} */
+      const trace = clientTraceId ? { clientTraceId } : {};
+
+      const g = String(guildId ?? "").trim();
+      const c = String(channelId ?? "").trim();
+      if (!g || !c) {
+        return { ok: false, error: "guildId 与 channelId 不能为空" };
+      }
+      if (!/^\d+$/.test(g) || !/^\d+$/.test(c)) {
+        return { ok: false, error: "guildId、channelId 须为数字" };
+      }
+      const targetUrl = kookChannelDirectUrl(g, c);
+      if (mounted.length === 0) {
+        return { ok: false, error: "尚无已挂载 CDP 的页面" };
+      }
+      /** @type {{ page: import("playwright").Page; score: number }[]} */
+      const ranked = [];
+      for (const { page } of mounted) {
+        let url = "";
+        try {
+          url = page.url();
+        } catch {
+          ranked.push({ page, score: -1 });
+          continue;
+        }
+        const sc = scoreKookPageForChannelNav(url, g, c);
+        ranked.push({ page, score: sc >= 0 ? sc : 0 });
+      }
+      ranked.sort((a, b) => b.score - a.score);
+      const top = ranked[0];
+      const page = top?.page;
+      if (!page) {
+        return { ok: false, error: "无法选择浏览器标签页" };
+      }
+      let pickedPageUrl = "";
+      try {
+        pickedPageUrl = page.url();
+      } catch {
+        pickedPageUrl = "";
+      }
+      log.info(
+        `[kook-channel] CDP 已选标签 score=${top?.score ?? "?"} mounted=${mounted.length} page=${shortenUrl(pickedPageUrl, 200)} → goto ${shortenUrl(targetUrl, 200)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`
+      );
+      opts.diagnosticSink?.({
+        kind: "kook_channel_pick_page",
+        guildId: g,
+        channelId: c,
+        targetUrl,
+        pickedPageUrl,
+        pickScore: top?.score ?? null,
+        mountedCount: mounted.length,
+        ...trace,
+      });
+      try {
+        log.info(`[kook-channel] page.goto 开始 …${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
+        opts.diagnosticSink?.({
+          kind: "kook_channel_nav_begin",
+          guildId: g,
+          channelId: c,
+          targetUrl,
+          pickedPageUrl,
+          ...trace,
+        });
+        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 90_000 });
+        const finalUrl = page.url();
+        log.info(`[kook-channel] page.goto 完成 final=${shortenUrl(finalUrl, 200)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
+        opts.diagnosticSink?.({
+          kind: "kook_channel_nav_done",
+          guildId: g,
+          channelId: c,
+          targetUrl,
+          finalUrl,
+          ok: true,
+          ...trace,
+        });
+        return { ok: true, finalUrl };
+      } catch (e) {
+        const err = /** @type {Error} */ (e);
+        log.warn(`[kook-channel] page.goto 失败: ${err.message}${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
+        opts.diagnosticSink?.({
+          kind: "kook_channel_nav_done",
+          guildId: g,
+          channelId: c,
+          targetUrl,
+          ok: false,
+          error: err.message,
+          ...trace,
+        });
+        return { ok: false, error: err.message };
+      }
     },
     async close() {
       log.info("正在卸载 CDP 监听 …");

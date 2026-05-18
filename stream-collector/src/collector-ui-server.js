@@ -7,61 +7,23 @@ import "dotenv/config";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import zlib from "node:zlib";
 import express from "express";
 import { WebSocketServer } from "ws";
 
+import { buildFrameChannelPayload } from "./collect-ws-decode.js";
 import { config } from "./config.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { createLogger, setLogLevel } from "./logger.js";
-import { processBuffer } from "./processor.js";
 import { hashBuffer, openStore } from "./store.js";
+import { createKookMessageIngest } from "./kook-message-ingest.js";
+import { registerKookMessageRoutes } from "./kook-message-api.js";
+import { registerKookSignalRoutes } from "./kook-signal-api.js";
+import { createKookTradeTelegramPush } from "./kook-trade-telegram-push.js";
+import { registerKookTradePushRoutes } from "./kook-trade-push-api.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public", "collector-ui");
 const PORT = Number.isFinite(config.collectUiPort) ? config.collectUiPort : 3840;
-
-/**
- * @param {Buffer} buf
- */
-function tryDecodeWsPayload(buf) {
-  try {
-    const t = buf.toString("utf8");
-    const obj = JSON.parse(t);
-    return { format: "json_utf8", obj, len: buf.length };
-  } catch {
-    try {
-      const inflated = zlib.inflateSync(buf);
-      const t = inflated.toString("utf8");
-      const obj = JSON.parse(t);
-      return { format: "json_zlib", obj, len: buf.length };
-    } catch {
-      try {
-        const inflated = zlib.inflateRawSync(buf);
-        const t = inflated.toString("utf8");
-        const obj = JSON.parse(t);
-        return { format: "json_zlib_raw", obj, len: buf.length };
-      } catch {
-        return {
-          format: "opaque",
-          len: buf.length,
-          hexPreview: buf.subarray(0, 48).toString("hex"),
-        };
-      }
-    }
-  }
-}
-
-/** @param {unknown} obj @param {number} max */
-function jsonWire(obj, max = 32000) {
-  try {
-    const s = JSON.stringify(obj);
-    if (s.length <= max) return { json: obj, truncated: false };
-    return { json: null, truncated: true, snippet: s.slice(0, max) };
-  } catch {
-    return { json: null, truncated: false, snippet: String(obj).slice(0, max) };
-  }
-}
 
 async function main() {
   setLogLevel(config.logLevel);
@@ -81,9 +43,24 @@ async function main() {
 
   const diagnosticSink = /** @param {Record<string, unknown>} evt */ (evt) => {
     broadcast("diag", evt);
+    void kookIngest.onDiag(evt).catch((e) => {
+      log.debug(`kook ingest diag: ${/** @type {Error} */ (e).message}`);
+    });
   };
 
   const store = await openStore(config.mysql, createLogger("store"));
+  const tradePush = createKookTradeTelegramPush(createLogger("trade-push"));
+  const kookIngest = createKookMessageIngest(store, createLogger("kook-ingest"), tradePush);
+
+  app.use(express.json({ limit: "512kb" }));
+
+  registerKookMessageRoutes(app, store, kookIngest);
+  registerKookSignalRoutes(app, store);
+  registerKookTradePushRoutes(app, tradePush);
+
+  let frameSeq = 0;
+  /** @type {null | ((guildId: string, channelId: string, trace?: { clientTraceId?: string }) => Promise<unknown>)} */
+  let navigateKookImpl = null;
 
   app.get("/api/frames", async (req, res) => {
     try {
@@ -95,17 +72,81 @@ async function main() {
     }
   });
 
-  app.use(express.static(publicDir));
+  app.post("/api/cdp/kook-channel", async (req, res) => {
+    const guildId = String(req.body?.guildId ?? req.query?.guild_id ?? "").trim();
+    const channelId = String(req.body?.channelId ?? req.query?.channel_id ?? "").trim();
+    const clientTraceIdRaw = String(req.body?.clientTraceId ?? "").trim();
+    const clientTraceId = clientTraceIdRaw || undefined;
+    /** @type {Record<string, string>} */
+    const tracePayload = clientTraceId ? { clientTraceId } : {};
 
-  /** Vue SPA：静态未命中且非 /api、路径无扩展名时回退 index.html */
-  app.use((req, res, next) => {
-    if (req.method !== "GET" && req.method !== "HEAD") return next();
-    if (req.path.startsWith("/api")) return next();
-    if (/\.\w+$/.test(req.path)) return next();
-    res.sendFile(path.join(publicDir, "index.html"), (err) => (err ? next(err) : undefined));
+    if (!guildId || !channelId) {
+      log.warn(
+        `[kook-channel] 拒绝 400 缺少 guildId/channelId${clientTraceId ? ` trace=${clientTraceId}` : ""} | body=${JSON.stringify(req.body ?? {}).slice(0, 200)}`
+      );
+      res.status(400).json({ ok: false, error: "缺少 guildId 或 channelId" });
+      return;
+    }
+    if (typeof navigateKookImpl !== "function") {
+      log.warn(`[kook-channel] 拒绝 503 CDP 尚未就绪${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
+      res.status(503).json({ ok: false, error: "CDP 尚未就绪" });
+      return;
+    }
+
+    log.info(
+      `[kook-channel] 收到 POST guild=${guildId} channel=${channelId}${clientTraceId ? ` trace=${clientTraceId}` : ""}，转 CDP …`
+    );
+    diagnosticSink({
+      kind: "kook_channel_api_received",
+      guildId,
+      channelId,
+      phase: "post_received",
+      ...tracePayload,
+    });
+
+    try {
+      const trace = clientTraceId ? { clientTraceId } : {};
+      const out = /** @type {{ ok?: boolean, error?: string, finalUrl?: string }} */ (
+        await navigateKookImpl(guildId, channelId, trace)
+      );
+      diagnosticSink({
+        kind: "kook_channel_api_finished",
+        guildId,
+        channelId,
+        phase: "post_done",
+        ok: Boolean(out?.ok),
+        error: out?.ok ? null : (out?.error ?? "导航失败"),
+        finalUrl: out?.finalUrl ?? null,
+        ...tracePayload,
+      });
+      log.info(
+        `[kook-channel] CDP 返回 ok=${Boolean(out?.ok)}${out?.error ? ` err=${out.error}` : ""}${out?.finalUrl ? ` final=${String(out.finalUrl).length > 180 ? `${String(out.finalUrl).slice(0, 180)}…` : out.finalUrl}` : ""}${clientTraceId ? ` trace=${clientTraceId}` : ""}`
+      );
+      if (out?.ok) {
+        res.json({ ok: true, ...out, ...tracePayload });
+      } else {
+        log.warn(
+          `[kook-channel] CDP 返回失败 err=${out?.error ?? "unknown"}${clientTraceId ? ` trace=${clientTraceId}` : ""}`
+        );
+        res.status(500).json({ ok: false, error: out?.error ?? "导航失败", ...tracePayload });
+      }
+    } catch (e) {
+      const errMsg = String(/** @type {Error} */ (e).message ?? e);
+      diagnosticSink({
+        kind: "kook_channel_api_finished",
+        guildId,
+        channelId,
+        phase: "post_done",
+        ok: false,
+        error: errMsg,
+        finalUrl: null,
+        ...tracePayload,
+      });
+      log.error(`[kook-channel] 未捕获异常: ${errMsg}${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
+      res.status(500).json({ ok: false, error: errMsg, ...tracePayload });
+    }
   });
 
-  let frameSeq = 0;
   const session = await startCdpWebSocketMonitor(
     {
       startUrl: config.startUrl,
@@ -115,31 +156,15 @@ async function main() {
       diagnosticSink,
       onData(buf, meta) {
         frameSeq += 1;
-        const decoded = tryDecodeWsPayload(buf);
-        const proc = processBuffer(buf, config.requiredTopLevelKeys);
-        const parsedObj = "obj" in decoded && decoded.obj !== undefined ? decoded.obj : undefined;
-        const body =
-          parsedObj !== undefined
-            ? jsonWire(parsedObj)
-            : {
-                json: null,
-                truncated: false,
-                snippet:
-                  "hexPreview" in decoded ? String(decoded.hexPreview) : null,
-                rawLen: decoded.len,
-              };
-
-        broadcast("frame", {
-          kind: "ws_frame",
-          seq: frameSeq,
-          opcode: meta.opcode,
-          pageUrl: meta.pageUrl ?? "",
-          requestId: meta.requestId ?? "",
-          decodeFormat: decoded.format,
-          len: buf.length,
-          dbParseOk: proc.ok,
-          dbParseError: proc.parseError,
-          body,
+        const { payload, proc } = buildFrameChannelPayload(
+          buf,
+          meta,
+          frameSeq,
+          config.requiredTopLevelKeys
+        );
+        broadcast("frame", payload);
+        void kookIngest.onWsFrame(payload).catch((e) => {
+          log.debug(`kook ingest ws: ${/** @type {Error} */ (e).message}`);
         });
 
         void store
@@ -158,6 +183,25 @@ async function main() {
     createLogger("cdp")
   );
 
+  navigateKookImpl = (guildId, channelId, trace) => session.navigateKookChannel(guildId, channelId, trace);
+
+  app.use(express.static(publicDir));
+
+  /** Vue SPA：静态未命中且非 /api、路径无扩展名时回退 index.html */
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.path.startsWith("/api")) return next();
+    if (/\.\w+$/.test(req.path)) return next();
+    res.sendFile(path.join(publicDir, "index.html"), (err) => (err ? next(err) : undefined));
+  });
+
+  /** 未实现的 /api（含 POST 落在此）：打日志并 JSON 404，避免静默落到 Express 默认 HTML 404 */
+  app.use((req, res, next) => {
+    if (!req.path.startsWith("/api")) return next();
+    log.warn(`[api] 404 未匹配路由 ${req.method} ${req.originalUrl}`);
+    res.status(404).json({ ok: false, error: `API 不存在: ${req.method} ${req.path}` });
+  });
+
   const shutdown = async (reason = "shutdown") => {
     log.info(`退出 (${reason})`);
     await session.close().catch((e) => log.warn(String(e?.message ?? e)));
@@ -171,6 +215,9 @@ async function main() {
   server.listen(PORT, "127.0.0.1", () => {
     log.info(
       `Collector UI (Vue)  http://127.0.0.1:${PORT}/  |  /debug  /show  |  WS ws://127.0.0.1:${PORT}/ws  （先 pnpm run ui:build）`
+    );
+    log.info(
+      `[api] 已注册 /api/kook/messages、/api/kook/signals*、/api/kook/trade-signal/*、/api/frames、/api/cdp/kook-channel（COLLECTOR_UI_PORT=${PORT}）`
     );
     if (config.collectStartUsedTargetFallback) {
       log.info(`COLLECTOR_START_URL 回退为 TARGET_PAGE_URL → ${config.startUrl}`);
