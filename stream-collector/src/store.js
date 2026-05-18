@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import mysql from "mysql2/promise";
 
 import { bufferToPlainPayloadText } from "./collect-ws-decode.js";
+import { serializeRawJsonColumnForMysql } from "./mysql-json.js";
 
 /**
  * @typedef {{ host: string; port: number; user: string; password: string; database: string }} MysqlConfig
@@ -131,6 +132,8 @@ export async function openStore(cfg, log) {
       content, msg_type, author_username, author_nickname, source, raw_json, received_at
     ) VALUES ?
   `;
+  /** bulk 行内 raw_json 列下标（与 tuples 数组一致） */
+  const KOOK_RAW_JSON_COL_IDX = 10;
   const insertFrameSql = `
     INSERT IGNORE INTO frames (received_at, payload_hash, opcode, request_id, raw_payload, parsed_json, parse_error)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -197,18 +200,7 @@ export async function openStore(cfg, log) {
 
     /** @type {unknown[][]} */
     const tuples = valid.map((r) => {
-      let rawVal = null;
-      if (r.rawJson != null) {
-        if (typeof r.rawJson === "string") {
-          try {
-            rawVal = JSON.parse(r.rawJson);
-          } catch {
-            rawVal = r.rawJson;
-          }
-        } else {
-          rawVal = r.rawJson;
-        }
-      }
+      const rawText = serializeRawJsonColumnForMysql(r.rawJson);
       return [
         r.messageId,
         r.guildId ?? "",
@@ -220,12 +212,25 @@ export async function openStore(cfg, log) {
         r.authorUsername ?? null,
         r.authorNickname ?? null,
         r.source ?? "rest",
-        rawVal,
+        rawText,
         isoToMysqlDatetime3(r.receivedAt ?? new Date().toISOString()),
       ];
     });
 
-    const [result] = await pool.query(insertKookSql, [tuples]);
+    let result;
+    try {
+      [result] = await pool.query(insertKookSql, [tuples]);
+    } catch (e) {
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      if (!/raw_json|JSON/i.test(msg)) throw e;
+      log.warn(`kook_messages 批量写入 raw_json 失败，降级为 NULL 后重试: ${msg}`);
+      const tuplesNoRaw = tuples.map((row) => {
+        const copy = [...row];
+        copy[KOOK_RAW_JSON_COL_IDX] = null;
+        return copy;
+      });
+      [result] = await pool.query(insertKookSql, [tuplesNoRaw]);
+    }
     const affected = /** @type {import("mysql2").ResultSetHeader} */ (result).affectedRows ?? 0;
     const inserted = affected;
     const duplicate = Math.max(0, valid.length - inserted);

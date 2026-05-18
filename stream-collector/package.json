@@ -17,7 +17,7 @@
     "dev:replay": "nodemon src/index.js -- --mode=replay",
     "dev:bridge": "nodemon src/ws-bridge.js",
     "dev:persistent": "nodemon src/persistent-profile-collector.js",
-    "collect:ui": "node src/collector-ui-server.js",
+    "collect:ui": "node scripts/pre-collect-ui.mjs && node src/collector-ui-server.js",
     "ui:build": "vite build --config collector-ui-vue/vite.config.js",
     "dev:ui-vue": "vite --config collector-ui-vue/vite.config.js"
   },

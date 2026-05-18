@@ -8,7 +8,8 @@ import {
   mightBeTradeSignalRough,
 } from "./kook-trade-ai-classify.js";
 import { config } from "./config.js";
-import { createSignalPublishHelper } from "./kook-signal-publish.js";
+import { createSignalPublishHelper, resolveStyleIdsForGuild } from "./kook-signal-publish.js";
+import { logPushBanner } from "./push-log-banner.js";
 
 /**
  * @typedef {{
@@ -134,7 +135,16 @@ export function createKookTradeTelegramPush(log) {
   /**
    * @param {string} text
    */
-  async function postTelegram(text) {
+  async function postTelegram(text, meta = {}) {
+    logPushBanner(log, "info", `TELEGRAM_SEND_URL → POST ${sendUrl}`, [
+      `chat_id: ${chatId}`,
+      meta.guildId ? `guild_id: ${meta.guildId}` : "",
+      meta.kind ? `kind: ${meta.kind}` : "",
+      meta.styleIds?.length ? `style_ids: ${meta.styleIds.join(", ")}` : "",
+      "--- 推送正文 ---",
+      text,
+    ].filter(Boolean));
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.telegramSendTimeoutMs);
     try {
@@ -146,6 +156,10 @@ export function createKookTradeTelegramPush(log) {
       });
       const body = await r.text().catch(() => "");
       if (!r.ok) {
+        logPushBanner(log, "error", `TELEGRAM_SEND_URL 失败 HTTP ${r.status}`, [
+          `chat_id: ${chatId}`,
+          body ? `response: ${body.slice(0, 300)}` : "",
+        ]);
         throw new Error(`HTTP ${r.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
       }
     } finally {
@@ -191,9 +205,6 @@ export function createKookTradeTelegramPush(log) {
           const sr = await signalPublish.maybePublish({ guildId, content });
           if (sr.ok) {
             delivered = true;
-            log.info(
-              `完整做单 → publish/signal | guild=${guildId} style=${(sr.styleIds ?? []).join(",")} msg=${messageId || "?"}`
-            );
           }
         } catch (e) {
           const err = String(/** @type {Error} */ (e).message ?? e);
@@ -204,13 +215,19 @@ export function createKookTradeTelegramPush(log) {
 
       if (inTelegram && telegramEnabled) {
         try {
+          const styleIds =
+            inSignal && signalPublish.enabled
+              ? resolveStyleIdsForGuild(guildId, signalPublish.mapping)
+              : [];
           await postTelegram(
-            formatTelegramText(row, { summary: verdict.summary ?? "", kind: verdict.kind })
+            formatTelegramText(row, { summary: verdict.summary ?? "", kind: verdict.kind }),
+            {
+              guildId,
+              kind: verdict.kind,
+              styleIds,
+            }
           );
           delivered = true;
-          log.info(
-            `完整做单 → Telegram | guild=${guildId} via=${verdict.via ?? "?"} star=${verdict.star ?? "-"} msg=${messageId || "?"} | ${verdict.summary ?? ""}`
-          );
         } catch (e) {
           const err = String(/** @type {Error} */ (e).message ?? e);
           errors.push(`telegram: ${err}`);

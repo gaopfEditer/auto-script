@@ -3,6 +3,7 @@
  * style_ids 与 STYLES_GROUPS_PUSH 按群组顺序一一对应，未匹配则用第一项。
  */
 import { config } from "./config.js";
+import { logPushBanner } from "./push-log-banner.js";
 
 /** @param {string} raw */
 function parseCsvList(raw) {
@@ -50,9 +51,44 @@ export function resolveStyleIdsForGuild(guildId, mapping) {
  *   publish?: boolean;
  * }} body
  */
-export async function postPublishSignal(body) {
+/**
+ * @param {{
+ *   signal: string;
+ *   guildId: string;
+ *   styleIds: string[];
+ *   strategyId?: string;
+ *   composeMode?: string;
+ *   publish?: boolean;
+ * }} body
+ * @param {ReturnType<typeof import("./logger.js").createLogger>} log
+ */
+export async function postPublishSignal(body, log) {
   const url = config.signalPublishUrl;
   if (!url) throw new Error("未配置 SIGNAL_PUBLISH_URL");
+
+  const payload = {
+    signal: body.signal,
+    style_ids: body.styleIds,
+    strategy_id: body.strategyId ?? config.signalPublishStrategyId,
+    compose_mode: body.composeMode ?? config.signalPublishComposeMode,
+    publish: body.publish ?? config.signalPublishPublish,
+  };
+
+  logPushBanner(log, "info", `SIGNAL_PUBLISH_URL → POST ${url}`, [
+    `guild_id (KOOK_GROUPS_PUSH): ${body.guildId}`,
+    `style_ids (STYLES_GROUPS_PUSH): ${body.styleIds.join(", ") || "(空)"}`,
+    `strategy_id: ${payload.strategy_id}`,
+    `compose_mode: ${payload.compose_mode}`,
+    `publish: ${payload.publish}`,
+    "--- signal 正文 ---",
+    body.signal,
+    "--- 请求 JSON（节选）---",
+    JSON.stringify(
+      { ...payload, signal: payload.signal.length > 500 ? `${payload.signal.slice(0, 500)}…` : payload.signal },
+      null,
+      2
+    ),
+  ]);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.signalPublishTimeoutMs);
@@ -60,19 +96,23 @@ export async function postPublishSignal(body) {
     const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        signal: body.signal,
-        style_ids: body.styleIds,
-        strategy_id: body.strategyId ?? config.signalPublishStrategyId,
-        compose_mode: body.composeMode ?? config.signalPublishComposeMode,
-        publish: body.publish ?? config.signalPublishPublish,
-      }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
     const text = await r.text().catch(() => "");
     if (!r.ok) {
+      logPushBanner(log, "error", `SIGNAL_PUBLISH_URL 失败 HTTP ${r.status}`, [
+        `guild_id: ${body.guildId}`,
+        `style_ids: ${body.styleIds.join(", ")}`,
+        text ? `response: ${text.slice(0, 500)}` : "",
+      ]);
       throw new Error(`HTTP ${r.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
     }
+    logPushBanner(log, "info", `SIGNAL_PUBLISH_URL 成功`, [
+      `guild_id: ${body.guildId}`,
+      `style_ids: ${body.styleIds.join(", ")}`,
+      text ? `response: ${text.slice(0, 300)}` : "",
+    ]);
     return text;
   } finally {
     clearTimeout(timer);
@@ -109,11 +149,14 @@ export function createSignalPublishHelper(log) {
     const signal = String(row.content ?? "").trim();
     if (!signal) return { skipped: "empty" };
 
-    await postPublishSignal({
-      signal,
-      guildId,
-      styleIds,
-    });
+    await postPublishSignal(
+      {
+        signal,
+        guildId,
+        styleIds,
+      },
+      log
+    );
     return { ok: true, styleIds };
   }
 
