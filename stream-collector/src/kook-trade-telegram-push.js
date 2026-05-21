@@ -42,6 +42,27 @@ function mergedPushGuildIds() {
   ];
 }
 
+/**
+ * @param {ReturnType<typeof import("./logger.js").createLogger>} log
+ * @param {string} reason
+ * @param {TradePushRow} row
+ * @param {Record<string, string>} [extra]
+ */
+function logPushSkipped(log, reason, row, extra = {}) {
+  const gid = String(row.guildId ?? "").trim();
+  const preview = normalizeTradeSignalText(row.content ?? "").slice(0, 280);
+  logPushBanner(log, "info", `做单推送跳过 · ${reason}`, [
+    `guild_id: ${gid || "(空)"}`,
+    row.channelId ? `channel_id: ${row.channelId}` : "",
+    row.messageId ? `message_id: ${row.messageId}` : "",
+    row.source ? `source: ${row.source}` : "",
+    ...Object.entries(extra).map(([k, v]) => `${k}: ${v}`),
+    `KOOK_GROUPS_PUSH 已配置: ${parseGuildIdList(config.kookGroupsPush).join(", ") || "(无)"}`,
+    "--- 消息摘要 ---",
+    preview || "(空)",
+  ].filter(Boolean));
+}
+
 /** @param {TradePushRow} row */
 function isRealtimeSocketMessage(row) {
   const src = String(row.source ?? "").trim();
@@ -177,12 +198,24 @@ export function createKookTradeTelegramPush(log) {
     const guildId = String(row.guildId ?? "").trim();
     const inTelegram = guildId && guildIds.has(guildId);
     const inSignal = guildId && signalPublish.signalGuilds.includes(guildId);
-    if (!inTelegram && !inSignal) return { skipped: "guild" };
+    if (!inTelegram && !inSignal) {
+      logPushSkipped(log, "guild 不在 KOOK_GROUPS_PUSH / 推送列表", row, {
+        inSignal: String(inSignal),
+        inTelegram: String(inTelegram),
+      });
+      return { skipped: "guild" };
+    }
 
-    if (!isRealtimeSocketMessage(row)) return { skipped: "not_socket" };
+    if (!isRealtimeSocketMessage(row)) {
+      logPushSkipped(log, "非实时 WS 来源（仅 ws_desktop/frontend）", row);
+      return { skipped: "not_socket" };
+    }
 
     const content = normalizeTradeSignalText(row.content ?? "");
-    if (!content) return { skipped: "empty" };
+    if (!content) {
+      logPushSkipped(log, "正文为空", row);
+      return { skipped: "empty" };
+    }
 
     const messageId = String(row.messageId ?? "").trim();
     if (messageId && pushedMessageIds.has(messageId)) return { skipped: "dedup" };
@@ -194,6 +227,10 @@ export function createKookTradeTelegramPush(log) {
     const run = async () => {
       const verdict = await isCompleteTradeForPush(content, log);
       if (!verdict.push) {
+        logPushSkipped(log, `AI/规则未判定为做单 (${verdict.reason})`, row, {
+          ai_summary: verdict.summary ?? "",
+          via: verdict.via ?? "",
+        });
         return { skipped: verdict.reason, ai: verdict.summary };
       }
 
