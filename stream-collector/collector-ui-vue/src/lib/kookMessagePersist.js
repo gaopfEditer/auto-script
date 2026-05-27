@@ -19,8 +19,9 @@ export function queueKookMessagesForPersist(messages, ctx) {
     const messageId = String(m.id ?? "").trim();
     if (!messageId) continue;
     const raw = m.raw;
-    const wsDesktop =
-      raw && typeof raw === "object" && /** @type {Record<string, unknown>} */ (raw)._kookWsDesktopNotification;
+    const rawO = raw && typeof raw === "object" ? /** @type {Record<string, unknown>} */ (raw) : null;
+    const wsDesktop = Boolean(rawO?._kookWsDesktopNotification);
+    const wsChannel = Boolean(rawO?._kookWsChannelMsg);
     pendingByMessageId.set(messageId, {
       messageId,
       guildId,
@@ -31,7 +32,7 @@ export function queueKookMessagesForPersist(messages, ctx) {
       msgType: m.type ?? null,
       authorUsername: m.authorUsername || null,
       authorNickname: m.authorNickname || null,
-      source: wsDesktop ? "ws_desktop" : "frontend",
+      source: wsDesktop ? "ws_desktop" : wsChannel ? "ws_channel_msg" : "frontend",
       rawJson: raw && typeof raw === "object" ? raw : null,
     });
   }

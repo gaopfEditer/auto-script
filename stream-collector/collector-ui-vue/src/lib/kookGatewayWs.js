@@ -95,6 +95,110 @@ export function tryExtractDesktopNotificationFromWsFrameJson(frameRoot) {
 }
 
 /**
+ * @param {Record<string, unknown>} di
+ * @returns {Record<string, unknown> | null}
+ */
+function parseChannelMsgInner(di) {
+  const contentStr = di.content;
+  if (typeof contentStr === "string" && contentStr.trim()) {
+    try {
+      const inner = JSON.parse(contentStr);
+      return isObj(inner) ? /** @type {Record<string, unknown>} */ (inner) : null;
+    } catch {
+      return null;
+    }
+  }
+  if (isObj(contentStr)) return /** @type {Record<string, unknown>} */ (contentStr);
+  return null;
+}
+
+/**
+ * @param {Record<string, unknown>} ex
+ * @param {Record<string, unknown>} di
+ */
+function pickChannelIdFromEnvelope(ex, di) {
+  for (const src of [ex, di]) {
+    for (const k of ["channel_id", "channelId"]) {
+      const v = src[k];
+      if (v == null) continue;
+      const s = String(v).trim();
+      if (/^\d{8,}$/.test(s)) return s;
+    }
+  }
+  for (const k of ["target_id", "targetId"]) {
+    const v = di[k];
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (/^\d{8,}$/.test(s)) return s;
+  }
+  return "";
+}
+
+/**
+ * 从 CHANNEL_MSG 提取频道消息（content / extra 为嵌套 JSON 字符串）。
+ * @param {unknown} frameRoot
+ * @returns {{ channelId: string; guildId: string; hist: import("./kookMessages.js").KookHistMsg } | null}
+ */
+export function tryExtractChannelMsgFromWsFrameJson(frameRoot) {
+  if (!isObj(frameRoot)) return null;
+  const di = /** @type {Record<string, unknown>} */ (
+    /** @type {Record<string, unknown>} */ (frameRoot).d
+  );
+  if (!isObj(di) || String(di.type ?? "") !== "CHANNEL_MSG") return null;
+
+  const inner = parseChannelMsgInner(di);
+  if (!inner) return null;
+
+  let extraRaw = inner.extra;
+  if (typeof extraRaw === "string" && extraRaw.trim()) {
+    try {
+      extraRaw = JSON.parse(extraRaw);
+    } catch {
+      extraRaw = {};
+    }
+  }
+  const ex = isObj(extraRaw) ? /** @type {Record<string, unknown>} */ (extraRaw) : {};
+
+  const guildId = String(ex.guild_id ?? "").trim();
+  if (!guildId) return null;
+
+  const channelId = pickChannelIdFromEnvelope(ex, di);
+  const author = isObj(ex.author) ? /** @type {Record<string, unknown>} */ (ex.author) : {};
+  const km = isObj(inner.kmarkdown) ? /** @type {Record<string, unknown>} */ (inner.kmarkdown) : {};
+
+  let content = String(inner.content ?? "").trim();
+  if (!content) content = String(km.raw_content ?? "").trim();
+  if (!content) return null;
+
+  const authorId = String(author.id ?? di.fromUserId ?? "").trim();
+  const msgId = String(di.msgId ?? "").trim();
+  const msgTs = Number(di.msgTimestamp);
+  const create_at = !Number.isNaN(msgTs) && msgTs > 0 ? msgTs : Date.now();
+
+  /** @type {import("./kookMessages.js").KookHistMsg} */
+  const hist = {
+    id: msgId || `ws-ch-${guildId}-${create_at}`,
+    content,
+    create_at,
+    authorId,
+    authorUsername: String(author.username ?? "").trim(),
+    authorNickname: String(author.nickname ?? "").trim(),
+    authorIdentifyNum: String(author.identify_num ?? author.identifyNum ?? "").trim(),
+    authorDisplayName: String(author.nickname ?? author.username ?? "未知用户").trim() || "未知用户",
+    authorAvatar: typeof author.avatar === "string" ? author.avatar.trim() : "",
+    bot: Boolean(author.bot),
+    type: Number(ex.type ?? inner.type ?? 1) || 1,
+    raw: {
+      _kookWsChannelMsg: true,
+      envelope: di,
+      parsed: inner,
+    },
+  };
+
+  return { channelId, guildId, hist };
+}
+
+/**
  * 从普通网关帧（非 SYS_MSG 桌面通知路径）尝试取频道 id，用于未读 +1。
  * @param {unknown} frameRoot
  * @returns {string | null}

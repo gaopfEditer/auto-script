@@ -72,11 +72,18 @@ export const config = {
    */
   pageReloadIntervalMs: Number(process.env.COLLECTOR_PAGE_RELOAD_INTERVAL_MS ?? 0),
   /**
-   * collect：打印主文档 / XHR / Fetch / WebSocket 握手与页面生命周期（默认开）。
-   * 设 COLLECTOR_NETWORK_TRACE=0|false|off 关闭。
+   * collect：终端打印 [cdp] 的 net→/net←/page/ws 等 CDP 网络诊断（默认关）。
+   * 设 COLLECTOR_NETWORK_TRACE=1|true|on 开启。
    */
-  collectNetworkTrace: !["0", "false", "no", "off"].includes(
-    String(process.env.COLLECTOR_NETWORK_TRACE ?? "1").toLowerCase()
+  collectNetworkTrace: ["1", "true", "yes", "on"].includes(
+    String(process.env.COLLECTOR_NETWORK_TRACE ?? "0").toLowerCase()
+  ),
+  /**
+   * collect：[cdp] 逐帧打印 WS 解码 JSON（默认关；心跳 s=3、SYS_MSG 永不打印）。
+   * 设 COLLECTOR_WS_FRAME_TRACE=1|true|on 开启其余帧。
+   */
+  collectWsFrameTrace: ["1", "true", "yes", "on"].includes(
+    String(process.env.COLLECTOR_WS_FRAME_TRACE ?? "0").toLowerCase()
   ),
   /** `pnpm run collect:ui` 与嵌入式 UI 监听端口（默认 3840）；`pnpm collect` 联调 Vite 时设 COLLECTOR_UI_EMBED=1 */
   collectUiPort: Number(process.env.COLLECTOR_UI_PORT ?? 3840),

@@ -19,6 +19,8 @@ import { createKookMessageIngest } from "./kook-message-ingest.js";
 import { registerKookMessageRoutes } from "./kook-message-api.js";
 import { registerKookSignalRoutes } from "./kook-signal-api.js";
 import { createKookTradeTelegramPush } from "./kook-trade-telegram-push.js";
+import { createKookPromatAnalysis } from "./kook-promat-analysis.js";
+import { createPromatPublishHelper } from "./kook-promat-publish.js";
 import { registerKookTradePushRoutes } from "./kook-trade-push-api.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,7 +52,14 @@ async function main() {
 
   const store = await openStore(config.mysql, createLogger("store"));
   const tradePush = createKookTradeTelegramPush(createLogger("trade-push"));
-  const kookIngest = createKookMessageIngest(store, createLogger("kook-ingest"), tradePush);
+  const promatPublish = createPromatPublishHelper(createLogger("promat-publish"));
+  const promatAnalysis = createKookPromatAnalysis(createLogger("promat"), promatPublish);
+  const kookIngest = createKookMessageIngest(
+    store,
+    createLogger("kook-ingest"),
+    tradePush,
+    promatAnalysis
+  );
 
   app.use(express.json({ limit: "512kb" }));
 
@@ -153,6 +162,7 @@ async function main() {
       cdpConnectUrl: config.cdpConnectUrl,
       pageReloadIntervalMs: config.pageReloadIntervalMs,
       networkTrace: config.collectNetworkTrace,
+      wsFrameTrace: config.collectWsFrameTrace,
       diagnosticSink,
       onData(buf, meta) {
         frameSeq += 1;

@@ -11,9 +11,12 @@ import {
   extractChannelIdFromMessagesUrl,
   parseKookMessagesResponseBody,
 } from "../collector-ui-vue/src/lib/kookMessages.js";
+import { formatKookGatewayFrameForLog } from "../collector-ui-vue/src/lib/kookGatewayFrameFormat.js";
 import {
+  tryExtractChannelMsgFromWsFrameJson,
   tryExtractDesktopNotificationFromWsFrameJson,
 } from "../collector-ui-vue/src/lib/kookGatewayWs.js";
+import { logPushBanner } from "./push-log-banner.js";
 
 /**
  * @typedef {{
@@ -36,8 +39,9 @@ import {
  * @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {ReturnType<typeof import("./kook-trade-telegram-push.js").createKookTradeTelegramPush> | null} [tradePush]
+ * @param {ReturnType<typeof import("./kook-promat-analysis.js").createKookPromatAnalysis> | null} [promatAnalysis]
  */
-export function createKookMessageIngest(store, log, tradePush = null) {
+export function createKookMessageIngest(store, log, tradePush = null, promatAnalysis = null) {
   /** @type {Record<string, string>} */
   const reqUrlByRequestId = {};
   const MAX_REQ_TRACK = 600;
@@ -85,6 +89,8 @@ export function createKookMessageIngest(store, log, tradePush = null) {
   function queueTradePush(rows) {
     if (!tradePush) return;
     for (const row of rows) {
+      // ws_channel_msg 由 Promat 管线（解析 + Telegram + publish/signal）处理，避免重复 AI/推送
+      if (String(row.source ?? "").trim() === "ws_channel_msg") continue;
       void tradePush.maybePush(row).catch((e) => {
         log.debug(`trade push: ${/** @type {Error} */ (e).message}`);
       });
@@ -160,16 +166,44 @@ export function createKookMessageIngest(store, log, tradePush = null) {
         : null;
     if (!j) return;
 
-    const desk = tryExtractDesktopNotificationFromWsFrameJson(j);
-    if (!desk) return;
+    const d =
+      j.d != null && typeof j.d === "object" && !Array.isArray(j.d)
+        ? /** @type {Record<string, unknown>} */ (j.d)
+        : null;
+    const frameType = String(d?.type ?? "");
+    if (frameType === "CHANNEL_MSG") {
+      logPushBanner(log, "info", `Kook WS 帧 · ${frameType}`, formatKookGatewayFrameForLog(j));
+    }
 
-    const { channelId, guildId, hist } = desk;
-    const row = histToRow(hist, {
-      guildId: guildId || guildIdLabel,
-      channelId,
-      source: "ws_desktop",
-    });
-    if (row) await persistRows([row]);
+    const desk = tryExtractDesktopNotificationFromWsFrameJson(j);
+    if (desk) {
+      const { channelId, guildId, hist } = desk;
+      const row = histToRow(hist, {
+        guildId: guildId || guildIdLabel,
+        channelId,
+        source: "ws_desktop",
+      });
+      if (row) await persistRows([row]);
+      return;
+    }
+
+    const chMsg = tryExtractChannelMsgFromWsFrameJson(j);
+    if (chMsg) {
+      const { channelId, guildId, hist } = chMsg;
+      const row = histToRow(hist, {
+        guildId: guildId || guildIdLabel,
+        channelId,
+        source: "ws_channel_msg",
+      });
+      if (row) {
+        await persistRows([row]);
+        if (promatAnalysis) {
+          void promatAnalysis.analyzeFromRow(row).catch((e) => {
+            log.debug(`promat analysis: ${/** @type {Error} */ (e).message}`);
+          });
+        }
+      }
+    }
   }
 
   /**

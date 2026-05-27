@@ -22,7 +22,11 @@ import {
   bumpChannelUnread,
   clearChannelUnread,
 } from "../lib/kookUnread.js";
-import { tryExtractDesktopNotificationFromWsFrameJson, tryExtractChannelIdFromGatewayFrame } from "../lib/kookGatewayWs.js";
+import {
+  tryExtractChannelMsgFromWsFrameJson,
+  tryExtractDesktopNotificationFromWsFrameJson,
+  tryExtractChannelIdFromGatewayFrame,
+} from "../lib/kookGatewayWs.js";
 import { queueKookMessagesForPersist } from "../lib/kookMessagePersist.js";
 import { maybeNotifyCompleteTradeSignal } from "../lib/kookTradeSignalNotify.js";
 import {
@@ -368,6 +372,21 @@ function ingestKookWsFrameForShow(msg) {
     persistMergedMessages(channelId, desk.guildId, [hist], "ws_desktop");
     if (channelId && channelId !== selId) {
       bumpChannelUnread(unreadByChannelId, channelId, { mention: false });
+    }
+    return;
+  }
+
+  const chMsg = tryExtractChannelMsgFromWsFrameJson(j);
+  if (chMsg) {
+    const { channelId, guildId, hist } = chMsg;
+    const cidKey = channelId || `guild-${guildId}`;
+    const prev = messagesByChannelId[cidKey] ?? [];
+    messagesByChannelId[cidKey] = mergeKookChannelMessages(prev, [hist]);
+    patchChannelLastMsgPreview(cidKey, hist.content);
+    persistMergedMessages(cidKey, guildId, [hist], "ws_channel_msg");
+    maybeNotifyCompleteTradeSignal(hist, { guildId, channelId: cidKey, source: "ws_channel_msg" });
+    if (cidKey && cidKey !== selId) {
+      bumpChannelUnread(unreadByChannelId, cidKey, { mention: false });
     }
     return;
   }

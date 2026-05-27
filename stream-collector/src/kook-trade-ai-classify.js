@@ -12,6 +12,7 @@ import { config } from "./config.js";
 /** 实时 WS / 前端推送来源（非历史 REST 批量） */
 export const KOOK_TRADE_SOCKET_SOURCES = new Set([
   "ws_desktop",
+  "ws_channel_msg",
   "frontend",
   "frontend_notify",
 ]);

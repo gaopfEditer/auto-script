@@ -4,7 +4,12 @@
 import { mightBeTradeSignalRough } from "./kookTradeSignalDetect.js";
 
 /** 与后端 KOOK_TRADE_SOCKET_SOURCES 一致 */
-const SOCKET_SOURCES = new Set(["ws_desktop", "frontend", "frontend_notify"]);
+const SOCKET_SOURCES = new Set([
+  "ws_desktop",
+  "ws_channel_msg",
+  "frontend",
+  "frontend_notify",
+]);
 
 /** @type {Set<string>} */
 const clientDedup = new Set();

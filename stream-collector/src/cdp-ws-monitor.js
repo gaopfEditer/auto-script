@@ -427,15 +427,38 @@ function decodeWebSocketFramePayload(buf, opcode) {
 }
 
 /**
+ * 终端是否跳过打印该 WS 帧（心跳、SYS_MSG 等噪音）。
+ * @param {unknown} parsedJson
+ */
+function shouldSkipWsFrameConsoleLog(parsedJson) {
+  if (parsedJson == null || typeof parsedJson !== "object" || Array.isArray(parsedJson)) {
+    return false;
+  }
+  const o = /** @type {Record<string, unknown>} */ (parsedJson);
+  const keys = Object.keys(o);
+  if (keys.length === 1 && (o.s === 3 || o.s === "3")) return true;
+
+  const d = o.d;
+  if (d != null && typeof d === "object" && !Array.isArray(d)) {
+    if (String(/** @type {Record<string, unknown>} */ (d).type ?? "") === "SYS_MSG") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * @param {import('playwright').CDPSession} cdp
  * @param {Logger} log
  * @param {{
  *   onData: (buf: Buffer, meta: { requestId: string, opcode: number, isBinaryHint: boolean, pageUrl: string }) => void,
  *   diagnosticSink?: (evt: Record<string, unknown>) => void,
+ *   wsFrameTrace?: boolean,
  * }} opts
  * @param {() => string} getPageUrl
  */
 function wireWebSocketFrames(cdp, log, opts, getPageUrl) {
+  const wsFrameTrace = Boolean(opts.wsFrameTrace);
   let localSeq = 0;
   cdp.on("Network.webSocketFrameReceived", (evt) => {
     const requestId = evt.requestId ?? "";
@@ -461,20 +484,25 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl) {
 
     localSeq += 1;
     const decoded = decodeWebSocketFramePayload(buf, opcode);
-    if (decoded.parsedJson !== undefined) {
-      let line;
-      try {
-        line = JSON.stringify(decoded.parsedJson);
-      } catch {
-        line = "[object]";
+    const skipConsole =
+      !wsFrameTrace ||
+      shouldSkipWsFrameConsoleLog(decoded.parsedJson);
+    if (!skipConsole) {
+      if (decoded.parsedJson !== undefined) {
+        let line;
+        try {
+          line = JSON.stringify(decoded.parsedJson);
+        } catch {
+          line = "[object]";
+        }
+        log.info(
+          `[WS 帧 #${localSeq} op=${opcode} ${decoded.decodePath}] ${line.length > 2800 ? `${line.slice(0, 2800)}…` : line}`
+        );
+      } else {
+        log.info(
+          `[WS 帧 #${localSeq} op=${opcode} ${decoded.decodePath}] ${decoded.parseError ?? ""} ${decoded.rawPreview ? decoded.rawPreview.slice(0, 400) : decoded.hexPreview ?? ""}`
+        );
       }
-      log.info(
-        `[WS 帧 #${localSeq} op=${opcode} ${decoded.decodePath}] ${line.length > 2800 ? `${line.slice(0, 2800)}…` : line}`
-      );
-    } else {
-      log.info(
-        `[WS 帧 #${localSeq} op=${opcode} ${decoded.decodePath}] ${decoded.parseError ?? ""} ${decoded.rawPreview ? decoded.rawPreview.slice(0, 400) : decoded.hexPreview ?? ""}`
-      );
     }
 
     opts.diagnosticSink?.({
@@ -514,6 +542,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl) {
  *   cdpConnectUrl?: string,
  *   pageReloadIntervalMs?: number,
  *   networkTrace?: boolean,
+ *   wsFrameTrace?: boolean,
  *   diagnosticSink?: (evt: Record<string, unknown>) => void,
  *   onData: (buf: Buffer, meta: { requestId: string, opcode: number, isBinaryHint: boolean, pageUrl?: string }) => void
  * }} opts — diagnosticSink：实时诊断（collect UI），与 networkTrace 独立；仅 sink 时也会挂 CDP 监听

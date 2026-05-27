@@ -11,6 +11,8 @@ import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, openStore } from "./store.js";
 import { createKookMessageIngest } from "./kook-message-ingest.js";
 import { createKookTradeTelegramPush } from "./kook-trade-telegram-push.js";
+import { createKookPromatAnalysis } from "./kook-promat-analysis.js";
+import { createPromatPublishHelper } from "./kook-promat-publish.js";
 import { runReplayScheduler } from "./replay-scheduler.js";
 
 setLogLevel(config.logLevel);
@@ -37,7 +39,7 @@ async function collect() {
     );
   }
   log.info(
-    `启动 collect | MySQL ${config.mysql.host}:${config.mysql.port}/${config.mysql.database} | 页面 ${config.startUrl} | 网络诊断=${config.collectNetworkTrace ? "开" : "关"} | LOG_LEVEL=${config.logLevel}`
+    `启动 collect | MySQL ${config.mysql.host}:${config.mysql.port}/${config.mysql.database} | 页面 ${config.startUrl} | 网络诊断=${config.collectNetworkTrace ? "开" : "关"} | WS帧日志=${config.collectWsFrameTrace ? "开" : "关"} | LOG_LEVEL=${config.logLevel}`
   );
   if (config.cdpConnectUrl) {
     log.info(
@@ -56,7 +58,14 @@ async function collect() {
 
   const store = await openStore(config.mysql, createLogger("store"));
   const tradePush = createKookTradeTelegramPush(createLogger("trade-push"));
-  const kookIngest = createKookMessageIngest(store, createLogger("kook-ingest"), tradePush);
+  const promatPublish = createPromatPublishHelper(createLogger("promat-publish"));
+  const promatAnalysis = createKookPromatAnalysis(createLogger("promat"), promatPublish);
+  const kookIngest = createKookMessageIngest(
+    store,
+    createLogger("kook-ingest"),
+    tradePush,
+    promatAnalysis
+  );
 
   let embedUi = null;
   /** @type {{ navigateKookChannel?: (g: string, c: string, t?: { clientTraceId?: string }) => Promise<unknown> }} */
@@ -78,6 +87,7 @@ async function collect() {
       cdpConnectUrl: config.cdpConnectUrl,
       pageReloadIntervalMs: config.pageReloadIntervalMs,
       networkTrace: config.collectNetworkTrace,
+      wsFrameTrace: config.collectWsFrameTrace,
       diagnosticSink: (evt) => {
         embedUi?.diagnosticSink?.(evt);
         void kookIngest.onDiag(evt).catch((e) => {
