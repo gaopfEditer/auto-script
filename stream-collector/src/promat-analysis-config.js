@@ -6,7 +6,7 @@ export const PROMAT_ANALYSIS = {
   ollama: {
     enabled: true,
     baseUrl: "http://localhost:11434",
-    model: "gemma-uncensored",
+    model: "gemma4:26b",
     timeoutSec: 120,
   },
   /** Promat 结构化发车 → 本机 8000（url/strategy 运行时读 config.js / .env） */

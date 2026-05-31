@@ -373,7 +373,7 @@ def get_ollama_generate_url() -> str:
 
 
 def get_ollama_model() -> str:
-    return os.environ.get("OLLAMA_MODEL", "gemma-uncensored").strip() or "gemma-uncensored"
+    return os.environ.get("OLLAMA_MODEL", "gemma4:26b").strip() or "gemma4:26b"
 
 
 def get_ollama_generate_timeout_sec() -> int:

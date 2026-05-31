@@ -61,7 +61,7 @@ pnpm run dev:ui-vue
 - `KOOK_GROUPS_PUSH`：监听的 Kook 群组 id（逗号分隔，可与 `KOOK_TRADE_PUSH_GUILD_IDS` 合并）
 - `TELEGRAM_PUSH_CHAT_ID`：目标 Telegram 会话 id（如 `-5289237674`）
 - `TELEGRAM_SEND_URL`：发送 API，默认 `http://127.0.0.1:8000/api/telegram/send`
-- `OLLAMA_GENERATE_URL` / `OLLAMA_MODEL`：本机 Ollama（默认 `http://127.0.0.1:11434/api/generate`、`gemma-uncensored`）
+- `OLLAMA_GENERATE_URL` / `OLLAMA_MODEL`：本机 Ollama（默认 `http://127.0.0.1:11434/api/generate`、`gemma4:26b`）
 
 **仅处理实时 socket 来源**（`ws_desktop` / 前端 WS 合并），不扫 REST 历史。Ollama 判断两类需推送信号：`kind=full` 完整做单、`kind=adjust` 仅改止盈/止损/芷楹等持仓调整。
 

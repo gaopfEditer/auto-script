@@ -125,7 +125,7 @@ export const config = {
   ollamaGenerateUrl: (
     process.env.OLLAMA_GENERATE_URL ?? "http://127.0.0.1:11434/api/generate"
   ).trim(),
-  ollamaModel: (process.env.OLLAMA_MODEL ?? "gemma-uncensored").trim(),
+  ollamaModel: (process.env.OLLAMA_MODEL ?? "gemma4:26b").trim(),
   ollamaGenerateTimeoutMs: Number(process.env.OLLAMA_GENERATE_TIMEOUT_MS ?? 60_000),
   /** AI 不可用或解析失败时是否用正则兜底 */
   ollamaTradeClassifyFallbackRegex: !["0", "false", "no", "off"].includes(

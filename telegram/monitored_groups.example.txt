@@ -20,6 +20,6 @@ push_chat=-5123396026
 #
 # ---------- AI 聚合推送（listen.py 默认开启）----------
 # 每群滑动窗口 TELEGRAM_TRADE_CONTEXT_SIZE=30，防抖 TELEGRAM_TRADE_CONTEXT_FLUSH_SEC=45
-# Ollama: OLLAMA_GENERATE_URL、OLLAMA_MODEL=gemma-uncensored
+# Ollama: OLLAMA_GENERATE_URL、OLLAMA_MODEL=gemma4:26b
 # 发送: TELEGRAM_SEND_URL=http://127.0.0.1:8000/api/telegram/send
 # 关闭 AI、恢复关键词原样转发: TELEGRAM_AI_TRADE_AGGREGATE=0
