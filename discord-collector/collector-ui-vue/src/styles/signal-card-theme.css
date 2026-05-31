@@ -1,0 +1,123 @@
+.signal-card-rail {
+  background: #232428;
+  border-left: 1px solid #000;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.signal-card-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.45rem;
+}
+.signal-card-head {
+  padding: 0.75rem 0.85rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+.signal-card-wait,
+.signal-card-err {
+  font-size: 0.75rem;
+  color: #949ba4;
+  padding: 0.5rem 0.35rem;
+}
+.signal-card-err {
+  color: #f38688;
+}
+.signal-card {
+  background: #2b2d31;
+  border: 1px solid #1e1f22;
+  border-radius: 8px;
+  padding: 0.55rem 0.6rem 0.65rem;
+  margin-bottom: 0.5rem;
+}
+.signal-card.inactive {
+  opacity: 0.72;
+  border-color: #3a3c42;
+}
+.signal-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.68rem;
+}
+.signal-card-status.on {
+  color: #49e57a;
+  font-weight: 700;
+}
+.signal-card-status.off {
+  color: #949ba4;
+}
+.signal-card-time {
+  color: #6d7480;
+}
+.signal-style-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.35rem;
+}
+.signal-style-tab {
+  border: none;
+  background: #1e1f22;
+  color: #949ba4;
+  font-size: 0.65rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.signal-style-tab.active {
+  background: #5865f2;
+  color: #fff;
+}
+.signal-card-body {
+  font-family: inherit;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0 0 0.45rem;
+  color: #dbdee1;
+}
+.signal-card-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+.signal-act {
+  border: none;
+  background: #35373c;
+  color: #dbdee1;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.signal-act:hover {
+  background: #404249;
+}
+.signal-act.mini {
+  padding: 0.1rem 0.35rem;
+}
+.signal-expire-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.65rem;
+  color: #949ba4;
+}
+.signal-expire-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.65rem;
+  background: #1e1f22;
+  border: 1px solid #3a3c42;
+  color: #dbdee1;
+  border-radius: 4px;
+  padding: 0.1rem 0.25rem;
+}

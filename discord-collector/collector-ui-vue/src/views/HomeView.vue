@@ -1,0 +1,65 @@
+<script setup>
+import { RouterLink } from "vue-router";
+</script>
+
+<template>
+  <div class="hub">
+    <h1>Discord Collector</h1>
+    <p>
+      需要两个终端：<code>pnpm run collect:ui</code>（后端 3850）+ <code>pnpm run dev:ui-vue</code>（前端 dev）。
+      请打开 Vite 提示的地址（如 <code>http://localhost:5189/show</code>），顶部应显示 <strong>WS 已连接</strong>。
+    </p>
+    <div class="actions">
+      <RouterLink class="btn primary" to="/show">Show（群组 / 频道 / 消息）</RouterLink>
+      <RouterLink class="btn" to="/debug">Debug（网络 / WS 帧）</RouterLink>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.hub {
+  max-width: 560px;
+  margin: 3rem auto;
+  padding: 2rem;
+  background: #2b2d31;
+  border-radius: 12px;
+  border: 1px solid #3f4147;
+}
+h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.35rem;
+  color: #f2f3f5;
+}
+p {
+  color: #949ba4;
+  line-height: 1.55;
+  margin: 0;
+}
+code {
+  font-size: 0.85em;
+  background: #1e1f22;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+.actions {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+.btn {
+  flex: 1;
+  text-align: center;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-weight: 600;
+  border: 1px solid #3f4147;
+  background: #1e1f22;
+  color: #dbdee1;
+  text-decoration: none;
+}
+.btn.primary {
+  background: #5865f2;
+  border-color: #5865f2;
+  color: #fff;
+}
+</style>

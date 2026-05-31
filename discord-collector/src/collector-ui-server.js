@@ -1,0 +1,288 @@
+#!/usr/bin/env node
+/**
+ * Discord CDP 采集 + HTTP 静态 UI + WebSocket 实时推送。
+ */
+import "dotenv/config";
+import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import express from "express";
+import { WebSocketServer } from "ws";
+
+import { buildFrameChannelPayload } from "./collect-ws-decode.js";
+import { config } from "./config.js";
+import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
+import { createDiscordMessageIngest } from "./discord-message-ingest.js";
+import { createDiscordSignalCardService } from "./discord-signal-card-service.js";
+import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
+import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
+import { isBlockedWsPayload } from "./ws-noise-filter.js";
+import { createLogger, setLogLevel } from "./logger.js";
+import { hashBuffer, openStore } from "./store.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const publicDir = path.join(__dirname, "..", "public", "collector-ui");
+const PORT = Number.isFinite(config.collectUiPort) ? config.collectUiPort : 3850;
+
+async function main() {
+  setLogLevel(config.logLevel);
+  setDebugMode(config.debugMode);
+  const log = createLogger("ui-server");
+
+  const app = express();
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server, path: "/ws" });
+
+  /** @param {string} channel @param {Record<string, unknown>} payload */
+  function broadcast(channel, payload) {
+    const msg = JSON.stringify({ v: 1, ts: Date.now(), channel, ...payload });
+    for (const client of wss.clients) {
+      if (client.readyState === 1) client.send(msg);
+    }
+  }
+
+  const store = await openStore(config.mysql, createLogger("store"));
+  const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast);
+  const discordIngest = createDiscordMessageIngest(
+    store,
+    createLogger("discord-ingest"),
+    broadcast,
+    { signalCards }
+  );
+
+  const diagnosticSink = /** @param {Record<string, unknown>} evt */ (evt) => {
+    broadcast("diag", { ...evt, debugMode: isDebugMode() });
+    void discordIngest.onDiag(evt).catch((e) => {
+      log.warn(`discord ingest diag: ${/** @type {Error} */ (e).message}`);
+    });
+  };
+
+  app.use(express.json({ limit: "512kb" }));
+
+  registerDiscordSignalRoutes(app, store, signalCards);
+
+  let frameSeq = 0;
+  /** @type {null | ((guildId: string, channelId: string, trace?: { clientTraceId?: string }) => Promise<unknown>)} */
+  let navigateDiscordImpl = null;
+
+  app.get("/api/frames", async (req, res) => {
+    try {
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 120));
+      const rows = await store.listRecentFrames(limit);
+      const filtered = rows.filter((row) => {
+        let j = row.parsed_json;
+        if (typeof j === "string") {
+          try {
+            j = JSON.parse(j);
+          } catch {
+            j = null;
+          }
+        }
+        const raw = typeof row.raw_payload === "string" ? row.raw_payload : "";
+        return !isBlockedWsPayload(j, raw);
+      });
+      res.json({ ok: true, rows: filtered });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
+  app.get("/api/config", (_req, res) => {
+    res.json({ ok: true, ...getDebugConfig() });
+  });
+
+  app.post("/api/config", (req, res) => {
+    if (typeof req.body?.debugMode === "boolean") {
+      setDebugMode(req.body.debugMode);
+      broadcast("config", { kind: "debug_mode", ...getDebugConfig() });
+    }
+    res.json({ ok: true, ...getDebugConfig() });
+  });
+
+  app.get("/api/discord/context", (_req, res) => {
+    res.json({ ok: true, snapshot: discordIngest.context.snapshot() });
+  });
+
+  app.get("/api/discord/cdp-active", (_req, res) => {
+    res.json({ ok: true, ...discordIngest.getCdpPage() });
+  });
+
+  app.get("/api/discord/guilds", async (_req, res) => {
+    try {
+      const rows = await store.listDiscordGuilds();
+      const guilds = rows.map((row) => ({
+        guildId: row.guild_id,
+        name: row.name,
+        iconHash: row.icon_hash,
+        iconUrl: row.icon_url,
+        channelCount: Number(row.channel_count) || 0,
+        updatedAt: row.updated_at,
+      }));
+      res.json({ ok: true, guilds });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
+  app.get("/api/discord/guilds/:guildId/channels", async (req, res) => {
+    try {
+      const guildId = String(req.params.guildId ?? "").trim();
+      const rows = await store.listDiscordChannelsByGuild(guildId);
+      const channels = rows.map((row) => ({
+        channelId: row.channel_id,
+        guildId: row.guild_id,
+        name: row.name,
+        type: row.channel_type,
+        lastMessagePreview: row.last_message_preview,
+        lastMessageAtMs: row.last_message_at_ms,
+        updatedAt: row.updated_at,
+      }));
+      res.json({ ok: true, guildId, channels });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
+  app.get("/api/discord/messages", async (req, res) => {
+    try {
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+      const channelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
+      const guildId = String(req.query.guild_id ?? req.query.guildId ?? "").trim();
+      const orderParam = String(req.query.order ?? "asc").toLowerCase();
+      const wantChronological = orderParam !== "desc";
+      const rows = await store.listRecentMessages(
+        limit,
+        { channelId, guildId, order: "desc" },
+        { includeRaw: isDebugMode() }
+      );
+      let clientRows = rows.map((row) => {
+        const enriched = discordIngest.enrichForApi(row);
+        if (!isDebugMode()) {
+          enriched.rawJson = undefined;
+        }
+        return enriched;
+      });
+      if (wantChronological) clientRows = clientRows.reverse();
+      res.json({ ok: true, debugMode: isDebugMode(), rows: clientRows });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
+  app.post("/api/cdp/discord-channel", async (req, res) => {
+    const guildId = String(req.body?.guildId ?? req.query?.guild_id ?? "").trim();
+    const channelId = String(req.body?.channelId ?? req.query?.channel_id ?? "").trim();
+    const clientTraceId = String(req.body?.clientTraceId ?? "").trim() || undefined;
+    const tracePayload = clientTraceId ? { clientTraceId } : {};
+
+    if (!guildId || !channelId) {
+      res.status(400).json({ ok: false, error: "缺少 guildId 或 channelId" });
+      return;
+    }
+    if (typeof navigateDiscordImpl !== "function") {
+      res.status(503).json({ ok: false, error: "CDP 尚未就绪" });
+      return;
+    }
+
+    log.info(`[discord-channel] POST guild=${guildId} channel=${channelId}`);
+    diagnosticSink({
+      kind: "discord_channel_api_received",
+      guildId,
+      channelId,
+      ...tracePayload,
+    });
+
+    try {
+      const out = /** @type {{ ok?: boolean, error?: string, finalUrl?: string }} */ (
+        await navigateDiscordImpl(guildId, channelId, clientTraceId ? { clientTraceId } : {})
+      );
+      if (out?.ok) {
+        res.json({ ok: true, ...out, ...tracePayload });
+      } else {
+        res.status(500).json({ ok: false, error: out?.error ?? "导航失败", ...tracePayload });
+      }
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e), ...tracePayload });
+    }
+  });
+
+  const session = await startCdpWebSocketMonitor(
+    {
+      startUrl: config.startUrl,
+      cdpConnectUrl: config.cdpConnectUrl,
+      pageReloadIntervalMs: config.pageReloadIntervalMs,
+      networkTrace: config.collectNetworkTrace,
+      wsFrameTrace: config.collectWsFrameTrace,
+      diagnosticSink,
+      onData(buf, meta) {
+        frameSeq += 1;
+        const { payload, proc } = buildFrameChannelPayload(
+          buf,
+          meta,
+          frameSeq,
+          config.requiredTopLevelKeys
+        );
+        broadcast("frame", { ...payload, debugMode: isDebugMode() });
+        void discordIngest.onWsFrame(payload).catch((e) => {
+          log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
+        });
+
+        void store
+          .insertFrame({
+            receivedAt: proc.receivedAt,
+            payloadHash: hashBuffer(buf),
+            opcode: meta.opcode,
+            requestId: meta.requestId || null,
+            rawPayload: buf,
+            parsedJson: proc.ok ? proc.parsedJson : null,
+            parseError: proc.ok ? null : proc.parseError,
+          })
+          .catch((err) => log.error(`MySQL: ${err.message}`));
+      },
+    },
+    createLogger("cdp")
+  );
+
+  navigateDiscordImpl = (g, c, t) => session.navigateDiscordChannel(g, c, t);
+
+  app.use(express.static(publicDir));
+
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.path.startsWith("/api")) return next();
+    if (/\.\w+$/.test(req.path)) return next();
+    res.sendFile(path.join(publicDir, "index.html"), (err) => (err ? next(err) : undefined));
+  });
+
+  app.use((req, res, next) => {
+    if (!req.path.startsWith("/api")) return next();
+    res.status(404).json({ ok: false, error: `API 不存在: ${req.method} ${req.path}` });
+  });
+
+  const shutdown = async (reason = "shutdown") => {
+    log.info(`退出 (${reason})`);
+    await session.close().catch((e) => log.warn(String(e?.message ?? e)));
+    await store.close().catch((e) => log.warn(String(e?.message ?? e)));
+    server.close(() => process.exit(0));
+  };
+
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+  server.listen(PORT, "127.0.0.1", () => {
+    log.info(
+      `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws  （先 pnpm run ui:build）`
+    );
+    log.info(
+      `[api] /api/config /api/frames /api/discord/messages /api/discord/context POST /api/cdp/discord-channel（debugMode=${isDebugMode()}）`
+    );
+    if (config.cdpConnectUrl) {
+      log.info(`CDP 附加: ${config.cdpConnectUrl} — 请在 Chrome 中打开并登录 ${config.startUrl}`);
+    }
+  });
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
