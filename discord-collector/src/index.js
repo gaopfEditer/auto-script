@@ -8,6 +8,7 @@ import { config } from "./config.js";
 import { setDebugMode } from "./discord-debug.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { createDiscordMessageIngest } from "./discord-message-ingest.js";
+import { createDiscordTelegramMessagePush } from "./discord-telegram-message-push.js";
 import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, openStore } from "./store.js";
 
@@ -34,7 +35,10 @@ async function collect() {
   }
 
   const store = await openStore(config.mysql, createLogger("store"));
-  const discordIngest = createDiscordMessageIngest(store, createLogger("discord-ingest"));
+  const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
+  const discordIngest = createDiscordMessageIngest(store, createLogger("discord-ingest"), undefined, {
+    telegramPush,
+  });
 
   const session = await startCdpWebSocketMonitor(
     {
@@ -83,6 +87,7 @@ async function collect() {
     log.info(
       `结束 (${reason}) | 帧=${frameCount} | 新插入=${insertOk} | 去重=${insertDup}`
     );
+    await telegramPush.flushAll().catch((e) => log.warn(String(e?.message ?? e)));
     await session.close().catch((e) => log.warn(String(e?.message ?? e)));
     await store.close().catch((e) => log.warn(String(e?.message ?? e)));
     process.exit(0);

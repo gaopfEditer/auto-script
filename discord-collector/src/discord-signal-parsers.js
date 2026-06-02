@@ -31,7 +31,7 @@ export function looksLikeSignal(text, kind) {
   if (t.length < 12) return false;
   switch (kind) {
     case "binance_killers":
-      return /信号\s*ID|货币:|方向:|目标\s*\d/i.test(t);
+      return /信号\s*ID|SIGNAL\s*ID|货币:|COIN:|方向:|Direction:|目标\s*\d|Target\s*\d/i.test(t);
     case "btc_cn":
       return /方向[：:].*(多|空)/.test(t) && /入场[：:]/.test(t);
     case "eth_short":
@@ -47,13 +47,25 @@ export function looksLikeSignal(text, kind) {
 export function parseBinanceKillers(text) {
   const ls = lines(text);
   const joined = ls.join("\n");
-  const signalId = matchLine(joined, /信号\s*ID[：:\s]*([#\d\w-]+)/i) || matchLine(joined, /#(\d+)/);
+  const signalId =
+    matchLine(joined, /信号\s*ID[：:\s]*([#\d\w-]+)/i) ||
+    matchLine(joined, /SIGNAL\s*ID[：:\s]*([#\d\w-]+)/i) ||
+    matchLine(joined, /#(\d+)/);
   const symbol =
     matchLine(joined, /货币[：:\s]*\$?([\w/]+)/i) ||
+    matchLine(joined, /COIN[：:\s]*\$?([\w/]+)/i) ||
     matchLine(joined, /([A-Z]{2,10}\/USDT)/i);
-  const direction = matchLine(joined, /方向[：:\s]*([^\n➖]+)/i);
-  const leverage = matchLine(joined, /\(([^)]*倍[^)]*)\)/) || matchLine(joined, /(\d+[-~]\d+倍)/);
-  const targets = matchAll(joined, /目标\s*\d+[：:\s]*([\d.]+)/gi);
+  const direction =
+    matchLine(joined, /方向[：:\s]*([^\n➖]+)/i) ||
+    matchLine(joined, /Direction[：:\s]*([^\n➖]+)/i);
+  const leverage =
+    matchLine(joined, /\(([^)]*倍[^)]*)\)/) ||
+    matchLine(joined, /\(([^)]*\bx\b[^)]*)\)/i) ||
+    matchLine(joined, /(\d+[-~]\d+倍)/);
+  const targets = [
+    ...matchAll(joined, /目标\s*\d+[：:\s]*([\d.]+)/gi),
+    ...matchAll(joined, /Target\s*\d+[：:\s]*([\d.]+)/gi),
+  ];
   if (!direction || !targets.length) return null;
   return {
     parser: "binance_killers",

@@ -6,6 +6,8 @@ import { createChannelTextDedup, normalizeSignalText, signalTextHash } from "./d
 import { generateCardsByStyles } from "./discord-signal-ai.js";
 import { parseSignalText } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
+import { executionFromParsed, formatManualRawContent, normalizeExecution } from "./discord-signal-execution.js";
+import { isTelegramPushChannel } from "./discord-telegram-push-config.js";
 
 /**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
@@ -49,7 +51,7 @@ export function createDiscordSignalCardService(store, log, broadcast) {
 
     const parsed = parseSignalText(content, chCfg.parser);
     if (!parsed) {
-      log.debug(`信号未识别 channel=${channelId} parser=${chCfg.parser}`);
+      log.info(`信号未识别 channel=${channelId} parser=${chCfg.parser} preview=${content.slice(0, 80)}`);
       return { skipped: "parse_failed" };
     }
 
@@ -58,6 +60,7 @@ export function createDiscordSignalCardService(store, log, broadcast) {
     });
 
     const textHash = signalTextHash(content);
+    const executionJson = executionFromParsed(parsed);
     const cardRow = await store.insertSignalCard({
       messageId: messageId || `hash-${textHash.slice(0, 16)}`,
       channelId,
@@ -66,13 +69,15 @@ export function createDiscordSignalCardService(store, log, broadcast) {
       rawContent: content,
       parsedJson: parsed,
       cardsByStyle,
+      executionJson,
+      source: "auto",
       status: "active",
     });
 
     const telegramStyle = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";
     const telegramText = cardsByStyle[telegramStyle] ?? Object.values(cardsByStyle)[0] ?? content;
 
-    if (telegram.enabled) {
+    if (telegram.enabled && !isTelegramPushChannel(channelId)) {
       try {
         await telegram.send(telegramText, { channelId, cardId: cardRow.id });
         await store.markSignalCardTelegramSent(cardRow.id);
@@ -89,7 +94,7 @@ export function createDiscordSignalCardService(store, log, broadcast) {
     return { card: clientCard };
   }
 
-  return { onMessage, dedup, telegram, signalCardToClient, ensureHydrated };
+  return { onMessage, dedup, telegram, signalCardToClient, ensureHydrated, formatManualRawContent };
 }
 
 /** @param {Record<string, unknown>} row */
@@ -110,9 +115,12 @@ export function signalCardToClient(row) {
       parsedJson = null;
     }
   }
+  const source = String(row.source ?? "auto");
+  const messageId = String(row.message_id ?? row.messageId ?? "");
+  const isManual = source === "manual" || messageId.startsWith("manual-");
   return {
     id: Number(row.id),
-    messageId: String(row.message_id ?? row.messageId ?? ""),
+    messageId,
     channelId: String(row.channel_id ?? row.channelId ?? ""),
     guildId: String(row.guild_id ?? row.guildId ?? ""),
     rawContent: String(row.raw_content ?? row.rawContent ?? ""),
@@ -121,6 +129,10 @@ export function signalCardToClient(row) {
     status: String(row.status ?? "active"),
     expiresAt: row.expires_at ?? row.expiresAt ?? null,
     telegramSentAt: row.telegram_sent_at ?? row.telegramSentAt ?? null,
+    note: row.note != null ? String(row.note) : "",
+    execution: normalizeExecution(row.execution_json ?? row.executionJson, parsedJson),
+    source,
+    isManual,
     createdAt: row.created_at ?? row.createdAt ?? null,
     updatedAt: row.updated_at ?? row.updatedAt ?? null,
   };

@@ -6,11 +6,12 @@ import { RouterLink } from "vue-router";
   <div class="hub">
     <h1>Discord Collector</h1>
     <p>
-      需要两个终端：<code>pnpm run collect:ui</code>（后端 3850）+ <code>pnpm run dev:ui-vue</code>（前端 dev）。
+      需要两个终端：<code>pnpm run collect:ui</code>（后端 3851）+ <code>pnpm run dev:ui-vue</code>（前端 dev）。
       请打开 Vite 提示的地址（如 <code>http://localhost:5189/show</code>），顶部应显示 <strong>WS 已连接</strong>。
     </p>
     <div class="actions">
       <RouterLink class="btn primary" to="/show">Show（群组 / 频道 / 消息）</RouterLink>
+      <RouterLink class="btn" to="/signals">信号概览 / 历史</RouterLink>
       <RouterLink class="btn" to="/debug">Debug（网络 / WS 帧）</RouterLink>
     </div>
   </div>
@@ -43,6 +44,7 @@ code {
 }
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
   margin-top: 1.5rem;
 }

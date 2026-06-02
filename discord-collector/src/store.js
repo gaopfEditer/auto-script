@@ -129,12 +129,25 @@ export async function openStore(cfg, log) {
       status VARCHAR(16) NOT NULL DEFAULT 'active',
       expires_at DATETIME(3) NULL,
       telegram_sent_at DATETIME(3) NULL,
+      note TEXT NULL,
       created_at DATETIME(3) NOT NULL,
       updated_at DATETIME(3) NOT NULL,
       UNIQUE KEY uk_signal_message_id (message_id),
       KEY idx_signal_channel_status (channel_id, status, id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  for (const col of [
+    "ADD COLUMN note TEXT NULL AFTER telegram_sent_at",
+    "ADD COLUMN execution_json JSON NULL AFTER note",
+    "ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'auto' AFTER execution_json",
+  ]) {
+    try {
+      await pool.query(`ALTER TABLE discord_signal_cards ${col}`);
+    } catch {
+      /* 列已存在 */
+    }
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS discord_channel_text_cache (
@@ -491,6 +504,9 @@ export async function openStore(cfg, log) {
    *   cardsByStyle: Record<string, string>;
    *   status?: string;
    *   expiresAt?: string | null;
+   *   executionJson?: unknown;
+   *   source?: string;
+   *   note?: string | null;
    * }} row
    */
   async function insertSignalCard(row) {
@@ -498,13 +514,16 @@ export async function openStore(cfg, log) {
     const [result] = await pool.execute(
       `INSERT INTO discord_signal_cards (
          message_id, channel_id, guild_id, source_text_hash, raw_content,
-         parsed_json, cards_by_style, status, expires_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         parsed_json, cards_by_style, status, expires_at, note, execution_json, source,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          source_text_hash = VALUES(source_text_hash),
          raw_content = VALUES(raw_content),
          parsed_json = VALUES(parsed_json),
          cards_by_style = VALUES(cards_by_style),
+         note = COALESCE(VALUES(note), note),
+         execution_json = COALESCE(VALUES(execution_json), execution_json),
          updated_at = VALUES(updated_at)`,
       [
         row.messageId,
@@ -516,6 +535,9 @@ export async function openStore(cfg, log) {
         JSON.stringify(row.cardsByStyle ?? {}),
         row.status ?? "active",
         row.expiresAt ? isoToMysqlDatetime3(row.expiresAt) : null,
+        row.note ?? null,
+        serializeRawJsonColumnForMysql(row.executionJson),
+        row.source ?? "auto",
         now,
         now,
       ]
@@ -544,12 +566,14 @@ export async function openStore(cfg, log) {
   }
 
   /**
-   * @param {{ channelId?: string, status?: string, limit?: number }} [filters]
+   * @param {{ channelId?: string, status?: string, limit?: number, fromMs?: number, toMs?: number }} [filters]
    */
   async function listSignalCards(filters = {}) {
-    const lim = Math.min(200, Math.max(1, Number(filters.limit) || 50));
+    const lim = Math.min(500, Math.max(1, Number(filters.limit) || 50));
     const ch = String(filters.channelId ?? "").trim();
     const status = String(filters.status ?? "").trim();
+    const fromMs = Number(filters.fromMs);
+    const toMs = Number(filters.toMs);
     /** @type {unknown[]} */
     const params = [];
     const where = [];
@@ -561,6 +585,14 @@ export async function openStore(cfg, log) {
       where.push("status = ?");
       params.push(status);
     }
+    if (Number.isFinite(fromMs) && fromMs > 0) {
+      where.push("created_at >= ?");
+      params.push(isoToMysqlDatetime3(new Date(fromMs).toISOString()));
+    }
+    if (Number.isFinite(toMs) && toMs > 0) {
+      where.push("created_at <= ?");
+      params.push(isoToMysqlDatetime3(new Date(toMs).toISOString()));
+    }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const [rows] = await pool.query(
       `SELECT * FROM discord_signal_cards ${whereSql} ORDER BY id DESC LIMIT ${lim}`,
@@ -571,7 +603,7 @@ export async function openStore(cfg, log) {
 
   /**
    * @param {number} id
-   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string> }} patch
+   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, executionJson?: unknown, parsedJson?: unknown }} patch
    */
   async function updateSignalCard(id, patch) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
@@ -590,6 +622,18 @@ export async function openStore(cfg, log) {
     if (patch.cardsByStyle != null) {
       sets.push("cards_by_style = ?");
       params.push(JSON.stringify(patch.cardsByStyle));
+    }
+    if (patch.note !== undefined) {
+      sets.push("note = ?");
+      params.push(patch.note ? String(patch.note) : null);
+    }
+    if (patch.executionJson !== undefined) {
+      sets.push("execution_json = ?");
+      params.push(serializeRawJsonColumnForMysql(patch.executionJson));
+    }
+    if (patch.parsedJson !== undefined) {
+      sets.push("parsed_json = ?");
+      params.push(serializeRawJsonColumnForMysql(patch.parsedJson));
     }
     params.push(id);
     await pool.execute(`UPDATE discord_signal_cards SET ${sets.join(", ")} WHERE id = ?`, params);

@@ -8,7 +8,8 @@ const collectorRoot = path.resolve(root, "..");
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, collectorRoot, "");
-  const uiPort = Number(env.COLLECTOR_UI_PORT) || 3850;
+  const uiPort = Number(env.COLLECTOR_UI_PORT) || 3851;
+  const devPort = Number(env.VITE_DEV_PORT || env.COLLECTOR_VUE_DEV_PORT) || 5178;
   const apiTarget = `http://127.0.0.1:${uiPort}`;
 
   return {
@@ -37,8 +38,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
-      port: 5176,
-      strictPort: false,
+      port: devPort,
+      strictPort: true,
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
         "/ws": {

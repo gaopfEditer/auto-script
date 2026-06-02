@@ -14,15 +14,17 @@ import { config } from "./config.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { createDiscordMessageIngest } from "./discord-message-ingest.js";
 import { createDiscordSignalCardService } from "./discord-signal-card-service.js";
+import { createDiscordTelegramMessagePush } from "./discord-telegram-message-push.js";
 import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
 import { isBlockedWsPayload } from "./ws-noise-filter.js";
 import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, openStore } from "./store.js";
+import { killListenersOnPort } from "../scripts/kill-port.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public", "collector-ui");
-const PORT = Number.isFinite(config.collectUiPort) ? config.collectUiPort : 3850;
+const PORT = Number.isFinite(config.collectUiPort) ? config.collectUiPort : 3851;
 
 async function main() {
   setLogLevel(config.logLevel);
@@ -42,12 +44,13 @@ async function main() {
   }
 
   const store = await openStore(config.mysql, createLogger("store"));
+  const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
   const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast);
   const discordIngest = createDiscordMessageIngest(
     store,
     createLogger("discord-ingest"),
     broadcast,
-    { signalCards }
+    { signalCards, telegramPush }
   );
 
   const diagnosticSink = /** @param {Record<string, unknown>} evt */ (evt) => {
@@ -206,44 +209,8 @@ async function main() {
     }
   });
 
-  const session = await startCdpWebSocketMonitor(
-    {
-      startUrl: config.startUrl,
-      cdpConnectUrl: config.cdpConnectUrl,
-      pageReloadIntervalMs: config.pageReloadIntervalMs,
-      networkTrace: config.collectNetworkTrace,
-      wsFrameTrace: config.collectWsFrameTrace,
-      diagnosticSink,
-      onData(buf, meta) {
-        frameSeq += 1;
-        const { payload, proc } = buildFrameChannelPayload(
-          buf,
-          meta,
-          frameSeq,
-          config.requiredTopLevelKeys
-        );
-        broadcast("frame", { ...payload, debugMode: isDebugMode() });
-        void discordIngest.onWsFrame(payload).catch((e) => {
-          log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
-        });
-
-        void store
-          .insertFrame({
-            receivedAt: proc.receivedAt,
-            payloadHash: hashBuffer(buf),
-            opcode: meta.opcode,
-            requestId: meta.requestId || null,
-            rawPayload: buf,
-            parsedJson: proc.ok ? proc.parsedJson : null,
-            parseError: proc.ok ? null : proc.parseError,
-          })
-          .catch((err) => log.error(`MySQL: ${err.message}`));
-      },
-    },
-    createLogger("cdp")
-  );
-
-  navigateDiscordImpl = (g, c, t) => session.navigateDiscordChannel(g, c, t);
+  /** @type {Awaited<ReturnType<typeof startCdpWebSocketMonitor>> | null} */
+  let session = null;
 
   app.use(express.static(publicDir));
 
@@ -261,7 +228,8 @@ async function main() {
 
   const shutdown = async (reason = "shutdown") => {
     log.info(`退出 (${reason})`);
-    await session.close().catch((e) => log.warn(String(e?.message ?? e)));
+    await telegramPush.flushAll().catch((e) => log.warn(String(e?.message ?? e)));
+    if (session) await session.close().catch((e) => log.warn(String(e?.message ?? e)));
     await store.close().catch((e) => log.warn(String(e?.message ?? e)));
     server.close(() => process.exit(0));
   };
@@ -269,20 +237,101 @@ async function main() {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  server.listen(PORT, "127.0.0.1", () => {
-    log.info(
-      `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws  （先 pnpm run ui:build）`
-    );
-    log.info(
-      `[api] /api/config /api/frames /api/discord/messages /api/discord/context POST /api/cdp/discord-channel（debugMode=${isDebugMode()}）`
-    );
-    if (config.cdpConnectUrl) {
-      log.info(`CDP 附加: ${config.cdpConnectUrl} — 请在 Chrome 中打开并登录 ${config.startUrl}`);
+  await killListenersOnPort(PORT, "collect:ui");
+
+  let listenError = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (err) => {
+          server.removeListener("listening", onListening);
+          reject(err);
+        };
+        const onListening = () => {
+          server.removeListener("error", onError);
+          resolve(undefined);
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(PORT, "127.0.0.1");
+      });
+      listenError = null;
+      break;
+    } catch (e) {
+      listenError = e;
+      if (/** @type {NodeJS.ErrnoException} */ (e).code === "EADDRINUSE" && attempt === 0) {
+        log.warn(`端口 ${PORT} 仍被占用，再次尝试释放…`);
+        await killListenersOnPort(PORT, "collect:ui");
+        continue;
+      }
+      throw e;
     }
-  });
+  }
+  if (listenError) throw listenError;
+
+  log.info(
+    `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws  （先 pnpm run ui:build）`
+  );
+  log.info(
+    `[api] /api/config /api/frames /api/discord/messages /api/discord/context POST /api/cdp/discord-channel（debugMode=${isDebugMode()}）`
+  );
+  if (config.cdpConnectUrl) {
+    log.info(`CDP 附加: ${config.cdpConnectUrl} — 请在 Chrome 中打开并登录 ${config.startUrl}`);
+  }
+
+  void (async () => {
+    try {
+      session = await startCdpWebSocketMonitor(
+        {
+          startUrl: config.startUrl,
+          cdpConnectUrl: config.cdpConnectUrl,
+          pageReloadIntervalMs: config.pageReloadIntervalMs,
+          networkTrace: config.collectNetworkTrace,
+          wsFrameTrace: config.collectWsFrameTrace,
+          diagnosticSink,
+          onData(buf, meta) {
+            frameSeq += 1;
+            const { payload, proc } = buildFrameChannelPayload(
+              buf,
+              meta,
+              frameSeq,
+              config.requiredTopLevelKeys
+            );
+            broadcast("frame", { ...payload, debugMode: isDebugMode() });
+            void discordIngest.onWsFrame(payload).catch((e) => {
+              log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
+            });
+
+            void store
+              .insertFrame({
+                receivedAt: proc.receivedAt,
+                payloadHash: hashBuffer(buf),
+                opcode: meta.opcode,
+                requestId: meta.requestId || null,
+                rawPayload: buf,
+                parsedJson: proc.ok ? proc.parsedJson : null,
+                parseError: proc.ok ? null : proc.parseError,
+              })
+              .catch((err) => log.error(`MySQL: ${err.message}`));
+          },
+        },
+        createLogger("cdp")
+      );
+      navigateDiscordImpl = (g, c, t) => session.navigateDiscordChannel(g, c, t);
+    } catch (e) {
+      log.error(`CDP 启动失败: ${/** @type {Error} */ (e).message ?? e}`);
+    }
+  })();
 }
 
 main().catch((e) => {
+  const err = /** @type {NodeJS.ErrnoException} */ (e);
+  if (err?.code === "EADDRINUSE") {
+    console.error(`\n[collect:ui] 端口 ${PORT} 无法绑定（EADDRINUSE）。`);
+    console.error("旧进程可能处于僵死状态（macOS 上 STAT=UE 时 kill -9 无效）。");
+    console.error("请关闭之前运行 collect:ui 的终端窗口后重试；");
+    console.error(`或临时换端口: COLLECTOR_UI_PORT=3852 pnpm run collect:ui\n`);
+  }
   console.error(e);
   process.exit(1);
 });

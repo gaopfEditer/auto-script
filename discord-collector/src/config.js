@@ -57,7 +57,7 @@ export const config = {
   collectWsFrameTrace: ["1", "true", "yes", "on"].includes(
     String(process.env.COLLECTOR_WS_FRAME_TRACE ?? "0").toLowerCase()
   ),
-  collectUiPort: Number(process.env.COLLECTOR_UI_PORT ?? 3850),
+  collectUiPort: Number(process.env.COLLECTOR_UI_PORT ?? 3851),
   requiredTopLevelKeys: (process.env.COLLECTOR_REQUIRED_KEYS ?? "")
     .split(",")
     .map((s) => s.trim())
@@ -66,6 +66,12 @@ export const config = {
   monitoredGuildIds: parseIdList(process.env.DISCORD_MONITORED_GUILD_IDS ?? ""),
   /** 信号卡片监听频道（默认内置 4 个） */
   discordSignalChannelIds: parseIdList(process.env.DISCORD_SIGNAL_CHANNEL_IDS ?? ""),
+  /** Telegram 推送频道（空=内置 8 个） */
+  discordTelegramPushChannelIds: parseIdList(process.env.DISCORD_TELEGRAM_PUSH_CHANNEL_IDS ?? ""),
+  /** 实时推送频道，不参与 debounce（空=无，全部走 2 分钟聚合） */
+  discordTelegramRealtimeChannelIds: parseIdList(process.env.DISCORD_TELEGRAM_REALTIME_CHANNEL_IDS ?? ""),
+  /** 非实时频道：最后一条消息后等待毫秒再批量转发（默认 120000） */
+  telegramPushDebounceMs: Number(process.env.DISCORD_TELEGRAM_PUSH_DEBOUNCE_MS ?? 120_000),
   ollamaGenerateUrl: (process.env.OLLAMA_GENERATE_URL ?? "http://127.0.0.1:11434/api/generate").trim(),
   ollamaModel: (process.env.OLLAMA_MODEL ?? "gemma4:26b").trim(),
   ollamaGenerateTimeoutMs: Number(process.env.OLLAMA_GENERATE_TIMEOUT_MS ?? 60_000),

@@ -343,6 +343,109 @@ export function splitPinnedChannels(channels, pinnedIds) {
   return { pinned, rest };
 }
 
+/** @typedef {{ id: string, name: string, channelIds: string[], collapsed?: boolean }} ChannelGroup */
+
+/**
+ * @param {Array<{ channelId: string }>} channels
+ * @param {string[]} [orderIds]
+ */
+export function orderChannelsByIds(channels, orderIds = []) {
+  if (!orderIds?.length) return channels.slice();
+  const byId = new Map(channels.map((c) => [c.channelId, c]));
+  /** @type {typeof channels} */
+  const ordered = [];
+  const seen = new Set();
+  for (const id of orderIds) {
+    const ch = byId.get(String(id));
+    if (ch && !seen.has(ch.channelId)) {
+      ordered.push(ch);
+      seen.add(ch.channelId);
+    }
+  }
+  for (const ch of channels) {
+    if (!seen.has(ch.channelId)) ordered.push(ch);
+  }
+  return ordered;
+}
+
+/**
+ * @param {Array<{ channelId: string }>} channels
+ * @param {string[]} pinnedIds
+ * @param {ChannelGroup[]} [groups]
+ * @param {string[]} [ungroupedOrderIds]
+ */
+export function buildChannelListSections(channels, pinnedIds, groups = [], ungroupedOrderIds = []) {
+  const { pinned, rest } = splitPinnedChannels(channels, pinnedIds);
+  const byId = new Map(channels.map((c) => [c.channelId, c]));
+  const inGroup = new Set();
+  /** @type {Array<
+   *   | { kind: "pinned-label" }
+   *   | { kind: "group-label", group: ChannelGroup }
+   *   | { kind: "ungrouped-label" }
+   *   | { kind: "channel", ch: { channelId: string }, pinned?: boolean, groupId?: string }
+   * >} */
+  const items = [];
+
+  if (pinned.length) {
+    items.push({ kind: "pinned-label" });
+    for (const ch of pinned) {
+      items.push({ kind: "channel", ch, pinned: true });
+    }
+  }
+
+  for (const group of groups) {
+    if (!group?.id) continue;
+    items.push({ kind: "group-label", group });
+    if (group.collapsed) continue;
+    for (const cid of group.channelIds ?? []) {
+      const ch = byId.get(String(cid));
+      if (!ch || inGroup.has(ch.channelId)) continue;
+      inGroup.add(ch.channelId);
+      items.push({ kind: "channel", ch, groupId: group.id });
+    }
+  }
+
+  const ungrouped = rest.filter((c) => !inGroup.has(c.channelId));
+  const sortedUngrouped = orderChannelsByIds(ungrouped, ungroupedOrderIds);
+  if (groups.length && sortedUngrouped.length) {
+    items.push({ kind: "ungrouped-label" });
+  }
+  for (const ch of groups.length ? sortedUngrouped : orderChannelsByIds(rest, ungroupedOrderIds)) {
+    items.push({ kind: "channel", ch, pinned: false });
+  }
+
+  return items;
+}
+
+/** @param {unknown} raw */
+export function normalizeChannelGroups(raw) {
+  if (!Array.isArray(raw)) return [];
+  /** @type {ChannelGroup[]} */
+  const out = [];
+  for (const item of raw) {
+    if (item == null || typeof item !== "object") continue;
+    const o = /** @type {Record<string, unknown>} */ (item);
+    const id = String(o.id ?? "").trim();
+    const name = String(o.name ?? "").trim() || "未命名分组";
+    const channelIds = Array.isArray(o.channelIds)
+      ? o.channelIds.map((x) => String(x ?? "").trim()).filter(Boolean)
+      : [];
+    if (!id) continue;
+    out.push({
+      id,
+      name,
+      channelIds,
+      collapsed: Boolean(o.collapsed),
+    });
+  }
+  return out;
+}
+
+/** @returns {string} */
+export function newChannelGroupId() {
+  return `grp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
 /** @param {string} channelId @param {string[]} pinnedIds */
 export function isChannelPinned(channelId, pinnedIds) {
   return pinnedIds.includes(String(channelId ?? ""));

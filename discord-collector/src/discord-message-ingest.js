@@ -40,10 +40,10 @@ import { isBlockedWsPayload } from "./ws-noise-filter.js";
  * @param {Store} store
  * @param {Logger} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
- * @param {{ signalCards?: ReturnType<typeof import("./discord-signal-card-service.js").createDiscordSignalCardService> }} [opts]
+ * @param {{ signalCards?: ReturnType<typeof import("./discord-signal-card-service.js").createDiscordSignalCardService>, telegramPush?: ReturnType<typeof import("./discord-telegram-message-push.js").createDiscordTelegramMessagePush> }} [opts]
  */
 export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
-  const { signalCards } = opts;
+  const { signalCards, telegramPush } = opts;
   const guildFilter = new Set(config.monitoredGuildIds);
   const context = createDiscordContextCache();
   const messageDedup = createChannelMessageDedup(store);
@@ -472,6 +472,14 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
           log.debug(`signal card: ${/** @type {Error} */ (e).message}`);
         });
         await signalCards.dedup.remember(cid, content);
+      }
+    }
+
+    if (telegramPush?.enabled && !isRestBatch && result.inserted > 0) {
+      for (const r of toPersist) {
+        if (String(r.source ?? "") !== "gateway_ws") continue;
+        if (!String(r.content ?? "").trim()) continue;
+        telegramPush.enqueue(r);
       }
     }
 

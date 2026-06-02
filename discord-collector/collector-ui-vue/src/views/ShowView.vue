@@ -25,14 +25,17 @@ import {
   msgAttachments,
   msgAvatarUrl,
   msgDisplayName,
-  splitPinnedChannels,
   upsertChannelItem,
+  buildChannelListSections,
+  normalizeChannelGroups,
+  newChannelGroupId,
 } from "../lib/discordShow.js";
 
 defineOptions({ name: "ShowView" });
 
 const SHOW_CACHE_KEY = "discord-collector.show.v1";
-const SHOW_CACHE_VERSION = 3;
+const SHOW_LAYOUT_KEY = "discord-collector.show.layout.v1";
+const SHOW_CACHE_VERSION = 5;
 const MAX_MSGS_PER_CHANNEL = 300;
 
 /** @typedef {{ guildId: string, name: string, iconUrl: string, channelCount: number }} GuildItem */
@@ -47,6 +50,10 @@ const messagesByChannelId = reactive({});
 const channelAliases = reactive(/** @type {Record<string, string>} */ ({}));
 /** 各服务器内置顶频道（guildId → channelId[]，顺序即置顶顺序） */
 const pinnedChannelsByGuild = reactive(/** @type {Record<string, string[]>} */ ({}));
+/** 各服务器频道自定义分组（guildId → 分组列表），仅存 localStorage */
+const channelGroupsByGuild = reactive(/** @type {Record<string, import('../lib/discordShow.js').ChannelGroup[]>} */ ({}));
+/** 各服务器未分组频道顺序（guildId → channelId[]） */
+const ungroupedOrderByGuild = reactive(/** @type {Record<string, string[]>} */ ({}));
 /** channelId → 未读条数（Gateway 实时推送） */
 const unreadCountByChannelId = reactive(/** @type {Record<string, number>} */ ({}));
 
@@ -59,6 +66,8 @@ const cdpActiveGuildId = ref("");
 
 const renamingChannelId = ref("");
 const renameDraft = ref("");
+const renamingGroupId = ref("");
+const renameGroupDraft = ref("");
 const renameInputEl = ref(/** @type {HTMLInputElement | null} */ (null));
 
 const loadingGuilds = ref(true);
@@ -70,6 +79,7 @@ const avatarFailed = reactive(/** @type {Record<string, true>} */ ({}));
 
 const msgsScrollEl = ref(/** @type {HTMLElement | null} */ (null));
 const signalCardRailRef = ref(/** @type {InstanceType<typeof SignalCardRail> | null} */ (null));
+const highlightMessageId = ref("");
 /** @type {import('vue').Ref<{ channelIds: string[] } | null>} */
 const signalConfig = ref(null);
 let saveTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
@@ -78,15 +88,13 @@ const selectedGuild = computed(() => guilds.value.find((g) => g.guildId === sele
 const currentGuildChannels = computed(() => channelsByGuild[selectedGuildId.value] ?? []);
 const currentPinnedIds = computed(() => pinnedChannelsByGuild[selectedGuildId.value] ?? []);
 const channelSections = computed(() => {
-  const { pinned, rest } = splitPinnedChannels(currentGuildChannels.value, currentPinnedIds.value);
-  /** @type {Array<{ kind: 'label' } | { kind: 'channel', ch: ChannelItem, pinned: boolean }>} */
-  const items = [];
-  if (pinned.length) {
-    items.push({ kind: "label" });
-    for (const ch of pinned) items.push({ kind: "channel", ch, pinned: true });
-  }
-  for (const ch of rest) items.push({ kind: "channel", ch, pinned: false });
-  return items;
+  const gid = selectedGuildId.value;
+  return buildChannelListSections(
+    currentGuildChannels.value,
+    currentPinnedIds.value,
+    channelGroupsByGuild[gid] ?? [],
+    ungroupedOrderByGuild[gid] ?? []
+  );
 });
 const selectedMessages = computed(() => {
   const ch = selectedChannel.value?.channelId;
@@ -131,7 +139,7 @@ function toggleChannelPin(ch, e) {
   else list.unshift(ch.channelId);
   if (list.length) pinnedChannelsByGuild[gid] = list;
   else delete pinnedChannelsByGuild[gid];
-  scheduleSave();
+  saveLayoutNow();
 }
 
 /** @param {string} channelId */
@@ -166,6 +174,362 @@ function formatUnreadBadge(channelId) {
   return n > 99 ? "99+" : String(n);
 }
 
+function createChannelGroup() {
+  const gid = selectedGuildId.value;
+  if (!gid) return;
+  const newGroup = {
+    id: newChannelGroupId(),
+    name: "新分组",
+    channelIds: [],
+    collapsed: false,
+  };
+  channelGroupsByGuild[gid] = [newGroup, ...(channelGroupsByGuild[gid] ?? [])];
+  void nextTick(() => startRenameGroup(newGroup));
+  saveLayoutNow();
+}
+
+/** @param {{ id: string, name: string, channelIds?: string[], collapsed?: boolean }} group */
+function toggleGroupCollapsed(group) {
+  if (suppressGroupClick.value) return;
+  const gid = selectedGuildId.value;
+  if (!gid) return;
+  const groups = channelGroupsByGuild[gid] ?? [];
+  channelGroupsByGuild[gid] = groups.map((g) =>
+    g.id === group.id ? { ...g, collapsed: !g.collapsed } : g
+  );
+  saveLayoutNow();
+}
+
+/** @param {{ id: string }} group */
+function deleteChannelGroup(group) {
+  const gid = selectedGuildId.value;
+  if (!gid) return;
+  const list = channelGroupsByGuild[gid];
+  if (!list) return;
+  const next = list.filter((g) => g.id !== group.id);
+  if (next.length) channelGroupsByGuild[gid] = next;
+  else delete channelGroupsByGuild[gid];
+  if (renamingGroupId.value === group.id) cancelRenameGroup();
+  saveLayoutNow();
+}
+
+/** @param {{ id: string, name: string }} group */
+function startRenameGroup(group) {
+  renamingGroupId.value = group.id;
+  renameGroupDraft.value = group.name;
+  void nextTick(() => renameInputEl.value?.focus());
+}
+
+function cancelRenameGroup() {
+  renamingGroupId.value = "";
+  renameGroupDraft.value = "";
+}
+
+function commitRenameGroup() {
+  const gid = selectedGuildId.value;
+  const id = renamingGroupId.value;
+  if (!gid || !id) return;
+  const next = String(renameGroupDraft.value ?? "").trim();
+  const groups = channelGroupsByGuild[gid] ?? [];
+  channelGroupsByGuild[gid] = groups.map((g) => (g.id === id && next ? { ...g, name: next } : g));
+  cancelRenameGroup();
+  saveLayoutNow();
+}
+
+/** @param {ChannelItem} ch @param {string} groupId @param {{ beforeChannelId?: string }} [opts] */
+function moveChannelToGroup(ch, groupId, opts = {}) {
+  const gid = selectedGuildId.value;
+  if (!gid) return;
+  const cid = String(ch.channelId ?? "").trim();
+  if (!cid) return;
+  const groups = channelGroupsByGuild[gid] ?? [];
+  const nextGroups = groups.map((g) => ({
+    ...g,
+    channelIds: (g.channelIds ?? []).filter((id) => id !== cid),
+  }));
+  if (groupId) {
+    const idx = nextGroups.findIndex((g) => g.id === groupId);
+    if (idx >= 0) {
+      const target = nextGroups[idx];
+      const ids = (target.channelIds ?? []).filter((id) => id !== cid);
+      const before = String(opts.beforeChannelId ?? "").trim();
+      if (before && ids.includes(before)) {
+        ids.splice(ids.indexOf(before), 0, cid);
+      } else {
+        ids.push(cid);
+      }
+      nextGroups[idx] = { ...target, channelIds: ids, collapsed: false };
+    }
+  }
+  channelGroupsByGuild[gid] = nextGroups;
+  saveLayoutNow();
+}
+
+/** @param {string} gid */
+function getUngroupedChannelIds(gid) {
+  const channels = channelsByGuild[gid] ?? [];
+  const pinned = new Set(pinnedChannelsByGuild[gid] ?? []);
+  const inGroup = new Set();
+  for (const g of channelGroupsByGuild[gid] ?? []) {
+    for (const id of g.channelIds ?? []) inGroup.add(String(id));
+  }
+  return channels
+    .filter((c) => !pinned.has(c.channelId) && !inGroup.has(c.channelId))
+    .map((c) => c.channelId);
+}
+
+/** @param {string[]} currentIds @param {string[]} orderIds */
+function mergeOrderIds(currentIds, orderIds) {
+  const set = new Set(currentIds);
+  /** @type {string[]} */
+  const result = [];
+  for (const id of orderIds) {
+    if (set.has(id)) {
+      result.push(id);
+      set.delete(id);
+    }
+  }
+  for (const id of currentIds) {
+    if (set.has(id)) result.push(id);
+  }
+  return result;
+}
+
+/** @param {string} dragCid @param {string} [beforeCid] */
+function reorderUngroupedChannel(dragCid, beforeCid = "") {
+  const gid = selectedGuildId.value;
+  if (!gid || !dragCid) return;
+  const current = getUngroupedChannelIds(gid);
+  let order = mergeOrderIds(current, ungroupedOrderByGuild[gid] ?? []);
+  order = order.filter((id) => id !== dragCid);
+  if (beforeCid) {
+    const idx = order.indexOf(beforeCid);
+    if (idx >= 0) order.splice(idx, 0, dragCid);
+    else order.push(dragCid);
+  } else {
+    order.push(dragCid);
+  }
+  ungroupedOrderByGuild[gid] = order;
+  saveLayoutNow();
+}
+
+/** @param {string} dragCid @param {string} beforeCid */
+function reorderPinnedChannel(dragCid, beforeCid) {
+  const gid = selectedGuildId.value;
+  if (!gid || !dragCid) return;
+  const list = [...(pinnedChannelsByGuild[gid] ?? [])];
+  if (!list.includes(dragCid)) return;
+  const next = list.filter((id) => id !== dragCid);
+  const idx = next.indexOf(beforeCid);
+  if (idx >= 0) next.splice(idx, 0, dragCid);
+  else next.push(dragCid);
+  pinnedChannelsByGuild[gid] = next;
+  saveLayoutNow();
+}
+
+const dragChannelId = ref("");
+/** @type {import('vue').Ref<string>} '' | '__ungrouped__' | groupId */
+const dropHighlightTarget = ref("");
+const dropBeforeChannelId = ref("");
+const suppressGroupClick = ref(false);
+
+/** @param {ChannelItem} ch @param {DragEvent} e */
+function onChannelDragStart(ch, e) {
+  const cid = String(ch.channelId ?? "").trim();
+  if (!cid) return;
+  if (renamingChannelId.value === cid) {
+    e.preventDefault();
+    return;
+  }
+  dragChannelId.value = cid;
+  dropHighlightTarget.value = "";
+  dropBeforeChannelId.value = "";
+  e.dataTransfer?.setData("text/plain", cid);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+}
+
+function onChannelDragEnd() {
+  dragChannelId.value = "";
+  dropHighlightTarget.value = "";
+  dropBeforeChannelId.value = "";
+}
+
+/** @param {DragEvent} e @param {string} target */
+function onDropZoneDragOver(e, target) {
+  if (!dragChannelId.value) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  dropHighlightTarget.value = target;
+}
+
+/** @param {string} target */
+function onDropZoneDragLeave(target) {
+  if (dropHighlightTarget.value === target) dropHighlightTarget.value = "";
+}
+
+/** @param {DragEvent} e @param {string} groupId */
+function onDropToGroup(e, groupId) {
+  e.preventDefault();
+  e.stopPropagation();
+  const cid = dragChannelId.value || e.dataTransfer?.getData("text/plain") || "";
+  if (!cid) return;
+  const ch = currentGuildChannels.value.find((c) => c.channelId === cid);
+  if (ch) moveChannelToGroup(ch, groupId);
+  suppressGroupClick.value = true;
+  onChannelDragEnd();
+  requestAnimationFrame(() => {
+    suppressGroupClick.value = false;
+  });
+}
+
+/** @param {DragEvent} e */
+function onDropToUngrouped(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const cid = dragChannelId.value || e.dataTransfer?.getData("text/plain") || "";
+  if (!cid) return;
+  const ch = currentGuildChannels.value.find((c) => c.channelId === cid);
+  if (ch) {
+    moveChannelToGroup(ch, "");
+    reorderUngroupedChannel(cid);
+  }
+  onChannelDragEnd();
+}
+
+/** @param {ChannelItem} targetCh */
+function onChannelDragLeave(targetCh) {
+  const tid = String(targetCh.channelId ?? "").trim();
+  if (dropBeforeChannelId.value === tid) dropBeforeChannelId.value = "";
+}
+
+/**
+ * @param {DragEvent} e
+ * @param {ChannelItem} targetCh
+ * @param {{ groupId?: string, pinned?: boolean }} [ctx]
+ */
+function onChannelDragOver(e, targetCh, ctx = {}) {
+  const cid = dragChannelId.value;
+  const tid = String(targetCh.channelId ?? "").trim();
+  if (!cid || cid === tid) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  dropBeforeChannelId.value = tid;
+  const groupId = ctx.groupId ?? "";
+  dropHighlightTarget.value = ctx.pinned ? "__pinned__" : groupId || "__ungrouped__";
+}
+
+/**
+ * @param {DragEvent} e
+ * @param {ChannelItem} targetCh
+ * @param {{ groupId?: string, pinned?: boolean }} [ctx]
+ */
+function onDropOnChannel(e, targetCh, ctx = {}) {
+  e.preventDefault();
+  e.stopPropagation();
+  const cid = dragChannelId.value || e.dataTransfer?.getData("text/plain") || "";
+  const tid = String(targetCh.channelId ?? "").trim();
+  if (!cid || cid === tid) return;
+  const ch = currentGuildChannels.value.find((c) => c.channelId === cid);
+  if (!ch) return;
+  const groupId = ctx.groupId ?? "";
+  if (ctx.pinned) {
+    reorderPinnedChannel(cid, tid);
+  } else if (groupId) {
+    moveChannelToGroup(ch, groupId, { beforeChannelId: tid });
+  } else {
+    moveChannelToGroup(ch, "");
+    reorderUngroupedChannel(cid, tid);
+  }
+  onChannelDragEnd();
+}
+
+/** @param {{ kind: string, ch?: ChannelItem, group?: { id: string } }} item */
+function sectionItemKey(item) {
+  if (item.kind === "pinned-label") return "pinned-label";
+  if (item.kind === "ungrouped-label") return "ungrouped-label";
+  if (item.kind === "group-label" && item.group) return `group-${item.group.id}`;
+  if (item.kind === "channel" && item.ch) return `ch-${item.ch.channelId}`;
+  return `x-${Math.random()}`;
+}
+
+/** 布局（置顶 / 分组 / 别名 / 排序）立即写入独立 localStorage，避免消息缓存过大导致保存失败 */
+function saveLayoutNow() {
+  try {
+    localStorage.setItem(
+      SHOW_LAYOUT_KEY,
+      JSON.stringify({
+        v: 1,
+        savedAt: Date.now(),
+        channelAliases: { ...channelAliases },
+        pinnedChannelsByGuild: JSON.parse(JSON.stringify(pinnedChannelsByGuild)),
+        channelGroupsByGuild: JSON.parse(JSON.stringify(channelGroupsByGuild)),
+        ungroupedOrderByGuild: { ...ungroupedOrderByGuild },
+        selectedGuildId: selectedGuildId.value,
+        selectedChannel: selectedChannel.value,
+      })
+    );
+  } catch {
+    /* quota */
+  }
+}
+
+/** @param {Record<string, unknown>} o */
+function applyLayoutFromObject(o) {
+  if (o.channelAliases && typeof o.channelAliases === "object") {
+    for (const [k, v] of Object.entries(o.channelAliases)) {
+      if (typeof v === "string" && v.trim()) channelAliases[k] = v.trim();
+    }
+  }
+  if (o.pinnedChannelsByGuild && typeof o.pinnedChannelsByGuild === "object") {
+    for (const [k, v] of Object.entries(o.pinnedChannelsByGuild)) {
+      if (!Array.isArray(v)) continue;
+      const ids = v.map((id) => String(id ?? "").trim()).filter(Boolean);
+      if (ids.length) pinnedChannelsByGuild[k] = ids;
+    }
+  }
+  if (o.channelGroupsByGuild && typeof o.channelGroupsByGuild === "object") {
+    for (const [k, v] of Object.entries(o.channelGroupsByGuild)) {
+      const groups = normalizeChannelGroups(v);
+      if (groups.length) channelGroupsByGuild[k] = groups;
+    }
+  }
+  if (o.ungroupedOrderByGuild && typeof o.ungroupedOrderByGuild === "object") {
+    for (const [k, v] of Object.entries(o.ungroupedOrderByGuild)) {
+      if (!Array.isArray(v)) continue;
+      const ids = v.map((id) => String(id ?? "").trim()).filter(Boolean);
+      if (ids.length) ungroupedOrderByGuild[k] = ids;
+    }
+  }
+  if (o.selectedGuildId) selectedGuildId.value = String(o.selectedGuildId);
+  if (o.selectedChannel) selectedChannel.value = /** @type {ChannelItem} */ (o.selectedChannel);
+}
+
+function loadLayoutCache() {
+  try {
+    const layoutRaw = localStorage.getItem(SHOW_LAYOUT_KEY);
+    if (layoutRaw) {
+      applyLayoutFromObject(JSON.parse(layoutRaw));
+      return true;
+    }
+    const mainRaw = localStorage.getItem(SHOW_CACHE_KEY);
+    if (!mainRaw) return false;
+    const o = JSON.parse(mainRaw);
+    if (
+      o.pinnedChannelsByGuild ||
+      o.channelGroupsByGuild ||
+      o.channelAliases ||
+      o.ungroupedOrderByGuild
+    ) {
+      applyLayoutFromObject(o);
+      saveLayoutNow();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function saveCache() {
   try {
     /** @type {Record<string, Record<string, unknown>[]>} */
@@ -185,13 +549,17 @@ function saveCache() {
         messagesByChannelId: msgs,
         channelAliases: { ...channelAliases },
         pinnedChannelsByGuild: { ...pinnedChannelsByGuild },
+        channelGroupsByGuild: { ...channelGroupsByGuild },
+        ungroupedOrderByGuild: { ...ungroupedOrderByGuild },
         unreadCountByChannelId: { ...unreadCountByChannelId },
         selectedGuildId: selectedGuildId.value,
         selectedChannel: selectedChannel.value,
       })
     );
+    saveLayoutNow();
   } catch {
-    /* quota */
+    /* quota — 布局仍可通过 saveLayoutNow 单独保存 */
+    saveLayoutNow();
   }
 }
 
@@ -208,7 +576,7 @@ function loadCache() {
     const raw = localStorage.getItem(SHOW_CACHE_KEY);
     if (!raw) return false;
     const o = JSON.parse(raw);
-    if (Number(o.v) !== SHOW_CACHE_VERSION && Number(o.v) !== 2) return false;
+    if (Number(o.v) !== SHOW_CACHE_VERSION && Number(o.v) !== 4 && Number(o.v) !== 3 && Number(o.v) !== 2) return false;
     if (Array.isArray(o.guilds) && o.guilds.length) guilds.value = o.guilds;
     if (o.channelsByGuild && typeof o.channelsByGuild === "object") {
       for (const [k, v] of Object.entries(o.channelsByGuild)) {
@@ -220,26 +588,12 @@ function loadCache() {
         if (Array.isArray(v)) messagesByChannelId[k] = v;
       }
     }
-    if (o.channelAliases && typeof o.channelAliases === "object") {
-      for (const [k, v] of Object.entries(o.channelAliases)) {
-        if (typeof v === "string" && v.trim()) channelAliases[k] = v.trim();
-      }
-    }
-    if (o.pinnedChannelsByGuild && typeof o.pinnedChannelsByGuild === "object") {
-      for (const [k, v] of Object.entries(o.pinnedChannelsByGuild)) {
-        if (!Array.isArray(v)) continue;
-        const ids = v.map((id) => String(id ?? "").trim()).filter(Boolean);
-        if (ids.length) pinnedChannelsByGuild[k] = ids;
-      }
-    }
     if (o.unreadCountByChannelId && typeof o.unreadCountByChannelId === "object") {
       for (const [k, v] of Object.entries(o.unreadCountByChannelId)) {
         const n = Number(v);
         if (k && Number.isFinite(n) && n > 0) unreadCountByChannelId[k] = n;
       }
     }
-    if (o.selectedGuildId) selectedGuildId.value = String(o.selectedGuildId);
-    if (o.selectedChannel) selectedChannel.value = o.selectedChannel;
     const t = Number(o.savedAt);
     if (t) {
       cacheBanner.value = `已恢复本地缓存（${new Date(t).toLocaleString("zh-CN")}）`;
@@ -429,7 +783,7 @@ function commitRename() {
 
   renamingChannelId.value = "";
   renameDraft.value = "";
-  scheduleSave();
+  saveLayoutNow();
 }
 
 function cancelRename() {
@@ -442,12 +796,57 @@ function resetChannelAlias(ch, e) {
   e.stopPropagation();
   delete channelAliases[ch.channelId];
   if (renamingChannelId.value === ch.channelId) cancelRename();
-  scheduleSave();
+  saveLayoutNow();
 }
 
 function scrollMsgsBottom() {
   const el = msgsScrollEl.value;
   if (el) el.scrollTop = el.scrollHeight;
+}
+
+/** @param {string} messageId */
+async function scrollToSignalMessage(messageId) {
+  const mid = String(messageId ?? "").trim();
+  if (!mid) return;
+  navError.value = "";
+  await nextTick();
+  const root = msgsScrollEl.value;
+  if (!root) return;
+  let el = root.querySelector(`[data-message-id="${CSS.escape(mid)}"]`);
+  if (!el && selectedChannel.value) {
+    try {
+      await loadMessagesForChannel(selectedChannel.value);
+      await nextTick();
+      el = root.querySelector(`[data-message-id="${CSS.escape(mid)}"]`);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!el) {
+    navError.value = "未找到该信号对应的消息，可能尚未采集到本地。";
+    return;
+  }
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  highlightMessageId.value = mid;
+  window.setTimeout(() => {
+    if (highlightMessageId.value === mid) highlightMessageId.value = "";
+  }, 2800);
+}
+
+/** @param {import('../lib/discordSignalApi.js').SignalCard} card */
+function onSignalCardUpdated(card) {
+  signalCardRailRef.value?.upsertCard(card);
+}
+
+/** @param {Record<string, unknown>} m */
+function messageDomId(m) {
+  return String(m.messageId ?? m.message_id ?? "");
+}
+
+/** @param {Record<string, unknown>} m */
+function isHighlightedMessage(m) {
+  const mid = messageDomId(m);
+  return mid && highlightMessageId.value === mid;
 }
 
 /** 向上翻页插入旧消息后保持视口位置 */
@@ -683,13 +1082,14 @@ function onSocketMsg(msg) {
 useCollectorSocket(onSocketMsg);
 
 watch([guilds, selectedGuildId, selectedChannel], scheduleSave, { deep: true });
+watch([selectedGuildId, selectedChannel], saveLayoutNow, { deep: true });
 watch(
   () => JSON.stringify(channelAliases),
-  () => scheduleSave()
+  saveLayoutNow
 );
 watch(
   () => JSON.stringify(pinnedChannelsByGuild),
-  () => scheduleSave()
+  saveLayoutNow
 );
 watch(
   () => JSON.stringify(messagesByChannelId),
@@ -701,6 +1101,14 @@ watch(
   () => scheduleSave()
 );
 
+watch(
+  () => JSON.stringify(channelGroupsByGuild),
+  saveLayoutNow
+);
+watch(
+  () => JSON.stringify(ungroupedOrderByGuild),
+  saveLayoutNow
+);
 watch(selectedGuildId, (gid) => {
   if (gid) void loadChannelsForGuild(gid);
 });
@@ -718,6 +1126,7 @@ onMounted(async () => {
     signalConfig.value = { channelIds: [] };
   }
   const hadCache = loadCache();
+  loadLayoutCache();
   await reloadGuilds();
   if (selectedGuildId.value) {
     await loadChannelsForGuild(selectedGuildId.value, { force: !hadCache });
@@ -768,26 +1177,85 @@ onMounted(async () => {
 
     <aside class="channel-panel">
       <div v-if="cacheBanner" class="kook-cache-banner">{{ cacheBanner }}</div>
+      <div v-if="selectedGuild" class="channel-panel-toolbar">
+        <span class="channel-panel-guild-name" :title="selectedGuild.name">{{ selectedGuild.name }}</span>
+        <button type="button" class="channel-group-add-btn" title="新建分组" @click="createChannelGroup">+ 分组</button>
+      </div>
       <div class="guild-channel-scroll">
         <p v-if="loadingChannels" class="kook-wait">加载频道…</p>
         <p v-else-if="selectedGuildId && !currentGuildChannels.length" class="kook-wait">
           暂无文本频道；请在 Discord 网页打开该服务器以同步频道列表。
         </p>
-        <template v-for="item in channelSections" :key="item.kind === 'label' ? 'pinned-label' : item.ch.channelId">
-          <div v-if="item.kind === 'label'" class="channel-section-label">置顶</div>
+        <template v-for="item in channelSections" :key="sectionItemKey(item)">
+          <div v-if="item.kind === 'pinned-label'" class="channel-section-label">置顶</div>
+          <div
+            v-else-if="item.kind === 'group-label'"
+            class="channel-group-head"
+            :class="{ 'drop-target': dropHighlightTarget === item.group.id }"
+            @click="toggleGroupCollapsed(item.group)"
+            @dragover="onDropZoneDragOver($event, item.group.id)"
+            @dragleave="onDropZoneDragLeave(item.group.id)"
+            @drop="onDropToGroup($event, item.group.id)"
+          >
+            <span class="channel-group-chevron">{{ item.group.collapsed ? "▸" : "▾" }}</span>
+            <input
+              v-if="renamingGroupId === item.group.id"
+              v-model="renameGroupDraft"
+              class="channel-group-rename-input"
+              @click.stop
+              @keydown.enter.prevent="commitRenameGroup"
+              @keydown.escape.prevent="cancelRenameGroup"
+              @blur="commitRenameGroup"
+            />
+            <span
+              v-else
+              class="channel-group-name"
+              :title="item.group.name"
+              @dblclick.stop="startRenameGroup(item.group)"
+            >{{ item.group.name }}</span>
+            <span class="channel-group-count">{{ (item.group.channelIds ?? []).length }}</span>
+            <button
+              type="button"
+              class="channel-group-rename-btn"
+              title="重命名分组"
+              @click.stop="startRenameGroup(item.group)"
+            >✎</button>
+            <button
+              type="button"
+              class="channel-group-del-btn"
+              title="删除分组"
+              @click.stop="deleteChannelGroup(item.group)"
+            >×</button>
+          </div>
+          <div
+            v-else-if="item.kind === 'ungrouped-label'"
+            class="channel-section-label channel-ungrouped-drop"
+            :class="{ 'drop-target': dropHighlightTarget === '__ungrouped__' }"
+            @dragover="onDropZoneDragOver($event, '__ungrouped__')"
+            @dragleave="onDropZoneDragLeave('__ungrouped__')"
+            @drop="onDropToUngrouped"
+          >未分组</div>
           <button
-            v-else
+            v-else-if="item.kind === 'channel'"
             type="button"
             class="channel-row"
+            draggable="true"
             :class="{
               active: selectedChannel?.channelId === item.ch.channelId,
               renaming: renamingChannelId === item.ch.channelId,
               pinned: item.pinned,
               unread: channelUnreadCount(item.ch.channelId) > 0 && selectedChannel?.channelId !== item.ch.channelId,
+              dragging: dragChannelId === item.ch.channelId,
+              'drop-before': dropBeforeChannelId === item.ch.channelId && dragChannelId !== item.ch.channelId,
             }"
             @click="selectChannel(item.ch)"
             @dblclick="startRenameChannel(item.ch, $event)"
             @contextmenu.prevent="startRenameChannel(item.ch, $event)"
+            @dragstart="onChannelDragStart(item.ch, $event)"
+            @dragend="onChannelDragEnd"
+            @dragover="onChannelDragOver($event, item.ch, { groupId: item.groupId ?? '', pinned: item.pinned })"
+            @dragleave="onChannelDragLeave(item.ch)"
+            @drop="onDropOnChannel($event, item.ch, { groupId: item.groupId ?? '', pinned: item.pinned })"
           >
             <span
               v-if="renamingChannelId === item.ch.channelId && selectedChannel?.channelId !== item.ch.channelId"
@@ -897,7 +1365,9 @@ onMounted(async () => {
           </template>
         </template>
         <template v-else>
-          <span class="main-sub">从左侧选择服务器与频道；原始 WS 见</span>
+          <span class="main-sub">从左侧选择服务器与频道；信号统计见</span>
+          <RouterLink to="/signals" class="main-sub">概览</RouterLink>
+          <span class="main-sub">；原始 WS 见</span>
           <RouterLink to="/debug" class="main-sub">Debug</RouterLink>
         </template>
       </header>
@@ -911,6 +1381,8 @@ onMounted(async () => {
             v-for="g in groupedMessages"
             :key="String(g.head.messageId ?? g.head.message_id)"
             class="msg-group"
+            :class="{ 'msg-highlight': isHighlightedMessage(g.head) }"
+            :data-message-id="messageDomId(g.head)"
           >
             <div class="msg-row msg-row-head">
               <img
@@ -971,6 +1443,8 @@ onMounted(async () => {
               v-for="m in g.tail"
               :key="String(m.messageId ?? m.message_id)"
               class="msg-row msg-row-continued"
+              :class="{ 'msg-highlight-row': isHighlightedMessage(m) }"
+              :data-message-id="messageDomId(m)"
             >
               <div class="msg-av-gap" aria-hidden="true" />
               <div class="msg-body">
@@ -1018,6 +1492,9 @@ onMounted(async () => {
       v-if="showSignalCards"
       ref="signalCardRailRef"
       :channel-id="selectedChannel?.channelId ?? ''"
+      :guild-id="selectedGuildId"
+      @scroll-to-message="scrollToSignalMessage"
+      @card-updated="onSignalCardUpdated"
     />
   </div>
 </template>

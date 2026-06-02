@@ -17,6 +17,148 @@
   font-size: 0.85rem;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.signal-head-btn {
+  border: none;
+  background: #5865f2;
+  color: #fff;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.signal-head-btn:hover {
+  filter: brightness(1.08);
+}
+.signal-manual-form {
+  background: #2b2d31;
+  border: 1px solid #5865f2;
+  border-radius: 8px;
+  padding: 0.55rem;
+  margin-bottom: 0.55rem;
+}
+.signal-field-row {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.68rem;
+  color: #949ba4;
+}
+.signal-field-row.compact {
+  grid-template-columns: 2rem 1fr;
+  margin-bottom: 0.25rem;
+}
+.signal-field-row input,
+.signal-field-row select,
+.signal-field-row textarea {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.68rem;
+  background: #1e1f22;
+  border: 1px solid #3a3c42;
+  color: #dbdee1;
+  border-radius: 4px;
+  padding: 0.15rem 0.35rem;
+}
+.signal-field-row textarea {
+  resize: vertical;
+  grid-column: 2;
+}
+.signal-act.primary {
+  width: 100%;
+  background: #5865f2;
+  color: #fff;
+  margin-top: 0.25rem;
+}
+.signal-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.35rem;
+  margin-bottom: 0.15rem;
+}
+.signal-card-top-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.signal-card-top-actions {
+  display: flex;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+.signal-icon-btn {
+  border: none;
+  background: #35373c;
+  color: #dbdee1;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.signal-icon-btn:hover {
+  background: #5865f2;
+  color: #fff;
+}
+.signal-card-symbol {
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: #fff;
+}
+.signal-card-manual-tag {
+  font-size: 0.6rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: rgba(250, 166, 26, 0.2);
+  color: #faa61a;
+}
+.signal-card-outcome-tag {
+  font-size: 0.6rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: rgba(73, 229, 122, 0.15);
+  color: #49e57a;
+}
+.signal-card-outcome-tag.noted {
+  background: rgba(88, 101, 242, 0.15);
+  color: #949ba4;
+}
+.signal-exec-section {
+  margin: 0.35rem 0 0.45rem;
+  padding: 0.35rem 0.4rem;
+  background: #25262a;
+  border-radius: 6px;
+}
+.signal-note-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.65rem;
+  color: #949ba4;
+  margin-bottom: 0.4rem;
+}
+.signal-note-row textarea {
+  font-size: 0.68rem;
+  background: #1e1f22;
+  border: 1px solid #3a3c42;
+  color: #dbdee1;
+  border-radius: 4px;
+  padding: 0.25rem 0.35rem;
+  resize: vertical;
+}
+.signal-card.manual {
+  border-color: rgba(250, 166, 26, 0.35);
 }
 .signal-card-wait,
 .signal-card-err {
@@ -49,12 +191,16 @@
 .signal-card-status.on {
   color: #49e57a;
   font-weight: 700;
+  font-size: 0.62rem;
 }
 .signal-card-status.off {
   color: #949ba4;
+  font-size: 0.62rem;
 }
 .signal-card-time {
   color: #6d7480;
+  font-size: 0.62rem;
+  margin-bottom: 0.25rem;
 }
 .signal-style-tabs {
   display: flex;
@@ -120,4 +266,91 @@
   color: #dbdee1;
   border-radius: 4px;
   padding: 0.1rem 0.25rem;
+}
+.signal-note-preview {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.65rem;
+  color: #949ba4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.signal-card-nav {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  max-width: min(52vw, 520px);
+}
+.signal-card-nav-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #949ba4;
+  padding-top: 0.35rem;
+  white-space: nowrap;
+}
+.signal-card-nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+.signal-card-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  max-width: 160px;
+}
+.signal-card-nav-item.expanded {
+  z-index: 2;
+}
+.signal-card-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  border: 1px solid #3f4147;
+  background: #2b2d31;
+  color: #dbdee1;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.signal-card-nav-item.inactive .signal-card-nav-btn {
+  opacity: 0.55;
+}
+.signal-card-nav-item.expanded .signal-card-nav-btn {
+  border-color: var(--accent, #5865f2);
+  background: rgba(88, 101, 242, 0.18);
+}
+.signal-card-nav-btn:hover {
+  background: #35373c;
+}
+.signal-card-nav-id {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.signal-card-nav-note-dot {
+  color: #faa61a;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.signal-card-nav-note-panel {
+  margin-top: 0.25rem;
+}
+.signal-card-nav-note-input {
+  width: 160px;
+  max-width: 100%;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  background: #1e1f22;
+  border: 1px solid #5865f2;
+  color: #dbdee1;
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  resize: vertical;
 }

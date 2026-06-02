@@ -10,9 +10,9 @@
     "collect:live": "COLLECTOR_UI_EMBED=1 node src/index.js --mode=collect",
     "collect:ui": "node scripts/pre-collect-ui.mjs && node src/collector-ui-server.js",
     "ui:build": "vite build --config collector-ui-vue/vite.config.js",
-    "dev:ui-vue": "vite --config collector-ui-vue/vite.config.js",
+    "dev:ui-vue": "node scripts/pre-dev-ui-vue.mjs && vite --config collector-ui-vue/vite.config.js",
     "dev:collect": "nodemon src/index.js",
-    "dev:collect:ui": "nodemon src/collector-ui-server.js"
+    "dev:collect:ui": "node scripts/pre-collect-ui.mjs && nodemon src/collector-ui-server.js"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",
