@@ -29,6 +29,7 @@ import {
 } from "./discord-message-format.js";
 import { createChannelMessageDedup, messageDedupKey } from "./discord-message-dedup.js";
 import { normalizeSignalText } from "./discord-signal-dedup.js";
+import { isSignalChannel } from "./discord-signal-config.js";
 import { isBlockedWsPayload } from "./ws-noise-filter.js";
 
 /**
@@ -379,7 +380,7 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       );
     } else {
       for (const row of toPersist) {
-        // Gateway 实时消息已由 cdp 层 [gateway MESSAGE_CREATE] 打印
+        // Gateway 实时消息日志见 DISCORD_GATEWAY_MESSAGE_LOG（默认不打印）
         if (String(row.source ?? "") === "gateway_ws") continue;
         logMessageIngest(log, row);
       }
@@ -479,6 +480,8 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       for (const r of toPersist) {
         if (String(r.source ?? "") !== "gateway_ws") continue;
         if (!String(r.content ?? "").trim()) continue;
+        const cid = String(r.channelId ?? "").trim();
+        if (isSignalChannel(cid)) continue;
         telegramPush.enqueue(r);
       }
     }

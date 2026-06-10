@@ -3,7 +3,7 @@
  */
 import { config } from "./config.js";
 
-/** @typedef {"binance_killers"|"btc_cn"|"eth_short"|"tw_opg"|"generic"} ParserKind */
+/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"generic"} ParserKind */
 
 /**
  * @typedef {{
@@ -16,29 +16,53 @@ import { config } from "./config.js";
 
 /** @type {Record<string, SignalChannelConfig>} */
 export const DEFAULT_SIGNAL_CHANNELS = {
-  "1444967547169669160": {
-    name: "Binance Killers",
-    parser: "binance_killers",
-    styles: ["cn_formal", "cn_brief", "en_brief"],
+  "1444962339743989843": {
+    name: "大镖客",
+    parser: "dabiaoke",
+    styles: ["cn_formal", "cn_brief"],
     telegramStyle: "cn_brief",
   },
   "1444962376066793513": {
-    name: "比特币/综合信号",
+    name: "淑琴",
     parser: "btc_cn",
     styles: ["cn_formal", "cn_brief", "tw_formal"],
     telegramStyle: "cn_brief",
   },
+  "1444962410002911396": {
+    name: "飞扬",
+    parser: "feiyang",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
   "1444962439471955989": {
-    name: "ETH 连胜信号",
-    parser: "eth_short",
+    name: "三马",
+    parser: "streak_cn",
     styles: ["cn_formal", "cn_brief", "tw_formal"],
     telegramStyle: "cn_brief",
   },
   "1444963372134301827": {
-    name: "OPG 繁中信号",
+    name: "seven",
     parser: "tw_opg",
     styles: ["tw_formal", "cn_formal", "cn_brief"],
     telegramStyle: "tw_formal",
+  },
+  "1444963929393729686": {
+    name: "峰哥",
+    parser: "fengge",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1444963689194192947": {
+    name: "颜驰",
+    parser: "yanchi",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1444967547169669160": {
+    name: "币安杀手",
+    parser: "binance_killers",
+    styles: ["cn_formal", "cn_brief", "en_brief"],
+    telegramStyle: "cn_brief",
   },
 };
 
@@ -67,4 +91,9 @@ export function getSignalChannelConfig(channelId) {
 /** @param {string} channelId */
 export function isSignalChannel(channelId) {
   return getSignalChannelIds().has(String(channelId ?? "").trim());
+}
+
+/** @param {string} channelId @returns {string} */
+export function signalChannelDisplayName(channelId) {
+  return getSignalChannelConfig(channelId)?.name ?? channelId;
 }

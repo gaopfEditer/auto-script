@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 
 import { isBlockedWsPayload, isDiscordGatewayPayload } from "./ws-noise-filter.js";
 import { formatGatewayRealtimeLog } from "./discord-gateway.js";
+import { config } from "./config.js";
 import {
   createDiscordGatewayZlibHub,
   isDiscordGatewayZlibStreamUrl,
@@ -509,7 +510,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
     if (isBlockedWsPayload(parsedJson, rawUtf8)) return;
 
     const gatewayLine = formatGatewayRealtimeLog(parsedJson);
-    if (gatewayLine) {
+    if (gatewayLine && config.gatewayMessageLog) {
       log.info(gatewayLine);
     }
 
@@ -727,6 +728,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *   networkTrace?: boolean,
  *   wsFrameTrace?: boolean,
  *   diagnosticSink?: (evt: Record<string, unknown>) => void,
+ *   onConnectionLost?: (info: { reason: string, connectUrl: string, message: string }) => void | Promise<void>,
  *   onData: (buf: Buffer, meta: { requestId: string, opcode: number, isBinaryHint: boolean, pageUrl?: string }) => void
  * }} opts — diagnosticSink：实时诊断（collect UI），与 networkTrace 独立；仅 sink 时也会挂 CDP 监听
  * @param {Logger} log
@@ -780,10 +782,34 @@ export async function startCdpWebSocketMonitor(opts, log) {
   /** @type {ReturnType<typeof setInterval> | null} */
   let reloadTimer = null;
 
+  /** @param {import('playwright').Browser} b */
+  function wireBrowserDisconnect(b) {
+    b.on("disconnected", () => {
+      const message = connectUrl
+        ? `CDP 与 Chrome 调试连接已断开: ${connectUrl}`
+        : "CDP 浏览器连接已断开";
+      log.error(
+        `[CDP] ${message} — 请检查 Chrome 是否休眠/关闭，或重新启动带 --remote-debugging-port 的 Chrome`
+      );
+      opts.diagnosticSink?.({
+        kind: "cdp_disconnected",
+        connectUrl: connectUrl || null,
+        reason: "browser_disconnected",
+        message,
+      });
+      void opts.onConnectionLost?.({
+        reason: "browser_disconnected",
+        connectUrl,
+        message,
+      });
+    });
+  }
+
   if (connectUrl) {
     ownedBrowser = false;
     log.info(`connectOverCDP: ${connectUrl}（监听你在该 Chrome 里打开/刷新的页面上的 WS）`);
     browser = await chromium.connectOverCDP(connectUrl);
+    wireBrowserDisconnect(browser);
 
     for (const ctx of browser.contexts()) {
       for (const page of ctx.pages()) {
@@ -809,6 +835,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
     log.info("启动 Chromium (headless) …");
     opts.diagnosticSink?.({ kind: "cdp_boot", mode: "headless", startUrl: opts.startUrl });
     browser = await chromium.launch({ headless: false });
+    wireBrowserDisconnect(browser);
     headlessContext = await browser.newContext();
     headlessPage = await headlessContext.newPage();
     await attachToPage(headlessPage);

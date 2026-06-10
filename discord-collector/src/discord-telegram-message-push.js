@@ -43,7 +43,7 @@ export function createDiscordTelegramMessagePush(log) {
       String(row.authorUsername ?? "").trim() ||
       "未知";
     const body = String(row.content ?? "").trim();
-    return `【${ch}】${author}\n${body}`;
+    return `【${ch}】\n${author}\n${body}`;
   }
 
   /**
@@ -64,7 +64,12 @@ export function createDiscordTelegramMessagePush(log) {
     if (!rows.length) return;
     const text = formatBatch(rows);
     try {
-      const result = await telegram.send(text, { channelId, batch: rows.length, kind: "message_batch" });
+      const result = await telegram.send(text, {
+        channelId,
+        batch: rows.length,
+        kind: "message_batch",
+        skipChannelLabel: true,
+      });
       if (result.skipped) {
         log.debug(`[telegram-push] 跳过 channel=${channelId} reason=${result.skipped}`);
         return;

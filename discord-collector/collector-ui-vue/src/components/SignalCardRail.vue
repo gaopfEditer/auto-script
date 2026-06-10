@@ -8,7 +8,6 @@ import {
   updateSignalCard,
   createSignalCard,
 } from "../lib/discordSignalApi.js";
-import SignalExecutionPreview from "./SignalExecutionPreview.vue";
 import SignalEvaluationForm from "./SignalEvaluationForm.vue";
 import {
   cardExecution,
@@ -20,6 +19,9 @@ import {
   executionEquals,
   hasEvaluation,
   evaluationSummaryLines,
+  seedActualFromPlanned,
+  calcProfitPercents,
+  formatProfitPercent,
 } from "../lib/signalExecution.js";
 
 const props = defineProps({
@@ -183,13 +185,43 @@ function cardHasEvaluation(card) {
 }
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
+function cardEvalProfit(card) {
+  const ex = cardExecution(card);
+  return calcProfitPercents(ex.actual.buyPrice, ex.actual.sellPrice, ex.direction);
+}
+
+/** @param {import("../lib/discordSignalApi.js").SignalCard} card */
+function cardEvalProfitBadge(card) {
+  const profit = cardEvalProfit(card);
+  if (!profit) return null;
+  return {
+    text: formatProfitPercent(profit.spot),
+    gain: profit.spot > 0,
+    loss: profit.spot < 0,
+  };
+}
+
+/** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 function cardEvalSummary(card) {
   return evaluationSummaryLines(cardExecution(card), card.note ?? "");
 }
 
-/** @param {number} id */
-function toggleEvalPanel(id) {
-  evalExpandedById.value[id] = !evalExpandedById.value[id];
+/** @param {import("../lib/discordSignalApi.js").SignalCard} card */
+function openEvalPanel(card) {
+  ensureExecDraft(card);
+  const draft = executionDraftById[card.id];
+  seedActualFromPlanned(draft);
+  actualTpTextById.value[card.id] = takeProfitText(draft.actual);
+  evalExpandedById.value[card.id] = true;
+}
+
+/** @param {import("../lib/discordSignalApi.js").SignalCard} card */
+function toggleEvalPanel(card) {
+  if (evalExpandedById.value[card.id]) {
+    evalExpandedById.value[card.id] = false;
+    return;
+  }
+  openEvalPanel(card);
 }
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
@@ -397,7 +429,14 @@ onMounted(async () => {
               v-if="cardExecution(card).outcome && cardExecution(card).outcome !== 'pending'"
               class="signal-card-outcome-tag"
             >{{ outcomeLabel(cardExecution(card).outcome) }}</span>
-            <span v-else-if="cardHasEvaluation(card)" class="signal-card-outcome-tag noted">已评价</span>
+            <span v-else-if="cardHasEvaluation(card)" class="signal-card-eval-tags">
+              <span class="signal-card-outcome-tag noted">已评价</span>
+              <span
+                v-if="cardEvalProfitBadge(card)"
+                class="signal-card-profit-tag"
+                :class="{ gain: cardEvalProfitBadge(card).gain, loss: cardEvalProfitBadge(card).loss }"
+              >{{ cardEvalProfitBadge(card).text }}</span>
+            </span>
           </div>
           <div class="signal-card-top-actions">
             <div
@@ -408,7 +447,7 @@ onMounted(async () => {
                 type="button"
                 class="signal-eval-btn"
                 :class="{ active: evalExpandedById[card.id] }"
-                @click="toggleEvalPanel(card.id)"
+                @click="toggleEvalPanel(card)"
               >评价</button>
               <div v-if="cardHasEvaluation(card) && !evalExpandedById[card.id]" class="signal-eval-popover">
                 <p v-for="(line, i) in cardEvalSummary(card)" :key="i">{{ line }}</p>
@@ -427,12 +466,7 @@ onMounted(async () => {
           {{ card.createdAt ? new Date(card.createdAt).toLocaleString("zh-CN") : "" }}
         </div>
 
-        <section class="signal-exec-section preview">
-          <SignalExecutionPreview
-            v-if="executionDraftById[card.id]"
-            :execution="executionDraftById[card.id]"
-          />
-        </section>
+        <pre v-if="cardBody(card)" class="signal-card-body">{{ cardBody(card) }}</pre>
 
         <section v-if="evalExpandedById[card.id]" class="signal-eval-panel">
           <header class="signal-eval-panel-head">评价 / 实际成交</header>
@@ -445,18 +479,6 @@ onMounted(async () => {
             @save="saveCardFields(card)"
           />
         </section>
-
-        <div v-if="cardStyleIds(card).length > 1" class="signal-style-tabs">
-          <button
-            v-for="sid in cardStyleIds(card)"
-            :key="sid"
-            type="button"
-            class="signal-style-tab"
-            :class="{ active: activeStyle(card) === sid }"
-            @click="activeStyleByCard[card.id] = sid"
-          >{{ styleLabel(sid) }}</button>
-        </div>
-        <pre v-if="cardBody(card)" class="signal-card-body">{{ cardBody(card) }}</pre>
 
         <div class="signal-card-actions">
           <button type="button" class="signal-act" @click="toggleStatus(card)">
@@ -511,9 +533,6 @@ onMounted(async () => {
   font-size: 0.62rem;
   color: #949ba4;
   padding: 0 0.25rem;
-}
-.signal-exec-section.preview {
-  padding: 0.35rem 0.45rem;
 }
 .signal-eval-wrap {
   position: relative;
@@ -579,5 +598,26 @@ onMounted(async () => {
   font-weight: 700;
   color: #949ba4;
   margin-bottom: 0.35rem;
+}
+.signal-card-eval-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.signal-card-profit-tag {
+  font-size: 0.6rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: rgba(148, 155, 164, 0.15);
+  color: #949ba4;
+  font-weight: 600;
+}
+.signal-card-profit-tag.gain {
+  background: rgba(73, 229, 122, 0.15);
+  color: #49e57a;
+}
+.signal-card-profit-tag.loss {
+  background: rgba(243, 134, 136, 0.15);
+  color: #f38688;
 }
 </style>

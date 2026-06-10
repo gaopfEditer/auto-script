@@ -15,6 +15,7 @@ import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { createDiscordMessageIngest } from "./discord-message-ingest.js";
 import { createDiscordSignalCardService } from "./discord-signal-card-service.js";
 import { createDiscordTelegramMessagePush } from "./discord-telegram-message-push.js";
+import { createSystemTelegramAlert } from "./discord-system-telegram.js";
 import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
 import { isBlockedWsPayload } from "./ws-noise-filter.js";
@@ -45,6 +46,7 @@ async function main() {
 
   const store = await openStore(config.mysql, createLogger("store"));
   const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
+  const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"));
   const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast);
   const discordIngest = createDiscordMessageIngest(
     store,
@@ -289,6 +291,7 @@ async function main() {
           networkTrace: config.collectNetworkTrace,
           wsFrameTrace: config.collectWsFrameTrace,
           diagnosticSink,
+          onConnectionLost: (info) => systemTelegram.notifyCdpDisconnected(info),
           onData(buf, meta) {
             frameSeq += 1;
             const { payload, proc } = buildFrameChannelPayload(

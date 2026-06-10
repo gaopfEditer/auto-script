@@ -254,7 +254,11 @@ export function registerDiscordSignalRoutes(app, store, signalService) {
         card.cardsByStyle[chCfg?.telegramStyle ?? ""] ||
         Object.values(card.cardsByStyle)[0] ||
         card.rawContent;
-      const result = await signalService.telegram.send(text, { channelId: card.channelId, cardId: id });
+      const result = await signalService.telegram.send(text, {
+        channelId: card.channelId,
+        channelName: chCfg?.name,
+        cardId: id,
+      });
       if (result.skipped) {
         res.json({ ok: false, skipped: result.skipped });
         return;

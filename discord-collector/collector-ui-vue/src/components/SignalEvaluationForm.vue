@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from "vue";
-import { OUTCOME_OPTIONS } from "../lib/signalExecution.js";
+import { OUTCOME_OPTIONS, calcProfitPercents, directionLabel, formatProfitPercent, resolveTradeDirection } from "../lib/signalExecution.js";
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -34,23 +34,61 @@ const closedAtLocal = computed({
     patchActual("closedAt", val ? new Date(val).toISOString() : null);
   },
 });
+
+const tradeSide = computed(() => resolveTradeDirection(props.modelValue?.direction));
+
+const profit = computed(() =>
+  calcProfitPercents(
+    props.modelValue?.actual?.buyPrice,
+    props.modelValue?.actual?.sellPrice,
+    props.modelValue?.direction
+  )
+);
+
+/** @param {"long" | "short"} side */
+function setTradeSide(side) {
+  patchRoot("direction", side === "short" ? "空" : "多");
+}
 </script>
 
 <template>
   <div class="signal-eval-form">
     <div class="signal-field-row compact">
-      <label>买入</label>
+      <label>方向</label>
+      <div class="signal-side-toggle">
+        <button
+          type="button"
+          class="signal-side-btn"
+          :class="{ active: tradeSide === 'long' }"
+          @click="setTradeSide('long')"
+        >多</button>
+        <button
+          type="button"
+          class="signal-side-btn"
+          :class="{ active: tradeSide === 'short' }"
+          @click="setTradeSide('short')"
+        >空</button>
+      </div>
+    </div>
+    <div class="signal-field-row compact">
+      <label>入场</label>
       <input
         :value="modelValue.actual.buyPrice"
+        placeholder="开仓价"
         @input="patchActual('buyPrice', ($event.target).value)"
       />
     </div>
     <div class="signal-field-row compact">
-      <label>卖出</label>
+      <label>出场</label>
       <input
         :value="modelValue.actual.sellPrice"
+        placeholder="平仓价"
         @input="patchActual('sellPrice', ($event.target).value)"
       />
+    </div>
+    <div v-if="profit" class="signal-profit-row" :class="{ gain: profit.spot > 0, loss: profit.spot < 0 }">
+      <span>{{ directionLabel(profit.side) }} · 盈利 {{ formatProfitPercent(profit.spot) }}</span>
+      <span>100x {{ formatProfitPercent(profit.leverage100) }}</span>
     </div>
     <div class="signal-field-row compact">
       <label>止盈</label>
@@ -113,5 +151,43 @@ const closedAtLocal = computed({
 .eval-save {
   width: 100%;
   margin-top: 0.35rem;
+}
+.signal-profit-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+  padding: 0.25rem 0.35rem;
+  margin-bottom: 0.25rem;
+  border-radius: 4px;
+  background: #25262a;
+  color: #949ba4;
+}
+.signal-profit-row.gain {
+  color: #49e57a;
+}
+.signal-profit-row.loss {
+  color: #f38688;
+}
+.signal-side-toggle {
+  display: flex;
+  gap: 0.35rem;
+  flex: 1;
+}
+.signal-side-btn {
+  flex: 1;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.68rem;
+  border-radius: 4px;
+  border: 1px solid #3a3c42;
+  background: #1e1f22;
+  color: #949ba4;
+  cursor: pointer;
+}
+.signal-side-btn.active {
+  border-color: #5865f2;
+  background: rgba(88, 101, 242, 0.2);
+  color: #dbdee1;
+  font-weight: 600;
 }
 </style>

@@ -30,7 +30,7 @@ export function parseGatewayFrame(obj) {
 
 const MESSAGE_EVENTS = new Set(["MESSAGE_CREATE", "MESSAGE_UPDATE"]);
 
-/** Gateway 实时消息事件（始终打印，不受 wsFrameTrace 限制） */
+/** Gateway 实时消息事件（config.gatewayMessageLog=1 时打印） */
 export const GATEWAY_REALTIME_LOG_EVENTS = MESSAGE_EVENTS;
 
 /** @param {unknown} json */

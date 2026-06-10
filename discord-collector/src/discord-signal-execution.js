@@ -98,9 +98,15 @@ export function executionFromParsed(parsed) {
   const p = parsed;
   const symbol = String(p.symbol ?? p.asset ?? "").trim();
   const direction = String(p.direction ?? "").trim();
+  const entryRaw =
+    p.entry ??
+    (Array.isArray(p.entries) ? p.entries.join(" / ") : "") ??
+    p.entryPrice ??
+    "";
+  const tpRaw = p.targets ?? p.takeProfits ?? p.takeProfit;
   const planned = normalizeTradeLeg({
-    entryPrice: p.entry ?? (Array.isArray(p.entries) ? p.entries[0] : "") ?? p.entryPrice,
-    takeProfitPrices: p.targets ?? p.takeProfits ?? p.takeProfit,
+    entryPrice: entryRaw,
+    takeProfitPrices: tpRaw,
     stopLossPrice: p.stopLoss ?? p.stop_loss,
   });
   return { symbol, direction, planned, actual: emptyActualLeg(), outcome: "pending", outcomeNote: "" };

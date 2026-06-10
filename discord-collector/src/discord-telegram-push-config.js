@@ -52,3 +52,18 @@ export function telegramPushChannelLabel(channelId, fallbackName = "") {
   if (fb) return fb;
   return id ? `#${id.slice(-6)}` : "频道";
 }
+
+/**
+ * @param {string} text
+ * @param {string} [channelId]
+ * @param {string} [fallbackName]
+ */
+export function formatTelegramWithChannelLabel(text, channelId, fallbackName = "") {
+  const body = String(text ?? "").trim();
+  if (!body) return "";
+  const id = String(channelId ?? "").trim();
+  if (!id) return body;
+  const label = telegramPushChannelLabel(id, fallbackName);
+  if (!label || body.startsWith(`【${label}】`)) return body;
+  return `【${label}】\n${body}`;
+}

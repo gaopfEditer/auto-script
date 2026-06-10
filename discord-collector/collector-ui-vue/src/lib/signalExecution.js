@@ -222,12 +222,16 @@ export function evaluationSummaryLines(ex, note = "") {
     lines.push(`结果：${outcomeLabel(ex.outcome)}`);
   }
   const a = ex.actual;
-  if (a.buyPrice) lines.push(`买入：${a.buyPrice}`);
-  if (a.sellPrice) lines.push(`卖出：${a.sellPrice}`);
+  if (a.buyPrice) lines.push(`入场：${a.buyPrice}`);
+  if (a.sellPrice) lines.push(`出场：${a.sellPrice}`);
   const tp = takeProfitText(a);
   if (tp) lines.push(`止盈：${tp}`);
   if (a.stopLossPrice) lines.push(`止损：${a.stopLossPrice}`);
   if (a.exitPrice) lines.push(`平仓：${a.exitPrice}`);
+  const profit = calcProfitPercents(a.buyPrice, a.sellPrice, ex.direction);
+  if (profit) {
+    lines.push(`${directionLabel(profit.side)} · 盈利 ${formatProfitPercent(profit.spot)}（100x ${formatProfitPercent(profit.leverage100)}）`);
+  }
   if (a.closedAt) {
     lines.push(`时间：${new Date(a.closedAt).toLocaleString("zh-CN")}`);
   }
@@ -241,6 +245,155 @@ export function evaluationSummaryLines(ex, note = "") {
 export function dash(v) {
   const s = String(v ?? "").trim();
   return s || "—";
+}
+
+/** @param {string} direction */
+export function isLongDirection(direction) {
+  const d = String(direction ?? "").trim();
+  if (/空|做空|SHORT/i.test(d)) return false;
+  return /多|做多|LONG/i.test(d);
+}
+
+/** @param {string} direction */
+export function isShortDirection(direction) {
+  return /空|做空|SHORT/i.test(String(direction ?? "").trim());
+}
+
+/**
+ * @param {string} [direction]
+ * @returns {"long" | "short" | null}
+ */
+export function resolveTradeDirection(direction) {
+  if (isShortDirection(direction)) return "short";
+  if (isLongDirection(direction)) return "long";
+  return null;
+}
+
+/** @param {"long" | "short" | null} side @returns {string} */
+export function directionLabel(side) {
+  if (side === "short") return "空";
+  if (side === "long") return "多";
+  return "—";
+}
+
+/** @param {string} price @returns {number | null} */
+export function parsePrice(price) {
+  const s = String(price ?? "").trim().replace(/,/g, "");
+  const n = parseFloat(s);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * 买入=入场价，卖出=出场价
+ * @param {string} buy 入场
+ * @param {string} sell 出场
+ * @param {string} [direction]
+ * @returns {{ spot: number, leverage100: number, side: "long" | "short" } | null}
+ */
+export function calcProfitPercents(buy, sell, direction) {
+  const entry = parsePrice(buy);
+  const exit = parsePrice(sell);
+  const side = resolveTradeDirection(direction);
+  if (entry == null || exit == null || !side) return null;
+  const spot = side === "short"
+    ? ((entry - exit) / entry) * 100
+    : ((exit - entry) / entry) * 100;
+  return { spot, leverage100: spot * 100, side };
+}
+
+/** @param {number | null | undefined} pct @returns {string} */
+export function formatProfitPercent(pct) {
+  if (pct == null || !Number.isFinite(pct)) return "—";
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toFixed(2)}%`;
+}
+
+/** @param {import("./discordSignalApi.js").SignalCard[]} cards */
+export function statLineFromCards(cards) {
+  /** @type {Record<string, number>} */
+  const stats = {
+    total: cards.length,
+    pending: 0,
+    take_profit: 0,
+    stop_loss: 0,
+    manual_close: 0,
+    cancelled: 0,
+  };
+  for (const c of cards) {
+    const o = String(cardExecution(c).outcome ?? "pending");
+    if (o in stats && o !== "total") stats[o]++;
+    else stats.pending++;
+  }
+  return stats;
+}
+
+/** @param {import("./discordSignalApi.js").SignalCard} card */
+export function isSignalCardActive(card) {
+  if (card.status === "expired") return false;
+  if (!card.expiresAt) return card.status === "active";
+  return card.status === "active" && new Date(card.expiresAt).getTime() > Date.now();
+}
+
+/** @param {import("./discordSignalApi.js").SignalCard} card */
+export function cardStatusLabel(card) {
+  return isSignalCardActive(card) ? "有效" : "失效";
+}
+
+/** @param {SignalExecution} ex */
+export function formatPlannedSummary(ex) {
+  /** @type {string[]} */
+  const parts = [];
+  const sym = String(ex.symbol ?? "").trim().replace(/^\$/, "");
+  if (sym) parts.push(sym);
+  if (ex.direction) parts.push(ex.direction);
+  const p = ex.planned;
+  if (p.entryPrice) parts.push(`入场 ${p.entryPrice}`);
+  const tp = takeProfitText(p);
+  if (tp) parts.push(`止盈 ${tp}`);
+  if (p.stopLossPrice) parts.push(`止损 ${p.stopLossPrice}`);
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+/** @param {SignalExecution} ex */
+export function formatActualSummary(ex) {
+  /** @type {string[]} */
+  const parts = [];
+  if (ex.direction) parts.push(ex.direction);
+  const a = ex.actual;
+  if (a.buyPrice) parts.push(`入场 ${a.buyPrice}`);
+  if (a.sellPrice) parts.push(`出场 ${a.sellPrice}`);
+  const tp = takeProfitText(a);
+  if (tp) parts.push(`止盈 ${tp}`);
+  if (a.stopLossPrice) parts.push(`止损 ${a.stopLossPrice}`);
+  if (ex.outcome && ex.outcome !== "pending") parts.push(outcomeLabel(ex.outcome));
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+/** @param {import("./discordSignalApi.js").SignalCard} card */
+export function cardBodyPreview(card, maxLines = 2) {
+  const styles = Object.keys(card.cardsByStyle ?? {});
+  const body = (styles.length ? card.cardsByStyle[styles[0]] : card.rawContent) ?? "";
+  const text = String(body).trim();
+  if (!text) return "";
+  return text.split("\n").slice(0, maxLines).join(" / ");
+}
+
+/** @param {SignalExecution} ex @returns {SignalExecution} */
+export function seedActualFromPlanned(ex) {
+  const entry = String(ex.planned?.entryPrice ?? "").trim();
+  const sl = String(ex.planned?.stopLossPrice ?? "").trim();
+  const tps = [...(ex.planned?.takeProfitPrices ?? [])];
+  const a = ex.actual;
+
+  if (entry) {
+    if (!a.buyPrice) a.buyPrice = entry;
+  }
+  if (sl && !a.stopLossPrice) a.stopLossPrice = sl;
+  if (tps.length && !(a.takeProfitPrices?.length ?? 0)) {
+    a.takeProfitPrices = [...tps];
+  }
+  if (!a.closedAt) a.closedAt = new Date().toISOString();
+  return ex;
 }
 
 /** @param {SignalExecution} ex @param {string} [note] @returns {string} */

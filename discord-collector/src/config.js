@@ -57,6 +57,10 @@ export const config = {
   collectWsFrameTrace: ["1", "true", "yes", "on"].includes(
     String(process.env.COLLECTOR_WS_FRAME_TRACE ?? "0").toLowerCase()
   ),
+  /** 打印 Gateway MESSAGE_CREATE 等实时消息行（默认关，避免群聊刷屏） */
+  gatewayMessageLog: ["1", "true", "yes", "on"].includes(
+    String(process.env.DISCORD_GATEWAY_MESSAGE_LOG ?? "0").toLowerCase()
+  ),
   collectUiPort: Number(process.env.COLLECTOR_UI_PORT ?? 3851),
   requiredTopLevelKeys: (process.env.COLLECTOR_REQUIRED_KEYS ?? "")
     .split(",")

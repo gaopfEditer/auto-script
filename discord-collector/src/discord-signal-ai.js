@@ -1,9 +1,89 @@
 /**
- * Ollama：将结构化信号格式化为各语言风格卡片正文。
+ * Ollama：将结构化信号格式化为各语言风格卡片正文；规则解析失败时用 AI 提取字段。
  */
 import { config } from "./config.js";
 import { SIGNAL_STYLE_META } from "./discord-signal-config.js";
 import { formatCardFallback } from "./discord-signal-parsers.js";
+
+/** @param {string} prompt */
+async function callOllama(prompt) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.ollamaGenerateTimeoutMs);
+  try {
+    const r = await fetch(config.ollamaGenerateUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: config.ollamaModel,
+        prompt,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    const body = /** @type {{ response?: string, error?: string }} */ (await r.json().catch(() => ({})));
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    return String(body.response ?? "").trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** @param {string} raw @returns {Record<string, unknown> | null} */
+function parseAiJson(raw) {
+  const text = String(raw ?? "").trim();
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1]?.trim() || text;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const obj = JSON.parse(candidate.slice(start, end + 1));
+    return obj && typeof obj === "object" ? /** @type {Record<string, unknown>} */ (obj) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {string} rawContent
+ * @param {string} parserKind
+ * @param {string} channelName
+ * @param {{ debug?: (s: string) => void }} [opts]
+ */
+export async function extractSignalWithAi(rawContent, parserKind, channelName, opts = {}) {
+  if (!config.ollamaEnabled) return null;
+  const prompt = `你是加密货币 Discord 发单消息解析器。频道「${channelName}」的发单风格为 ${parserKind}。
+
+从下面原文提取交易信号，只输出一个 JSON 对象（不要 markdown）：
+{
+  "parser": "${parserKind}",
+  "symbol": "币种如 BTC/BNB/OPG",
+  "direction": "做多或做空",
+  "entry": "入场价或区间",
+  "takeProfits": ["止盈1", "止盈2"],
+  "stopLoss": "止损价",
+  "leverage": "杠杆可选",
+  "position": "仓位可选",
+  "note": "备注可选",
+  "title": "简短标题"
+}
+不要编造原文没有的价位；无法识别则返回 {"skip": true}
+
+【原文】
+${String(rawContent ?? "").slice(0, 2500)}`;
+
+  try {
+    const resp = await callOllama(prompt);
+    const obj = parseAiJson(resp);
+    if (!obj || obj.skip) return null;
+    obj.parser = obj.parser || parserKind;
+    if (!obj.symbol && !obj.direction) return null;
+    return obj;
+  } catch (e) {
+    opts.debug?.(`Ollama 提取失败: ${/** @type {Error} */ (e).message}`);
+    return null;
+  }
+}
 
 /**
  * @param {Record<string, unknown>} parsed
@@ -61,27 +141,4 @@ export async function generateCardsByStyles(parsed, styleIds, rawContent, opts =
     }
   }
   return out;
-}
-
-/** @param {string} prompt */
-async function callOllama(prompt) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.ollamaGenerateTimeoutMs);
-  try {
-    const r = await fetch(config.ollamaGenerateUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: config.ollamaModel,
-        prompt,
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-    const body = /** @type {{ response?: string, error?: string }} */ (await r.json().catch(() => ({})));
-    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
-    return String(body.response ?? "").trim();
-  } finally {
-    clearTimeout(timer);
-  }
 }

@@ -3,11 +3,11 @@
  */
 import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
 import { createChannelTextDedup, normalizeSignalText, signalTextHash } from "./discord-signal-dedup.js";
-import { generateCardsByStyles } from "./discord-signal-ai.js";
+import { generateCardsByStyles, extractSignalWithAi } from "./discord-signal-ai.js";
 import { parseSignalText } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
 import { executionFromParsed, formatManualRawContent, normalizeExecution } from "./discord-signal-execution.js";
-import { isTelegramPushChannel } from "./discord-telegram-push-config.js";
+import { config } from "./config.js";
 
 /**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
@@ -49,7 +49,12 @@ export function createDiscordSignalCardService(store, log, broadcast) {
       return { skipped: "duplicate_text" };
     }
 
-    const parsed = parseSignalText(content, chCfg.parser);
+    let parsed = parseSignalText(content, chCfg.parser);
+    if (!parsed && config.ollamaEnabled) {
+      parsed = await extractSignalWithAi(content, chCfg.parser, chCfg.name, {
+        debug: (s) => log.debug(s),
+      });
+    }
     if (!parsed) {
       log.info(`信号未识别 channel=${channelId} parser=${chCfg.parser} preview=${content.slice(0, 80)}`);
       return { skipped: "parse_failed" };
@@ -77,9 +82,13 @@ export function createDiscordSignalCardService(store, log, broadcast) {
     const telegramStyle = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";
     const telegramText = cardsByStyle[telegramStyle] ?? Object.values(cardsByStyle)[0] ?? content;
 
-    if (telegram.enabled && !isTelegramPushChannel(channelId)) {
+    if (telegram.enabled) {
       try {
-        await telegram.send(telegramText, { channelId, cardId: cardRow.id });
+        await telegram.send(telegramText, {
+          channelId,
+          channelName: chCfg.name,
+          cardId: cardRow.id,
+        });
         await store.markSignalCardTelegramSent(cardRow.id);
         cardRow.telegramSentAt = new Date().toISOString();
       } catch (e) {

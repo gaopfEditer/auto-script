@@ -1,19 +1,19 @@
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
 import { RouterLink } from "vue-router";
-import {
-  fetchSignalConfig,
-  fetchSignalOverview,
-  fetchSignalHistory,
-  updateSignalCard,
-} from "../lib/discordSignalApi.js";
-import SignalExecutionForm from "../components/SignalExecutionForm.vue";
+import { fetchSignalConfig, fetchSignalOverview, fetchSignalHistory } from "../lib/discordSignalApi.js";
 import {
   cardExecution,
   outcomeLabel,
-  takeProfitText,
-  buildExecutionPayload,
-  executionEquals,
+  statLineFromCards,
+  calcProfitPercents,
+  formatProfitPercent,
+  formatPlannedSummary,
+  formatActualSummary,
+  cardBodyPreview,
+  isSignalCardActive,
+  cardStatusLabel,
+  directionLabel,
 } from "../lib/signalExecution.js";
 
 const PERIOD_OPTIONS = [
@@ -23,28 +23,32 @@ const PERIOD_OPTIONS = [
   { value: 0, label: "全部" },
 ];
 
+const STATUS_OPTIONS = [
+  { value: "active", label: "有效" },
+  { value: "all", label: "全部（含失效）" },
+];
+
 const days = ref(30);
+const statusFilter = ref("active");
 const loading = ref(false);
 const error = ref("");
 const overview = ref(/** @type {{ fromMs: number, toMs: number, channels: Array<Record<string, unknown>> } | null} */ (null));
 const selectedChannelId = ref("");
 const historyLoading = ref(false);
 const history = ref(/** @type {import("../lib/discordSignalApi.js").SignalCard[]} */ ([]));
-const historyStats = ref(/** @type {Record<string, number>} */ ({}));
-const expandedCardId = ref(/** @type {number | null} */ (null));
-
-/** @type {Record<number, import("../lib/signalExecution.js").SignalExecution>} */
-const execDraft = ref({});
-/** @type {Record<number, string>} */
-const plannedTpText = ref({});
-/** @type {Record<number, string>} */
-const actualTpText = ref({});
 
 const channels = computed(() => overview.value?.channels ?? []);
 
 const selectedChannel = computed(() =>
   channels.value.find((c) => String(c.channelId) === selectedChannelId.value)
 );
+
+const filteredHistory = computed(() => {
+  if (statusFilter.value === "all") return history.value;
+  return history.value.filter((c) => isSignalCardActive(c));
+});
+
+const filteredStats = computed(() => statLineFromCards(filteredHistory.value));
 
 async function loadOverview() {
   loading.value = true;
@@ -72,8 +76,6 @@ async function loadHistory() {
     const d = Number(days.value);
     const res = await fetchSignalHistory(selectedChannelId.value, d > 0 ? { days: d } : { days: 3650 });
     history.value = res.cards ?? [];
-    historyStats.value = res.stats ?? {};
-    syncDrafts(history.value);
   } catch (e) {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {
@@ -81,43 +83,10 @@ async function loadHistory() {
   }
 }
 
-/** @param {import("../lib/discordSignalApi.js").SignalCard[]} list */
-function syncDrafts(list) {
-  for (const c of list) {
-    const ex = cardExecution(c);
-    execDraft.value[c.id] = structuredClone(ex);
-    plannedTpText.value[c.id] = takeProfitText(ex.planned);
-    actualTpText.value[c.id] = takeProfitText(ex.actual);
-  }
-}
-
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
-function cardTitle(card) {
-  const ex = cardExecution(card);
-  if (ex.symbol) return ex.symbol.replace(/^\$/, "");
-  return `#${card.id}`;
-}
-
-/** @param {import("../lib/discordSignalApi.js").SignalCard} card */
-async function saveCard(card) {
-  const draft = execDraft.value[card.id];
-  if (!draft) return;
-  const payload = buildExecutionPayload(draft, {
-    plannedTp: plannedTpText.value[card.id],
-    actualTp: actualTpText.value[card.id],
-  });
-  if (executionEquals(payload, cardExecution(card))) return;
-  try {
-    const updated = await updateSignalCard(card.id, { execution: payload });
-    const idx = history.value.findIndex((c) => c.id === updated.id);
-    if (idx >= 0) history.value[idx] = updated;
-    execDraft.value[updated.id] = structuredClone(cardExecution(updated));
-    plannedTpText.value[updated.id] = takeProfitText(cardExecution(updated).planned);
-    actualTpText.value[updated.id] = takeProfitText(cardExecution(updated).actual);
-    await loadOverview();
-  } catch (e) {
-    error.value = String(/** @type {Error} */ (e).message ?? e);
-  }
+function cardProfit(cell) {
+  const ex = cardExecution(cell);
+  return calcProfitPercents(ex.actual.buyPrice, ex.actual.sellPrice, ex.direction);
 }
 
 /** @param {Record<string, number>} stats */
@@ -144,10 +113,10 @@ onMounted(async () => {
     <header class="sov-head">
       <div>
         <h1>信号概览</h1>
-        <p class="sov-sub">各监听频道的做单统计与历史记录</p>
+        <p class="sov-sub">各监听频道发单与实际做单盈利情况</p>
       </div>
       <div class="sov-head-actions">
-        <select v-model.number="days" class="sov-period">
+        <select v-model.number="days" class="sov-select">
           <option v-for="p in PERIOD_OPTIONS" :key="p.value" :value="p.value">{{ p.label }}</option>
         </select>
         <RouterLink to="/show" class="sov-link">← Show</RouterLink>
@@ -169,54 +138,111 @@ onMounted(async () => {
       >
         <div class="sov-channel-name">{{ ch.name }}</div>
         <div class="sov-channel-stats">{{ statLine(ch.stats) }}</div>
-        <div v-if="ch.recent?.length" class="sov-recent">
-          <span v-for="c in ch.recent.slice(0, 3)" :key="c.id" class="sov-recent-chip">
-            {{ (c.execution?.symbol || `#${c.id}`).replace(/^\$/, "") }}
-            <em>{{ outcomeLabel(c.execution?.outcome ?? "pending") }}</em>
-          </span>
-        </div>
       </button>
     </section>
 
     <section v-if="selectedChannel" class="sov-history">
       <header class="sov-history-head">
-        <h2>{{ selectedChannel.name }} · 信号历史</h2>
-        <span class="sov-history-stats">{{ statLine(historyStats) }}</span>
+        <h2>{{ selectedChannel.name }} · 盈利明细</h2>
+        <div class="sov-history-filters">
+          <select v-model="statusFilter" class="sov-select">
+            <option v-for="o in STATUS_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+          <span class="sov-history-stats">{{ statLine(filteredStats) }}</span>
+        </div>
       </header>
 
       <p v-if="historyLoading" class="sov-wait">加载历史…</p>
-      <p v-else-if="!history.length" class="sov-wait">该周期内暂无信号记录</p>
+      <p v-else-if="!filteredHistory.length" class="sov-wait">该筛选条件下暂无信号记录</p>
 
-      <article v-for="card in history" :key="card.id" class="sov-history-item">
-        <header class="sov-item-top" @click="expandedCardId = expandedCardId === card.id ? null : card.id">
-          <span class="sov-item-symbol">{{ cardTitle(card) }}</span>
-          <span class="sov-item-outcome">{{ outcomeLabel(cardExecution(card).outcome) }}</span>
-          <span v-if="card.isManual" class="sov-item-manual">手动</span>
-          <span class="sov-item-time">{{ card.createdAt ? new Date(card.createdAt).toLocaleString("zh-CN") : "" }}</span>
-          <span class="sov-item-toggle">{{ expandedCardId === card.id ? "▾" : "▸" }}</span>
-        </header>
-        <div v-if="expandedCardId === card.id" class="sov-item-body">
-          <SignalExecutionForm
-            v-if="execDraft[card.id]"
-            v-model="execDraft[card.id]"
-            v-model:planned-tp-text="plannedTpText[card.id]"
-            v-model:actual-tp-text="actualTpText[card.id]"
-            @change="saveCard(card)"
-          />
-          <p v-if="card.note" class="sov-item-note">备注：{{ card.note }}</p>
-          <pre v-if="card.rawContent" class="sov-item-raw">{{ card.rawContent }}</pre>
-        </div>
-      </article>
+      <div v-else class="sov-table-wrap">
+        <table class="sov-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>状态</th>
+              <th>信号信息</th>
+              <th>实际做单</th>
+              <th>盈利率</th>
+              <th>100x</th>
+              <th>结果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="card in filteredHistory" :key="card.id" :class="{ inactive: !isSignalCardActive(card) }">
+              <td class="sov-col-time">
+                {{ card.createdAt ? new Date(card.createdAt).toLocaleString("zh-CN") : "—" }}
+              </td>
+              <td>
+                <span class="sov-status-tag" :class="isSignalCardActive(card) ? 'on' : 'off'">
+                  {{ cardStatusLabel(card) }}
+                </span>
+              </td>
+              <td class="sov-col-signal">
+                <div class="sov-cell-main">{{ formatPlannedSummary(cardExecution(card)) }}</div>
+                <div v-if="cardBodyPreview(card)" class="sov-cell-sub">{{ cardBodyPreview(card) }}</div>
+              </td>
+              <td class="sov-col-actual">
+                <div class="sov-cell-main">{{ formatActualSummary(cardExecution(card)) }}</div>
+                <div v-if="card.note" class="sov-cell-sub">备注：{{ card.note }}</div>
+              </td>
+              <td class="sov-col-profit">
+                <template v-if="cardProfit(card)">
+                  <span
+                    class="sov-profit"
+                    :class="{ gain: cardProfit(card).spot > 0, loss: cardProfit(card).spot < 0 }"
+                  >
+                    {{ directionLabel(cardProfit(card).side) }}
+                    {{ formatProfitPercent(cardProfit(card).spot) }}
+                  </span>
+                </template>
+                <span v-else class="sov-muted">—</span>
+              </td>
+              <td class="sov-col-profit">
+                <span
+                  v-if="cardProfit(card)"
+                  class="sov-profit"
+                  :class="{ gain: cardProfit(card).spot > 0, loss: cardProfit(card).spot < 0 }"
+                >
+                  {{ formatProfitPercent(cardProfit(card).leverage100) }}
+                </span>
+                <span v-else class="sov-muted">—</span>
+              </td>
+              <td>{{ outcomeLabel(cardExecution(card).outcome) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
 </template>
 
 <style scoped>
 .signal-overview-page {
-  max-width: 960px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #5c5f66 #1e1f22;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 1.25rem 1rem 2rem;
   color: #dbdee1;
+  box-sizing: border-box;
+}
+.signal-overview-page::-webkit-scrollbar {
+  width: 8px;
+}
+.signal-overview-page::-webkit-scrollbar-track {
+  background: #1e1f22;
+}
+.signal-overview-page::-webkit-scrollbar-thumb {
+  background: #5c5f66;
+  border-radius: 4px;
+}
+.signal-overview-page::-webkit-scrollbar-thumb:hover {
+  background: #6d7480;
 }
 .sov-head {
   display: flex;
@@ -241,7 +267,7 @@ onMounted(async () => {
   align-items: center;
   gap: 0.5rem;
 }
-.sov-period {
+.sov-select {
   background: #2b2d31;
   border: 1px solid #3f4147;
   color: #dbdee1;
@@ -271,7 +297,7 @@ onMounted(async () => {
 }
 .sov-channel-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.65rem;
   margin-bottom: 1.5rem;
 }
@@ -298,93 +324,111 @@ onMounted(async () => {
   color: #949ba4;
   line-height: 1.4;
 }
-.sov-recent {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  margin-top: 0.45rem;
-}
-.sov-recent-chip {
-  font-size: 0.65rem;
-  background: #1e1f22;
-  padding: 0.1rem 0.35rem;
-  border-radius: 4px;
-}
-.sov-recent-chip em {
-  font-style: normal;
-  color: #949ba4;
-  margin-left: 0.2rem;
-}
 .sov-history-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
   margin-bottom: 0.75rem;
 }
 .sov-history-head h2 {
   margin: 0;
   font-size: 1rem;
 }
+.sov-history-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
 .sov-history-stats {
   font-size: 0.78rem;
   color: #949ba4;
 }
-.sov-history-item {
-  background: #2b2d31;
+.sov-table-wrap {
+  overflow-x: auto;
   border: 1px solid #3f4147;
   border-radius: 8px;
-  margin-bottom: 0.5rem;
-  overflow: hidden;
+  background: #2b2d31;
 }
-.sov-item-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.65rem;
+.sov-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.sov-table th,
+.sov-table td {
   padding: 0.55rem 0.65rem;
-  cursor: pointer;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid #3f4147;
 }
-.sov-item-top:hover {
-  background: #35373c;
+.sov-table th {
+  background: #25262a;
+  color: #949ba4;
+  font-weight: 600;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
-.sov-item-symbol {
-  font-weight: 700;
-  font-size: 0.85rem;
+.sov-table tbody tr:last-child td {
+  border-bottom: none;
 }
-.sov-item-outcome {
+.sov-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.sov-table tbody tr.inactive {
+  opacity: 0.65;
+}
+.sov-col-time {
+  white-space: nowrap;
+  color: #949ba4;
   font-size: 0.72rem;
-  color: #49e57a;
 }
-.sov-item-manual {
-  font-size: 0.65rem;
-  color: #faa61a;
+.sov-col-signal,
+.sov-col-actual {
+  min-width: 180px;
+  max-width: 280px;
 }
-.sov-item-time {
-  margin-left: auto;
+.sov-col-profit {
+  white-space: nowrap;
+}
+.sov-cell-main {
+  line-height: 1.45;
+  color: #dbdee1;
+}
+.sov-cell-sub {
+  margin-top: 0.25rem;
   font-size: 0.68rem;
   color: #6d7480;
+  line-height: 1.4;
+  word-break: break-word;
 }
-.sov-item-toggle {
+.sov-status-tag {
+  display: inline-block;
+  font-size: 0.65rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 3px;
+}
+.sov-status-tag.on {
+  background: rgba(73, 229, 122, 0.15);
+  color: #49e57a;
+}
+.sov-status-tag.off {
+  background: rgba(148, 155, 164, 0.15);
   color: #949ba4;
-  font-size: 0.75rem;
 }
-.sov-item-body {
-  padding: 0 0.65rem 0.65rem;
-  border-top: 1px solid #3f4147;
+.sov-profit {
+  font-weight: 600;
 }
-.sov-item-note {
-  font-size: 0.72rem;
-  color: #949ba4;
-  margin: 0.5rem 0 0;
+.sov-profit.gain {
+  color: #49e57a;
 }
-.sov-item-raw {
-  font-size: 0.75rem;
-  white-space: pre-wrap;
-  margin: 0.5rem 0 0;
-  color: #949ba4;
-  background: #1e1f22;
-  padding: 0.45rem;
-  border-radius: 6px;
+.sov-profit.loss {
+  color: #f38688;
+}
+.sov-muted {
+  color: #6d7480;
 }
 </style>
