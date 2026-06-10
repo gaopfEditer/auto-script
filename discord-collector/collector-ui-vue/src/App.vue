@@ -33,6 +33,8 @@ async function toggleDebug() {
       <RouterLink to="/" class="brand">discord-collector</RouterLink>
       <nav class="nav-links">
         <RouterLink to="/show">Show</RouterLink>
+        <RouterLink to="/fetch">拉取</RouterLink>
+        <RouterLink to="/archives">文稿</RouterLink>
         <RouterLink to="/debug">Debug</RouterLink>
       </nav>
       <button

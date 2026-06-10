@@ -19,8 +19,10 @@ import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
 import { isBlockedWsPayload } from "./ws-noise-filter.js";
 import { createLogger, setLogLevel } from "./logger.js";
-import { hashBuffer, openStore } from "./store.js";
+import { hashBuffer, tryOpenStore } from "./store.js";
 import { killListenersOnPort } from "../scripts/kill-port.mjs";
+import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
+import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public", "collector-ui");
@@ -43,7 +45,8 @@ async function main() {
     }
   }
 
-  const store = await openStore(config.mysql, createLogger("store"));
+  const storeLog = createLogger("store");
+  const { store, offline: mysqlOffline, hint: mysqlHint } = await tryOpenStore(config.mysql, storeLog);
   const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
   const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast);
   const discordIngest = createDiscordMessageIngest(
@@ -63,6 +66,11 @@ async function main() {
   app.use(express.json({ limit: "512kb" }));
 
   registerDiscordSignalRoutes(app, store, signalCards);
+  registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
+  registerYoutubeFetchProxyRoutes(app, {
+    baseUrl: config.youtubeFetchUrl,
+    log: createLogger("yt-fetch-proxy"),
+  });
 
   let frameSeq = 0;
   /** @type {null | ((guildId: string, channelId: string, trace?: { clientTraceId?: string }) => Promise<unknown>)} */
@@ -90,8 +98,19 @@ async function main() {
     }
   });
 
+  app.get("/api/health", (_req, res) => {
+    res.json({
+      ok: true,
+      mysql: !mysqlOffline,
+      mysqlHint: mysqlOffline ? mysqlHint : undefined,
+      mysqlHost: config.mysql.host,
+      mysqlPort: config.mysql.port,
+      mysqlDatabase: config.mysql.database,
+    });
+  });
+
   app.get("/api/config", (_req, res) => {
-    res.json({ ok: true, ...getDebugConfig() });
+    res.json({ ok: true, mysql: !mysqlOffline, ...getDebugConfig() });
   });
 
   app.post("/api/config", (req, res) => {
@@ -270,8 +289,11 @@ async function main() {
   if (listenError) throw listenError;
 
   log.info(
-    `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws  （先 pnpm run ui:build）`
+    `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /fetch  |  /archives  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws  （先 pnpm run ui:build）`
   );
+  if (mysqlOffline) {
+    log.warn("MySQL 离线 — 服务已启动但无持久化；修复数据库后请重启 collect:ui");
+  }
   log.info(
     `[api] /api/config /api/frames /api/discord/messages /api/discord/context POST /api/cdp/discord-channel（debugMode=${isDebugMode()}）`
   );
