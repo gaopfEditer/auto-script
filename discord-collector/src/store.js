@@ -648,6 +648,7 @@ export async function openStore(cfg, log) {
   await purgeMisclassifiedGuilds().catch(() => {});
 
   return {
+    offline: false,
     insertFrame,
     insertDiscordMessagesBatch,
     upsertDiscordGuildsBatch,
@@ -668,4 +669,63 @@ export async function openStore(cfg, log) {
     updateSignalCard,
     close,
   };
+}
+
+/**
+ * @param {MysqlConfig} cfg
+ * @param {Error} err
+ */
+export function formatMysqlUnavailableHint(cfg, err) {
+  const code = /** @type {NodeJS.ErrnoException} */ (err).code ?? "";
+  const addr = `${cfg.host}:${cfg.port}`;
+  return [
+    `MySQL 不可用（${code || err.message}）— ${addr} 库=${cfg.database}`,
+    "collect:ui 将以「无数据库」模式继续运行：",
+    "  · 可用：静态 UI、/archives、/debug、WebSocket 实时推送",
+    "  · 不可用：消息/帧入库、Show 历史、信号卡片持久化",
+    "请启动 MySQL，或检查 .env 中 MYSQL_HOST / MYSQL_PORT / MYSQL_DATABASE",
+  ].join("\n");
+}
+
+/** @returns {ReturnType<typeof openStore> extends Promise<infer S> ? S : never} */
+export function createOfflineStore() {
+  return {
+    offline: true,
+    insertFrame: async () => {},
+    insertDiscordMessagesBatch: async () => 0,
+    upsertDiscordGuildsBatch: async () => 0,
+    upsertDiscordChannelsBatch: async () => 0,
+    purgeMisclassifiedGuilds: async () => {},
+    getChannelMeta: async () => null,
+    listDiscordGuilds: async () => [],
+    listDiscordChannelsByGuild: async () => [],
+    listRecentFrames: async () => [],
+    listRecentMessages: async () => [],
+    listChannelTextCaches: async () => [],
+    upsertChannelTextCache: async () => {},
+    listChannelMessageDedupCaches: async () => [],
+    upsertChannelMessageDedupCache: async () => {},
+    insertSignalCard: async () => null,
+    markSignalCardTelegramSent: async () => {},
+    listSignalCards: async () => [],
+    updateSignalCard: async () => null,
+    close: async () => {},
+  };
+}
+
+/**
+ * collect:ui 用：MySQL 失败时不抛错，返回离线 store。
+ * @param {MysqlConfig} cfg
+ * @param {Logger} log
+ */
+export async function tryOpenStore(cfg, log) {
+  try {
+    const store = await openStore(cfg, log);
+    return { store, offline: false, error: null, hint: null };
+  } catch (e) {
+    const err = /** @type {Error} */ (e);
+    const hint = formatMysqlUnavailableHint(cfg, err);
+    for (const line of hint.split("\n")) log.error(line);
+    return { store: createOfflineStore(), offline: true, error: err.message, hint };
+  }
 }

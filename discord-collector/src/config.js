@@ -1,6 +1,10 @@
 /**
  * discord-collector 配置（环境变量覆盖）。
  */
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const _repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** @typedef {{ host: string; port: number; user: string; password: string; database: string }} MysqlConfig */
 
@@ -96,4 +100,10 @@ export const config = {
   )
     ? false
     : true,
+  /** youtube-fetch 本地归档目录（前端文稿预览） */
+  youtubeArchivesDir: (process.env.YOUTUBE_ARCHIVES_DIR ?? "").trim()
+    ? path.resolve(process.env.YOUTUBE_ARCHIVES_DIR.trim())
+    : path.join(_repoRoot, "youtube-fetch", "archives"),
+  /** youtube-fetch HTTP API（队列拉取） */
+  youtubeFetchUrl: (process.env.YOUTUBE_FETCH_URL ?? "http://127.0.0.1:3920").trim(),
 };

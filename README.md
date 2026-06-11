@@ -38,3 +38,11 @@ fix_all_encoding 处理同级目录下的所有编码错误的**文本**文件�
 - **frontend**：Vue + Element Plus 管理界面（创建定义、刷新列表、执行记录、部分聊天发送等 API 见 `frontend/src/api`）。
 
 具体接口与密钥配置见 `workflow` 目录内 `config` 与 `请求参考.txt`。
+
+## youtube-fetch
+
+通过 **CDP**（`connectOverCDP`，默认 `http://127.0.0.1:9222`）附着已启动的 Chrome，在 [youtube-transcript.ai](https://youtube-transcript.ai/) 页面上下文中请求 `/transcript/{VIDEO_ID}.txt`，拉取 YouTube 文字稿并以 **HTTP API** 对外提供。
+
+- 需 Chrome 带 `--remote-debugging-port=9222`（或环境变量 `CDP_CONNECT_URL`）。
+- 启动：`cd youtube-fetch && npm start`（默认端口 `3920`，`YOUTUBE_FETCH_PORT` 可改）。
+- `GET /health` — 健康检查；`GET /api/transcript?url=...` 或 `POST /api/transcript` — 可选 `lang`、`raw`。
