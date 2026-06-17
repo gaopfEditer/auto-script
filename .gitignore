@@ -1,4 +1,7 @@
 .env
+# Python
+__pycache__/
+*.py[cod]
 # Telethon 登录态，勿提交
 *.session
 *.session-journal

@@ -57,12 +57,15 @@ setup_telethon_logging()
 
 日志格式：`时间 级别 [logger名] 消息`，输出到 **stderr**，时间格式为 `%H:%M:%S`。
 
-## listen.py：AI 聚合推送（默认）
+## listen.py：关键词原样转发（默认）
 
-配置了 `push_chat` 后，**不会**把每条闲聊原样转发，而是：
+在 `monitored_groups.txt` 配置 `monitored`、`sender_keywords`、`push_chat` 后：
 
-1. 每个监听群保留最近 **30** 条消息（`TELEGRAM_TRADE_CONTEXT_SIZE`）
-2. 停聊 **45s** 后（`TELEGRAM_TRADE_CONTEXT_FLUSH_SEC`）将窗口交给 **Ollama** 提取交易信息
-3. 按 **币种** 合并为「入场 / 止损 / 止盈 / 调整」等一行摘要，发到 `push_chat`（`TELEGRAM_SEND_URL` 或 Telethon）
+- 监听群内新消息会打印到终端
+- **发件人展示名**包含任一 `sender_keywords` 子串时，**原样 forward** 到 `push_chat` 所列群组
 
-需本机 **Ollama** 与 **Telegram 发送 API**（如 `http://127.0.0.1:8000/api/telegram/send`）。关闭 AI、恢复关键词单条转发：`TELEGRAM_AI_TRADE_AGGREGATE=0` 并配置 `sender_keywords`。
+启动时应看到：`[+] 关键词原样转发: 子串=[...] → 推送 chat(s)=...`
+
+## listen.py：可选 AI 交易聚合
+
+设 `TELEGRAM_AI_TRADE_AGGREGATE=1` 时改为：滑动窗口 + Ollama 提取交易摘要后推送，**不**逐条转发闲聊。需本机 **Ollama** 与 `TELEGRAM_SEND_URL`（如 `http://127.0.0.1:8000/api/telegram/send`）。

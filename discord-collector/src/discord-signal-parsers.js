@@ -126,6 +126,20 @@ const SIGNAL_PATTERN_SETS = {
     /止盈/,
     /\d{3,}/,
   ],
+  unknown_trader: [
+    /#[A-Z0-9]+|\$[A-Z0-9]+/i,
+    /(多头|空头|做多|做空)/,
+    /入场价格[：:]/,
+    /目标价格[：:]/,
+    /止损价格[：:]/,
+  ],
+  altcoin_king: [
+    /#[A-Z0-9]+/i,
+    /市[價价][多空]/,
+    /止盈[：:]/,
+    /止[損损][：:]/,
+    /\d+\.\d+/,
+  ],
   generic: [
     /(做多|做空|LONG|SHORT|多|空)/i,
     /(止盈|目标|TARGETS?|TP)\s*[：:]/i,
@@ -378,6 +392,66 @@ export function parseYanchi(text) {
 }
 
 /** @param {string} text */
+export function parseUnknownTrader(text) {
+  const joined = lines(text).join("\n");
+  const symbol =
+    matchLine(joined, /#([A-Z0-9]+)/i) ||
+    matchLine(joined, /\$([A-Z0-9]+)/i);
+  const direction = /空头|做空/.test(joined)
+    ? "做空"
+    : /多头|做多/.test(joined)
+      ? "做多"
+      : "";
+  const entry = matchLine(joined, /入场价格[：:\s]*([\d.]+)/);
+  const target = matchLine(joined, /目标价格[：:\s]*([\d.]+)/);
+  const stopLoss = matchLine(joined, /止损价格[：:\s]*([\d.]+)/);
+  if (!symbol || !direction || !entry) return null;
+  const sym = symbol.toUpperCase();
+  const takeProfits = target ? [target] : [];
+  return {
+    parser: "unknown_trader",
+    symbol: sym,
+    asset: sym,
+    direction,
+    entry,
+    targets: takeProfits,
+    takeProfits,
+    stopLoss,
+    title: `${sym} · unknown-trader`,
+  };
+}
+
+/** @param {string} text */
+export function parseAltcoinKing(text) {
+  const joined = lines(text).join("\n");
+  const m = joined.match(/#([A-Z0-9]+)\s+市[價价]([多空])\s*([\d.]+)/i);
+  const symbol = (m?.[1] ?? matchLine(joined, /#([A-Z0-9]+)/i)).toUpperCase();
+  const direction = m?.[2] === "空" ? "做空" : m?.[2] === "多" ? "做多" : "";
+  const entry = m?.[3] ?? "";
+  const tpLine = matchLine(joined, /止盈[：:\s]*([^\n]+)/);
+  const takeProfits = tpLine
+    ? tpLine
+        .split(/[-–—]+/)
+        .map((x) => x.trim())
+        .filter((x) => /^\d/.test(x))
+    : [];
+  const stopLoss =
+    matchLine(joined, /止損[：:\s]*([\d.]+)/) ||
+    matchLine(joined, /止损[：:\s]*([\d.]+)/);
+  if (!symbol || !direction || !entry) return null;
+  return {
+    parser: "altcoin_king",
+    symbol,
+    asset: symbol,
+    direction,
+    entry,
+    takeProfits,
+    stopLoss,
+    title: `${symbol} · 山寨之王`,
+  };
+}
+
+/** @param {string} text */
 export function parseTwOpg(text) {
   const joined = lines(text).join("\n");
   const symbol = matchSymbolFromText(joined) || "OPG";
@@ -430,6 +504,10 @@ export function parseSignalText(text, kind) {
       return parseFengge(t);
     case "yanchi":
       return parseYanchi(t);
+    case "unknown_trader":
+      return parseUnknownTrader(t);
+    case "altcoin_king":
+      return parseAltcoinKing(t);
     default:
       return (
         parseDabiaoke(t) ||
@@ -438,6 +516,8 @@ export function parseSignalText(text, kind) {
         parseFeiyang(t) ||
         parseFengge(t) ||
         parseYanchi(t) ||
+        parseUnknownTrader(t) ||
+        parseAltcoinKing(t) ||
         parseTwOpg(t) ||
         parseBinanceKillers(t)
       );
@@ -490,7 +570,7 @@ export function formatCardFallback(parsed, styleId) {
       .join("\n");
   }
 
-  if (parsed.parser === "dabiaoke" || parsed.parser === "feiyang" || parsed.parser === "fengge" || parsed.parser === "yanchi") {
+  if (parsed.parser === "dabiaoke" || parsed.parser === "feiyang" || parsed.parser === "fengge" || parsed.parser === "yanchi" || parsed.parser === "unknown_trader" || parsed.parser === "altcoin_king") {
     const tps = /** @type {string[]} */ (parsed.takeProfits ?? []).join(" · ") || String(parsed.takeProfit ?? "");
     return [
       parsed.title ?? parsed.symbol ?? "信号",

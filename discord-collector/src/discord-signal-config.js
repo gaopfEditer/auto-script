@@ -3,7 +3,7 @@
  */
 import { config } from "./config.js";
 
-/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"generic"} ParserKind */
+/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"unknown_trader"|"altcoin_king"|"generic"} ParserKind */
 
 /**
  * @typedef {{
@@ -62,6 +62,18 @@ export const DEFAULT_SIGNAL_CHANNELS = {
     name: "币安杀手",
     parser: "binance_killers",
     styles: ["cn_formal", "cn_brief", "en_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1459861535815110810": {
+    name: "unknown-trader",
+    parser: "unknown_trader",
+    styles: ["cn_formal", "cn_brief", "en_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1444963506431463474": {
+    name: "山寨之王",
+    parser: "altcoin_king",
+    styles: ["cn_formal", "cn_brief", "tw_formal"],
     telegramStyle: "cn_brief",
   },
 };

@@ -340,8 +340,8 @@ def _env_bool(name: str, default: str = "1") -> bool:
 
 
 def ai_trade_aggregate_enabled() -> bool:
-    """监听群消息滑动窗口 + Ollama 聚合后推送（默认开）。"""
-    return _env_bool("TELEGRAM_AI_TRADE_AGGREGATE", "1")
+    """监听群消息滑动窗口 + Ollama 聚合后推送（默认关；需显式 TELEGRAM_AI_TRADE_AGGREGATE=1）。"""
+    return _env_bool("TELEGRAM_AI_TRADE_AGGREGATE", "0")
 
 
 def ollama_trade_aggregate_enabled() -> bool:

@@ -4,14 +4,11 @@
 默认仅监听与 poll_groups 相同的列表：telegram/monitored_groups.txt
 及环境变量 TELEGRAM_MONITORED_GROUP_IDS（见 config.get_monitored_group_ids）。
 
-推送模式（配置了 push_chat 时，默认 TELEGRAM_AI_TRADE_AGGREGATE=1）：
-  - 每个监听群维护最近 N 条（默认 30）消息的滑动窗口
-  - 防抖后调用 Ollama，从窗口中提取并**按币种聚合**入场/出场/止盈/止损
-  - 仅将聚合摘要发往 push_chat（TELEGRAM_SEND_URL 或 Telethon send_message）
-  - 琐碎闲聊不单独转发
+默认推送（monitored_groups.txt 配 push_chat + sender_keywords）：
+  - 发件人展示名包含任一关键词时，原样 forward 到 push_chat 群
 
-可选关键词原始转发（TELEGRAM_AI_TRADE_AGGREGATE=0 时）：
-  - sender_keywords=西西,梵乐：发件人展示名包含子串则原样转发单条
+可选 AI 交易聚合（TELEGRAM_AI_TRADE_AGGREGATE=1 时）：
+  - 滑动窗口 + Ollama 提取交易摘要后推送（不逐条转发闲聊）
 
 覆盖与例外：
   - TELEGRAM_TARGET_CHAT_IDS：非空时只监听其中 id（优先级最高）
@@ -98,7 +95,7 @@ async def main() -> None:
         )
     elif notify_kw or push_ids:
         print(
-            "[*] 推送未完全配置（需 push_chat；AI 聚合默认开，或设 TELEGRAM_AI_TRADE_AGGREGATE=0 并配 sender_keywords）",
+            "[*] 推送未完全配置（需 push_chat + sender_keywords；或设 TELEGRAM_AI_TRADE_AGGREGATE=1 走 AI 聚合）",
             flush=True,
         )
 
