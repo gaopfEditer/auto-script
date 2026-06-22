@@ -112,9 +112,16 @@ export const config = {
   binanceFapiUrl: (process.env.BINANCE_FAPI_URL ?? "https://fapi.binance.com").trim(),
   binanceRequestTimeoutMs: Number(process.env.BINANCE_REQUEST_TIMEOUT_MS ?? 15_000),
   cardPriceMonitorIntervalMs: Number(process.env.CARD_PRICE_MONITOR_INTERVAL_MS ?? 60_000),
-  cardProximityBandPct: Number(process.env.CARD_PROXIMITY_BAND_PCT ?? 0.5),
-  cardProximityCooldownMs: Number(process.env.CARD_PROXIMITY_COOLDOWN_MS ?? 300_000),
+  /** 加密接近推送：每 1h 检查，距关键位 ≤ 1% */
+  cardProximityCryptoCheckMs: Number(process.env.CARD_PROXIMITY_CRYPTO_CHECK_MS ?? 3_600_000),
+  cardProximityCryptoBandPct: Number(process.env.CARD_PROXIMITY_CRYPTO_BAND_PCT ?? 1.0),
+  /** 股票接近推送：每 1 天检查，剩余落差 ≤ 10%（100→110 则在 109–110 提醒） */
+  cardProximityStockCheckMs: Number(process.env.CARD_PROXIMITY_STOCK_CHECK_MS ?? 86_400_000),
+  cardProximityStockGapPct: Number(process.env.CARD_PROXIMITY_STOCK_GAP_PCT ?? 0.1),
   cardProximityTelegram: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_PROXIMITY_TELEGRAM ?? "1").toLowerCase()
   ),
+  /** 价格校验：加密默认 3 小时；股票较长周期（天） */
+  cardVerifyDefaultWindowHours: Number(process.env.CARD_VERIFY_DEFAULT_HOURS ?? 3),
+  cardVerifyStockWindowDays: Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30),
 };

@@ -8,6 +8,7 @@ import { parseSignalText } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
 import { executionFromParsed, formatManualRawContent, normalizeExecution } from "./discord-signal-execution.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
+import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { config } from "./config.js";
 
 /**
@@ -68,6 +69,8 @@ export function createDiscordSignalCardService(store, log, broadcast) {
     const textHash = signalTextHash(content);
     const executionJson = executionFromParsed(parsed);
     const symbol = extractSymbolFromPayload(parsed, executionJson);
+    const assetClass = detectAssetClass(symbol, parsed, executionJson, content);
+    const verifyMode = resolveVerifyMode(assetClass, parsed.verifyMode);
     const cardFieldsJson = buildCardFieldsFromExecution(executionJson, parsed, content, {
       sourceType: "discord",
       sourceRef: channelId,
@@ -88,6 +91,8 @@ export function createDiscordSignalCardService(store, log, broadcast) {
       symbol,
       cardFieldsJson,
       signalAt: new Date().toISOString(),
+      verifyMode,
+      assetClass,
     });
 
     const telegramStyle = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";

@@ -49,6 +49,20 @@ export async function fetchFuturesKlines(symbol, startMs, endMs, interval = "5m"
   }));
 }
 
+/**
+ * @param {string} symbol
+ * @param {'crypto' | 'stock'} assetClass
+ * @param {number} startMs
+ * @param {number} endMs
+ * @param {string} interval
+ */
+export async function fetchKlinesForCard(symbol, assetClass, startMs, endMs, interval) {
+  if (assetClass === "stock") {
+    throw new Error("股票行情源未配置（请设置 assetClass=crypto 或接入股票 K 线 API）");
+  }
+  return fetchFuturesKlines(symbol, startMs, endMs, interval);
+}
+
 /** @param {unknown} v */
 export function parsePrice(v) {
   const n = Number(String(v ?? "").replace(/,/g, "").trim());

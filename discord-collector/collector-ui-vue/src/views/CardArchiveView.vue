@@ -54,11 +54,25 @@ function fmtTime(v) {
 
 /** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
 function verifyBadge(card) {
-  const v3 = card.verify3h?.outcome;
-  const v1 = card.verify1m?.outcome;
-  if (v1 && v1 !== "pending") return `30d: ${outcomeLabel(String(v1))}`;
-  if (v3 && v3 !== "pending") return `3h: ${outcomeLabel(String(v3))}`;
-  return "待校验";
+  const mode = card.verifyMode ?? "3h";
+  const snap = mode === "30d" ? card.verify1m : card.verify3h;
+  const outcome = snap?.outcome;
+  if (outcome && outcome !== "pending") {
+    const label = mode === "30d" ? "长周期" : "3h";
+    return `${label}: ${outcomeLabel(String(outcome))}`;
+  }
+  if (snap?.error) return "行情待配置";
+  return mode === "30d" ? "待长周期校验" : "待 3h 校验";
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
+function verifyPanelTitle(card) {
+  return card.verifyMode === "30d" ? "长周期校验（股票）" : "3 小时校验（默认）";
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
+function activeVerifyResult(card) {
+  return card.verifyMode === "30d" ? card.verify1m : card.verify3h;
 }
 
 async function load() {
@@ -141,6 +155,7 @@ onMounted(async () => {
         >
           <div class="row-top">
             <span class="badge src">{{ c.sourceType }}</span>
+            <span v-if="c.assetClass === 'stock'" class="badge stock">股票</span>
             <span class="sym">{{ c.symbol || cardExecution(c).symbol }}</span>
             <span class="dir">{{ directionLabel(cardExecution(c).direction) }}</span>
           </div>
@@ -156,6 +171,7 @@ onMounted(async () => {
         来源 {{ selected.sourceType }}
         <template v-if="selected.sourceRef"> · {{ selected.sourceRef }}</template>
         · {{ fmtTime(selected.signalAt || selected.createdAt) }}
+        · 校验周期 {{ selected.verifyMode === "30d" ? "长周期(股票)" : "3小时" }}
       </p>
 
       <div v-if="selected.cardFields?.fields?.length" class="embed-preview">
@@ -180,20 +196,23 @@ onMounted(async () => {
 
       <div class="block verify-grid">
         <div>
-          <h4>3 小时校验</h4>
-          <p v-if="selected.verify3h">
-            {{ outcomeLabel(String(selected.verify3h.outcome ?? "pending")) }}
-            <template v-if="selected.verify3h.hitLevel"> @ {{ selected.verify3h.hitLevel }}</template>
+          <h4>{{ verifyPanelTitle(selected) }}</h4>
+          <p v-if="activeVerifyResult(selected)">
+            {{ outcomeLabel(String(activeVerifyResult(selected)?.outcome ?? "pending")) }}
+            <template v-if="activeVerifyResult(selected)?.hitLevel">
+              @ {{ activeVerifyResult(selected)?.hitLevel }}
+            </template>
+            <span v-if="activeVerifyResult(selected)?.error" class="muted">
+              （{{ activeVerifyResult(selected)?.error }}）
+            </span>
           </p>
-          <p v-else class="muted">未满 3 小时或待执行</p>
+          <p v-else class="muted">
+            {{ selected.verifyMode === "30d" ? "未满长周期窗口或待执行" : "未满 3 小时或待执行" }}
+          </p>
         </div>
-        <div>
-          <h4>30 天校验</h4>
-          <p v-if="selected.verify1m">
-            {{ outcomeLabel(String(selected.verify1m.outcome ?? "pending")) }}
-            <template v-if="selected.verify1m.hitLevel"> @ {{ selected.verify1m.hitLevel }}</template>
-          </p>
-          <p v-else class="muted">未满 30 天或待执行</p>
+        <div v-if="selected.verifyMode !== '30d' && selected.verify1m">
+          <h4>补充长周期记录</h4>
+          <p>{{ outcomeLabel(String(selected.verify1m.outcome ?? "pending")) }}</p>
         </div>
       </div>
 
@@ -317,6 +336,10 @@ h3 {
   border-radius: 4px;
   background: #3f4147;
   color: #dbdee1;
+}
+.badge.stock {
+  background: rgba(254, 231, 92, 0.15);
+  color: #fee75c;
 }
 .sym {
   font-weight: 700;

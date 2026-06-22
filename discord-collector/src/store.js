@@ -149,6 +149,8 @@ export async function openStore(cfg, log) {
     "ADD COLUMN verify_1m_json JSON NULL AFTER verify_3h_json",
     "ADD COLUMN proximity_json JSON NULL AFTER verify_1m_json",
     "ADD COLUMN signal_at DATETIME(3) NULL AFTER proximity_json",
+    "ADD COLUMN verify_mode VARCHAR(8) NOT NULL DEFAULT '3h' AFTER signal_at",
+    "ADD COLUMN asset_class VARCHAR(16) NOT NULL DEFAULT 'crypto' AFTER verify_mode",
   ]) {
     try {
       await pool.query(`ALTER TABLE discord_signal_cards ${col}`);
@@ -530,6 +532,8 @@ export async function openStore(cfg, log) {
    *   symbol?: string | null;
    *   cardFieldsJson?: unknown;
    *   signalAt?: string | null;
+   *   verifyMode?: string;
+   *   assetClass?: string;
    * }} row
    */
   async function insertSignalCard(row) {
@@ -538,9 +542,9 @@ export async function openStore(cfg, log) {
       `INSERT INTO discord_signal_cards (
          message_id, channel_id, guild_id, source_text_hash, raw_content,
          parsed_json, cards_by_style, card_fields_json, status, expires_at, note, execution_json, source,
-         source_type, source_ref, symbol, signal_at,
+         source_type, source_ref, symbol, signal_at, verify_mode, asset_class,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          source_text_hash = VALUES(source_text_hash),
          raw_content = VALUES(raw_content),
@@ -553,6 +557,8 @@ export async function openStore(cfg, log) {
          source_ref = COALESCE(VALUES(source_ref), source_ref),
          symbol = COALESCE(VALUES(symbol), symbol),
          signal_at = COALESCE(VALUES(signal_at), signal_at),
+         verify_mode = COALESCE(VALUES(verify_mode), verify_mode),
+         asset_class = COALESCE(VALUES(asset_class), asset_class),
          updated_at = VALUES(updated_at)`,
       [
         row.messageId,
@@ -572,6 +578,8 @@ export async function openStore(cfg, log) {
         row.sourceRef ?? null,
         row.symbol ? String(row.symbol).toUpperCase() : null,
         row.signalAt ? isoToMysqlDatetime3(row.signalAt) : now,
+        row.verifyMode ?? "3h",
+        row.assetClass ?? "crypto",
         now,
         now,
       ]
@@ -653,19 +661,29 @@ export async function openStore(cfg, log) {
   }
 
   /**
-   * 待 3h / 30d 自动价格校验的卡片。
+   * 待价格校验的卡片（每张仅一种周期：默认 3h 加密 / 30d 股票）。
    * @param {{ limit?: number }} [opts]
    */
   async function listCardsForVerification(opts = {}) {
     const lim = Math.min(200, Math.max(1, Number(opts.limit) || 80));
+    const hours = Number(process.env.CARD_VERIFY_DEFAULT_HOURS ?? 3) || 3;
+    const days = Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30) || 30;
     const now = isoToMysqlDatetime3(new Date().toISOString());
     const [rows] = await pool.query(
       `SELECT * FROM discord_signal_cards
        WHERE status = 'active'
          AND symbol IS NOT NULL AND symbol != ''
          AND (
-           (verify_3h_json IS NULL AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL 3 HOUR))
-           OR (verify_1m_json IS NULL AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL 30 DAY))
+           (
+             COALESCE(verify_mode, '3h') = '3h'
+             AND verify_3h_json IS NULL
+             AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${hours} HOUR)
+           )
+           OR (
+             verify_mode = '30d'
+             AND verify_1m_json IS NULL
+             AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${days} DAY)
+           )
          )
        ORDER BY id ASC
        LIMIT ${lim}`,

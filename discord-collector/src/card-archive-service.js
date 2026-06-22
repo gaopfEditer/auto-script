@@ -10,6 +10,7 @@ import {
 } from "./card-fields.js";
 import { executionFromParsed, normalizeExecution, normalizePriceList } from "./discord-signal-execution.js";
 import { signalCardToClient } from "./discord-signal-card-service.js";
+import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 
 export const SOURCE_TYPES = /** @type {const} */ (["discord", "youtube", "api", "manual"]);
 
@@ -65,6 +66,11 @@ export function createCardArchiveService(store, log, broadcast) {
 
     const channelId = String(input.channelId ?? input.sourceRef ?? sourceType).trim() || sourceType;
     const textHash = signalTextHash(rawContent || JSON.stringify(cardFields));
+    const assetClass =
+      input.assetClass === "stock" || input.assetClass === "crypto"
+        ? input.assetClass
+        : detectAssetClass(symbol, input.parsedJson, execution, rawContent);
+    const verifyMode = resolveVerifyMode(assetClass, input.verifyMode);
 
     const row = await store.insertSignalCard({
       messageId,
@@ -83,6 +89,8 @@ export function createCardArchiveService(store, log, broadcast) {
       symbol,
       cardFieldsJson: cardFields,
       signalAt: input.signalAt ?? new Date().toISOString(),
+      verifyMode,
+      assetClass,
     });
 
     const clientCard = archiveCardToClient(row);
@@ -155,6 +163,8 @@ export function createCardArchiveService(store, log, broadcast) {
       cardFields,
       symbol: body.symbol,
       note: body.note,
+      assetClass: body.assetClass,
+      verifyMode: body.verifyMode,
     });
   }
 
@@ -196,6 +206,8 @@ export function archiveCardToClient(row) {
     sourceType: String(row.source_type ?? row.sourceType ?? "discord"),
     sourceRef: row.source_ref ?? row.sourceRef ?? null,
     symbol: String(row.symbol ?? base.execution?.symbol ?? "").toUpperCase(),
+    assetClass: String(row.asset_class ?? row.assetClass ?? "crypto"),
+    verifyMode: String(row.verify_mode ?? row.verifyMode ?? "3h"),
     cardFields: cardFields && typeof cardFields === "object" ? cardFields : null,
     signalAt: row.signal_at ?? row.signalAt ?? base.createdAt,
     verify3h: verify3h && typeof verify3h === "object" ? verify3h : null,

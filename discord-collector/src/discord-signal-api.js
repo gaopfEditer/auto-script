@@ -9,6 +9,7 @@ import {
   normalizePriceList,
 } from "./discord-signal-execution.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
+import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { signalTextHash } from "./discord-signal-dedup.js";
 
 /** @param {import("express").Request} req */
@@ -217,7 +218,17 @@ export function registerDiscordSignalRoutes(app, store, signalService) {
         entry: execution.planned.entryPrice,
         targets: execution.planned.takeProfitPrices,
         stopLoss: execution.planned.stopLossPrice,
+        assetClass: req.body?.assetClass,
+        verifyMode: req.body?.verifyMode,
       };
+
+      const assetClass = detectAssetClass(
+        extractSymbolFromPayload(parsedJson, execution),
+        parsedJson,
+        execution,
+        rawContent
+      );
+      const verifyMode = resolveVerifyMode(assetClass, req.body?.verifyMode);
 
       const row = await store.insertSignalCard({
         messageId,
@@ -239,6 +250,8 @@ export function registerDiscordSignalRoutes(app, store, signalService) {
           sourceRef: channelId,
         }),
         signalAt: new Date().toISOString(),
+        verifyMode,
+        assetClass,
       });
       res.json({ ok: true, card: signalCardToClient(row) });
     } catch (e) {

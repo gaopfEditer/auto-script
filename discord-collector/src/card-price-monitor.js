@@ -1,18 +1,23 @@
 /**
- * 卡片价格校验（3 小时 / 1 月）与接近关键价位推送。
+ * 卡片价格校验（默认 3h；股票较长周期）与接近关键价位推送。
  */
 import { archiveCardToClient } from "./card-archive-service.js";
 import {
-  distancePct,
   evaluatePricePath,
-  fetchFuturesKlines,
+  fetchKlinesForCard,
   fetchFuturesPrice,
   parsePrice,
 } from "./card-price-fetch.js";
+import {
+  collectProximityLevels,
+  getCardProximityPolicy,
+  isLevelNear,
+  levelKindLabel,
+  proximityDistanceLabel,
+  shouldCheckCardProximity,
+} from "./card-proximity-policy.js";
+import { getCardVerifyPlan, verifyModeLabel } from "./card-verify-policy.js";
 import { config } from "./config.js";
-
-const VERIFY_3H_MS = 3 * 60 * 60 * 1000;
-const VERIFY_1M_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
@@ -21,8 +26,6 @@ const VERIFY_1M_MS = 30 * 24 * 60 * 60 * 1000;
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
  */
 export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
-  /** @type {Map<string, number>} */
-  const priceCache = new Map();
   let timer = null;
 
   /**
@@ -38,19 +41,24 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
    * @param {Record<string, unknown>} card
    */
   function collectLevels(card) {
-    const ex = card.execution ?? {};
-    const planned = ex.planned ?? {};
-    /** @type {Array<{ kind: string, price: number }>} */
-    const levels = [];
-    const entry = parsePrice(planned.entryPrice);
-    const sl = parsePrice(planned.stopLossPrice);
-    if (entry) levels.push({ kind: "entry", price: entry });
-    if (sl) levels.push({ kind: "stop_loss", price: sl });
-    for (const tp of planned.takeProfitPrices ?? []) {
-      const p = parsePrice(tp);
-      if (p) levels.push({ kind: "take_profit", price: p });
-    }
-    return levels;
+    return collectProximityLevels(card).map((lv) => ({
+      kind: lv.kind,
+      price: lv.price,
+      referencePrice: lv.referencePrice,
+    }));
+  }
+
+  /**
+   * @param {ReturnType<typeof archiveCardToClient>} card
+   */
+  function isVerificationDue(card, signalMs, now) {
+    const { verifyMode, window } = getCardVerifyPlan(card);
+    const already =
+      verifyMode === "30d"
+        ? card.verify1m != null
+        : card.verify3h != null;
+    if (already) return false;
+    return now - signalMs >= window.durationMs;
   }
 
   async function runVerification() {
@@ -59,55 +67,58 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
       const card = archiveCardToClient(row);
       const sym = card.symbol;
       if (!sym) continue;
+
       const signalMs = cardSignalMs(row);
       const now = Date.now();
-      const need3h = now - signalMs >= VERIFY_3H_MS && !card.verify3h;
-      const need1m = now - signalMs >= VERIFY_1M_MS && !card.verify1m;
-      if (!need3h && !need1m) continue;
+      if (!isVerificationDue(card, signalMs, now)) continue;
+
+      const { assetClass, verifyMode, window } = getCardVerifyPlan(card);
 
       try {
-        if (need3h) {
-          const end = signalMs + VERIFY_3H_MS;
-          const klines = await fetchFuturesKlines(sym, signalMs, end, "5m");
-          const result = evaluatePricePath(card.execution, klines);
-          const patch = {
-            verify3hJson: {
-              ...result,
-              window: "3h",
-              symbol: sym,
-            },
+        const end = signalMs + window.durationMs;
+        let result;
+        try {
+          const klines = await fetchKlinesForCard(sym, assetClass, signalMs, end, window.klineInterval);
+          result = {
+            ...evaluatePricePath(card.execution, klines),
+            window: window.labelShort,
+            verifyMode,
+            assetClass,
+            symbol: sym,
+            klineCount: klines.length,
           };
-          if (result.outcome !== "pending") {
-            patch.executionJson = {
-              ...card.execution,
-              outcome: result.outcome,
-              outcomeNote: `自动校验(3h): ${result.outcome} @ ${result.hitLevel || "—"}`,
-            };
-          }
-          await store.updateSignalCard(card.id, patch);
-          log.info(`卡片 #${card.id} 3h 校验 outcome=${result.outcome}`);
-        }
-        if (need1m) {
-          const end = signalMs + VERIFY_1M_MS;
-          const klines = await fetchFuturesKlines(sym, signalMs, end, "1h");
-          const result = evaluatePricePath(card.execution, klines);
-          const patch = {
-            verify1mJson: {
-              ...result,
-              window: "30d",
-              symbol: sym,
-            },
+        } catch (fetchErr) {
+          result = {
+            outcome: "pending",
+            hitLevel: "",
+            highMax: 0,
+            lowMin: 0,
+            entry: parsePrice(card.execution?.planned?.entryPrice),
+            verifiedAt: new Date().toISOString(),
+            window: window.labelShort,
+            verifyMode,
+            assetClass,
+            symbol: sym,
+            error: String(/** @type {Error} */ (fetchErr).message ?? fetchErr),
           };
-          if (result.outcome !== "pending" && card.execution?.outcome === "pending") {
-            patch.executionJson = {
-              ...card.execution,
-              outcome: result.outcome,
-              outcomeNote: `自动校验(30d): ${result.outcome} @ ${result.hitLevel || "—"}`,
-            };
-          }
-          await store.updateSignalCard(card.id, patch);
-          log.info(`卡片 #${card.id} 30d 校验 outcome=${result.outcome}`);
+          log.warn(`卡片 #${card.id} ${verifyMode} 行情拉取失败: ${result.error}`);
         }
+
+        /** @type {Record<string, unknown>} */
+        const patch = {
+          [window.resultField]: result,
+        };
+        if (result.outcome !== "pending" && !result.error) {
+          patch.executionJson = {
+            ...card.execution,
+            outcome: result.outcome,
+            outcomeNote: `自动校验(${verifyModeLabel(verifyMode)}): ${result.outcome} @ ${result.hitLevel || "—"}`,
+          };
+        }
+        await store.updateSignalCard(card.id, patch);
+        log.info(
+          `卡片 #${card.id} ${verifyMode} 校验 asset=${assetClass} outcome=${result.outcome}${result.error ? ` err=${result.error}` : ""}`
+        );
       } catch (e) {
         log.warn(`卡片 #${card.id} 价格校验失败: ${/** @type {Error} */ (e).message}`);
       }
@@ -116,65 +127,100 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
 
   async function runProximityCheck() {
     const rows = await store.listActiveCardsForProximity({ limit: 200 });
-    const band = config.cardProximityBandPct;
-    /** @type {Map<string, number>} */
-    const symbols = new Map();
-    for (const row of rows) {
-      const sym = String(row.symbol ?? "").trim();
-      if (sym) symbols.set(sym, 1);
-    }
-
-    for (const sym of symbols.keys()) {
-      try {
-        const { price } = await fetchFuturesPrice(sym);
-        priceCache.set(sym, price);
-      } catch (e) {
-        log.debug(`现价拉取失败 ${sym}: ${/** @type {Error} */ (e).message}`);
-      }
-    }
+    const now = Date.now();
+    /** @type {Map<string, { assetClass: string, price: number }>} */
+    const priceCache = new Map();
 
     for (const row of rows) {
       const card = archiveCardToClient(row);
+      const policy = getCardProximityPolicy(card);
+      let proximity =
+        card.proximity && typeof card.proximity === "object" ? { ...card.proximity } : {};
+
+      if (!shouldCheckCardProximity(proximity, now, policy.checkIntervalMs)) {
+        continue;
+      }
+
       const sym = card.symbol;
-      const price = priceCache.get(sym);
-      if (!price || !sym) continue;
+      if (!sym) continue;
+
+      let price = priceCache.get(sym)?.price;
+      if (price == null) {
+        try {
+          const { assetClass } = getCardVerifyPlan(card);
+          if (assetClass === "stock") {
+            log.debug(`股票 ${sym} 现价源未配置，跳过接近检查`);
+            proximity._meta = {
+              ...(proximity._meta && typeof proximity._meta === "object" ? proximity._meta : {}),
+              lastCheckAt: new Date().toISOString(),
+              skipped: "stock_price_feed",
+            };
+            await store.updateSignalCard(card.id, { proximityJson: proximity });
+            continue;
+          }
+          const tick = await fetchFuturesPrice(sym);
+          price = tick.price;
+          priceCache.set(sym, { assetClass, price });
+        } catch (e) {
+          log.debug(`现价拉取失败 ${sym}: ${/** @type {Error} */ (e).message}`);
+          continue;
+        }
+      }
 
       const levels = collectLevels(card);
-      let proximity = card.proximity && typeof card.proximity === "object" ? { ...card.proximity } : {};
       /** @type {Array<Record<string, unknown>>} */
       const alerts = [];
 
       for (const lv of levels) {
-        const dist = distancePct(price, lv.price);
+        const near = isLevelNear(price, lv.price, policy.assetClass, lv.referencePrice);
         const key = `${lv.kind}_${lv.price}`;
         const prev = proximity[key];
-        const near = dist <= band;
+        const distLabel = proximityDistanceLabel(price, lv.price, policy.assetClass, lv.referencePrice);
+
         if (near) {
           const lastAlert = prev?.lastAlertAt ? new Date(String(prev.lastAlertAt)).getTime() : 0;
-          const cooldown = config.cardProximityCooldownMs;
-          if (Date.now() - lastAlert > cooldown) {
+          if (now - lastAlert >= policy.checkIntervalMs) {
             alerts.push({
               kind: lv.kind,
+              kindLabel: levelKindLabel(lv.kind),
               level: lv.price,
-              distancePct: dist,
               currentPrice: price,
+              distanceLabel: distLabel,
+              policy: policy.assetClass,
             });
-            proximity[key] = { lastAlertAt: new Date().toISOString(), distancePct: dist, price };
+            proximity[key] = {
+              lastAlertAt: new Date().toISOString(),
+              near: true,
+              distanceLabel: distLabel,
+              price,
+            };
           }
         } else if (prev) {
-          proximity[key] = { ...prev, distancePct: dist, near: false };
+          proximity[key] = { ...prev, near: false, distanceLabel: distLabel, price };
         }
       }
 
+      proximity._meta = {
+        ...(proximity._meta && typeof proximity._meta === "object" ? proximity._meta : {}),
+        lastCheckAt: new Date().toISOString(),
+        assetClass: policy.assetClass,
+        checkIntervalMs: policy.checkIntervalMs,
+      };
+
+      await store.updateSignalCard(card.id, { proximityJson: proximity });
+
       if (alerts.length) {
-        await store.updateSignalCard(card.id, { proximityJson: proximity });
+        const rule =
+          policy.assetClass === "stock"
+            ? `股票 ${policy.checkLabel} · 落差 ${policy.gapLabel}`
+            : `加密 ${policy.checkLabel} · 误差 ${policy.bandLabel}`;
         const lines = alerts.map(
-          (a) =>
-            `· ${a.kind} ${a.level} 距离 ${Number(a.distancePct).toFixed(2)}% (现价 ${a.currentPrice})`
+          (a) => `· ${a.kindLabel} ${a.level} — ${a.distanceLabel}（现价 ${a.currentPrice}）`
         );
         const text = [
           `📍 价格接近警报 · ${sym}`,
           `卡片 #${card.id} · 来源 ${card.sourceType}`,
+          `规则: ${rule}`,
           ...lines,
           card.cardFields?.title ? `标题: ${card.cardFields.title}` : "",
         ]
@@ -186,13 +232,14 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
           cardId: card.id,
           symbol: sym,
           price,
+          policy: policy.assetClass,
           alerts,
         });
 
         if (config.cardProximityTelegram) {
           await systemTelegram.notify(text, { kind: "card_proximity" });
         }
-        log.info(`接近推送 #${card.id} ${sym} alerts=${alerts.length}`);
+        log.info(`接近推送 #${card.id} ${sym} [${policy.assetClass}] alerts=${alerts.length}`);
       }
     }
   }
@@ -209,7 +256,11 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
       void tick().catch((e) => log.warn(`价格监控 tick: ${/** @type {Error} */ (e).message}`));
     }, ms);
     void tick().catch((e) => log.warn(`价格监控首次: ${/** @type {Error} */ (e).message}`));
-    log.info(`卡片价格监控已启动 interval=${ms}ms proximity=${config.cardProximityBandPct}%`);
+    log.info(
+      `卡片价格监控已启动 tick=${config.cardPriceMonitorIntervalMs}ms | ` +
+        `接近推送 加密每${config.cardProximityCryptoCheckMs / 3600000}h±${config.cardProximityCryptoBandPct}% | ` +
+        `股票每${config.cardProximityStockCheckMs / 86400000}d落差${config.cardProximityStockGapPct * 100}%`
+    );
   }
 
   function stop() {

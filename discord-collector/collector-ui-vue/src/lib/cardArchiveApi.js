@@ -11,6 +11,8 @@
  *   sourceType: string,
  *   sourceRef: string | null,
  *   symbol: string,
+ *   assetClass: string,
+ *   verifyMode: string,
  *   cardFields: {
  *     title?: string,
  *     description?: string,

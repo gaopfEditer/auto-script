@@ -2,6 +2,7 @@
  * 统一卡片归档 API（内部 /api/cards + 对外开放 /api/v1/cards）。
  */
 import { archiveCardToClient, createCardArchiveService } from "./card-archive-service.js";
+import { detectAssetClass } from "./card-verify-policy.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { config } from "./config.js";
 
@@ -133,6 +134,12 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
     try {
       const body = req.body ?? {};
       const execution = normalizeExecution(body.execution ?? body, body.parsedJson);
+      const assetClass = detectAssetClass(
+        body.symbol ?? execution.symbol,
+        body.parsedJson,
+        execution,
+        body.rawContent
+      );
       const card = await archiveService.archiveCard({
         messageId: body.messageId,
         channelId: body.channelId ?? "api",
@@ -147,6 +154,8 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
         symbol: body.symbol ?? execution.symbol,
         note: body.note,
         signalAt: body.signalAt,
+        verifyMode: body.verifyMode,
+        assetClass: body.assetClass ?? assetClass,
       });
       res.status(201).json({ ok: true, card });
     } catch (e) {
