@@ -141,6 +141,14 @@ export async function openStore(cfg, log) {
     "ADD COLUMN note TEXT NULL AFTER telegram_sent_at",
     "ADD COLUMN execution_json JSON NULL AFTER note",
     "ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'auto' AFTER execution_json",
+    "ADD COLUMN source_type VARCHAR(32) NOT NULL DEFAULT 'discord' AFTER source",
+    "ADD COLUMN source_ref VARCHAR(128) NULL AFTER source_type",
+    "ADD COLUMN symbol VARCHAR(32) NULL AFTER source_ref",
+    "ADD COLUMN card_fields_json JSON NULL AFTER cards_by_style",
+    "ADD COLUMN verify_3h_json JSON NULL AFTER card_fields_json",
+    "ADD COLUMN verify_1m_json JSON NULL AFTER verify_3h_json",
+    "ADD COLUMN proximity_json JSON NULL AFTER verify_1m_json",
+    "ADD COLUMN signal_at DATETIME(3) NULL AFTER proximity_json",
   ]) {
     try {
       await pool.query(`ALTER TABLE discord_signal_cards ${col}`);
@@ -149,8 +157,18 @@ export async function openStore(cfg, log) {
     }
   }
 
+  for (const idx of [
+    "ADD KEY idx_signal_symbol_time (symbol, created_at)",
+    "ADD KEY idx_signal_source_time (source_type, created_at)",
+  ]) {
+    try {
+      await pool.query(`ALTER TABLE discord_signal_cards ${idx}`);
+    } catch {
+      /* 索引已存在 */
+    }
+  }
+
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS discord_channel_text_cache (
       channel_id VARCHAR(32) NOT NULL PRIMARY KEY,
       recent_texts JSON NOT NULL,
       updated_at DATETIME(3) NOT NULL
@@ -507,6 +525,11 @@ export async function openStore(cfg, log) {
    *   executionJson?: unknown;
    *   source?: string;
    *   note?: string | null;
+   *   sourceType?: string;
+   *   sourceRef?: string | null;
+   *   symbol?: string | null;
+   *   cardFieldsJson?: unknown;
+   *   signalAt?: string | null;
    * }} row
    */
   async function insertSignalCard(row) {
@@ -514,16 +537,22 @@ export async function openStore(cfg, log) {
     const [result] = await pool.execute(
       `INSERT INTO discord_signal_cards (
          message_id, channel_id, guild_id, source_text_hash, raw_content,
-         parsed_json, cards_by_style, status, expires_at, note, execution_json, source,
+         parsed_json, cards_by_style, card_fields_json, status, expires_at, note, execution_json, source,
+         source_type, source_ref, symbol, signal_at,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          source_text_hash = VALUES(source_text_hash),
          raw_content = VALUES(raw_content),
          parsed_json = VALUES(parsed_json),
          cards_by_style = VALUES(cards_by_style),
+         card_fields_json = COALESCE(VALUES(card_fields_json), card_fields_json),
          note = COALESCE(VALUES(note), note),
          execution_json = COALESCE(VALUES(execution_json), execution_json),
+         source_type = COALESCE(VALUES(source_type), source_type),
+         source_ref = COALESCE(VALUES(source_ref), source_ref),
+         symbol = COALESCE(VALUES(symbol), symbol),
+         signal_at = COALESCE(VALUES(signal_at), signal_at),
          updated_at = VALUES(updated_at)`,
       [
         row.messageId,
@@ -533,11 +562,16 @@ export async function openStore(cfg, log) {
         row.rawContent,
         serializeRawJsonColumnForMysql(row.parsedJson),
         JSON.stringify(row.cardsByStyle ?? {}),
+        serializeRawJsonColumnForMysql(row.cardFieldsJson),
         row.status ?? "active",
         row.expiresAt ? isoToMysqlDatetime3(row.expiresAt) : null,
         row.note ?? null,
         serializeRawJsonColumnForMysql(row.executionJson),
         row.source ?? "auto",
+        row.sourceType ?? "discord",
+        row.sourceRef ?? null,
+        row.symbol ? String(row.symbol).toUpperCase() : null,
+        row.signalAt ? isoToMysqlDatetime3(row.signalAt) : now,
         now,
         now,
       ]
@@ -566,12 +600,14 @@ export async function openStore(cfg, log) {
   }
 
   /**
-   * @param {{ channelId?: string, status?: string, limit?: number, fromMs?: number, toMs?: number }} [filters]
+   * @param {{ channelId?: string, status?: string, limit?: number, fromMs?: number, toMs?: number, sourceType?: string, symbol?: string }} [filters]
    */
   async function listSignalCards(filters = {}) {
     const lim = Math.min(500, Math.max(1, Number(filters.limit) || 50));
     const ch = String(filters.channelId ?? "").trim();
     const status = String(filters.status ?? "").trim();
+    const sourceType = String(filters.sourceType ?? "").trim();
+    const symbol = String(filters.symbol ?? "").trim().toUpperCase();
     const fromMs = Number(filters.fromMs);
     const toMs = Number(filters.toMs);
     /** @type {unknown[]} */
@@ -584,6 +620,15 @@ export async function openStore(cfg, log) {
     if (status) {
       where.push("status = ?");
       params.push(status);
+    }
+    if (sourceType) {
+      where.push("source_type = ?");
+      params.push(sourceType);
+    }
+    if (symbol) {
+      const sym = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
+      where.push("(symbol = ? OR symbol = ? OR symbol LIKE ?)");
+      params.push(sym, symbol.replace(/USDT$/, ""), `${symbol.replace(/USDT$/, "")}%`);
     }
     if (Number.isFinite(fromMs) && fromMs > 0) {
       where.push("created_at >= ?");
@@ -601,9 +646,58 @@ export async function openStore(cfg, log) {
     return rows;
   }
 
+  /** @param {number} id */
+  async function getSignalCardById(id) {
+    const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  /**
+   * 待 3h / 30d 自动价格校验的卡片。
+   * @param {{ limit?: number }} [opts]
+   */
+  async function listCardsForVerification(opts = {}) {
+    const lim = Math.min(200, Math.max(1, Number(opts.limit) || 80));
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const [rows] = await pool.query(
+      `SELECT * FROM discord_signal_cards
+       WHERE status = 'active'
+         AND symbol IS NOT NULL AND symbol != ''
+         AND (
+           (verify_3h_json IS NULL AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL 3 HOUR))
+           OR (verify_1m_json IS NULL AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL 30 DAY))
+         )
+       ORDER BY id ASC
+       LIMIT ${lim}`,
+      [now, now]
+    );
+    return rows;
+  }
+
+  /**
+   * 有效且未完结的卡片（接近价位监控）。
+   * @param {{ limit?: number }} [opts]
+   */
+  async function listActiveCardsForProximity(opts = {}) {
+    const lim = Math.min(500, Math.max(1, Number(opts.limit) || 200));
+    const [rows] = await pool.query(
+      `SELECT * FROM discord_signal_cards
+       WHERE status = 'active'
+         AND symbol IS NOT NULL AND symbol != ''
+         AND (
+           execution_json IS NULL
+           OR JSON_UNQUOTE(JSON_EXTRACT(execution_json, '$.outcome')) IS NULL
+           OR JSON_UNQUOTE(JSON_EXTRACT(execution_json, '$.outcome')) = 'pending'
+         )
+       ORDER BY id DESC
+       LIMIT ${lim}`
+    );
+    return rows;
+  }
+
   /**
    * @param {number} id
-   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, executionJson?: unknown, parsedJson?: unknown }} patch
+   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown }} patch
    */
   async function updateSignalCard(id, patch) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
@@ -634,6 +728,22 @@ export async function openStore(cfg, log) {
     if (patch.parsedJson !== undefined) {
       sets.push("parsed_json = ?");
       params.push(serializeRawJsonColumnForMysql(patch.parsedJson));
+    }
+    if (patch.verify3hJson !== undefined) {
+      sets.push("verify_3h_json = ?");
+      params.push(serializeRawJsonColumnForMysql(patch.verify3hJson));
+    }
+    if (patch.verify1mJson !== undefined) {
+      sets.push("verify_1m_json = ?");
+      params.push(serializeRawJsonColumnForMysql(patch.verify1mJson));
+    }
+    if (patch.proximityJson !== undefined) {
+      sets.push("proximity_json = ?");
+      params.push(serializeRawJsonColumnForMysql(patch.proximityJson));
+    }
+    if (patch.cardFieldsJson !== undefined) {
+      sets.push("card_fields_json = ?");
+      params.push(serializeRawJsonColumnForMysql(patch.cardFieldsJson));
     }
     params.push(id);
     await pool.execute(`UPDATE discord_signal_cards SET ${sets.join(", ")} WHERE id = ?`, params);
@@ -666,6 +776,9 @@ export async function openStore(cfg, log) {
     insertSignalCard,
     markSignalCardTelegramSent,
     listSignalCards,
+    getSignalCardById,
+    listCardsForVerification,
+    listActiveCardsForProximity,
     updateSignalCard,
     close,
   };
@@ -708,6 +821,9 @@ export function createOfflineStore() {
     insertSignalCard: async () => null,
     markSignalCardTelegramSent: async () => {},
     listSignalCards: async () => [],
+    getSignalCardById: async () => null,
+    listCardsForVerification: async () => [],
+    listActiveCardsForProximity: async () => [],
     updateSignalCard: async () => null,
     close: async () => {},
   };

@@ -24,6 +24,9 @@ import { hashBuffer, tryOpenStore } from "./store.js";
 import { killListenersOnPort } from "../scripts/kill-port.mjs";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
+import { createCardArchiveService } from "./card-archive-service.js";
+import { registerCardArchiveRoutes } from "./card-archive-api.js";
+import { createCardPriceMonitor } from "./card-price-monitor.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public", "collector-ui");
@@ -51,6 +54,13 @@ async function main() {
   const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
   const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"));
   const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast);
+  const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast);
+  const cardPriceMonitor = createCardPriceMonitor(
+    store,
+    createLogger("card-price"),
+    systemTelegram,
+    broadcast
+  );
   const discordIngest = createDiscordMessageIngest(
     store,
     createLogger("discord-ingest"),
@@ -68,6 +78,7 @@ async function main() {
   app.use(express.json({ limit: "512kb" }));
 
   registerDiscordSignalRoutes(app, store, signalCards);
+  registerCardArchiveRoutes(app, store, cardArchive);
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   registerYoutubeFetchProxyRoutes(app, {
     baseUrl: config.youtubeFetchUrl,
@@ -249,6 +260,7 @@ async function main() {
 
   const shutdown = async (reason = "shutdown") => {
     log.info(`退出 (${reason})`);
+    cardPriceMonitor.stop();
     await telegramPush.flushAll().catch((e) => log.warn(String(e?.message ?? e)));
     if (session) await session.close().catch((e) => log.warn(String(e?.message ?? e)));
     await store.close().catch((e) => log.warn(String(e?.message ?? e)));
@@ -291,13 +303,15 @@ async function main() {
   if (listenError) throw listenError;
 
   log.info(
-    `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /fetch  |  /archives  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws  （先 pnpm run ui:build）`
+    `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /cards  |  /fetch  |  /archives  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws`
   );
   if (mysqlOffline) {
     log.warn("MySQL 离线 — 服务已启动但无持久化；修复数据库后请重启 collect:ui");
+  } else {
+    cardPriceMonitor.start();
   }
   log.info(
-    `[api] /api/config /api/frames /api/discord/messages /api/discord/context POST /api/cdp/discord-channel（debugMode=${isDebugMode()}）`
+    `[api] /api/cards /api/v1/cards /api/discord/signal-cards（debugMode=${isDebugMode()}）`
   );
   if (config.cdpConnectUrl) {
     log.info(`CDP 附加: ${config.cdpConnectUrl} — 请在 Chrome 中打开并登录 ${config.startUrl}`);

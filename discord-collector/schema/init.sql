@@ -78,10 +78,20 @@ CREATE TABLE IF NOT EXISTS discord_signal_cards (
   note TEXT NULL,
   execution_json JSON NULL,
   source VARCHAR(16) NOT NULL DEFAULT 'auto',
+  source_type VARCHAR(32) NOT NULL DEFAULT 'discord',
+  source_ref VARCHAR(128) NULL,
+  symbol VARCHAR(32) NULL,
+  card_fields_json JSON NULL,
+  verify_3h_json JSON NULL,
+  verify_1m_json JSON NULL,
+  proximity_json JSON NULL,
+  signal_at DATETIME(3) NULL,
   created_at DATETIME(3) NOT NULL,
   updated_at DATETIME(3) NOT NULL,
   UNIQUE KEY uk_signal_message_id (message_id),
-  KEY idx_signal_channel_status (channel_id, status, id)
+  KEY idx_signal_channel_status (channel_id, status, id),
+  KEY idx_signal_symbol_time (symbol, created_at),
+  KEY idx_signal_source_time (source_type, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS discord_channel_text_cache (

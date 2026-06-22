@@ -106,4 +106,15 @@ export const config = {
     : path.join(_repoRoot, "youtube-fetch", "archives"),
   /** youtube-fetch HTTP API（队列拉取） */
   youtubeFetchUrl: (process.env.YOUTUBE_FETCH_URL ?? "http://127.0.0.1:3920").trim(),
+  /** 统一卡片开放 API Key（Header: X-Cards-Api-Key 或 Bearer） */
+  cardsApiKey: (process.env.CARDS_API_KEY ?? "").trim(),
+  /** 币安行情（卡片价格校验 / 接近推送） */
+  binanceFapiUrl: (process.env.BINANCE_FAPI_URL ?? "https://fapi.binance.com").trim(),
+  binanceRequestTimeoutMs: Number(process.env.BINANCE_REQUEST_TIMEOUT_MS ?? 15_000),
+  cardPriceMonitorIntervalMs: Number(process.env.CARD_PRICE_MONITOR_INTERVAL_MS ?? 60_000),
+  cardProximityBandPct: Number(process.env.CARD_PROXIMITY_BAND_PCT ?? 0.5),
+  cardProximityCooldownMs: Number(process.env.CARD_PROXIMITY_COOLDOWN_MS ?? 300_000),
+  cardProximityTelegram: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_PROXIMITY_TELEGRAM ?? "1").toLowerCase()
+  ),
 };

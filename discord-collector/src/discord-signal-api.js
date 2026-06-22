@@ -8,6 +8,7 @@ import {
   normalizeExecution,
   normalizePriceList,
 } from "./discord-signal-execution.js";
+import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
 import { signalTextHash } from "./discord-signal-dedup.js";
 
 /** @param {import("express").Request} req */
@@ -230,6 +231,14 @@ export function registerDiscordSignalRoutes(app, store, signalService) {
         source: "manual",
         status: "active",
         note: req.body?.note ? String(req.body.note) : null,
+        sourceType: "manual",
+        sourceRef: channelId,
+        symbol: extractSymbolFromPayload(parsedJson, execution),
+        cardFieldsJson: buildCardFieldsFromExecution(execution, parsedJson, rawContent, {
+          sourceType: "manual",
+          sourceRef: channelId,
+        }),
+        signalAt: new Date().toISOString(),
       });
       res.json({ ok: true, card: signalCardToClient(row) });
     } catch (e) {
