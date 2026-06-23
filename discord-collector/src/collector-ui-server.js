@@ -134,6 +134,53 @@ async function main() {
     res.json({ ok: true, ...getDebugConfig() });
   });
 
+  app.get("/api/debug/telegram", (_req, res) => {
+    const tg = signalCards.telegram;
+    res.json({
+      ok: true,
+      enabled: tg.enabled,
+      chatId: tg.chatId != null && tg.chatId !== "" ? String(tg.chatId) : null,
+      sendUrl: tg.sendUrl || config.telegramSendUrl,
+    });
+  });
+
+  app.post("/api/debug/telegram-test", async (req, res) => {
+    const tg = signalCards.telegram;
+    if (!tg.enabled) {
+      res.status(503).json({
+        ok: false,
+        skipped: "telegram_disabled",
+        error: "Telegram 未配置",
+        hint: "在 .env 设置 TELEGRAM_PUSH_CHAT_ID 与 TELEGRAM_SEND_URL",
+      });
+      return;
+    }
+    const custom = String(req.body?.text ?? "").trim();
+    const text =
+      custom ||
+      `🧪 discord-collector Telegram 链路测试\n${new Date().toISOString()}\n来源: Debug 页`;
+    try {
+      const result = await tg.send(text, { skipChannelLabel: true, kind: "debug_test" });
+      if (result.skipped) {
+        res.status(400).json({ ok: false, ...result });
+        return;
+      }
+      res.json({
+        ok: true,
+        chatId: tg.chatId,
+        sendUrl: tg.sendUrl,
+        text,
+      });
+    } catch (e) {
+      res.status(500).json({
+        ok: false,
+        error: String(/** @type {Error} */ (e).message ?? e),
+        chatId: tg.chatId,
+        sendUrl: tg.sendUrl,
+      });
+    }
+  });
+
   app.get("/api/discord/context", (_req, res) => {
     res.json({ ok: true, snapshot: discordIngest.context.snapshot() });
   });

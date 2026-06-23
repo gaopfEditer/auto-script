@@ -22,6 +22,56 @@ const frameLines = ref(
 const filterText = ref("");
 const { debugMode, applyConfigFromSocket } = useDebugMode();
 
+const tgEnabled = ref(false);
+const tgChatId = ref("");
+const tgSendUrl = ref("");
+const tgTesting = ref(false);
+const tgResult = ref("");
+const tgResultOk = ref(/** @type {boolean | null} */ (null));
+const tgTestText = ref("");
+
+async function loadTelegramStatus() {
+  try {
+    const res = await fetch("/api/debug/telegram");
+    const data = await res.json();
+    if (data.ok) {
+      tgEnabled.value = Boolean(data.enabled);
+      tgChatId.value = data.chatId ? String(data.chatId) : "";
+      tgSendUrl.value = data.sendUrl ? String(data.sendUrl) : "";
+    }
+  } catch {
+    tgEnabled.value = false;
+  }
+}
+
+async function sendTelegramTest() {
+  tgTesting.value = true;
+  tgResult.value = "";
+  tgResultOk.value = null;
+  try {
+    const body = tgTestText.value.trim() ? { text: tgTestText.value.trim() } : {};
+    const res = await fetch("/api/debug/telegram-test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      tgResultOk.value = true;
+      tgResult.value = `已发送 → chat=${data.chatId}`;
+    } else {
+      tgResultOk.value = false;
+      tgResult.value = data.error || data.skipped || `失败 HTTP ${res.status}`;
+      if (data.hint) tgResult.value += `（${data.hint}）`;
+    }
+  } catch (e) {
+    tgResultOk.value = false;
+    tgResult.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    tgTesting.value = false;
+  }
+}
+
 /** @param {Record<string, unknown>} msg */
 function onSocketMsg(msg) {
   applyConfigFromSocket(msg);
@@ -56,6 +106,7 @@ const filteredNet = computed(() => {
 });
 
 onMounted(async () => {
+  void loadTelegramStatus();
   try {
     const res = await fetch("/api/frames?limit=80");
     const data = await res.json();
@@ -97,6 +148,25 @@ function isDiscordRow(row) {
 <template>
   <div class="debug-root">
     <aside class="sidebar">
+      <div class="tg-panel">
+        <div class="tg-head">
+          <span class="tg-label">Telegram 链路</span>
+          <span class="tg-badge" :class="{ on: tgEnabled }">{{ tgEnabled ? "已配置" : "未配置" }}</span>
+        </div>
+        <p v-if="tgEnabled" class="tg-meta">chat={{ tgChatId }} · {{ tgSendUrl }}</p>
+        <p v-else class="tg-meta warn">需 TELEGRAM_PUSH_CHAT_ID + TELEGRAM_SEND_URL</p>
+        <input
+          v-model="tgTestText"
+          class="tg-input"
+          placeholder="可选自定义测试文案（留空用默认）"
+        />
+        <button type="button" class="tg-btn" :disabled="!tgEnabled || tgTesting" @click="sendTelegramTest">
+          {{ tgTesting ? "发送中…" : "发送 Telegram 测试" }}
+        </button>
+        <p v-if="tgResult" class="tg-result" :class="{ err: tgResultOk === false }">
+          {{ tgResult }}
+        </p>
+      </div>
       <div class="tabs">
         <button :class="{ active: tab === 'network' }" @click="tab = 'network'">Network</button>
         <button :class="{ active: tab === 'frames' }" @click="tab = 'frames'">WS 帧</button>
@@ -155,6 +225,81 @@ function isDiscordRow(row) {
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+.tg-panel {
+  margin: 0.5rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: #1e1f22;
+  border: 1px solid #3f4147;
+  flex-shrink: 0;
+}
+.tg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.tg-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #dbdee1;
+}
+.tg-badge {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #3f4147;
+  color: #949ba4;
+}
+.tg-badge.on {
+  background: #248046;
+  color: #fff;
+}
+.tg-meta {
+  margin: 0.35rem 0 0.45rem;
+  font-size: 0.68rem;
+  color: #949ba4;
+  word-break: break-all;
+  line-height: 1.35;
+}
+.tg-meta.warn {
+  color: #faa61a;
+}
+.tg-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #3f4147;
+  background: #111214;
+  color: #dbdee1;
+  font-size: 0.72rem;
+}
+.tg-btn {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: #5865f2;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.tg-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tg-result {
+  margin: 0.4rem 0 0;
+  font-size: 0.72rem;
+  color: #57f287;
+  word-break: break-word;
+}
+.tg-result.err {
+  color: #ed4245;
 }
 .tabs {
   display: flex;
