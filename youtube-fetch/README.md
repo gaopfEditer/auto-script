@@ -47,6 +47,41 @@ npm run dev
 | `YOUTUBE_TRANSCRIPT_SITE` | `https://youtube-transcript.ai` | 文稿站点根 URL |
 | `YOUTUBE_FETCH_TIMEOUT_MS` | `90000` | 单次拉取超时（毫秒） |
 | `YOUTUBE_FETCH_LOG_LEVEL` | `info` | 日志级别：`debug` / `info` / `warn` / `error` |
+| `OLLAMA_CHAT_URL` | `http://127.0.0.1:8000/ollama/chat` | 文稿解析用的 Ollama 代理（与根目录 `config.py` 一致） |
+| `OLLAMA_MODEL` | `gemma4:26b` | 分析模型 |
+| `YOUTUBE_ANALYZE` | `0` | 设为 `1` 时，拉取/归档后默认调用模型解析 |
+| `YOUTUBE_ANALYZE_TIMEOUT_MS` | `120000` | 单次模型请求超时（毫秒） |
+| `YOUTUBE_ANALYZE_PROMPT` | （内置） | 覆盖默认 prompt，可用 `{{title}}` / `{{transcript}}` |
+| `YOUTUBE_ANALYZE_PROMPT_FILE` | — | 从文件读取 prompt（优先于 `YOUTUBE_ANALYZE_PROMPT`） |
+
+## Ollama 文稿解析
+
+CDP 拉取文字稿后，可 POST 到本地 **8000** 端口的 `/ollama/chat` 做结构化解析（交易观点、币种、方向、价位等）：
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:8000/ollama/chat' \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"用一句话介绍你自己","model":"gemma4:26b"}'
+```
+
+本服务封装为可选步骤：
+
+1. 环境变量 **`YOUTUBE_ANALYZE=1`** 开启默认分析；或单次请求加 **`analyze=1`**。
+2. 分析结果写入 `archives/{videoId}.json` 的 **`analysis`** 字段（含 `parsed` JSON、`raw` 原文），并在 `.md` 追加 `## Analysis` 节。
+3. 对已归档视频可 **`POST /api/analyze/:videoId`** 单独重跑分析，无需再拉 CDP。
+
+```bash
+# 拉取 + 归档 + 分析
+curl "http://127.0.0.1:3920/api/transcript?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&save=1&analyze=1"
+
+# 队列批量（body 里 analyze: true）
+curl -X POST http://127.0.0.1:3920/api/queue \
+  -H 'Content-Type: application/json' \
+  -d '{"urls":["https://youtu.be/..."], "analyze": true}'
+
+# 仅对已有归档重跑模型
+curl -X POST http://127.0.0.1:3920/api/analyze/dQw4w9WgXcQ
+```
 
 ## API
 
@@ -99,6 +134,7 @@ Content-Type: application/json
 | `lang` | query 或 body | 可选，字幕语言，如 `en`、`zh-Hant` |
 | `raw` | query 或 body | 为 `1` / `true` 时返回原始 Markdown，不做字段解析 |
 | `save` | query 或 body | 为 `1` / `true` 时写入 `archives/{videoId}.md` + `.json` |
+| `analyze` | query 或 body | 为 `1` / `true` 时调用 Ollama 解析文稿（默认见 `YOUTUBE_ANALYZE`） |
 
 ### 串行队列（推荐用于批量归档）
 
@@ -138,7 +174,7 @@ GET /api/queue?limit=80
 | 文件 | 内容 |
 |------|------|
 | `{videoId}.md` | 正文：首行 `# 标题`，元数据行，`## Transcript` 以下为带时间戳文稿 |
-| `{videoId}.json` | 元数据：`title`、`sourceUrl`、`languageLine`、`wordCount`、`charCount`、`fetchedAt` 等（**不含**正文重复） |
+| `{videoId}.json` | 元数据：`title`、`sourceUrl`、`languageLine`、`wordCount`、`charCount`、`fetchedAt` 等；若已分析则含 **`analysis`**（**不含**正文重复） |
 
 `discord-collector` 前端 `/fetch` 提交 URL 入队，`/archives` 读取同一目录预览。
 
@@ -153,6 +189,16 @@ GET /api/queue?limit=80
   "sourceUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   "languageLine": "en · Duration: 3:27 · Words: 481",
   "transcript": "[0:01] [♪♪♪] ♪ We're no strangers to love ♪ ...",
+  "analysis": {
+    "model": "gemma4:26b",
+    "analyzedAt": "2026-05-28T12:00:00.000Z",
+    "parsed": {
+      "summary": ["..."],
+      "symbol": "BTC",
+      "direction": "做多"
+    },
+    "raw": "{ ... }"
+  },
   "raw": "# Transcript: Rick Astley ..."
 }
 ```
@@ -162,8 +208,9 @@ GET /api/queue?limit=80
 | HTTP | 含义 |
 |------|------|
 | `400` | 无法解析 video id，或缺少 `url` / `videoId` |
-| `502` | CDP 页面拉取失败（站点返回非 2xx、超时等） |
+| `502` | CDP 页面拉取失败，或 Ollama 分析失败 |
 | `503` | CDP 未就绪（Chrome 未开或调试端口不可达） |
+| `404` | `POST /api/analyze/:videoId` 时归档不存在 |
 
 ## 调用示例
 
@@ -193,7 +240,8 @@ console.log(data.transcript);
    `https://youtube-transcript.ai/transcript/{VIDEO_ID}.txt`（可选 `?lang=`）。
 4. 读取响应正文，解析 Markdown 元数据，返回 JSON。
 5. `/api/queue` 与 CDP 拉取经内部队列 **串行** 执行，避免并发导航冲突。
-6. 进程退出时仅断开 Playwright 会话，**不会关闭你的 Chrome**。
+6. 若开启 **`analyze`**，拉取完成后 POST `OLLAMA_CHAT_URL`，解析结果并入归档。
+7. 进程退出时仅断开 Playwright 会话，**不会关闭你的 Chrome**。
 
 ## 目录结构
 
@@ -211,6 +259,7 @@ youtube-fetch/
     ├── config.js          # 环境变量
     ├── video-id.js        # YouTube URL → videoId
     ├── parse-transcript.js
+    ├── ollama-analyze.js  # POST /ollama/chat 解析文稿
     └── logger.js
 ```
 

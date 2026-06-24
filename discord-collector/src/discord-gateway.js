@@ -232,18 +232,24 @@ export function isDiscordApiUrl(url) {
   return u.includes("discord.com/api") || u.includes("discordapp.com/api");
 }
 
-/** Discord 已读 ack、science 埋点等中间请求，无需日志/入库 */
+/** Discord 已读 ack、science 埋点、metrics、quests 等中间请求，无需日志/入库 */
 export function isDiscordNoiseApiUrl(url) {
   const u = String(url ?? "").toLowerCase();
   if (!isDiscordApiUrl(u)) return false;
   return (
     /\/messages\/\d+\/ack(?:\?|$)/i.test(u) ||
     /\/science(?:\?|$|\/)/i.test(u) ||
+    /\/metrics(?:\?|$|\/)/i.test(u) ||
+    /\/quests(?:\?|$|\/)/i.test(u) ||
     /\/channels\/\d+\/typing(?:\?|$)/i.test(u) ||
     /\/channels\/\d+\/messages\/\d+\/ack/i.test(u) ||
     /\/users\/@me\/settings/i.test(u) ||
     /\/users\/@me\/affinities/i.test(u) ||
-    /\/users\/@me\/billing/i.test(u)
+    /\/users\/@me\/billing/i.test(u) ||
+    /\/users\/@me\/connections/i.test(u) ||
+    /\/users\/@me\/billing\/country-code/i.test(u) ||
+    /\/experiments(?:\?|$)/i.test(u) ||
+    /\/promotions(?:\?|$)/i.test(u)
   );
 }
 

@@ -77,4 +77,23 @@ export function registerYoutubeFetchProxyRoutes(app, opts) {
       });
     }
   });
+
+  app.post("/api/youtube-fetch/analyze/:videoId", async (req, res) => {
+    const videoId = encodeURIComponent(String(req.params.videoId ?? "").trim());
+    if (!videoId) {
+      res.status(400).json({ ok: false, error: "缺少 videoId" });
+      return;
+    }
+    try {
+      const out = await proxy("POST", `/api/analyze/${videoId}`, req);
+      res.status(out.status).json(out.body);
+    } catch (e) {
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      log.warn(`youtube-fetch analyze ${videoId}: ${msg}`);
+      res.status(502).json({
+        ok: false,
+        error: `无法连接 youtube-fetch（${root}）：${msg}`,
+      });
+    }
+  });
 }

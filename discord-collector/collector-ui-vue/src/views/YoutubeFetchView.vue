@@ -11,6 +11,7 @@ const STORAGE_KEY = "yt-fetch-submitted-urls";
 
 const urlText = ref("");
 const lang = ref("");
+const analyzeOnFetch = ref(false);
 const submitting = ref(false);
 const error = ref("");
 const health = ref(/** @type {Record<string, unknown> | null} */ (null));
@@ -130,6 +131,7 @@ async function submit() {
     const data = await enqueueYoutubeUrls({
       urls,
       lang: lang.value.trim() || undefined,
+      analyze: analyzeOnFetch.value,
     });
     lastSubmit.value = data.results ?? [];
     saveSubmittedHistory(urls);
@@ -184,6 +186,9 @@ onUnmounted(stopPolling);
             {{ health.cdpReady ? "CDP 就绪" : "CDP 未就绪" }}
           </span>
           · 队列等待 {{ queueSnap.pending ?? 0 }} · 处理中 {{ queueSnap.running ?? 0 }}
+          <template v-if="health.analyze">
+            · 分析模型 {{ health.analyze.model }}
+          </template>
         </template>
         <template v-else>{{ health.error || "youtube-fetch 不可用" }}</template>
       </p>
@@ -200,6 +205,10 @@ https://youtu.be/..."
       <label class="field inline">
         <span>语言（可选）</span>
         <input v-model="lang" type="text" placeholder="en" />
+      </label>
+      <label class="field checkbox">
+        <input v-model="analyzeOnFetch" type="checkbox" />
+        <span>拉取完成后调用 Ollama 分析（需 8000 端口可用）</span>
       </label>
       <div class="actions">
         <button type="button" class="btn primary" :disabled="submitting" @click="submit">
@@ -342,6 +351,18 @@ h2 {
 }
 .field.inline {
   max-width: 12rem;
+}
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+.field.checkbox input {
+  width: auto;
+  margin: 0;
+}
+.field.checkbox span {
+  font-weight: 500;
 }
 .actions {
   display: flex;

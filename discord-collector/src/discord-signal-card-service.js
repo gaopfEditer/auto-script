@@ -95,6 +95,12 @@ export function createDiscordSignalCardService(store, log, broadcast) {
       assetClass,
     });
 
+    const cardId = Number(cardRow?.id ?? cardRow?.ID ?? 0);
+    if (!cardId) {
+      log.warn(`信号卡片入库后缺少 id channel=${channelId} message=${messageId}`);
+      return { skipped: "insert_no_id" };
+    }
+
     const telegramStyle = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";
     const telegramText = cardsByStyle[telegramStyle] ?? Object.values(cardsByStyle)[0] ?? content;
 
@@ -103,10 +109,10 @@ export function createDiscordSignalCardService(store, log, broadcast) {
         await telegram.send(telegramText, {
           channelId,
           channelName: chCfg.name,
-          cardId: cardRow.id,
+          cardId,
         });
-        await store.markSignalCardTelegramSent(cardRow.id);
-        cardRow.telegramSentAt = new Date().toISOString();
+        await store.markSignalCardTelegramSent(cardId);
+        cardRow.telegram_sent_at = cardRow.telegramSentAt = new Date().toISOString();
       } catch (e) {
         log.warn(`Telegram 推送失败: ${/** @type {Error} */ (e).message}`);
       }
@@ -114,7 +120,7 @@ export function createDiscordSignalCardService(store, log, broadcast) {
 
     const clientCard = signalCardToClient(cardRow);
     broadcast?.("meta", { kind: "signal_card_created", card: clientCard });
-    log.info(`信号卡片 #${cardRow.id} channel=${channelId} styles=${Object.keys(cardsByStyle).join(",")}`);
+    log.info(`信号卡片 #${cardId} channel=${channelId} styles=${Object.keys(cardsByStyle).join(",")}`);
 
     return { card: clientCard };
   }
@@ -144,7 +150,7 @@ export function signalCardToClient(row) {
   const messageId = String(row.message_id ?? row.messageId ?? "");
   const isManual = source === "manual" || messageId.startsWith("manual-");
   return {
-    id: Number(row.id),
+    id: Number(row.id ?? row.ID ?? 0),
     messageId,
     channelId: String(row.channel_id ?? row.channelId ?? ""),
     guildId: String(row.guild_id ?? row.guildId ?? ""),

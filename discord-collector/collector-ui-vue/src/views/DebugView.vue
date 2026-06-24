@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from "vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
 import { useDebugMode } from "../composables/useDebugMode.js";
 import { extractDiscordDisplay } from "../lib/discordExtract.js";
-import { isBlockedWsFrame } from "../lib/wsNoiseFilter.js";
+import { isBlockedWsFrame, isForwardableWsFrameMessage } from "../lib/wsNoiseFilter.js";
 import {
   useDebugNetwork,
   nameFromUrl,
@@ -77,9 +77,9 @@ function onSocketMsg(msg) {
   applyConfigFromSocket(msg);
   ingest(msg);
   if (msg.channel === "frame" && msg.kind === "ws_frame") {
+    if (!isForwardableWsFrameMessage(msg)) return;
     const body = msg.body;
     const j = body && typeof body === "object" && "json" in body ? body.json : null;
-    if (isBlockedWsFrame(j)) return;
     const display = extractDiscordDisplay(j, debugMode.value);
     frameLines.value.unshift({
       id: `f-${msg.seq}-${msg.ts}`,

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { analyzeYoutubeArchive } from "../lib/youtubeFetchApi.js";
 import { fetchYoutubeArchive, fetchYoutubeArchiveList } from "../lib/youtubeArchivesApi.js";
 
 const route = useRoute();
@@ -8,15 +9,25 @@ const router = useRouter();
 
 const loading = ref(false);
 const detailLoading = ref(false);
+const analyzing = ref(false);
 const error = ref("");
+const analyzeMsg = ref("");
 const archiveDir = ref("");
 const items = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
 const selectedId = ref("");
 const article = ref(/** @type {Record<string, unknown> | null} */ (null));
 
-const selectedItem = computed(() =>
-  items.value.find((x) => String(x.videoId) === selectedId.value)
-);
+const analysis = computed(() => {
+  const raw = article.value?.analysis;
+  return raw && typeof raw === "object" ? /** @type {Record<string, unknown>} */ (raw) : null;
+});
+
+const parsedAnalysis = computed(() => {
+  const p = analysis.value?.parsed;
+  return p && typeof p === "object" ? /** @type {Record<string, unknown>} */ (p) : null;
+});
+
+const hasAnalysis = computed(() => Boolean(analysis.value && !analysis.value.error && parsedAnalysis.value));
 
 /** @param {string} text */
 function transcriptBlocks(text) {
@@ -84,7 +95,32 @@ async function loadDetail(videoId) {
 
 function selectItem(videoId) {
   selectedId.value = videoId;
+  analyzeMsg.value = "";
   router.replace({ query: { ...route.query, v: videoId } });
+}
+
+async function runAnalyze() {
+  const videoId = selectedId.value;
+  if (!videoId || analyzing.value) return;
+  analyzing.value = true;
+  error.value = "";
+  analyzeMsg.value = "正在调用 Ollama 分析，可能需要 1–2 分钟…";
+  try {
+    await analyzeYoutubeArchive(videoId);
+    analyzeMsg.value = "分析完成，已写入归档";
+    await Promise.all([loadList(), loadDetail(videoId)]);
+  } catch (e) {
+    analyzeMsg.value = "";
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    analyzing.value = false;
+  }
+}
+
+/** @param {unknown} v */
+function asStringList(v) {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => String(x)).filter(Boolean);
 }
 
 watch(selectedId, (id) => {
@@ -124,6 +160,7 @@ onMounted(async () => {
           <div class="item-meta dim">
             {{ formatFetched(row.fetchedAt) }}
             <span v-if="row.charCount"> · {{ Number(row.charCount).toLocaleString() }} 字</span>
+            <span v-if="row.hasAnalysis" class="tag-analyzed">已分析</span>
           </div>
         </li>
       </ul>
@@ -134,7 +171,17 @@ onMounted(async () => {
       <div v-else-if="!article" class="preview-empty muted">左侧选择一篇归档预览</div>
       <template v-else>
         <header class="preview-head">
-          <h1>{{ String(article.title ?? article.videoId ?? "") }}</h1>
+          <div class="preview-head-row">
+            <h1>{{ String(article.title ?? article.videoId ?? "") }}</h1>
+            <button
+              type="button"
+              class="btn-analyze"
+              :disabled="analyzing || detailLoading"
+              @click="runAnalyze"
+            >
+              {{ analyzing ? "分析中…" : hasAnalysis ? "重新分析" : "AI 分析" }}
+            </button>
+          </div>
           <div class="preview-meta">
             <a
               v-if="article.sourceUrl"
@@ -147,9 +194,45 @@ onMounted(async () => {
             </a>
             <span v-if="article.languageLine">{{ String(article.languageLine) }}</span>
             <span>归档 {{ formatFetched(article.fetchedAt) }}</span>
+            <span v-if="analysis?.analyzedAt">分析 {{ formatFetched(analysis.analyzedAt) }}</span>
             <span class="mono">{{ String(article.videoId) }}</span>
           </div>
+          <p v-if="analyzeMsg" class="analyze-msg">{{ analyzeMsg }}</p>
+          <p v-if="analysis?.error" class="err analyze-err">上次分析失败：{{ String(analysis.error) }}</p>
         </header>
+
+        <section v-if="parsedAnalysis" class="analysis-panel">
+          <h2>AI 分析</h2>
+          <ul v-if="asStringList(parsedAnalysis.summary).length" class="analysis-summary">
+            <li v-for="(line, i) in asStringList(parsedAnalysis.summary)" :key="i">{{ line }}</li>
+          </ul>
+          <dl class="analysis-fields">
+            <template v-if="parsedAnalysis.symbol">
+              <dt>币种</dt><dd>{{ String(parsedAnalysis.symbol) }}</dd>
+            </template>
+            <template v-if="parsedAnalysis.direction">
+              <dt>方向</dt><dd>{{ String(parsedAnalysis.direction) }}</dd>
+            </template>
+            <template v-if="parsedAnalysis.entry">
+              <dt>入场</dt><dd>{{ String(parsedAnalysis.entry) }}</dd>
+            </template>
+            <template v-if="parsedAnalysis.stopLoss">
+              <dt>止损</dt><dd>{{ String(parsedAnalysis.stopLoss) }}</dd>
+            </template>
+            <template v-if="asStringList(parsedAnalysis.targets).length">
+              <dt>止盈</dt>
+              <dd>{{ asStringList(parsedAnalysis.targets).join(" · ") }}</dd>
+            </template>
+            <template v-if="asStringList(parsedAnalysis.keyLevels).length">
+              <dt>关键价位</dt>
+              <dd>{{ asStringList(parsedAnalysis.keyLevels).join(" · ") }}</dd>
+            </template>
+            <template v-if="parsedAnalysis.titleHint">
+              <dt>摘要标题</dt><dd>{{ String(parsedAnalysis.titleHint) }}</dd>
+            </template>
+          </dl>
+        </section>
+
         <div class="preview-body">
           <article
             v-for="(block, i) in transcriptBlocks(String(article.transcript ?? ''))"
@@ -261,6 +344,10 @@ code {
 .item-meta.dim {
   color: #949ba4;
 }
+.tag-analyzed {
+  color: #57f287;
+  font-weight: 600;
+}
 .mono {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
@@ -289,11 +376,74 @@ code {
   border-bottom: 1px solid #2d2d30;
   background: #252526;
 }
+.preview-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
 .preview-head h1 {
   margin: 0;
+  flex: 1;
   font-size: 1rem;
   line-height: 1.45;
   color: #f2f3f5;
+}
+.btn-analyze {
+  flex-shrink: 0;
+  border: 1px solid #5865f2;
+  background: rgba(88, 101, 242, 0.15);
+  color: #aeb4ff;
+  padding: 0.35rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-analyze:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.analyze-msg {
+  margin: 0.45rem 0 0;
+  font-size: 0.75rem;
+  color: #aeb4ff;
+}
+.analyze-err {
+  margin: 0.35rem 0 0;
+}
+.analysis-panel {
+  flex-shrink: 0;
+  padding: 0.75rem 1.25rem 0.85rem;
+  border-bottom: 1px solid #2d2d30;
+  background: #2a2b2f;
+}
+.analysis-panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #f2f3f5;
+}
+.analysis-summary {
+  margin: 0 0 0.65rem;
+  padding-left: 1.1rem;
+  color: #dbdee1;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+.analysis-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  font-size: 0.78rem;
+}
+.analysis-fields dt {
+  color: #949ba4;
+  font-weight: 600;
+}
+.analysis-fields dd {
+  margin: 0;
+  color: #dbdee1;
 }
 .preview-meta {
   margin-top: 0.45rem;

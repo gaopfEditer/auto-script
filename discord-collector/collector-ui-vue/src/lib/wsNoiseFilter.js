@@ -78,6 +78,21 @@ function isBlockedBinanceEnvelope(o) {
   return false;
 }
 
+/** Socket.IO / TradingView ~m~ / ~h~ 帧 */
+function isUnforwardableWsRawText(rawText = "") {
+  const t = String(rawText ?? "").trim();
+  return t.startsWith("~m~") || t.startsWith("~h~");
+}
+
+/** @param {Record<string, unknown>} msg WS frame 广播消息 */
+export function isForwardableWsFrameMessage(msg) {
+  if (msg?.kind !== "ws_frame") return true;
+  const body = msg.body;
+  if (!body || typeof body !== "object") return false;
+  if (/** @type {{ json?: unknown }} */ (body).json == null) return false;
+  return !isBlockedWsFrame(/** @type {{ json?: unknown }} */ (body).json);
+}
+
 /** @param {unknown} parsedJson */
 export function isBlockedWsFrame(parsedJson) {
   if (parsedJson == null) return false;

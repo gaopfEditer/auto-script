@@ -218,11 +218,31 @@ function rawTextLooksBlocked(text) {
   return false;
 }
 
+/** Socket.IO / TradingView 等 ~m~ / ~h~ 帧，无法解析为 JSON，不推前端 */
+export function isUnforwardableWsRawText(rawText = "") {
+  const t = String(rawText ?? "").trim();
+  if (t.startsWith("~m~") || t.startsWith("~h~")) return true;
+  return false;
+}
+
+/**
+ * 是否应通过 WebSocket 推给前端（需成功解析出 JSON 且非噪音）。
+ * @param {Record<string, unknown>} payload buildFrameChannelPayload 的 payload
+ */
+export function isForwardableFramePayload(payload) {
+  const body = payload?.body;
+  if (!body || typeof body !== "object") return false;
+  const j = /** @type {{ json?: unknown }} */ (body).json;
+  if (j == null) return false;
+  return !isBlockedWsPayload(j);
+}
+
 /**
  * @param {unknown} parsedJson 解码后的 JSON（可为 undefined）
  * @param {string} [rawText] 原始 UTF-8 文本，解析失败时作兜底
  */
 export function isBlockedWsPayload(parsedJson, rawText = "") {
+  if (rawText && isUnforwardableWsRawText(rawText)) return true;
   if (isBlockedObject(parsedJson)) return true;
   if (rawText && rawTextLooksBlocked(rawText)) return true;
   return false;

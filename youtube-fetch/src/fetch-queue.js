@@ -8,6 +8,7 @@ import { parseYouTubeVideoId } from "./video-id.js";
  *   videoId: string,
  *   url: string,
  *   lang: string | null,
+ *   analyze?: boolean,
  *   status: JobStatus,
  *   reason?: string,
  *   title?: string | null,
@@ -22,7 +23,7 @@ import { parseYouTubeVideoId } from "./video-id.js";
  * @param {{
  *   archivesDir: string,
  *   log: ReturnType<import('./logger.js').createLogger>,
- *   fetchAndArchive: (videoId: string, lang?: string) => Promise<{ title: string | null }>,
+ *   fetchAndArchive: (videoId: string, lang?: string, options?: { analyze?: boolean }) => Promise<{ title: string | null }>,
  *   maxHistory?: number,
  * }} opts
  */
@@ -49,7 +50,9 @@ export function createFetchQueue(opts) {
     job.startedAt = new Date().toISOString();
     log.info(`队列开始 #${job.id} ${job.videoId}`);
     try {
-      const out = await fetchAndArchive(job.videoId, job.lang ?? undefined);
+      const out = await fetchAndArchive(job.videoId, job.lang ?? undefined, {
+        analyze: job.analyze,
+      });
       job.status = "done";
       job.title = out.title ?? null;
       job.finishedAt = new Date().toISOString();
@@ -65,7 +68,7 @@ export function createFetchQueue(opts) {
   }
 
   /**
-   * @param {{ url: string, lang?: string | null }} input
+   * @param {{ url: string, lang?: string | null, analyze?: boolean }} input
    */
   async function enqueue(input) {
     const rawUrl = String(input.url ?? "").trim();
@@ -79,6 +82,7 @@ export function createFetchQueue(opts) {
     }
 
     const lang = input.lang ?? null;
+    const analyze = input.analyze;
     const canonicalUrl = rawUrl.includes("youtube") || rawUrl.includes("youtu.be")
       ? rawUrl
       : `https://www.youtube.com/watch?v=${videoId}`;
@@ -89,6 +93,7 @@ export function createFetchQueue(opts) {
         videoId,
         url: canonicalUrl,
         lang,
+        analyze,
         status: "skipped",
         reason: "archived",
         enqueuedAt: new Date().toISOString(),
@@ -111,6 +116,7 @@ export function createFetchQueue(opts) {
       videoId,
       url: canonicalUrl,
       lang,
+      analyze,
       status: "pending",
       enqueuedAt: new Date().toISOString(),
     });
@@ -124,11 +130,12 @@ export function createFetchQueue(opts) {
   /**
    * @param {string[]} urls
    * @param {string | null | undefined} lang
+   * @param {boolean | undefined} analyze
    */
-  async function enqueueMany(urls, lang) {
+  async function enqueueMany(urls, lang, analyze) {
     const results = [];
     for (const url of urls) {
-      results.push(await enqueue({ url, lang }));
+      results.push(await enqueue({ url, lang, analyze }));
     }
     return results;
   }

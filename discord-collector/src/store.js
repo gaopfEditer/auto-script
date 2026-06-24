@@ -585,16 +585,17 @@ export async function openStore(cfg, log) {
       ]
     );
     const header = /** @type {import("mysql2").ResultSetHeader} */ (result);
-    const id = Number(header.insertId) || 0;
-    if (id) {
-      const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [id]);
-      return rows[0] ?? { id, ...row };
+    const insertId = Number(header.insertId) || 0;
+    if (insertId) {
+      const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [insertId]);
+      if (rows[0]) return rows[0];
     }
     const [rows] = await pool.query(
       `SELECT * FROM discord_signal_cards WHERE message_id = ? LIMIT 1`,
       [row.messageId]
     );
-    return rows[0];
+    if (rows[0]) return rows[0];
+    throw new Error(`insertSignalCard: 写入后未找到记录 message_id=${row.messageId}`);
   }
 
   /** @param {number} id */

@@ -18,7 +18,7 @@ import { createDiscordTelegramMessagePush } from "./discord-telegram-message-pus
 import { createSystemTelegramAlert } from "./discord-system-telegram.js";
 import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
-import { isBlockedWsPayload } from "./ws-noise-filter.js";
+import { isBlockedWsPayload, isForwardableFramePayload } from "./ws-noise-filter.js";
 import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, tryOpenStore } from "./store.js";
 import { killListenersOnPort } from "../scripts/kill-port.mjs";
@@ -103,6 +103,7 @@ async function main() {
           }
         }
         const raw = typeof row.raw_payload === "string" ? row.raw_payload : "";
+        if (!j) return false;
         return !isBlockedWsPayload(j, raw);
       });
       res.json({ ok: true, rows: filtered });
@@ -383,22 +384,23 @@ async function main() {
               frameSeq,
               config.requiredTopLevelKeys
             );
-            broadcast("frame", { ...payload, debugMode: isDebugMode() });
-            void discordIngest.onWsFrame(payload).catch((e) => {
-              log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
-            });
-
-            void store
-              .insertFrame({
-                receivedAt: proc.receivedAt,
-                payloadHash: hashBuffer(buf),
-                opcode: meta.opcode,
-                requestId: meta.requestId || null,
-                rawPayload: buf,
-                parsedJson: proc.ok ? proc.parsedJson : null,
-                parseError: proc.ok ? null : proc.parseError,
-              })
-              .catch((err) => log.error(`MySQL: ${err.message}`));
+            if (isForwardableFramePayload(payload)) {
+              broadcast("frame", { ...payload, debugMode: isDebugMode() });
+              void discordIngest.onWsFrame(payload).catch((e) => {
+                log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
+              });
+              void store
+                .insertFrame({
+                  receivedAt: proc.receivedAt,
+                  payloadHash: hashBuffer(buf),
+                  opcode: meta.opcode,
+                  requestId: meta.requestId || null,
+                  rawPayload: buf,
+                  parsedJson: proc.ok ? proc.parsedJson : null,
+                  parseError: proc.ok ? null : proc.parseError,
+                })
+                .catch((err) => log.error(`MySQL: ${err.message}`));
+            }
           },
         },
         createLogger("cdp")

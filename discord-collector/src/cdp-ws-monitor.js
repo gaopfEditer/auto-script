@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import zlib from "node:zlib";
 import { chromium } from "playwright";
 
-import { isBlockedWsPayload, isDiscordGatewayPayload } from "./ws-noise-filter.js";
+import { isBlockedWsPayload, isDiscordGatewayPayload, isUnforwardableWsRawText } from "./ws-noise-filter.js";
 import { formatGatewayRealtimeLog } from "./discord-gateway.js";
 import { config } from "./config.js";
 import {
@@ -676,6 +676,11 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
             return;
           }
         }
+      }
+
+      const rawUtf8ForDrop = decoded.rawPreview ?? buf.toString("utf8");
+      if (isUnforwardableWsRawText(rawUtf8ForDrop)) {
+        return;
       }
 
       const skipConsole = !wsFrameTrace;

@@ -40,7 +40,12 @@ function parseArchiveMd(md) {
   }
 
   const idx = text.indexOf("\n## Transcript\n");
-  const transcript = idx >= 0 ? text.slice(idx + "\n## Transcript\n".length).trim() : "";
+  let transcript = "";
+  if (idx >= 0) {
+    const rest = text.slice(idx + "\n## Transcript\n".length);
+    const analysisIdx = rest.indexOf("\n## Analysis\n");
+    transcript = (analysisIdx >= 0 ? rest.slice(0, analysisIdx) : rest).trim();
+  }
 
   return { title, sourceUrl, languageLine, fetchedAt, transcript };
 }
@@ -58,6 +63,7 @@ function mergeMeta(meta, mdParsed) {
     lang: meta.lang ?? null,
     charCount: meta.charCount ?? mdParsed.transcript.length,
     wordCount: meta.wordCount ?? null,
+    analysis: meta.analysis ?? null,
   };
 }
 
@@ -123,6 +129,8 @@ export async function listYoutubeArchives(archivesDir) {
       charCount: row.charCount,
       wordCount: row.wordCount,
       hasMd: row.hasMd,
+      hasAnalysis: Boolean(row.analysis && !row.analysis.error),
+      analyzedAt: row.analysis?.analyzedAt ?? null,
     });
   }
 
@@ -170,6 +178,7 @@ export async function getYoutubeArchive(archivesDir, videoId) {
     charCount: row.charCount ?? parsed.transcript.length,
     wordCount: row.wordCount ?? null,
     transcript: parsed.transcript,
+    analysis: row.analysis ?? null,
   };
 }
 

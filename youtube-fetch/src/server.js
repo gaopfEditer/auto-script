@@ -33,18 +33,25 @@ const client = new CdpTranscriptClient({
   log: createLogger("cdp"),
 });
 
-const { fetchAndArchive, fetchTranscript } = createTranscriptFetcher({
+const { fetchAndArchive, fetchTranscript, analyzeArchive } = createTranscriptFetcher({
   client,
   archivesDir: config.archivesDir,
   log: createLogger("fetch"),
+  analyze: {
+    enabled: config.analyzeEnabled,
+    chatUrl: config.ollamaChatUrl,
+    model: config.ollamaModel,
+    promptTemplate: config.analyzePromptTemplate,
+    timeoutMs: config.analyzeTimeoutMs,
+  },
 });
 
 const queue = createFetchQueue({
   archivesDir: config.archivesDir,
   log: createLogger("queue"),
-  fetchAndArchive: async (videoId, lang) => {
-    const out = await fetchAndArchive(videoId, lang);
-    return { title: out.title };
+  fetchAndArchive: async (videoId, lang, options) => {
+    const out = await fetchAndArchive(videoId, lang, options);
+    return { title: out.title, analysis: out.analysis };
   },
 });
 
@@ -85,12 +92,26 @@ function readSave(req) {
 }
 
 /**
+ * @param {import('express').Request} req
+ */
+function readAnalyze(req) {
+  const q = req.query.analyze;
+  if (q === "1" || q === "true") return true;
+  if (q === "0" || q === "false") return false;
+  const b = req.body?.analyze;
+  if (b === true || b === "1") return true;
+  if (b === false || b === "0") return false;
+  return config.analyzeEnabled;
+}
+
+/**
  * @param {string} input
  * @param {string | undefined} lang
  * @param {boolean} rawOnly
  * @param {boolean} save
+ * @param {boolean} analyze
  */
-async function handleTranscript(input, lang, rawOnly, save) {
+async function handleTranscript(input, lang, rawOnly, save, analyze) {
   const videoId = parseYouTubeVideoId(input);
   if (!videoId) {
     return { status: 400, body: { ok: false, error: "无法解析 YouTube video id", input } };
@@ -107,7 +128,7 @@ async function handleTranscript(input, lang, rawOnly, save) {
         body: { ok: true, videoId, lang: lang ?? null, format: "markdown", text: markdown },
       };
     }
-    const out = await fetchTranscript(videoId, lang, save);
+    const out = await fetchTranscript(videoId, lang, save, { analyze });
     return {
       status: 200,
       body: {
@@ -120,6 +141,7 @@ async function handleTranscript(input, lang, rawOnly, save) {
         charCount: out.charCount,
         wordCount: out.wordCount,
         transcript: out.transcript,
+        analysis: out.analysis,
         saved: out.saved ? { md: out.saved.mdPath, json: out.saved.jsonPath } : null,
       },
     };
@@ -136,13 +158,24 @@ app.get("/health", (_req, res) => {
     cdpReady: client.ready,
     cdpUrl: config.cdpConnectUrl,
     site: config.transcriptSite,
+    analyze: {
+      enabledDefault: config.analyzeEnabled,
+      chatUrl: config.ollamaChatUrl,
+      model: config.ollamaModel,
+    },
     queue: queue.snapshot(),
   });
 });
 
 app.get("/api/transcript/:videoId", async (req, res) => {
   const rawOnly = req.query.raw === "1" || req.query.raw === "true";
-  const out = await handleTranscript(readVideoInput(req), readLang(req), rawOnly, readSave(req));
+  const out = await handleTranscript(
+    readVideoInput(req),
+    readLang(req),
+    rawOnly,
+    readSave(req),
+    readAnalyze(req)
+  );
   res.status(out.status).json(out.body);
 });
 
@@ -153,7 +186,7 @@ app.get("/api/transcript", async (req, res) => {
     return;
   }
   const rawOnly = req.query.raw === "1" || req.query.raw === "true";
-  const out = await handleTranscript(input, readLang(req), rawOnly, readSave(req));
+  const out = await handleTranscript(input, readLang(req), rawOnly, readSave(req), readAnalyze(req));
   res.status(out.status).json(out.body);
 });
 
@@ -164,12 +197,35 @@ app.post("/api/transcript", async (req, res) => {
     return;
   }
   const rawOnly = req.body?.raw === true || req.body?.raw === "1";
-  const out = await handleTranscript(input, readLang(req), rawOnly, readSave(req));
+  const out = await handleTranscript(input, readLang(req), rawOnly, readSave(req), readAnalyze(req));
   res.status(out.status).json(out.body);
+});
+
+app.post("/api/analyze/:videoId", async (req, res) => {
+  const videoId = String(req.params.videoId ?? "").trim();
+  if (!videoId) {
+    res.status(400).json({ ok: false, error: "缺少 videoId" });
+    return;
+  }
+  try {
+    const out = await analyzeArchive(videoId, readLang(req));
+    res.json({
+      ok: true,
+      videoId: out.videoId,
+      title: out.title,
+      analysis: out.analysis,
+      saved: { md: out.saved.mdPath, json: out.saved.jsonPath },
+    });
+  } catch (e) {
+    const err = /** @type {Error} */ (e);
+    const status = err.message.includes("ENOENT") ? 404 : 502;
+    res.status(status).json({ ok: false, error: err.message, videoId });
+  }
 });
 
 app.post("/api/queue", async (req, res) => {
   const lang = readLang(req);
+  const analyze = readAnalyze(req);
   const urls = [];
   if (typeof req.body?.url === "string" && req.body.url.trim()) {
     urls.push(req.body.url.trim());
@@ -184,7 +240,7 @@ app.post("/api/queue", async (req, res) => {
     return;
   }
 
-  const results = await queue.enqueueMany(urls, lang ?? null);
+  const results = await queue.enqueueMany(urls, lang ?? null, analyze);
   const invalid = results.filter((r) => !r.ok);
   res.status(invalid.length === results.length ? 400 : 200).json({
     ok: invalid.length < results.length,

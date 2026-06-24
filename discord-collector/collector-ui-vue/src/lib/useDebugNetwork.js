@@ -1,5 +1,5 @@
 import { shallowRef } from "vue";
-import { isBlockedWsFrame } from "./wsNoiseFilter.js";
+import { isBlockedWsFrame, isForwardableWsFrameMessage } from "./wsNoiseFilter.js";
 
 const MAX_NET = 500;
 const MAX_MISC = 280;
@@ -96,9 +96,7 @@ export function useDebugNetwork() {
     const k = String(msg.kind ?? "");
 
     if (ch === "frame") {
-      const body = msg.body;
-      const j = body && typeof body === "object" && "json" in body ? body.json : null;
-      if (j != null && isBlockedWsFrame(j)) return;
+      if (!isForwardableWsFrameMessage(msg)) return;
       pushMisc(msg);
       return;
     }

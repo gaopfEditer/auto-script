@@ -13,7 +13,7 @@ async function parseJsonResponse(res) {
 }
 
 /**
- * @param {{ urls: string[], lang?: string }} payload
+ * @param {{ urls: string[], lang?: string, analyze?: boolean }} payload
  */
 export async function enqueueYoutubeUrls(payload) {
   const res = await fetch("/api/youtube-fetch/queue", {
@@ -22,12 +22,27 @@ export async function enqueueYoutubeUrls(payload) {
     body: JSON.stringify({
       urls: payload.urls,
       lang: payload.lang || undefined,
+      analyze: payload.analyze === true,
     }),
   });
   const data = await parseJsonResponse(res);
   if (!data.ok && !data.results?.length) {
     throw new Error(data.error || "入队失败");
   }
+  return data;
+}
+
+/** @param {string} videoId */
+export async function analyzeYoutubeArchive(videoId) {
+  const id = String(videoId ?? "").trim();
+  if (!id) throw new Error("缺少 videoId");
+  const res = await fetch(`/api/youtube-fetch/analyze/${encodeURIComponent(id)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "分析失败");
   return data;
 }
 

@@ -18,14 +18,15 @@ export function wordCountFromLanguageLine(languageLine) {
  * @param {{ title: string | null, sourceUrl: string, languageLine: string | null, transcript: string }} parsed
  * @param {string} videoId
  * @param {string | null | undefined} lang
+ * @param {Record<string, unknown> | null | undefined} [analysis]
  */
-export function buildArchivePayload(parsed, videoId, lang) {
+export function buildArchivePayload(parsed, videoId, lang, analysis = null) {
   const title = (parsed.title ?? videoId).replace(/^Transcript:\s*/i, "").trim();
   const fetchedAt = new Date().toISOString();
   const transcript = String(parsed.transcript ?? "").trim();
   const languageLine = parsed.languageLine ?? null;
 
-  const md = [
+  const mdParts = [
     `# ${title}`,
     "",
     `Source: ${parsed.sourceUrl}`,
@@ -36,8 +37,9 @@ export function buildArchivePayload(parsed, videoId, lang) {
     "",
     transcript,
     "",
-  ].join("\n");
+  ];
 
+  /** @type {Record<string, unknown>} */
   const meta = {
     videoId,
     title,
@@ -49,7 +51,22 @@ export function buildArchivePayload(parsed, videoId, lang) {
     wordCount: wordCountFromLanguageLine(languageLine),
   };
 
-  return { md, meta };
+  if (analysis && typeof analysis === "object") {
+    meta.analysis = analysis;
+    const summary = Array.isArray(analysis.parsed?.summary)
+      ? analysis.parsed.summary.map((s) => `- ${s}`).join("\n")
+      : "";
+    const raw = typeof analysis.raw === "string" ? analysis.raw.trim() : "";
+    mdParts.push("## Analysis", "");
+    if (summary) {
+      mdParts.push("### Summary", "", summary, "");
+    }
+    if (raw) {
+      mdParts.push("### Model output", "", raw, "");
+    }
+  }
+
+  return { md: mdParts.join("\n"), meta };
 }
 
 /**
@@ -64,4 +81,33 @@ export async function writeArchiveFiles(archivesDir, videoId, payload) {
   await fs.writeFile(mdPath, payload.md, "utf8");
   await fs.writeFile(jsonPath, `${JSON.stringify(payload.meta, null, 2)}\n`, "utf8");
   return { mdPath, jsonPath };
+}
+
+/**
+ * @param {string} md
+ */
+export function extractTranscriptFromMd(md) {
+  const text = String(md ?? "");
+  const m = text.match(/## Transcript\s*\r?\n([\s\S]*?)(?:\r?\n## |\s*$)/);
+  return m ? m[1].trim() : text.trim();
+}
+
+/**
+ * @param {string} archivesDir
+ * @param {string} videoId
+ */
+export async function readArchiveMeta(archivesDir, videoId) {
+  const jsonPath = path.join(archivesDir, `${videoId}.json`);
+  const raw = await fs.readFile(jsonPath, "utf8");
+  return /** @type {Record<string, unknown>} */ (JSON.parse(raw));
+}
+
+/**
+ * @param {string} archivesDir
+ * @param {string} videoId
+ */
+export async function readArchiveTranscript(archivesDir, videoId) {
+  const mdPath = path.join(archivesDir, `${videoId}.md`);
+  const md = await fs.readFile(mdPath, "utf8");
+  return extractTranscriptFromMd(md);
 }
