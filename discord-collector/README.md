@@ -33,7 +33,8 @@ mysql -h127.0.0.1 -uroot -p < schema/init.sql   # 首次
 
 ```bash
 cd discord-collector
-pnpm run collect:ui
+pnpm run collect:ui   
+pnpm run dev:ui-vue
 ```
 
 默认 **http://127.0.0.1:3851/**（`COLLECTOR_UI_PORT`，与 stream-collector 的 3840 错开）。

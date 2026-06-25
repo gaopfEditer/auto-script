@@ -1,0 +1,39 @@
+{
+  "videoId": "EdEojM6acfk",
+  "title": "比特幣，BTC最危險的不是跌破，是反彈沒人接！",
+  "sourceUrl": "https://www.youtube.com/watch?v=EdEojM6acfk",
+  "languageLine": "zh · Duration: 26:56 · Words: 1174",
+  "lang": null,
+  "fetchedAt": "2026-06-25T04:31:11.367Z",
+  "charCount": 12851,
+  "wordCount": 1174,
+  "analysis": {
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "analyzedAt": "2026-06-25T04:31:11.367Z",
+    "raw": "{\n  \"summary\": [\n    \"比特币在65,600冲高失败后回落，反弹缺乏资金承接。\",\n    \"64,200是短线修复的关键压力位，站稳才能转强。\",\n    \"63,800是短期支撑，跌破可能下探63,200甚至62,000。\",\n    \"日线和周线级别仍偏空，大级别趋势未改变。\",\n    \"当前盘面震荡偏空，方向选择取决于关键价位的收线结果。\"\n  ],\n  \"symbol\": \"BTC\",\n  \"direction\": \"观望\",\n  \"entry\": \"\",\n  \"stopLoss\": \"\",\n  \"targets\": [],\n  \"keyLevels\": [\"63,200\", \"63,800\", \"64,200\", \"64,700\", \"65,600\"],\n  \"titleHint\": \"比特币冲高回落，64,200决定短线方向\"\n}",
+    "parsed": {
+      "summary": [
+        "比特币在65,600冲高失败后回落，反弹缺乏资金承接。",
+        "64,200是短线修复的关键压力位，站稳才能转强。",
+        "63,800是短期支撑，跌破可能下探63,200甚至62,000。",
+        "日线和周线级别仍偏空，大级别趋势未改变。",
+        "当前盘面震荡偏空，方向选择取决于关键价位的收线结果。"
+      ],
+      "symbol": "BTC",
+      "direction": "观望",
+      "entry": "",
+      "stopLoss": "",
+      "targets": [],
+      "keyLevels": [
+        "63,200",
+        "63,800",
+        "64,200",
+        "64,700",
+        "65,600"
+      ],
+      "titleHint": "比特币冲高回落，64,200决定短线方向"
+    },
+    "fallbackFrom": "ollama"
+  }
+}

@@ -43,8 +43,19 @@ export const config = {
   logLevel: (process.env.YOUTUBE_FETCH_LOG_LEVEL ?? process.env.LOG_LEVEL ?? "info").toLowerCase(),
   ollamaChatUrl: (process.env.OLLAMA_CHAT_URL ?? "http://127.0.0.1:8000/ollama/chat").trim(),
   ollamaModel: (process.env.OLLAMA_MODEL ?? "gemma4:26b").trim(),
+  deepseekApiKey: (process.env.DEEPSEEK_API_KEY ?? "").trim(),
+  deepseekModel: (process.env.DEEPSEEK_MODEL ?? "deepseek-chat").trim(),
+  deepseekApiUrl: (process.env.DEEPSEEK_API_URL ?? "https://api.deepseek.com").trim().replace(/\/$/, ""),
   analyzeEnabled: envBool("YOUTUBE_ANALYZE", false),
   analyzeTimeoutMs: Number(process.env.YOUTUBE_ANALYZE_TIMEOUT_MS ?? 120_000),
   analyzePromptTemplate: loadPromptTemplate(),
   analyzeMaxTranscriptChars: Number(process.env.YOUTUBE_ANALYZE_MAX_CHARS ?? 14_000),
+  dealVideoWsEnabled: envBool("DEAL_VIDEO_WS_ENABLED", true),
+  dealVideoWsUrl: (
+    process.env.DEAL_VIDEO_WS_URL ?? "ws://127.0.0.1:3123/api/ws?type=deal-video"
+  ).trim(),
+  dealVideoWsReconnectMs: Number(process.env.DEAL_VIDEO_WS_RECONNECT_MS ?? 5_000),
+  dealVideoClientName: (process.env.DEAL_VIDEO_CLIENT_NAME ?? "youtube-fetch").trim(),
+  dealVideoAnalyzeOnTask: envBool("DEAL_VIDEO_ANALYZE", envBool("YOUTUBE_ANALYZE", false)),
+  dealVideoWsReportResult: envBool("DEAL_VIDEO_WS_REPORT_RESULT", true),
 };

@@ -36,6 +36,29 @@ export function createFetchQueue(opts) {
   let chain = Promise.resolve();
   /** @type {FetchJob | null} */
   let running = null;
+  /** @type {Map<number, Array<() => void>>} */
+  const jobWaiters = new Map();
+
+  function notifyJobDone(job) {
+    const list = jobWaiters.get(job.id);
+    if (!list) return;
+    jobWaiters.delete(job.id);
+    for (const fn of list) fn();
+  }
+
+  /**
+   * @param {FetchJob} job
+   */
+  function waitForJob(job) {
+    if (job.status === "done" || job.status === "failed" || job.status === "skipped") {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const list = jobWaiters.get(job.id) ?? [];
+      list.push(resolve);
+      jobWaiters.set(job.id, list);
+    });
+  }
 
   function trimHistory() {
     if (jobs.length > maxHistory) jobs.length = maxHistory;
@@ -64,6 +87,7 @@ export function createFetchQueue(opts) {
       log.warn(`队列失败 #${job.id} ${job.videoId}: ${job.error}`);
     } finally {
       running = null;
+      notifyJobDone(job);
     }
   }
 
@@ -101,6 +125,7 @@ export function createFetchQueue(opts) {
       });
       jobs.unshift(job);
       trimHistory();
+      notifyJobDone(job);
       return { ok: true, queued: false, skipped: true, job };
     }
 
@@ -125,6 +150,17 @@ export function createFetchQueue(opts) {
 
     chain = chain.then(() => runJob(job));
     return { ok: true, queued: true, job };
+  }
+
+  /**
+   * 入队并等待该任务完成（done / failed / skipped）。
+   * @param {{ url: string, lang?: string | null, analyze?: boolean }} input
+   */
+  async function enqueueAndWait(input) {
+    const result = await enqueue(input);
+    if (!result.ok || !result.job) return result;
+    await waitForJob(result.job);
+    return result;
   }
 
   /**
@@ -161,5 +197,5 @@ export function createFetchQueue(opts) {
     };
   }
 
-  return { enqueue, enqueueMany, listJobs, snapshot };
+  return { enqueue, enqueueAndWait, enqueueMany, listJobs, snapshot };
 }

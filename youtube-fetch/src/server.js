@@ -18,6 +18,7 @@ import express from "express";
 
 import { CdpTranscriptClient } from "./cdp-client.js";
 import { config } from "./config.js";
+import { createDealVideoWsClient } from "./deal-video-ws-client.js";
 import { createFetchQueue } from "./fetch-queue.js";
 import { createTranscriptFetcher } from "./fetch-transcript.js";
 import { createLogger, setLogLevel } from "./logger.js";
@@ -43,6 +44,10 @@ const { fetchAndArchive, fetchTranscript, analyzeArchive } = createTranscriptFet
     model: config.ollamaModel,
     promptTemplate: config.analyzePromptTemplate,
     timeoutMs: config.analyzeTimeoutMs,
+    maxChars: config.analyzeMaxTranscriptChars,
+    deepseekApiKey: config.deepseekApiKey,
+    deepseekModel: config.deepseekModel,
+    deepseekApiUrl: config.deepseekApiUrl,
   },
 });
 
@@ -52,6 +57,60 @@ const queue = createFetchQueue({
   fetchAndArchive: async (videoId, lang, options) => {
     const out = await fetchAndArchive(videoId, lang, options);
     return { title: out.title, analysis: out.analysis };
+  },
+});
+
+/** @param {unknown} meta */
+function analyzeFromMeta(meta) {
+  if (!meta || typeof meta !== "object") return config.dealVideoAnalyzeOnTask;
+  const m = /** @type {Record<string, unknown>} */ (meta);
+  if (m.analyze === true || m.analyze === "1") return true;
+  if (m.analyze === false || m.analyze === "0") return false;
+  return config.dealVideoAnalyzeOnTask;
+}
+
+/** @param {unknown} meta */
+function langFromMeta(meta) {
+  if (!meta || typeof meta !== "object") return undefined;
+  const lang = /** @type {Record<string, unknown>} */ (meta).lang;
+  return typeof lang === "string" && lang.trim() ? lang.trim() : undefined;
+}
+
+const dealVideoWs = createDealVideoWsClient({
+  wsUrl: config.dealVideoWsUrl,
+  enabled: config.dealVideoWsEnabled,
+  clientName: config.dealVideoClientName,
+  analyzeOnTask: config.dealVideoAnalyzeOnTask,
+  reconnectMs: config.dealVideoWsReconnectMs,
+  reportResult: config.dealVideoWsReportResult,
+  log: createLogger("deal-video-ws"),
+  onTask: async ({ videoUrl, meta }) => {
+    const lang = langFromMeta(meta);
+    const analyze = analyzeFromMeta(meta);
+    const result = await queue.enqueueAndWait({ url: videoUrl, lang, analyze });
+    if (!result.ok) {
+      return { ok: false, error: result.error ?? "enqueue failed", videoUrl };
+    }
+    const job = result.job;
+    if (job?.status === "failed") {
+      return {
+        ok: false,
+        videoUrl,
+        videoId: job.videoId,
+        error: job.error ?? "fetch failed",
+        status: job.status,
+      };
+    }
+    return {
+      ok: true,
+      videoUrl,
+      videoId: job?.videoId,
+      title: job?.title ?? null,
+      queued: Boolean(result.queued),
+      skipped: Boolean(result.skipped),
+      duplicate: Boolean(result.duplicate),
+      status: job?.status,
+    };
   },
 });
 
@@ -162,6 +221,13 @@ app.get("/health", (_req, res) => {
       enabledDefault: config.analyzeEnabled,
       chatUrl: config.ollamaChatUrl,
       model: config.ollamaModel,
+      deepseekConfigured: Boolean(config.deepseekApiKey),
+      deepseekModel: config.deepseekModel,
+    },
+    dealVideoWs: {
+      enabled: config.dealVideoWsEnabled,
+      url: config.dealVideoWsUrl,
+      clientId: dealVideoWs.getClientId(),
     },
     queue: queue.snapshot(),
   });
@@ -256,14 +322,19 @@ app.get("/api/queue", (req, res) => {
 
 async function main() {
   await client.connect();
+  dealVideoWs.start();
   app.listen(config.port, () => {
     log.info(`HTTP API http://127.0.0.1:${config.port}`);
     log.info(`示例: GET http://127.0.0.1:${config.port}/api/transcript?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ`);
     log.info(`队列: POST http://127.0.0.1:${config.port}/api/queue  { "urls": ["..."] }`);
+    if (config.dealVideoWsEnabled) {
+      log.info(`deal-video WS: ${config.dealVideoWsUrl}`);
+    }
   });
 }
 
 function shutdown() {
+  dealVideoWs.stop();
   void client.close().finally(() => process.exit(0));
 }
 

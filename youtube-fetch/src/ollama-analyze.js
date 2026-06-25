@@ -25,7 +25,7 @@ const DEFAULT_PROMPT = `你是加密货币/交易类 YouTube 视频文稿分析�
 {{transcript}}`;
 
 /** @param {string} raw */
-function extractJsonObject(raw) {
+export function extractJsonObject(raw) {
   const text = String(raw ?? "").trim();
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = (fenced?.[1] ?? text).trim();
@@ -108,6 +108,7 @@ export async function analyzeTranscriptWithOllama(opts) {
     const responseText = pickResponseText(parsedBody ?? rawText);
     const parsed = extractJsonObject(responseText);
     return {
+      provider: "ollama",
       model,
       analyzedAt: new Date().toISOString(),
       raw: responseText,

@@ -4,6 +4,7 @@ import {
   readArchiveTranscript,
   writeArchiveFiles,
 } from "./archive.js";
+import { analyzeTranscriptWithDeepSeek, isLocalModelUnavailable } from "./deepseek-analyze.js";
 import { analyzeTranscriptWithOllama } from "./ollama-analyze.js";
 import { parseTranscriptMarkdown } from "./parse-transcript.js";
 
@@ -18,6 +19,10 @@ import { parseTranscriptMarkdown } from "./parse-transcript.js";
  *     model: string,
  *     promptTemplate?: string,
  *     timeoutMs: number,
+ *     maxChars?: number,
+ *     deepseekApiKey?: string,
+ *     deepseekModel?: string,
+ *     deepseekApiUrl?: string,
  *   },
  * }} deps
  */
@@ -33,23 +38,57 @@ export function createTranscriptFetcher(deps) {
     if (!enabled || !analyze) return null;
     const transcript = String(parsed.transcript ?? "").trim();
     if (!transcript) return null;
+
+    const common = {
+      transcript,
+      title: parsed.title ?? undefined,
+      promptTemplate: analyze.promptTemplate,
+      maxChars: analyze.maxChars,
+      timeoutMs: analyze.timeoutMs,
+      log,
+    };
+
     try {
       return await analyzeTranscriptWithOllama({
-        transcript,
-        title: parsed.title ?? undefined,
+        ...common,
         chatUrl: analyze.chatUrl,
         model: analyze.model,
-        promptTemplate: analyze.promptTemplate,
-        timeoutMs: analyze.timeoutMs,
-        log,
       });
     } catch (e) {
-      const msg = /** @type {Error} */ (e).message;
-      log.warn(`Ollama 分析失败: ${msg}`);
+      const ollamaErr = /** @type {Error} */ (e);
+      const canFallback = Boolean(analyze.deepseekApiKey) && isLocalModelUnavailable(ollamaErr);
+      if (canFallback) {
+        log.warn(`本地 Ollama 不可用，改用 DeepSeek: ${ollamaErr.message}`);
+        try {
+          const out = await analyzeTranscriptWithDeepSeek({
+            ...common,
+            apiKey: analyze.deepseekApiKey,
+            model: analyze.deepseekModel ?? "deepseek-chat",
+            apiUrl: analyze.deepseekApiUrl,
+          });
+          return { ...out, fallbackFrom: "ollama" };
+        } catch (e2) {
+          const deepseekErr = /** @type {Error} */ (e2);
+          log.warn(`DeepSeek 分析失败: ${deepseekErr.message}`);
+          return {
+            provider: "deepseek",
+            model: analyze.deepseekModel ?? "deepseek-chat",
+            analyzedAt: new Date().toISOString(),
+            fallbackFrom: "ollama",
+            error: deepseekErr.message,
+            ollamaError: ollamaErr.message,
+            raw: null,
+            parsed: null,
+          };
+        }
+      }
+
+      log.warn(`Ollama 分析失败: ${ollamaErr.message}`);
       return {
+        provider: "ollama",
         model: analyze.model,
         analyzedAt: new Date().toISOString(),
-        error: msg,
+        error: ollamaErr.message,
         raw: null,
         parsed: null,
       };
