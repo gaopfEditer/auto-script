@@ -10,6 +10,7 @@ import { executionFromParsed, formatManualRawContent, normalizeExecution } from 
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { config } from "./config.js";
+import { extractSignalCardRowId } from "./store.js";
 
 /**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
@@ -75,7 +76,7 @@ export function createDiscordSignalCardService(store, log, broadcast) {
       sourceType: "discord",
       sourceRef: channelId,
     });
-    const cardRow = await store.insertSignalCard({
+    let cardRow = await store.insertSignalCard({
       messageId: messageId || `hash-${textHash.slice(0, 16)}`,
       channelId,
       guildId,
@@ -95,7 +96,11 @@ export function createDiscordSignalCardService(store, log, broadcast) {
       assetClass,
     });
 
-    const cardId = Number(cardRow?.id ?? cardRow?.ID ?? 0);
+    let cardId = extractSignalCardRowId(cardRow?.id ?? cardRow?.ID);
+    if (!cardId && messageId && store.getSignalCardByMessageId) {
+      cardRow = await store.getSignalCardByMessageId(messageId);
+      cardId = extractSignalCardRowId(cardRow?.id ?? cardRow?.ID);
+    }
     if (!cardId) {
       log.warn(`信号卡片入库后缺少 id channel=${channelId} message=${messageId}`);
       return { skipped: "insert_no_id" };
@@ -150,7 +155,7 @@ export function signalCardToClient(row) {
   const messageId = String(row.message_id ?? row.messageId ?? "");
   const isManual = source === "manual" || messageId.startsWith("manual-");
   return {
-    id: Number(row.id ?? row.ID ?? 0),
+    id: extractSignalCardRowId(row.id ?? row.ID),
     messageId,
     channelId: String(row.channel_id ?? row.channelId ?? ""),
     guildId: String(row.guild_id ?? row.guildId ?? ""),

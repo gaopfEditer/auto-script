@@ -4,6 +4,7 @@ import {
   readArchiveTranscript,
   writeArchiveFiles,
 } from "./archive.js";
+import { mergeVideoMeta } from "./video-meta.js";
 import { analyzeTranscriptWithDeepSeek, isLocalModelUnavailable } from "./deepseek-analyze.js";
 import { analyzeTranscriptWithOllama } from "./ollama-analyze.js";
 import { parseTranscriptMarkdown } from "./parse-transcript.js";
@@ -96,6 +97,25 @@ export function createTranscriptFetcher(deps) {
   }
 
   /**
+   * @param {ReturnType<typeof parseTranscriptMarkdown>} parsed
+   * @param {string} videoId
+   */
+  async function enrichParsedMeta(parsed, videoId) {
+    try {
+      const remote = await client.fetchVideoMeta(videoId);
+      const merged = mergeVideoMeta(parsed, remote);
+      parsed.author = merged.author;
+      parsed.publishedAt = merged.publishedAt;
+    } catch (e) {
+      log.warn(`视频元数据跳过 ${videoId}: ${/** @type {Error} */ (e).message}`);
+      const merged = mergeVideoMeta(parsed, {});
+      parsed.author = merged.author;
+      parsed.publishedAt = merged.publishedAt;
+    }
+    return parsed;
+  }
+
+  /**
    * @param {string} videoId
    * @param {string | undefined} lang
    * @param {{ analyze?: boolean }} [options]
@@ -103,7 +123,7 @@ export function createTranscriptFetcher(deps) {
   async function fetchAndArchive(videoId, lang, options = {}) {
     if (!client.ready) throw new Error("CDP 未就绪，请确认 Chrome 已开启 remote debugging");
     const markdown = await client.fetchTranscriptText(videoId, lang);
-    const parsed = parseTranscriptMarkdown(markdown, videoId);
+    const parsed = await enrichParsedMeta(parseTranscriptMarkdown(markdown, videoId), videoId);
     const analysis = await maybeAnalyze(parsed, options.analyze);
     const archive = buildArchivePayload(parsed, videoId, lang, analysis);
     const saved = await writeArchiveFiles(archivesDir, videoId, archive);
@@ -115,6 +135,8 @@ export function createTranscriptFetcher(deps) {
       languageLine: archive.meta.languageLine,
       charCount: archive.meta.charCount,
       wordCount: archive.meta.wordCount,
+      author: archive.meta.author,
+      publishedAt: archive.meta.publishedAt,
       analysis,
       saved,
     };
@@ -129,7 +151,7 @@ export function createTranscriptFetcher(deps) {
   async function fetchTranscript(videoId, lang, save, options = {}) {
     if (!client.ready) throw new Error("CDP 未就绪，请确认 Chrome 已开启 remote debugging");
     const markdown = await client.fetchTranscriptText(videoId, lang);
-    const parsed = parseTranscriptMarkdown(markdown, videoId);
+    const parsed = await enrichParsedMeta(parseTranscriptMarkdown(markdown, videoId), videoId);
     const analysis = await maybeAnalyze(parsed, options.analyze);
     const archive = buildArchivePayload(parsed, videoId, lang, analysis);
     let saved = null;
@@ -144,6 +166,8 @@ export function createTranscriptFetcher(deps) {
       languageLine: archive.meta.languageLine,
       charCount: archive.meta.charCount,
       wordCount: archive.meta.wordCount,
+      author: archive.meta.author,
+      publishedAt: archive.meta.publishedAt,
       transcript: parsed.transcript,
       analysis,
       saved,
@@ -163,6 +187,8 @@ export function createTranscriptFetcher(deps) {
       title: typeof meta.title === "string" ? meta.title : videoId,
       sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : `https://www.youtube.com/watch?v=${videoId}`,
       languageLine: typeof meta.languageLine === "string" ? meta.languageLine : null,
+      author: typeof meta.author === "string" ? meta.author : null,
+      publishedAt: typeof meta.publishedAt === "string" ? meta.publishedAt : null,
       transcript,
     };
     const analysis = await maybeAnalyze(parsed, true);

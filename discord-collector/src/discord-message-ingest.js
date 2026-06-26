@@ -29,7 +29,7 @@ import {
 } from "./discord-message-format.js";
 import { createChannelMessageDedup, messageDedupKey } from "./discord-message-dedup.js";
 import { normalizeSignalText } from "./discord-signal-dedup.js";
-import { isSignalChannel } from "./discord-signal-config.js";
+import { isSignalChannel, getSignalChannelConfig } from "./discord-signal-config.js";
 import { isBlockedWsPayload } from "./ws-noise-filter.js";
 
 /**
@@ -271,7 +271,8 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       const cid = String(r.channelId ?? "").trim();
       const gid = String(r.guildId ?? "").trim();
       if (cid) {
-        const name = resolveChannelDisplayName(r.channelName, cid);
+        const sigCfg = getSignalChannelConfig(cid);
+        const name = sigCfg?.name ?? resolveChannelDisplayName(r.channelName, cid);
         channelMap.set(cid, {
           channelId: cid,
           guildId: gid,
@@ -279,12 +280,16 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
           type: 0,
         });
       }
-      if (gid && r.guildName) {
+      if (gid) {
+        const prev = guildMap.get(gid);
+        const name = r.guildName
+          ? String(r.guildName)
+          : prev?.name ?? `Server ${gid.slice(-6)}`;
         guildMap.set(gid, {
           guildId: gid,
-          name: String(r.guildName),
-          icon: null,
-          iconUrl: resolveGuildIconUrl(gid, null),
+          name,
+          icon: prev?.icon ?? null,
+          iconUrl: prev?.iconUrl ?? resolveGuildIconUrl(gid, null),
         });
       }
     }

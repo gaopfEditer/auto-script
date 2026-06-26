@@ -3,7 +3,7 @@ import { ref, reactive, computed, onMounted, watch, nextTick } from "vue";
 import { RouterLink } from "vue-router";
 import SignalCardRail from "../components/SignalCardRail.vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
-import { fetchGuilds, fetchChannels, fetchChannelMessages, fetchCdpActiveChannel } from "../lib/discordApi.js";
+import { fetchGuilds, fetchChannels, fetchChannelMessages, fetchCdpActiveChannel, fetchDiscordContext } from "../lib/discordApi.js";
 import { fetchSignalConfig, isSignalChannelId } from "../lib/discordSignalApi.js";
 // import { navigateDiscordChannel } from "../lib/discordApi.js";
 import {
@@ -612,12 +612,45 @@ async function reloadGuilds() {
   try {
     const rows = await fetchGuilds();
     guilds.value = rows.map((r) => guildRowToClient(r));
+    if (!guilds.value.length) {
+      await inferGuildsFromContext();
+    }
     if (!selectedGuildId.value && guilds.value.length) {
       selectedGuildId.value = guilds.value[0].guildId;
     }
     scheduleSave();
   } finally {
     loadingGuilds.value = false;
+  }
+}
+
+async function inferGuildsFromContext() {
+  try {
+    const snapshot = await fetchDiscordContext();
+    const rawGuilds = snapshot.guilds;
+    if (rawGuilds && typeof rawGuilds === "object") {
+      const inferred = Object.entries(/** @type {Record<string, Record<string, unknown>>} */ (rawGuilds)).map(
+        ([guildId, g]) => ({
+          guildId,
+          name: String(g?.name ?? `Server ${guildId.slice(-6)}`),
+          iconUrl: g?.iconUrl ? String(g.iconUrl) : null,
+        })
+      );
+      if (inferred.length) {
+        guilds.value = inferred;
+        return;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  const cachedIds = Object.keys(channelsByGuild).filter(Boolean);
+  if (cachedIds.length) {
+    guilds.value = cachedIds.map((guildId) => ({
+      guildId,
+      name: `Server ${guildId.slice(-6)}`,
+      iconUrl: null,
+    }));
   }
 }
 
@@ -1172,7 +1205,9 @@ onMounted(async () => {
         <span v-else>{{ guildInitial(g.guildId, g.name) }}</span>
         <span v-if="guildUnreadCount(g.guildId)" class="guild-unread-dot" aria-hidden="true" />
       </button>
-      <p v-if="!loadingGuilds && !guilds.length" class="kook-wait">等待 READY / GUILD_CREATE…</p>
+      <p v-if="!loadingGuilds && !guilds.length" class="kook-wait">
+        等待 READY / GUILD_CREATE…（若已有消息，请刷新页面或确认 MySQL 已连接）
+      </p>
     </aside>
 
     <aside class="channel-panel">

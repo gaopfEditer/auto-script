@@ -16,6 +16,20 @@ function isoToMysqlDatetime3(iso) {
   return d.toISOString().slice(0, 23).replace("T", " ");
 }
 
+/** @param {unknown} raw */
+export function extractSignalCardRowId(raw) {
+  if (raw == null) return 0;
+  const n = typeof raw === "bigint" ? Number(raw) : Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+
+/** @param {Record<string, unknown> | null | undefined} row */
+function normalizeSignalCardRow(row) {
+  if (!row) return row;
+  const id = extractSignalCardRowId(row.id ?? row.ID);
+  return id ? { ...row, id } : row;
+}
+
 /** @param {Buffer} buf */
 export function hashBuffer(buf) {
   return createHash("sha256").update(buf).digest("hex");
@@ -390,14 +404,40 @@ export async function openStore(cfg, log) {
   }
 
   async function listDiscordGuilds() {
-    const [rows] = await pool.query(`
+    const [primary] = await pool.query(`
       SELECT g.guild_id, g.name, g.icon_hash, g.icon_url, g.updated_at,
              (SELECT COUNT(*) FROM discord_channels c WHERE c.guild_id = g.guild_id) AS channel_count
       FROM discord_guilds g
       WHERE g.guild_id NOT IN (SELECT channel_id FROM discord_channels)
-      ORDER BY g.name ASC
     `);
-    return rows;
+    const seen = new Set(primary.map((r) => String(r.guild_id)));
+    const [inferred] = await pool.query(`
+      SELECT ig.guild_id,
+             COALESCE(NULLIF(g.name, ''), NULLIF(ig.guild_name, ''), CONCAT('Server ', RIGHT(ig.guild_id, 6))) AS name,
+             g.icon_hash,
+             g.icon_url,
+             COALESCE(g.updated_at, NOW(3)) AS updated_at,
+             (SELECT COUNT(*) FROM discord_channels c WHERE c.guild_id = ig.guild_id) AS channel_count
+      FROM (
+        SELECT guild_id, NULL AS guild_name FROM discord_channels WHERE guild_id != ''
+        UNION
+        SELECT guild_id,
+          SUBSTRING_INDEX(GROUP_CONCAT(guild_name ORDER BY created_at_ms DESC SEPARATOR '\\\\0'), '\\\\0', 1) AS guild_name
+        FROM discord_messages WHERE guild_id != '' GROUP BY guild_id
+      ) AS ig
+      LEFT JOIN discord_guilds g ON g.guild_id = ig.guild_id
+      WHERE ig.guild_id NOT IN (SELECT channel_id FROM discord_channels)
+    `);
+    /** @type {typeof primary} */
+    const merged = [...primary];
+    for (const row of inferred) {
+      const gid = String(row.guild_id ?? "");
+      if (!gid || seen.has(gid)) continue;
+      merged.push(row);
+      seen.add(gid);
+    }
+    merged.sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "zh-CN"));
+    return merged;
   }
 
   async function listDiscordChannelsByGuild(guildId) {
@@ -538,6 +578,8 @@ export async function openStore(cfg, log) {
    */
   async function insertSignalCard(row) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
+    const messageId = String(row.messageId ?? "").trim();
+    if (!messageId) throw new Error("insertSignalCard: messageId 为空");
     const [result] = await pool.execute(
       `INSERT INTO discord_signal_cards (
          message_id, channel_id, guild_id, source_text_hash, raw_content,
@@ -561,7 +603,7 @@ export async function openStore(cfg, log) {
          asset_class = COALESCE(VALUES(asset_class), asset_class),
          updated_at = VALUES(updated_at)`,
       [
-        row.messageId,
+        messageId,
         row.channelId,
         row.guildId ?? "",
         row.sourceTextHash,
@@ -585,17 +627,24 @@ export async function openStore(cfg, log) {
       ]
     );
     const header = /** @type {import("mysql2").ResultSetHeader} */ (result);
-    const insertId = Number(header.insertId) || 0;
+    const insertId = extractSignalCardRowId(header.insertId);
     if (insertId) {
       const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [insertId]);
-      if (rows[0]) return rows[0];
+      if (rows[0]) return normalizeSignalCardRow(rows[0]);
     }
     const [rows] = await pool.query(
       `SELECT * FROM discord_signal_cards WHERE message_id = ? LIMIT 1`,
-      [row.messageId]
+      [messageId]
     );
-    if (rows[0]) return rows[0];
-    throw new Error(`insertSignalCard: 写入后未找到记录 message_id=${row.messageId}`);
+    if (rows[0]) return normalizeSignalCardRow(rows[0]);
+    if (row.channelId && row.sourceTextHash) {
+      const [byHash] = await pool.query(
+        `SELECT * FROM discord_signal_cards WHERE channel_id = ? AND source_text_hash = ? ORDER BY id DESC LIMIT 1`,
+        [row.channelId, row.sourceTextHash]
+      );
+      if (byHash[0]) return normalizeSignalCardRow(byHash[0]);
+    }
+    throw new Error(`insertSignalCard: 写入后未找到记录 message_id=${messageId}`);
   }
 
   /** @param {number} id */
@@ -658,7 +707,15 @@ export async function openStore(cfg, log) {
   /** @param {number} id */
   async function getSignalCardById(id) {
     const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [id]);
-    return rows[0] ?? null;
+    return normalizeSignalCardRow(rows[0] ?? null);
+  }
+
+  /** @param {string} messageId */
+  async function getSignalCardByMessageId(messageId) {
+    const mid = String(messageId ?? "").trim();
+    if (!mid) return null;
+    const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE message_id = ? LIMIT 1`, [mid]);
+    return normalizeSignalCardRow(rows[0] ?? null);
   }
 
   /**
@@ -796,6 +853,7 @@ export async function openStore(cfg, log) {
     markSignalCardTelegramSent,
     listSignalCards,
     getSignalCardById,
+    getSignalCardByMessageId,
     listCardsForVerification,
     listActiveCardsForProximity,
     updateSignalCard,
@@ -841,6 +899,7 @@ export function createOfflineStore() {
     markSignalCardTelegramSent: async () => {},
     listSignalCards: async () => [],
     getSignalCardById: async () => null,
+    getSignalCardByMessageId: async () => null,
     listCardsForVerification: async () => [],
     listActiveCardsForProximity: async () => [],
     updateSignalCard: async () => null,

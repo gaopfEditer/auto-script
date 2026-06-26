@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { mergeVideoMeta, normalizePublishedAt, resolveVideoMetaRemote } from "../../youtube-fetch/src/video-meta.js";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ARCHIVES_DIR = path.resolve(__dirname, "..", "..", "youtube-fetch", "archives");
 
@@ -32,9 +34,19 @@ function parseArchiveMd(md) {
 
   let sourceUrl = null;
   let languageLine = null;
+  let author = null;
+  let publishedAt = null;
   let fetchedAt = null;
-  for (const line of lines.slice(1, 12)) {
+  for (const line of lines.slice(1, 16)) {
     if (line.startsWith("Source:")) sourceUrl = line.slice("Source:".length).trim();
+    if (line.startsWith("Author:")) {
+      const v = line.slice("Author:".length).trim();
+      if (v && v !== "—") author = v;
+    }
+    if (line.startsWith("Published:")) {
+      const v = line.slice("Published:".length).trim();
+      if (v && v !== "—") publishedAt = normalizePublishedAt(v);
+    }
     if (line.startsWith("Language:")) languageLine = line.slice("Language:".length).trim();
     if (line.startsWith("Fetched:")) fetchedAt = line.slice("Fetched:".length).trim();
   }
@@ -47,7 +59,7 @@ function parseArchiveMd(md) {
     transcript = (analysisIdx >= 0 ? rest.slice(0, analysisIdx) : rest).trim();
   }
 
-  return { title, sourceUrl, languageLine, fetchedAt, transcript };
+  return { title, sourceUrl, languageLine, author, publishedAt, fetchedAt, transcript };
 }
 
 /**
@@ -55,11 +67,22 @@ function parseArchiveMd(md) {
  * @param {ReturnType<typeof parseArchiveMd>} mdParsed
  */
 function mergeMeta(meta, mdParsed) {
+  const title = String(meta.title ?? mdParsed.title ?? meta.videoId ?? "");
+  const merged = mergeVideoMeta(
+    {
+      title,
+      author: meta.author ?? mdParsed.author ?? null,
+      publishedAt: meta.publishedAt ?? mdParsed.publishedAt ?? null,
+    },
+    {}
+  );
   return {
-    title: String(meta.title ?? mdParsed.title ?? meta.videoId ?? ""),
+    title,
     sourceUrl: String(meta.sourceUrl ?? mdParsed.sourceUrl ?? ""),
     languageLine: meta.languageLine ?? mdParsed.languageLine ?? null,
     fetchedAt: meta.fetchedAt ?? mdParsed.fetchedAt ?? null,
+    author: merged.author,
+    publishedAt: merged.publishedAt,
     lang: meta.lang ?? null,
     charCount: meta.charCount ?? mdParsed.transcript.length,
     wordCount: meta.wordCount ?? null,
@@ -82,7 +105,15 @@ async function readArchivePair(archivesDir, videoId) {
     if (err.code !== "ENOENT") throw e;
   }
 
-  let mdParsed = { title: null, sourceUrl: null, languageLine: null, fetchedAt: null, transcript: "" };
+  let mdParsed = {
+    title: null,
+    sourceUrl: null,
+    languageLine: null,
+    author: null,
+    publishedAt: null,
+    fetchedAt: null,
+    transcript: "",
+  };
   try {
     const md = await fs.readFile(mdPath, "utf8");
     mdParsed = parseArchiveMd(md);
@@ -97,15 +128,54 @@ async function readArchivePair(archivesDir, videoId) {
 }
 
 /**
- * @param {string} archivesDir
+ * @param {string | undefined} raw
+ * @param {boolean} [endOfDay]
  */
-export async function listYoutubeArchives(archivesDir) {
+function parseDateBoundMs(raw, endOfDay = false) {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(s)) {
+    const d = new Date(`${s}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}`);
+    return Number.isNaN(d.getTime()) ? null : d.getTime();
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
+}
+
+/**
+ * @param {{ publishedAt?: unknown, fetchedAt?: unknown }} item
+ */
+function publishSortMs(item) {
+  const p = normalizePublishedAt(item.publishedAt);
+  if (p) return Date.parse(p);
+  const f = item.fetchedAt ? Date.parse(String(item.fetchedAt)) : NaN;
+  return Number.isFinite(f) ? f : 0;
+}
+
+/**
+ * @param {string} archivesDir
+ * @param {{ author?: string, from?: string, to?: string, backfill?: boolean }} [opts]
+ */
+export async function listYoutubeArchives(archivesDir, opts = {}) {
+  const authorFilter = String(opts.author ?? "").trim().toLowerCase();
+  const fromMs = parseDateBoundMs(opts.from, false);
+  const toMs = parseDateBoundMs(opts.to, true);
+  const backfill = opts.backfill !== false;
   let names;
   try {
     names = await fs.readdir(archivesDir);
   } catch (e) {
     const err = /** @type {NodeJS.ErrnoException} */ (e);
-    if (err.code === "ENOENT") return { ok: true, dir: archivesDir, items: [] };
+    if (err.code === "ENOENT") {
+      return {
+        ok: true,
+        dir: archivesDir,
+        authors: [],
+        total: 0,
+        items: [],
+        filters: { author: null, from: opts.from ?? null, to: opts.to ?? null },
+      };
+    }
     throw e;
   }
 
@@ -120,10 +190,23 @@ export async function listYoutubeArchives(archivesDir) {
     if (!isValidArchiveVideoId(videoId)) continue;
     const row = await readArchivePair(archivesDir, videoId);
     if (!row) continue;
+    let author = row.author ?? null;
+    let publishedAt = row.publishedAt ?? null;
+    if (backfill && (!author || !publishedAt)) {
+      const remote = await resolveVideoMetaRemote(videoId, {
+        title: row.title,
+        author,
+        publishedAt,
+      });
+      author = remote.author;
+      publishedAt = remote.publishedAt;
+    }
     items.push({
       videoId: row.videoId,
       title: row.title,
       sourceUrl: row.sourceUrl,
+      author,
+      publishedAt,
       languageLine: row.languageLine,
       fetchedAt: row.fetchedAt,
       charCount: row.charCount,
@@ -135,13 +218,39 @@ export async function listYoutubeArchives(archivesDir) {
   }
 
   items.sort((a, b) => {
-    const ta = a.fetchedAt ? Date.parse(String(a.fetchedAt)) : 0;
-    const tb = b.fetchedAt ? Date.parse(String(b.fetchedAt)) : 0;
+    const tb = publishSortMs(b);
+    const ta = publishSortMs(a);
     if (tb !== ta) return tb - ta;
     return String(b.videoId).localeCompare(String(a.videoId));
   });
 
-  return { ok: true, dir: archivesDir, items };
+  const authors = [...new Set(items.map((x) => String(x.author ?? "").trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, "zh-CN")
+  );
+
+  let filtered = authorFilter
+    ? items.filter((x) => String(x.author ?? "").trim().toLowerCase() === authorFilter)
+    : items;
+
+  if (fromMs != null) {
+    filtered = filtered.filter((x) => publishSortMs(x) >= fromMs);
+  }
+  if (toMs != null) {
+    filtered = filtered.filter((x) => publishSortMs(x) <= toMs);
+  }
+
+  return {
+    ok: true,
+    dir: archivesDir,
+    authors,
+    total: items.length,
+    items: filtered,
+    filters: {
+      author: authorFilter || null,
+      from: opts.from ?? null,
+      to: opts.to ?? null,
+    },
+  };
 }
 
 /**
@@ -174,6 +283,8 @@ export async function getYoutubeArchive(archivesDir, videoId) {
     sourceUrl: row.sourceUrl || parsed.sourceUrl,
     languageLine: row.languageLine || parsed.languageLine,
     fetchedAt: row.fetchedAt || parsed.fetchedAt,
+    author: row.author ?? null,
+    publishedAt: row.publishedAt ?? null,
     lang: row.lang ?? null,
     charCount: row.charCount ?? parsed.transcript.length,
     wordCount: row.wordCount ?? null,
@@ -189,9 +300,13 @@ export async function getYoutubeArchive(archivesDir, videoId) {
 export function registerYoutubeArchiveRoutes(app, opts) {
   const { archivesDir, log } = opts;
 
-  app.get("/api/youtube-archives", async (_req, res) => {
+  app.get("/api/youtube-archives", async (req, res) => {
     try {
-      const out = await listYoutubeArchives(archivesDir);
+      const author = String(req.query.author ?? "").trim();
+      const from = String(req.query.from ?? req.query.fromDate ?? "").trim();
+      const to = String(req.query.to ?? req.query.toDate ?? "").trim();
+      const backfill = req.query.backfill !== "0";
+      const out = await listYoutubeArchives(archivesDir, { author, from, to, backfill });
       res.json(out);
     } catch (e) {
       log.warn(`list archives: ${/** @type {Error} */ (e).message}`);

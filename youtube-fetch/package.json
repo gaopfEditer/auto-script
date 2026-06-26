@@ -5,7 +5,9 @@
   "description": "Fetch YouTube transcripts via CDP + youtube-transcript.ai, expose HTTP API",
   "type": "module",
   "scripts": {
+    "prestart": "node scripts/free-port.js",
     "start": "node src/server.js",
+    "predev": "node scripts/free-port.js",
     "dev": "nodemon src/server.js"
   },
   "dependencies": {

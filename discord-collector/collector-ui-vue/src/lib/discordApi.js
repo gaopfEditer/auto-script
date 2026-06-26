@@ -5,6 +5,13 @@ export async function fetchGuilds() {
   return /** @type {Array<Record<string, unknown>>} */ (data.guilds ?? []);
 }
 
+export async function fetchDiscordContext() {
+  const res = await fetch("/api/discord/context");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "加载 Discord 上下文失败");
+  return /** @type {Record<string, unknown>} */ (data.snapshot ?? {});
+}
+
 /** @param {string} guildId */
 export async function fetchChannels(guildId) {
   const res = await fetch(`/api/discord/guilds/${encodeURIComponent(guildId)}/channels`);

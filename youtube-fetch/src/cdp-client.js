@@ -1,5 +1,7 @@
 import { chromium } from "playwright";
 
+import { fetchVideoMetaInPage } from "./video-meta.js";
+
 /**
  * 通过 connectOverCDP 附着到已启动的 Chrome，在 youtube-transcript.ai 页面上下文中 fetch 文稿。
  */
@@ -57,6 +59,14 @@ export class CdpTranscriptClient {
   }
 
   /**
+   * @param {string} videoId
+   */
+  async fetchVideoMeta(videoId) {
+    if (!this.page || !this.ready) throw new Error("CDP 尚未连接，请先调用 connect()");
+    return this.#enqueue(() => this.#fetchMetaOnce(videoId));
+  }
+
+  /**
    * @param {() => Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -99,6 +109,22 @@ export class CdpTranscriptClient {
         throw new Error(`CDP 页面已关闭: ${err.message}`);
       }
       throw err;
+    }
+  }
+
+  /**
+   * @param {string} videoId
+   */
+  async #fetchMetaOnce(videoId) {
+    const page = this.page;
+    if (!page) throw new Error("无可用 page");
+    this.log.debug(`fetch video meta ${videoId}`);
+    try {
+      return await fetchVideoMetaInPage(page, videoId, Math.min(this.timeoutMs, 30_000));
+    } catch (e) {
+      const err = /** @type {Error} */ (e);
+      this.log.warn(`视频元数据拉取失败 ${videoId}: ${err.message}`);
+      return { author: null, publishedAt: null };
     }
   }
 

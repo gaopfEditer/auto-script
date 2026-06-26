@@ -1,0 +1,19 @@
+{
+  "videoId": "PrhptxAClcc",
+  "title": "🔴【每日要聞】阿里蒸餾Claude被抓包！中國銀行竟然逃稅！鎂光踢開英偉達，登基做上遊大哥！OpenAI宇宙再遭打擊，國會山股神佩洛西開倉英特爾！｜小翠時政財經 20260625",
+  "sourceUrl": "https://www.youtube.com/watch?v=PrhptxAClcc",
+  "author": "小翠時政財經",
+  "publishedAt": "2026-06-25T12:00:00.000Z",
+  "languageLine": "zh · Duration: 58:44 · Words: 2017",
+  "lang": null,
+  "fetchedAt": "2026-06-25T14:50:38.011Z",
+  "charCount": 21162,
+  "wordCount": 2017,
+  "analysis": {
+    "provider": "ollama",
+    "model": "gemma4:26b",
+    "analyzedAt": "2026-06-25T14:50:38.011Z",
+    "raw": "---\n{\n  \"summary\": [\n    \"美光财报表现极其强劲，营收同比大增346%，带动存储板块及SK海力士上涨\",\n    \"高通计划通过Arm架构进军数据中心芯片市场，与英特尔形成潜在竞争\",\n    \"美债收益率近期回落，导致黄金、白银及比特币出现回调压力\",\n    \"美国大银行顺利通过美联储压力测试，利好后续分红与股票回购\",\n    \"阿里巴巴通义千问被指控对Claude进行大规模的“蒸馏攻击\"\"\n  ],\n  \"symbol\": \"GLW\",\n  \"direction\": \"做多\",\n  \"entry\": \"160-180\",\n  \"stopLoss\": \"\",\n  \"targets\": [],\n  \"keyLevels\": [\"220\"],\n  \"titleHint\": \"半导体产业链动态：美光财报炸裂，高通与英特尔的竞争格局分析\"\n}",
+    "parsed": null
+  }
+}

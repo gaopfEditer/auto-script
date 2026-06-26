@@ -173,10 +173,10 @@ GET /api/queue?limit=80
 
 | 文件 | 内容 |
 |------|------|
-| `{videoId}.md` | 正文：首行 `# 标题`，元数据行，`## Transcript` 以下为带时间戳文稿 |
-| `{videoId}.json` | 元数据：`title`、`sourceUrl`、`languageLine`、`wordCount`、`charCount`、`fetchedAt` 等；若已分析则含 **`analysis`**（**不含**正文重复） |
+| `{videoId}.md` | 正文：首行 `# 标题`，元数据行（含 `Author` / `Published`），`## Transcript` 以下为带时间戳文稿 |
+| `{videoId}.json` | 元数据：`title`、`author`、`publishedAt`（YouTube 上传时间）、`sourceUrl`、`languageLine`、`fetchedAt` 等；若已分析则含 **`analysis`** |
 
-`discord-collector` 前端 `/fetch` 提交 URL 入队，`/archives` 读取同一目录预览。
+`discord-collector` 前端 `/archives` 按 **`publishedAt` 降序**（最新在前）展示，并支持按 **作者** 筛选。旧归档会在列表加载时通过 oEmbed / 标题启发式补全作者与发布时间。
 
 ### 成功响应示例
 

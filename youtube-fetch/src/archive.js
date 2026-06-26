@@ -15,7 +15,7 @@ export function wordCountFromLanguageLine(languageLine) {
 }
 
 /**
- * @param {{ title: string | null, sourceUrl: string, languageLine: string | null, transcript: string }} parsed
+ * @param {{ title: string | null, sourceUrl: string, languageLine: string | null, transcript: string, author?: string | null, publishedAt?: string | null }} parsed
  * @param {string} videoId
  * @param {string | null | undefined} lang
  * @param {Record<string, unknown> | null | undefined} [analysis]
@@ -25,11 +25,15 @@ export function buildArchivePayload(parsed, videoId, lang, analysis = null) {
   const fetchedAt = new Date().toISOString();
   const transcript = String(parsed.transcript ?? "").trim();
   const languageLine = parsed.languageLine ?? null;
+  const author = parsed.author ?? null;
+  const publishedAt = parsed.publishedAt ?? null;
 
   const mdParts = [
     `# ${title}`,
     "",
     `Source: ${parsed.sourceUrl}`,
+    author ? `Author: ${author}` : "Author: —",
+    publishedAt ? `Published: ${publishedAt}` : "Published: —",
     languageLine ? `Language: ${languageLine}` : "Language: —",
     `Fetched: ${fetchedAt}`,
     "",
@@ -44,6 +48,8 @@ export function buildArchivePayload(parsed, videoId, lang, analysis = null) {
     videoId,
     title,
     sourceUrl: parsed.sourceUrl,
+    author,
+    publishedAt,
     languageLine,
     lang: lang ?? null,
     fetchedAt,

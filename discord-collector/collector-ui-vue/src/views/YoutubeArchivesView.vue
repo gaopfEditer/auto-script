@@ -13,6 +13,11 @@ const analyzing = ref(false);
 const error = ref("");
 const analyzeMsg = ref("");
 const archiveDir = ref("");
+const authors = ref(/** @type {string[]} */ ([]));
+const authorFilter = ref("");
+const dateFrom = ref("");
+const dateTo = ref("");
+const listTotal = ref(0);
 const items = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
 const selectedId = ref("");
 const article = ref(/** @type {Record<string, unknown> | null} */ (null));
@@ -28,6 +33,10 @@ const parsedAnalysis = computed(() => {
 });
 
 const hasAnalysis = computed(() => Boolean(analysis.value && !analysis.value.error && parsedAnalysis.value));
+
+const hasActiveFilters = computed(
+  () => Boolean(authorFilter.value || dateFrom.value || dateTo.value)
+);
 
 /** @param {string} text */
 function transcriptBlocks(text) {
@@ -56,16 +65,32 @@ function formatFetched(v) {
   return d.toLocaleString("zh-CN", { hour12: false });
 }
 
+/** @param {unknown} v */
+function formatPublished(v) {
+  if (!v) return "—";
+  const d = new Date(String(v));
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
 async function loadList() {
   loading.value = true;
   error.value = "";
   try {
-    const data = await fetchYoutubeArchiveList();
+    const data = await fetchYoutubeArchiveList({
+      author: authorFilter.value || undefined,
+      from: dateFrom.value || undefined,
+      to: dateTo.value || undefined,
+    });
     archiveDir.value = data.dir;
+    authors.value = data.authors;
+    listTotal.value = data.total;
     items.value = data.items;
     const q = String(route.query.v ?? "");
     if (q && items.value.some((x) => String(x.videoId) === q)) {
       selectedId.value = q;
+    } else if (items.value.length && !items.value.some((x) => String(x.videoId) === selectedId.value)) {
+      selectedId.value = String(items.value[0].videoId);
     } else if (!selectedId.value && items.value.length) {
       selectedId.value = String(items.value[0].videoId);
     }
@@ -99,6 +124,48 @@ function selectItem(videoId) {
   router.replace({ query: { ...route.query, v: videoId } });
 }
 
+function syncFiltersToRoute() {
+  /** @type {Record<string, string | undefined>} */
+  const q = { ...route.query };
+  if (selectedId.value) q.v = selectedId.value;
+  else delete q.v;
+  if (authorFilter.value) q.author = authorFilter.value;
+  else delete q.author;
+  if (dateFrom.value) q.from = dateFrom.value;
+  else delete q.from;
+  if (dateTo.value) q.to = dateTo.value;
+  else delete q.to;
+  router.replace({ query: q });
+}
+
+function onFilterChange() {
+  syncFiltersToRoute();
+  void loadList();
+}
+
+function clearDateRange() {
+  dateFrom.value = "";
+  dateTo.value = "";
+  onFilterChange();
+}
+
+function clearAllFilters() {
+  authorFilter.value = "";
+  dateFrom.value = "";
+  dateTo.value = "";
+  onFilterChange();
+}
+
+/** @param {number} days */
+function setRecentDays(days) {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - (days - 1));
+  dateFrom.value = start.toISOString().slice(0, 10);
+  dateTo.value = end.toISOString().slice(0, 10);
+  onFilterChange();
+}
+
 async function runAnalyze() {
   const videoId = selectedId.value;
   if (!videoId || analyzing.value) return;
@@ -128,6 +195,9 @@ watch(selectedId, (id) => {
 });
 
 onMounted(async () => {
+  authorFilter.value = String(route.query.author ?? "");
+  dateFrom.value = String(route.query.from ?? "");
+  dateTo.value = String(route.query.to ?? "");
   await loadList();
   if (selectedId.value) await loadDetail(selectedId.value);
 });
@@ -142,9 +212,37 @@ onMounted(async () => {
       </div>
       <p class="list-hint">读取 <code>youtube-fetch/archives</code> 本地 JSON</p>
       <p v-if="archiveDir" class="list-dir" :title="archiveDir">{{ archiveDir }}</p>
+      <div class="filters">
+        <label v-if="authors.length" class="filter-row">
+          <span>作者</span>
+          <select v-model="authorFilter" @change="onFilterChange">
+            <option value="">全部作者</option>
+            <option v-for="name in authors" :key="name" :value="name">{{ name }}</option>
+          </select>
+        </label>
+        <div class="filter-row date-range">
+          <span>发布</span>
+          <input v-model="dateFrom" type="date" @change="onFilterChange" />
+          <span class="date-sep">—</span>
+          <input v-model="dateTo" type="date" @change="onFilterChange" />
+        </div>
+        <div class="filter-presets">
+          <button type="button" class="btn-preset" @click="setRecentDays(7)">近 7 天</button>
+          <button type="button" class="btn-preset" @click="setRecentDays(30)">近 30 天</button>
+          <button type="button" class="btn-preset" @click="setRecentDays(90)">近 90 天</button>
+          <button v-if="hasActiveFilters" type="button" class="btn-preset clear" @click="clearAllFilters">
+            清除筛选
+          </button>
+        </div>
+        <p v-if="!loading && listTotal" class="list-count">
+          显示 {{ items.length }} / {{ listTotal }} 条
+          <span v-if="hasActiveFilters">（已筛选）</span>
+        </p>
+      </div>
       <p v-if="error && !article" class="err">{{ error }}</p>
       <p v-if="loading" class="muted">加载列表…</p>
-      <p v-else-if="items.length === 0" class="muted">暂无归档；请先用 youtube-fetch 拉取并写入 archives。</p>
+      <p v-else-if="items.length === 0 && listTotal === 0" class="muted">暂无归档；请先用 youtube-fetch 拉取并写入 archives。</p>
+      <p v-else-if="items.length === 0" class="muted">无符合筛选条件的归档。</p>
       <ul v-else class="items">
         <li
           v-for="row in items"
@@ -154,11 +252,11 @@ onMounted(async () => {
         >
           <div class="item-title">{{ String(row.title ?? row.videoId) }}</div>
           <div class="item-meta">
+            <span v-if="row.author" class="item-author">{{ String(row.author) }}</span>
             <span class="mono">{{ row.videoId }}</span>
-            <span v-if="row.languageLine">{{ String(row.languageLine) }}</span>
           </div>
           <div class="item-meta dim">
-            {{ formatFetched(row.fetchedAt) }}
+            发布 {{ formatPublished(row.publishedAt) }}
             <span v-if="row.charCount"> · {{ Number(row.charCount).toLocaleString() }} 字</span>
             <span v-if="row.hasAnalysis" class="tag-analyzed">已分析</span>
           </div>
@@ -193,6 +291,8 @@ onMounted(async () => {
               打开 YouTube
             </a>
             <span v-if="article.languageLine">{{ String(article.languageLine) }}</span>
+            <span v-if="article.author">作者 {{ String(article.author) }}</span>
+            <span v-if="article.publishedAt">发布 {{ formatPublished(article.publishedAt) }}</span>
             <span>归档 {{ formatFetched(article.fetchedAt) }}</span>
             <span v-if="analysis?.analyzedAt">分析 {{ formatFetched(analysis.analyzedAt) }}</span>
             <span class="mono">{{ String(article.videoId) }}</span>
@@ -283,6 +383,71 @@ onMounted(async () => {
 .list-dir {
   word-break: break-all;
   opacity: 0.85;
+}
+.filters {
+  margin-top: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.72rem;
+  color: #b5bac1;
+}
+.filter-row > span:first-child {
+  flex-shrink: 0;
+  min-width: 2rem;
+}
+.filter-row select,
+.filter-row input[type="date"] {
+  flex: 1;
+  min-width: 0;
+  background: #1e1f22;
+  border: 1px solid #3f4147;
+  border-radius: 6px;
+  color: #dbdee1;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.72rem;
+}
+.date-range input[type="date"] {
+  flex: 1 1 0;
+}
+.date-sep {
+  color: #949ba4;
+  flex-shrink: 0;
+}
+.filter-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.btn-preset {
+  border: 1px solid #3f4147;
+  background: #2b2d31;
+  color: #b5bac1;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+.btn-preset:hover {
+  border-color: #5865f2;
+  color: #dbdee1;
+}
+.btn-preset.clear {
+  color: #f38688;
+}
+.list-count {
+  margin: 0;
+  font-size: 0.68rem;
+  color: #949ba4;
+}
+.item-author {
+  color: #aeb4ff;
+  font-weight: 600;
 }
 code {
   font-size: 0.85em;

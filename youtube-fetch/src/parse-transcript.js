@@ -1,3 +1,5 @@
+import { mergeVideoMeta, parseVideoMetaFromTranscriptMd } from "./video-meta.js";
+
 /**
  * 解析 youtube-transcript.ai 返回的 Markdown 文稿。
  * @param {string} raw
@@ -5,18 +7,24 @@
  */
 export function parseTranscriptMarkdown(raw, videoId) {
   const text = String(raw ?? "");
-  const titleMatch = text.match(/^#\s*Transcript:\s*(.+)$/m);
-  const sourceMatch = text.match(/^Source video:\s*(.+)$/m);
+  const titleMatch = text.match(/^#\s*Transcript:\s*(.+)$/m) ?? text.match(/^#\s+(.+)$/m);
+  const sourceMatch = text.match(/^Source(?: video)?:\s*(.+)$/m);
   const langMatch = text.match(/^Language:\s*(.+)$/m);
   const idx = text.indexOf("\n## Transcript\n");
   const transcript =
     idx >= 0 ? text.slice(idx + "\n## Transcript\n".length).trim() : text.trim();
 
+  const title = titleMatch?.[1]?.trim() ?? null;
+  const fromMd = parseVideoMetaFromTranscriptMd(text);
+  const merged = mergeVideoMeta({ title, ...fromMd }, {});
+
   return {
     videoId,
-    title: titleMatch?.[1]?.trim() ?? null,
+    title,
     sourceUrl: sourceMatch?.[1]?.trim() ?? `https://www.youtube.com/watch?v=${videoId}`,
     languageLine: langMatch?.[1]?.trim() ?? null,
+    author: merged.author,
+    publishedAt: merged.publishedAt,
     transcript,
     raw,
   };

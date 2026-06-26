@@ -12,12 +12,23 @@ async function parseJsonResponse(res) {
   }
 }
 
-export async function fetchYoutubeArchiveList() {
-  const res = await fetch("/api/youtube-archives");
+/** @param {{ author?: string, from?: string, to?: string }} [opts] */
+export async function fetchYoutubeArchiveList(opts = {}) {
+  const params = new URLSearchParams();
+  const author = String(opts.author ?? "").trim();
+  const from = String(opts.from ?? "").trim();
+  const to = String(opts.to ?? "").trim();
+  if (author) params.set("author", author);
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  const qs = params.toString();
+  const res = await fetch(`/api/youtube-archives${qs ? `?${qs}` : ""}`);
   const data = await parseJsonResponse(res);
   if (!data.ok) throw new Error(data.error || "加载归档列表失败");
-  return /** @type {{ dir: string, items: Array<Record<string, unknown>> }} */ ({
+  return /** @type {{ dir: string, authors: string[], total: number, items: Array<Record<string, unknown>> }} */ ({
     dir: data.dir,
+    authors: data.authors ?? [],
+    total: Number(data.total) || (data.items ?? []).length,
     items: data.items ?? [],
   });
 }
