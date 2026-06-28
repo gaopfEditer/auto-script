@@ -185,6 +185,7 @@ export async function openStore(cfg, log) {
   }
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS discord_channel_text_cache (
       channel_id VARCHAR(32) NOT NULL PRIMARY KEY,
       recent_texts JSON NOT NULL,
       updated_at DATETIME(3) NOT NULL
@@ -199,7 +200,9 @@ export async function openStore(cfg, log) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
-  log.info("表 frames / discord_messages / discord_guilds / discord_channels / discord_signal_cards 就绪");
+  log.info(
+    "表 frames / discord_messages / discord_guilds / discord_channels / discord_signal_cards / discord_channel_text_cache / discord_channel_message_dedup 就绪"
+  );
 
   const insertFrameSql = `
     INSERT IGNORE INTO frames (received_at, payload_hash, opcode, request_id, raw_payload, parsed_json, parse_error)
@@ -265,7 +268,19 @@ export async function openStore(cfg, log) {
    */
   async function insertDiscordMessagesBatch(rows) {
     const valid = rows.filter((r) => r?.messageId);
-    if (!valid.length) return { inserted: 0, duplicate: 0 };
+    if (!valid.length) return { inserted: 0, duplicate: 0, insertedRows: [] };
+
+    const ids = valid.map((r) => String(r.messageId));
+    /** @type {Set<string>} */
+    let existing = new Set();
+    if (ids.length) {
+      const [existingRows] = await pool.query(
+        `SELECT message_id FROM discord_messages WHERE message_id IN (?)`,
+        [ids]
+      );
+      existing = new Set(existingRows.map((r) => String(r.message_id)));
+    }
+    const insertedRows = valid.filter((r) => !existing.has(String(r.messageId)));
 
     const now = isoToMysqlDatetime3(new Date().toISOString());
     /** @type {unknown[][]} */
@@ -287,9 +302,7 @@ export async function openStore(cfg, log) {
       isoToMysqlDatetime3(r.receivedAt ?? new Date().toISOString()) || now,
     ]);
 
-    const [result] = await pool.query(insertMsgSql, [tuples]);
-    const affected = /** @type {import("mysql2").ResultSetHeader} */ (result).affectedRows ?? 0;
-    const inserted = Math.min(affected, valid.length);
+    await pool.query(insertMsgSql, [tuples]);
 
     for (const r of valid) {
       if (!r.channelId) continue;
@@ -319,7 +332,11 @@ export async function openStore(cfg, log) {
       ).catch(() => {});
     }
 
-    return { inserted, duplicate: valid.length - inserted };
+    return {
+      inserted: insertedRows.length,
+      duplicate: valid.length - insertedRows.length,
+      insertedRows,
+    };
   }
 
   /**
@@ -882,7 +899,7 @@ export function createOfflineStore() {
   return {
     offline: true,
     insertFrame: async () => {},
-    insertDiscordMessagesBatch: async () => 0,
+    insertDiscordMessagesBatch: async () => ({ inserted: 0, duplicate: 0, insertedRows: [] }),
     upsertDiscordGuildsBatch: async () => 0,
     upsertDiscordChannelsBatch: async () => 0,
     purgeMisclassifiedGuilds: async () => {},

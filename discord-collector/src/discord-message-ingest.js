@@ -463,22 +463,36 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       log.info(`Discord 消息入库 +${result.inserted}（重复 ${result.duplicate}）`);
     }
 
-    if (signalCards && !isRestBatch) {
+    /** @param {ReturnType<typeof extractMessageFromPayload>[]} rows */
+    async function runSignalCardPipeline(rows) {
+      if (!signalCards || !rows.length) return;
       await signalCards.ensureHydrated();
-      for (const r of toPersist) {
-        if (String(r.source ?? "") === "rest_api") continue;
+      for (const r of rows) {
         const cid = String(r.channelId ?? "").trim();
         const content = normalizeSignalText(String(r.content ?? ""));
         if (!cid || !content) continue;
+        if (!isSignalChannel(cid)) continue;
         if (signalCards.dedup.isDuplicate(cid, content)) {
           log.debug(`信号卡片跳过重复 channel=${cid} preview=${content.slice(0, 80)}`);
           continue;
         }
+        const src = String(r.source ?? "");
+        log.info(
+          `信号卡片处理 channel=${cid} message=${r.messageId} source=${src || "unknown"} preview=${content.slice(0, 60)}`
+        );
         void signalCards.onMessage(r, { skipDedup: true }).catch((e) => {
-          log.debug(`signal card: ${/** @type {Error} */ (e).message}`);
+          log.warn(`signal card: ${/** @type {Error} */ (e).message}`);
         });
         await signalCards.dedup.remember(cid, content);
       }
+    }
+
+    if (signalCards) {
+      const gatewayRows = isRestBatch
+        ? []
+        : toPersist.filter((r) => String(r.source ?? "") !== "rest_api");
+      const restInserted = Array.isArray(result.insertedRows) ? result.insertedRows : [];
+      await runSignalCardPipeline([...gatewayRows, ...restInserted]);
     }
 
     if (telegramPush?.enabled && !isRestBatch && result.inserted > 0) {

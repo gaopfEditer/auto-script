@@ -288,7 +288,8 @@ export function parseDabiaoke(text) {
   const symRaw = matchLine(joined, /^(Btc|BTC|Eth|ETH|DOGE)/im) || matchLine(joined, /^([A-Z]{2,10})/im);
   const symbol = symRaw ? symRaw.toUpperCase() : "BTC";
   const direction = matchLine(joined, /方向[：:\s]*([^\n]+)/);
-  const entry = matchLine(joined, /建仓[：:\s]*([\d.]+)/);
+  const entry =
+    matchLine(joined, /建仓[：:\s]*([\d.\-–—]+)/) || matchLine(joined, /入场[：:\s]*([\d.\-–—]+)/);
   const stopLoss = matchLine(joined, /止损[：:\s]*([\d.]+)/);
   const tpLine = matchLine(joined, /止盈[：:\s]*([^\n]+)/);
   const takeProfits = tpLine
