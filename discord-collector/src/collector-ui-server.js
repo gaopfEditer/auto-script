@@ -15,6 +15,7 @@ import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { createDiscordMessageIngest } from "./discord-message-ingest.js";
 import { createDiscordSignalCardService } from "./discord-signal-card-service.js";
 import { createDiscordTelegramMessagePush } from "./discord-telegram-message-push.js";
+import { createDiscordWebhookForward } from "./discord-webhook-forward.js";
 import { createSystemTelegramAlert } from "./discord-system-telegram.js";
 import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
@@ -52,6 +53,7 @@ async function main() {
   const storeLog = createLogger("store");
   const { store, offline: mysqlOffline, hint: mysqlHint } = await tryOpenStore(config.mysql, storeLog);
   const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
+  const webhookForward = createDiscordWebhookForward(createLogger("webhook-forward"));
   const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"));
   const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast);
   const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast);
@@ -65,7 +67,7 @@ async function main() {
     store,
     createLogger("discord-ingest"),
     broadcast,
-    { signalCards, telegramPush }
+    { signalCards, telegramPush, webhookForward }
   );
 
   const diagnosticSink = /** @param {Record<string, unknown>} evt */ (evt) => {
@@ -179,6 +181,46 @@ async function main() {
         chatId: tg.chatId,
         sendUrl: tg.sendUrl,
       });
+    }
+  });
+
+  app.get("/api/debug/webhook-forward", (_req, res) => {
+    res.json({
+      ok: true,
+      enabled: webhookForward.enabled,
+      ruleCount: webhookForward.ruleCount,
+      configFile: config.webhookForwardsFile,
+    });
+  });
+
+  app.post("/api/debug/webhook-forward-test", async (req, res) => {
+    if (!webhookForward.enabled) {
+      res.status(503).json({
+        ok: false,
+        error: "webhook_forward_disabled",
+        hint: "请检查 config/channel-webhook-forwards.json",
+      });
+      return;
+    }
+    const text =
+      String(req.body?.text ?? "").trim() ||
+      `🧪 webhook-forward 链路测试\n${new Date().toISOString()}`;
+    const channelId = String(req.body?.channelId ?? "1444964635068338270").trim();
+    try {
+      const result = await webhookForward.forward({
+        messageId: `test-${Date.now()}`,
+        channelId,
+        guildId: String(req.body?.guildId ?? "1444959079209504831").trim(),
+        authorUsername: "debug-test",
+        content: text,
+      });
+      if (result.skipped) {
+        res.status(400).json({ ok: false, skipped: result.skipped });
+        return;
+      }
+      res.json({ ok: true, channelId, text });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }
   });
 
@@ -406,6 +448,7 @@ async function main() {
         createLogger("cdp")
       );
       navigateDiscordImpl = (g, c, t) => session.navigateDiscordChannel(g, c, t);
+      webhookForward.setBrowserPost((url, payload) => session.postWebhookViaBrowser(url, payload));
     } catch (e) {
       log.error(`CDP 启动失败: ${/** @type {Error} */ (e).message ?? e}`);
     }

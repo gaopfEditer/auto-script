@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const _repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const _collectorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** @typedef {{ host: string; port: number; user: string; password: string; database: string }} MysqlConfig */
 
@@ -124,4 +125,11 @@ export const config = {
   /** 价格校验：加密默认 3 小时；股票较长周期（天） */
   cardVerifyDefaultWindowHours: Number(process.env.CARD_VERIFY_DEFAULT_HOURS ?? 3),
   cardVerifyStockWindowDays: Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30),
+  /** 源频道 → Webhook 转发映射 JSON（见 config/channel-webhook-forwards.json） */
+  webhookForwardsFile: (process.env.DISCORD_WEBHOOK_FORWARDS_FILE ?? "").trim()
+    ? path.resolve(process.env.DISCORD_WEBHOOK_FORWARDS_FILE.trim())
+    : path.join(_collectorRoot, "config", "channel-webhook-forwards.json"),
+  webhookForwardTimeoutMs: Number(process.env.DISCORD_WEBHOOK_FORWARD_TIMEOUT_MS ?? 15_000),
+  /** Node 发 Discord Webhook 用的 HTTP(S) 代理，需与 Chrome 一致，如 http://127.0.0.1:7890 */
+  webhookForwardProxy: (process.env.DISCORD_WEBHOOK_PROXY ?? process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? "").trim(),
 };

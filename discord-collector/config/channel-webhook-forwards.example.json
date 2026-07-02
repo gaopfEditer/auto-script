@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "forwards": [
+    {
+      "name": "源群组 → 自建频道（示例）",
+      "guildId": "1444959079209504831",
+      "channelId": "1444964635068338270",
+      "webhookUrl": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
+      "enabled": true
+    }
+  ]
+}

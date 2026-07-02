@@ -1021,6 +1021,37 @@ export async function startCdpWebSocketMonitor(opts, log) {
         return { ok: false, error: err.message };
       }
     },
+    /**
+     * 经 Playwright APIRequest 发 Webhook（非页面 fetch，避免 Discord 50067 Invalid request origin）。
+     * @param {string} webhookUrl
+     * @param {Record<string, unknown>} payload
+     */
+    async postWebhookViaBrowser(webhookUrl, payload) {
+      /** @type {import("playwright").Page | null} */
+      let page = null;
+      for (const { page: p } of mounted) {
+        try {
+          if (/discord\.com/i.test(p.url())) {
+            page = p;
+            break;
+          }
+        } catch {
+          /* 页面已关闭 */
+        }
+      }
+      if (!page && mounted.length) page = mounted[0].page;
+      if (!page) throw new Error("尚无已挂载 CDP 的 Discord 页面");
+
+      const r = await page.context().request.post(webhookUrl, {
+        headers: { "Content-Type": "application/json" },
+        data: payload,
+        timeout: config.webhookForwardTimeoutMs,
+      });
+      if (!r.ok()) {
+        const text = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status()}${text ? `: ${text.slice(0, 300)}` : ""}`);
+      }
+    },
     async close() {
       log.info("正在卸载 CDP 监听 …");
       if (reloadTimer) {

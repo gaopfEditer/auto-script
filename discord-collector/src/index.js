@@ -9,6 +9,7 @@ import { setDebugMode } from "./discord-debug.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { createDiscordMessageIngest } from "./discord-message-ingest.js";
 import { createDiscordTelegramMessagePush } from "./discord-telegram-message-push.js";
+import { createDiscordWebhookForward } from "./discord-webhook-forward.js";
 import { createSystemTelegramAlert } from "./discord-system-telegram.js";
 import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, openStore } from "./store.js";
@@ -37,9 +38,11 @@ async function collect() {
 
   const store = await openStore(config.mysql, createLogger("store"));
   const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
+  const webhookForward = createDiscordWebhookForward(createLogger("webhook-forward"));
   const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"));
   const discordIngest = createDiscordMessageIngest(store, createLogger("discord-ingest"), undefined, {
     telegramPush,
+    webhookForward,
   });
 
   const session = await startCdpWebSocketMonitor(

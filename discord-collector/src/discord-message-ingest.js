@@ -41,10 +41,10 @@ import { isBlockedWsPayload } from "./ws-noise-filter.js";
  * @param {Store} store
  * @param {Logger} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
- * @param {{ signalCards?: ReturnType<typeof import("./discord-signal-card-service.js").createDiscordSignalCardService>, telegramPush?: ReturnType<typeof import("./discord-telegram-message-push.js").createDiscordTelegramMessagePush> }} [opts]
+ * @param {{ signalCards?: ReturnType<typeof import("./discord-signal-card-service.js").createDiscordSignalCardService>, telegramPush?: ReturnType<typeof import("./discord-telegram-message-push.js").createDiscordTelegramMessagePush>, webhookForward?: ReturnType<typeof import("./discord-webhook-forward.js").createDiscordWebhookForward> }} [opts]
  */
 export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
-  const { signalCards, telegramPush } = opts;
+  const { signalCards, telegramPush, webhookForward } = opts;
   const guildFilter = new Set(config.monitoredGuildIds);
   const context = createDiscordContextCache();
   const messageDedup = createChannelMessageDedup(store);
@@ -208,7 +208,6 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
     if (guilds.length) {
       const n = await store.upsertDiscordGuildsBatch(guilds);
       if (n > 0) {
-        log.info(`Discord 群组入库/更新 ${n} 个`);
         broadcast?.("meta", { kind: "guilds_updated", count: n });
       }
     }
@@ -502,6 +501,16 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
         const cid = String(r.channelId ?? "").trim();
         if (isSignalChannel(cid)) continue;
         telegramPush.enqueue(r);
+      }
+    }
+
+    if (webhookForward?.enabled) {
+      const gatewayRows = isRestBatch
+        ? []
+        : toPersist.filter((r) => String(r.source ?? "") === "gateway_ws");
+      const restInserted = Array.isArray(result.insertedRows) ? result.insertedRows : [];
+      for (const r of [...gatewayRows, ...restInserted]) {
+        webhookForward.enqueue(r);
       }
     }
 

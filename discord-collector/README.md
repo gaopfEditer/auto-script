@@ -121,3 +121,18 @@ pnpm run collect
 - 若配置了 `DISCORD_TELEGRAM_REALTIME_CHANNEL_IDS`，所列频道**立即推送**，不参与聚合。
 
 信号卡片频道同时走消息推送；自动信号卡片 Telegram（AI 格式化）对该列表内频道关闭，避免重复推送。Show UI 内仍可手动点卡片「TG」重发。
+
+## Discord Webhook 频道转发
+
+将指定源频道（guild + channel）的**实时新消息**转发到你自建 Discord 频道的 Webhook。
+
+1. 复制 `config/channel-webhook-forwards.example.json` → `config/channel-webhook-forwards.json`（已在 `.gitignore`，含 webhook token）
+2. 在 `forwards` 数组追加映射，每条包含：
+   - `guildId` — 源服务器 ID（URL 中 `/channels/{guildId}/{channelId}` 第一段）
+   - `channelId` — 源频道 ID
+   - `webhookUrl` — 目标频道 Webhook 完整 URL
+   - `name` — 备注（可选）
+   - `enabled` — 是否启用（默认 `true`）
+3. 重启 `pnpm run collect:ui`，日志应出现 `[webhook-forward] 已加载 N 条映射`
+
+转发格式：`频道名 · 作者` + 正文 + 附件链接。Gateway 实时消息与新入库 REST 消息均会触发（历史翻页批量不转发）。

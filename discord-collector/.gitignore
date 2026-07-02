@@ -2,4 +2,5 @@ node_modules/
 data/
 *.log
 .env
+config/channel-webhook-forwards.json
 public/collector-ui/
