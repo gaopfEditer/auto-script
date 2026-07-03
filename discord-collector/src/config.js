@@ -122,9 +122,12 @@ export const config = {
   cardProximityTelegram: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_PROXIMITY_TELEGRAM ?? "1").toLowerCase()
   ),
-  /** 价格校验：加密默认 3 小时；股票较长周期（天） */
+  /** 价格校验：加密默认 1 天（Binance K 线）；legacy 3h；股票较长周期 */
+  cardVerifyCryptoWindowDays: Number(process.env.CARD_VERIFY_CRYPTO_WINDOW_DAYS ?? 1),
   cardVerifyDefaultWindowHours: Number(process.env.CARD_VERIFY_DEFAULT_HOURS ?? 3),
   cardVerifyStockWindowDays: Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30),
+  /** 自动校验盈亏按杠杆倍数（默认 100x） */
+  cardVerifyLeverage: Number(process.env.CARD_VERIFY_LEVERAGE ?? 100),
   /** 源频道 → Webhook 转发映射 JSON（见 config/channel-webhook-forwards.json） */
   webhookForwardsFile: (process.env.DISCORD_WEBHOOK_FORWARDS_FILE ?? "").trim()
     ? path.resolve(process.env.DISCORD_WEBHOOK_FORWARDS_FILE.trim())

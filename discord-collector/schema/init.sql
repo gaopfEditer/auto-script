@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS discord_signal_cards (
   verify_1m_json JSON NULL,
   proximity_json JSON NULL,
   signal_at DATETIME(3) NULL,
-  verify_mode VARCHAR(8) NOT NULL DEFAULT '3h',
+  verify_mode VARCHAR(8) NOT NULL DEFAULT '1d',
   asset_class VARCHAR(16) NOT NULL DEFAULT 'crypto',
   created_at DATETIME(3) NOT NULL,
   updated_at DATETIME(3) NOT NULL,

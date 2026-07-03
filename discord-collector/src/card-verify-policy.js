@@ -3,7 +3,7 @@
  */
 import { config } from "./config.js";
 
-/** @typedef {'3h' | '30d'} VerifyMode */
+/** @typedef {'1d' | '3h' | '30d'} VerifyMode */
 /** @typedef {'crypto' | 'stock'} AssetClass */
 
 const CRYPTO_BASES = new Set([
@@ -46,8 +46,8 @@ export function detectAssetClass(symbol, parsedJson, execution, rawContent = "")
  */
 export function resolveVerifyMode(assetClass, explicitMode) {
   const m = String(explicitMode ?? "").trim().toLowerCase();
-  if (m === "3h" || m === "30d") return m;
-  return assetClass === "stock" ? "30d" : "3h";
+  if (m === "1d" || m === "3h" || m === "30d") return m;
+  return assetClass === "stock" ? "30d" : "1d";
 }
 
 /**
@@ -66,15 +66,27 @@ export function getVerifyWindowSpec(mode) {
       sqlInterval: `${days} DAY`,
     };
   }
-  const hours = config.cardVerifyDefaultWindowHours;
+  if (mode === "3h") {
+    const hours = config.cardVerifyDefaultWindowHours;
+    return {
+      mode: /** @type {VerifyMode} */ ("3h"),
+      label: `${hours} 小时`,
+      labelShort: `${hours}h`,
+      durationMs: hours * 60 * 60 * 1000,
+      klineInterval: "5m",
+      resultField: "verify3hJson",
+      sqlInterval: `${hours} HOUR`,
+    };
+  }
+  const days = config.cardVerifyCryptoWindowDays;
   return {
-    mode: /** @type {VerifyMode} */ ("3h"),
-    label: `${hours} 小时`,
-    labelShort: `${hours}h`,
-    durationMs: hours * 60 * 60 * 1000,
+    mode: /** @type {VerifyMode} */ ("1d"),
+    label: `${days} 天`,
+    labelShort: `${days}d`,
+    durationMs: days * 24 * 60 * 60 * 1000,
     klineInterval: "5m",
     resultField: "verify3hJson",
-    sqlInterval: `${hours} HOUR`,
+    sqlInterval: `${days} DAY`,
   };
 }
 

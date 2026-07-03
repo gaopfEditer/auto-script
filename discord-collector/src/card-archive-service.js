@@ -10,7 +10,19 @@ import {
 } from "./card-fields.js";
 import { executionFromParsed, normalizeExecution, normalizePriceList } from "./discord-signal-execution.js";
 import { signalCardToClient } from "./discord-signal-card-service.js";
+import { getSignalChannelConfig } from "./discord-signal-config.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
+
+/** @param {string} channelId @param {string|null|undefined} [dbName] */
+export function resolveCardChannelName(channelId, dbName) {
+  const id = String(channelId ?? "").trim();
+  if (!id) return "";
+  const cfgName = getSignalChannelConfig(id)?.name;
+  if (cfgName) return cfgName;
+  const dn = String(dbName ?? "").trim();
+  if (dn) return dn;
+  return id;
+}
 
 export const SOURCE_TYPES = /** @type {const} */ (["discord", "youtube", "api", "manual"]);
 
@@ -201,13 +213,18 @@ export function archiveCardToClient(row) {
     }
   }
 
+  const channelId = String(row.channel_id ?? row.channelId ?? base.channelId ?? "").trim();
+  const dbChannelName = row.channel_name ?? row.channelName ?? null;
+
   return {
     ...base,
+    channelId,
+    channelName: resolveCardChannelName(channelId, dbChannelName),
     sourceType: String(row.source_type ?? row.sourceType ?? "discord"),
     sourceRef: row.source_ref ?? row.sourceRef ?? null,
     symbol: String(row.symbol ?? base.execution?.symbol ?? "").toUpperCase(),
     assetClass: String(row.asset_class ?? row.assetClass ?? "crypto"),
-    verifyMode: String(row.verify_mode ?? row.verifyMode ?? "3h"),
+    verifyMode: String(row.verify_mode ?? row.verifyMode ?? "1d"),
     cardFields: cardFields && typeof cardFields === "object" ? cardFields : null,
     signalAt: row.signal_at ?? row.signalAt ?? base.createdAt,
     verify3h: verify3h && typeof verify3h === "object" ? verify3h : null,

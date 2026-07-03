@@ -6,7 +6,6 @@ import {
   evaluatePricePath,
   fetchKlinesForCard,
   fetchFuturesPrice,
-  parsePrice,
 } from "./card-price-fetch.js";
 import {
   collectProximityLevels,
@@ -61,6 +60,21 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
     return now - signalMs >= window.durationMs;
   }
 
+  /** @param {Record<string, unknown>} result */
+  function formatVerifyOutcomeNote(verifyMode, result) {
+    const modeLabel = verifyModeLabel(verifyMode);
+    if (result.outcome === "pending") {
+      return `自动校验(${modeLabel}): 窗口内未触达止盈/止损`;
+    }
+    const kind = result.outcome === "take_profit" ? "止盈" : "止损";
+    const pnl = result.pnl100x?.pnlLabel ? ` | ${result.pnl100x.pnlLabel}` : "";
+    const entry =
+      result.entry != null
+        ? ` | 入场均价 ${Number(result.entry).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+        : "";
+    return `自动校验(${modeLabel}): ${kind} @ ${result.hitLevel || "—"}${entry}${pnl}`;
+  }
+
   async function runVerification() {
     const rows = await store.listCardsForVerification({ limit: 80 });
     for (const row of rows) {
@@ -88,36 +102,27 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
             klineCount: klines.length,
           };
         } catch (fetchErr) {
-          result = {
-            outcome: "pending",
-            hitLevel: "",
-            highMax: 0,
-            lowMin: 0,
-            entry: parsePrice(card.execution?.planned?.entryPrice),
-            verifiedAt: new Date().toISOString(),
-            window: window.labelShort,
-            verifyMode,
-            assetClass,
-            symbol: sym,
-            error: String(/** @type {Error} */ (fetchErr).message ?? fetchErr),
-          };
-          log.warn(`卡片 #${card.id} ${verifyMode} 行情拉取失败: ${result.error}`);
+          log.warn(
+            `卡片 #${card.id} ${verifyMode} 行情拉取失败（下轮重试）: ${String(/** @type {Error} */ (fetchErr).message ?? fetchErr)}`
+          );
+          continue;
         }
 
         /** @type {Record<string, unknown>} */
         const patch = {
           [window.resultField]: result,
         };
-        if (result.outcome !== "pending" && !result.error) {
+        if (!result.error) {
           patch.executionJson = {
             ...card.execution,
             outcome: result.outcome,
-            outcomeNote: `自动校验(${verifyModeLabel(verifyMode)}): ${result.outcome} @ ${result.hitLevel || "—"}`,
+            outcomeNote: formatVerifyOutcomeNote(verifyMode, result),
           };
         }
         await store.updateSignalCard(card.id, patch);
+        const pnl = result.pnl100x?.pnlLabel ? ` pnl=${result.pnl100x.pnlLabel}` : "";
         log.info(
-          `卡片 #${card.id} ${verifyMode} 校验 asset=${assetClass} outcome=${result.outcome}${result.error ? ` err=${result.error}` : ""}`
+          `卡片 #${card.id} ${verifyMode} 校验 asset=${assetClass} outcome=${result.outcome}${pnl}${result.error ? ` err=${result.error}` : ""}`
         );
       } catch (e) {
         log.warn(`卡片 #${card.id} 价格校验失败: ${/** @type {Error} */ (e).message}`);

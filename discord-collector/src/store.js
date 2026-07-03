@@ -675,47 +675,82 @@ export async function openStore(cfg, log) {
   }
 
   /**
-   * @param {{ channelId?: string, status?: string, limit?: number, fromMs?: number, toMs?: number, sourceType?: string, symbol?: string }} [filters]
+   * @param {{ channelId?: string, status?: string, fromMs?: number, toMs?: number, sourceType?: string, symbol?: string, includeChannelId?: boolean }} filters
+   * @returns {{ where: string[], params: unknown[] }}
    */
-  async function listSignalCards(filters = {}) {
-    const lim = Math.min(500, Math.max(1, Number(filters.limit) || 50));
+  function buildSignalCardFilters(filters) {
     const ch = String(filters.channelId ?? "").trim();
     const status = String(filters.status ?? "").trim();
     const sourceType = String(filters.sourceType ?? "").trim();
     const symbol = String(filters.symbol ?? "").trim().toUpperCase();
     const fromMs = Number(filters.fromMs);
     const toMs = Number(filters.toMs);
+    const includeChannelId = filters.includeChannelId !== false;
     /** @type {unknown[]} */
     const params = [];
     const where = [];
-    if (ch) {
-      where.push("channel_id = ?");
+    if (includeChannelId && ch) {
+      where.push("sc.channel_id = ?");
       params.push(ch);
     }
     if (status) {
-      where.push("status = ?");
+      where.push("sc.status = ?");
       params.push(status);
     }
     if (sourceType) {
-      where.push("source_type = ?");
+      where.push("sc.source_type = ?");
       params.push(sourceType);
     }
     if (symbol) {
       const sym = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
-      where.push("(symbol = ? OR symbol = ? OR symbol LIKE ?)");
+      where.push("(sc.symbol = ? OR sc.symbol = ? OR sc.symbol LIKE ?)");
       params.push(sym, symbol.replace(/USDT$/, ""), `${symbol.replace(/USDT$/, "")}%`);
     }
     if (Number.isFinite(fromMs) && fromMs > 0) {
-      where.push("created_at >= ?");
+      where.push("sc.created_at >= ?");
       params.push(isoToMysqlDatetime3(new Date(fromMs).toISOString()));
     }
     if (Number.isFinite(toMs) && toMs > 0) {
-      where.push("created_at <= ?");
+      where.push("sc.created_at <= ?");
       params.push(isoToMysqlDatetime3(new Date(toMs).toISOString()));
     }
+    return { where, params };
+  }
+
+  /**
+   * @param {{ channelId?: string, status?: string, limit?: number, fromMs?: number, toMs?: number, sourceType?: string, symbol?: string }} [filters]
+   */
+  async function listSignalCards(filters = {}) {
+    const lim = Math.min(500, Math.max(1, Number(filters.limit) || 50));
+    const { where, params } = buildSignalCardFilters(filters);
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const [rows] = await pool.query(
-      `SELECT * FROM discord_signal_cards ${whereSql} ORDER BY id DESC LIMIT ${lim}`,
+      `SELECT sc.*, dc.name AS channel_name
+       FROM discord_signal_cards sc
+       LEFT JOIN discord_channels dc ON dc.channel_id = sc.channel_id
+       ${whereSql}
+       ORDER BY sc.id DESC
+       LIMIT ${lim}`,
+      params
+    );
+    return rows;
+  }
+
+  /**
+   * 归档页频道筛选项（按卡片数量降序）。
+   * @param {{ status?: string, fromMs?: number, toMs?: number, sourceType?: string, symbol?: string }} [filters]
+   */
+  async function listSignalCardChannels(filters = {}) {
+    const { where, params } = buildSignalCardFilters({ ...filters, includeChannelId: false });
+    where.push("sc.channel_id != ''");
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const [rows] = await pool.query(
+      `SELECT sc.channel_id, COUNT(*) AS cnt, MAX(dc.name) AS channel_name
+       FROM discord_signal_cards sc
+       LEFT JOIN discord_channels dc ON dc.channel_id = sc.channel_id
+       ${whereSql}
+       GROUP BY sc.channel_id
+       ORDER BY cnt DESC, sc.channel_id ASC`,
       params
     );
     return rows;
@@ -723,7 +758,14 @@ export async function openStore(cfg, log) {
 
   /** @param {number} id */
   async function getSignalCardById(id) {
-    const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [id]);
+    const [rows] = await pool.query(
+      `SELECT sc.*, dc.name AS channel_name
+       FROM discord_signal_cards sc
+       LEFT JOIN discord_channels dc ON dc.channel_id = sc.channel_id
+       WHERE sc.id = ?
+       LIMIT 1`,
+      [id]
+    );
     return normalizeSignalCardRow(rows[0] ?? null);
   }
 
@@ -742,7 +784,8 @@ export async function openStore(cfg, log) {
   async function listCardsForVerification(opts = {}) {
     const lim = Math.min(200, Math.max(1, Number(opts.limit) || 80));
     const hours = Number(process.env.CARD_VERIFY_DEFAULT_HOURS ?? 3) || 3;
-    const days = Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30) || 30;
+    const cryptoDays = Number(process.env.CARD_VERIFY_CRYPTO_WINDOW_DAYS ?? 1) || 1;
+    const stockDays = Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30) || 30;
     const now = isoToMysqlDatetime3(new Date().toISOString());
     const [rows] = await pool.query(
       `SELECT * FROM discord_signal_cards
@@ -750,19 +793,24 @@ export async function openStore(cfg, log) {
          AND symbol IS NOT NULL AND symbol != ''
          AND (
            (
-             COALESCE(verify_mode, '3h') = '3h'
+             verify_mode = '3h'
              AND verify_3h_json IS NULL
              AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${hours} HOUR)
            )
            OR (
+             (verify_mode = '1d' OR verify_mode IS NULL OR verify_mode = '')
+             AND verify_3h_json IS NULL
+             AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${cryptoDays} DAY)
+           )
+           OR (
              verify_mode = '30d'
              AND verify_1m_json IS NULL
-             AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${days} DAY)
+             AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${stockDays} DAY)
            )
          )
        ORDER BY id ASC
        LIMIT ${lim}`,
-      [now, now]
+      [now, now, now]
     );
     return rows;
   }
@@ -869,6 +917,7 @@ export async function openStore(cfg, log) {
     insertSignalCard,
     markSignalCardTelegramSent,
     listSignalCards,
+    listSignalCardChannels,
     getSignalCardById,
     getSignalCardByMessageId,
     listCardsForVerification,
@@ -915,6 +964,7 @@ export function createOfflineStore() {
     insertSignalCard: async () => null,
     markSignalCardTelegramSent: async () => {},
     listSignalCards: async () => [],
+    listSignalCardChannels: async () => [],
     getSignalCardById: async () => null,
     getSignalCardByMessageId: async () => null,
     listCardsForVerification: async () => [],

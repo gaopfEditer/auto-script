@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import { RouterLink, RouterView } from "vue-router";
+import NewCardToastStack from "./components/NewCardToastStack.vue";
 import { useDebugMode } from "./composables/useDebugMode.js";
 import { ensureCollectorSocket, useCollectorSocket } from "./composables/useCollectorSocket.js";
 
@@ -54,6 +55,7 @@ async function toggleDebug() {
     <main class="main-outlet">
       <RouterView />
     </main>
+    <NewCardToastStack />
   </div>
 </template>
 

@@ -3,6 +3,8 @@
  */
 import { config } from "./config.js";
 
+const DEFAULT_LEVERAGE = () => Number(config.cardVerifyLeverage) || 100;
+
 /**
  * @param {string} symbol 如 BTC 或 BTCUSDT
  */
@@ -29,24 +31,38 @@ export async function fetchFuturesKlines(symbol, startMs, endMs, interval = "5m"
     ? String(symbol).toUpperCase()
     : `${String(symbol).toUpperCase()}USDT`;
   const base = config.binanceFapiUrl.replace(/\/$/, "");
-  const params = new URLSearchParams({
-    symbol: sym,
-    interval,
-    startTime: String(Math.floor(startMs)),
-    endTime: String(Math.floor(endMs)),
-    limit: "500",
-  });
-  const url = `${base}/fapi/v1/klines?${params}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(config.binanceRequestTimeoutMs) });
-  if (!res.ok) throw new Error(`Binance klines HTTP ${res.status}`);
-  const rows = await res.json();
-  return rows.map((r) => ({
-    open: Number(r[1]),
-    high: Number(r[2]),
-    low: Number(r[3]),
-    close: Number(r[4]),
-    ts: Number(r[0]),
-  }));
+  /** @type {Array<{ open: number, high: number, low: number, close: number, ts: number }>} */
+  const all = [];
+  let cursor = Math.floor(startMs);
+  const end = Math.floor(endMs);
+  while (cursor < end) {
+    const params = new URLSearchParams({
+      symbol: sym,
+      interval,
+      startTime: String(cursor),
+      endTime: String(end),
+      limit: "500",
+    });
+    const url = `${base}/fapi/v1/klines?${params}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(config.binanceRequestTimeoutMs) });
+    if (!res.ok) throw new Error(`Binance klines HTTP ${res.status}`);
+    const rows = await res.json();
+    if (!Array.isArray(rows) || !rows.length) break;
+    for (const r of rows) {
+      all.push({
+        open: Number(r[1]),
+        high: Number(r[2]),
+        low: Number(r[3]),
+        close: Number(r[4]),
+        ts: Number(r[0]),
+      });
+    }
+    const lastTs = Number(rows[rows.length - 1][0]);
+    if (lastTs <= cursor) break;
+    cursor = lastTs + 1;
+    if (rows.length < 500) break;
+  }
+  return all;
 }
 
 /**
@@ -70,25 +86,62 @@ export function parsePrice(v) {
 }
 
 /**
+ * 入场价：区间取均价，如 60500-62200。
+ * @param {unknown} v
+ */
+export function parseEntryPrice(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  const range = s.match(/([\d.]+)\s*[-~–—]\s*([\d.]+)/);
+  if (range) {
+    const a = parsePrice(range[1]);
+    const b = parsePrice(range[2]);
+    if (a != null && b != null) return (a + b) / 2;
+  }
+  return parsePrice(s);
+}
+
+/**
  * @param {number} price
  * @param {number} level
  */
 export function distancePct(price, level) {
   if (!level || !price) return 999;
-  return Math.abs(price - level) / level * 100;
+  return (Math.abs(price - level) / level) * 100;
 }
 
 /**
+ * @param {number} entry
+ * @param {number} exitPrice
+ * @param {boolean} isShort
+ * @param {number} [leverage]
+ */
+export function calcLeveragePnl(entry, exitPrice, isShort, leverage = DEFAULT_LEVERAGE()) {
+  if (!entry || !exitPrice || !leverage) return null;
+  const movePct = isShort ? (entry - exitPrice) / entry : (exitPrice - entry) / entry;
+  const pnlPctOnMargin = movePct * leverage * 100;
+  return {
+    leverage,
+    entry,
+    exitPrice,
+    movePct: movePct * 100,
+    pnlPctOnMargin,
+    pnlLabel: `${pnlPctOnMargin >= 0 ? "+" : ""}${pnlPctOnMargin.toFixed(2)}% (@${leverage}x)`,
+  };
+}
+
+/**
+ * 按 K 线时间顺序：先触达止损或任一止盈即停止；入场区间取均价。
  * @param {{
  *   direction?: string,
  *   planned?: { entryPrice?: string, takeProfitPrices?: string[], stopLossPrice?: string },
  * }} execution
- * @param {Array<{ high: number, low: number }>} klines
+ * @param {Array<{ high: number, low: number, ts?: number }>} klines
  */
 export function evaluatePricePath(execution, klines) {
   const dir = String(execution?.direction ?? "");
   const isShort = /空|short|sell/i.test(dir);
-  const entry = parsePrice(execution?.planned?.entryPrice);
+  const entry = parseEntryPrice(execution?.planned?.entryPrice);
   const sl = parsePrice(execution?.planned?.stopLossPrice);
   const tps = (execution?.planned?.takeProfitPrices ?? [])
     .map((p) => parsePrice(p))
@@ -104,30 +157,67 @@ export function evaluatePricePath(execution, klines) {
 
   let outcome = "pending";
   let hitLevel = "";
-  if (isShort) {
-    if (sl && highMax >= sl) {
-      outcome = "stop_loss";
-      hitLevel = String(sl);
-    } else if (tps.some((tp) => lowMin <= tp)) {
-      outcome = "take_profit";
-      hitLevel = String(tps.find((tp) => lowMin <= tp));
-    }
-  } else {
-    if (sl && lowMin <= sl) {
-      outcome = "stop_loss";
-      hitLevel = String(sl);
-    } else if (tps.some((tp) => highMax >= tp)) {
-      outcome = "take_profit";
-      hitLevel = String(tps.find((tp) => highMax >= tp));
+  let hitAt = "";
+  let hitKind = "";
+
+  const sorted = [...klines].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+
+  outer: for (const k of sorted) {
+    if (isShort) {
+      if (sl != null && k.high >= sl) {
+        outcome = "stop_loss";
+        hitLevel = String(sl);
+        hitKind = "stop_loss";
+        hitAt = k.ts ? new Date(k.ts).toISOString() : "";
+        break outer;
+      }
+      for (const tp of tps) {
+        if (k.low <= tp) {
+          outcome = "take_profit";
+          hitLevel = String(tp);
+          hitKind = "take_profit";
+          hitAt = k.ts ? new Date(k.ts).toISOString() : "";
+          break outer;
+        }
+      }
+    } else {
+      if (sl != null && k.low <= sl) {
+        outcome = "stop_loss";
+        hitLevel = String(sl);
+        hitKind = "stop_loss";
+        hitAt = k.ts ? new Date(k.ts).toISOString() : "";
+        break outer;
+      }
+      for (const tp of tps) {
+        if (k.high >= tp) {
+          outcome = "take_profit";
+          hitLevel = String(tp);
+          hitKind = "take_profit";
+          hitAt = k.ts ? new Date(k.ts).toISOString() : "";
+          break outer;
+        }
+      }
     }
   }
+
+  const exitPrice = hitLevel ? parsePrice(hitLevel) : null;
+  const pnl100x =
+    entry && exitPrice && outcome !== "pending"
+      ? calcLeveragePnl(entry, exitPrice, isShort)
+      : null;
 
   return {
     outcome,
     hitLevel,
+    hitKind,
+    hitAt,
     highMax,
     lowMin,
     entry,
+    entryRaw: execution?.planned?.entryPrice ?? null,
+    takeProfits: tps,
+    stopLoss: sl,
+    pnl100x,
     verifiedAt: new Date().toISOString(),
   };
 }

@@ -2,6 +2,7 @@
  *   id: number,
  *   messageId: string,
  *   channelId: string,
+ *   channelName: string,
  *   guildId: string,
  *   rawContent: string,
  *   parsedJson: Record<string, unknown> | null,
@@ -30,12 +31,27 @@
  *   updatedAt: string,
  * }} ArchiveCard */
 
-/** @param {{ source?: string, symbol?: string, status?: string, days?: number, from?: string, to?: string, limit?: number }} [opts] */
+/** @typedef {{ channelId: string, channelName: string, count: number }} ArchiveChannelOption */
+
+/** @param {string | number} period */
+export function buildArchivePeriodQuery(period) {
+  if (period === "today") {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return { from: start.toISOString() };
+  }
+  const d = Number(period);
+  if (Number.isFinite(d) && d > 0) return { days: d };
+  return { days: 3650 };
+}
+
+/** @param {{ source?: string, symbol?: string, status?: string, channelId?: string, days?: number, from?: string, to?: string, limit?: number }} [opts] */
 export async function fetchArchiveCards(opts = {}) {
   const q = new URLSearchParams();
   if (opts.source) q.set("source", opts.source);
   if (opts.symbol) q.set("symbol", opts.symbol);
   if (opts.status) q.set("status", opts.status);
+  if (opts.channelId) q.set("channelId", opts.channelId);
   if (opts.days) q.set("days", String(opts.days));
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
@@ -76,4 +92,19 @@ export async function fetchCardSources() {
   const j = await res.json();
   if (!j.ok) throw new Error(j.error || "加载来源失败");
   return /** @type {string[]} */ (j.sources ?? []);
+}
+
+/** @param {{ source?: string, symbol?: string, status?: string, days?: number, from?: string, to?: string }} [opts] */
+export async function fetchCardChannels(opts = {}) {
+  const q = new URLSearchParams();
+  if (opts.source) q.set("source", opts.source);
+  if (opts.symbol) q.set("symbol", opts.symbol);
+  if (opts.status) q.set("status", opts.status);
+  if (opts.days) q.set("days", String(opts.days));
+  if (opts.from) q.set("from", opts.from);
+  if (opts.to) q.set("to", opts.to);
+  const res = await fetch(`/api/cards/channels?${q}`);
+  const j = await res.json();
+  if (!j.ok) throw new Error(j.error || "加载频道失败");
+  return /** @type {ArchiveChannelOption[]} */ (j.channels ?? []);
 }

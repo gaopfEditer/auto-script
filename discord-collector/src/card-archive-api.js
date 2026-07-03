@@ -1,7 +1,11 @@
 /**
  * 统一卡片归档 API（内部 /api/cards + 对外开放 /api/v1/cards）。
  */
-import { archiveCardToClient, createCardArchiveService } from "./card-archive-service.js";
+import {
+  archiveCardToClient,
+  createCardArchiveService,
+  resolveCardChannelName,
+} from "./card-archive-service.js";
 import { detectAssetClass } from "./card-verify-policy.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { config } from "./config.js";
@@ -82,6 +86,38 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
   }
 
   app.get("/api/cards", listHandler);
+
+  app.get("/api/cards/sources", (_req, res) => {
+    res.json({
+      ok: true,
+      sources: ["discord", "youtube", "api", "manual"],
+    });
+  });
+
+  app.get("/api/cards/channels", async (req, res) => {
+    try {
+      const { fromMs, toMs } = parseRangeMs(req);
+      const sourceType = String(req.query.source ?? req.query.source_type ?? req.query.sourceType ?? "").trim();
+      const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
+      const status = String(req.query.status ?? "").trim();
+      const rows = await store.listSignalCardChannels({
+        status,
+        fromMs,
+        toMs,
+        sourceType,
+        symbol,
+      });
+      const channels = rows.map((r) => ({
+        channelId: String(r.channel_id ?? ""),
+        channelName: resolveCardChannelName(r.channel_id, r.channel_name),
+        count: Number(r.cnt ?? 0),
+      }));
+      res.json({ ok: true, fromMs, toMs, channels });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
   app.get("/api/cards/:id", async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -94,13 +130,6 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }
-  });
-
-  app.get("/api/cards/sources", (_req, res) => {
-    res.json({
-      ok: true,
-      sources: ["discord", "youtube", "api", "manual"],
-    });
   });
 
   /** 内部：YouTube 归档 */
