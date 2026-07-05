@@ -1,4 +1,4 @@
-﻿{
+{
   "videoId": "Z8nuB5jcSwQ",
   "title": "🔴【每日要聞】中國GDP神話破滅！美伊談判停滯，川普大罵內塔！老黃帶貨Marvell，甲骨文受資金熱捧！Anthropic搶先IPO，財報恐有貓膩！｜小翠時政財經 20260602",
   "sourceUrl": "https://www.youtube.com/watch?v=Z8nuB5jcSwQ",
@@ -6,5 +6,20 @@
   "lang": null,
   "fetchedAt": "2026-06-09T02:34:19.3065144Z",
   "charCount": 16046,
-  "wordCount": 1497
+  "wordCount": 1497,
+  "author": "小翠時政財經",
+  "publishedAt": "2026-06-02T12:00:00.000Z",
+  "analysis": null,
+  "parsedCache": {
+    "version": 1,
+    "mdMtimeMs": 1782476784610.652,
+    "parsedAt": "2026-07-05T14:24:09.159Z",
+    "transcript": "",
+    "title": null,
+    "sourceUrl": "https://www.youtube.com/watch?v=Z8nuB5jcSwQ",
+    "languageLine": "zh · Duration: 45:30 · Words: 1497",
+    "author": null,
+    "publishedAt": null,
+    "fetchedAt": "2026-06-09T02:34:19.3065144Z"
+  }
 }

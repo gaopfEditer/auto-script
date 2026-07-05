@@ -2,12 +2,19 @@
 import { ref, computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { analyzeYoutubeArchive } from "../lib/youtubeFetchApi.js";
-import { fetchYoutubeArchive, fetchYoutubeArchiveList } from "../lib/youtubeArchivesApi.js";
+import {
+  fetchYoutubeArchive,
+  fetchYoutubeArchiveList,
+  purgeYoutubeArchives,
+  rebuildYoutubeArchivesIndex,
+} from "../lib/youtubeArchivesApi.js";
 
 const route = useRoute();
 const router = useRouter();
 
 const loading = ref(false);
+const rebuilding = ref(false);
+const purging = ref(false);
 const detailLoading = ref(false);
 const analyzing = ref(false);
 const error = ref("");
@@ -18,6 +25,8 @@ const authorFilter = ref("");
 const dateFrom = ref("");
 const dateTo = ref("");
 const listTotal = ref(0);
+const indexBuiltAt = ref("");
+const listCached = ref(false);
 const items = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
 const selectedId = ref("");
 const article = ref(/** @type {Record<string, unknown> | null} */ (null));
@@ -36,6 +45,10 @@ const hasAnalysis = computed(() => Boolean(analysis.value && !analysis.value.err
 
 const hasActiveFilters = computed(
   () => Boolean(authorFilter.value || dateFrom.value || dateTo.value)
+);
+
+const canPurge = computed(
+  () => hasActiveFilters.value && items.value.length > 0 && !purging.value && !loading.value
 );
 
 /** @param {string} text */
@@ -73,7 +86,7 @@ function formatPublished(v) {
   return d.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
-async function loadList() {
+async function loadList(opts = {}) {
   loading.value = true;
   error.value = "";
   try {
@@ -81,10 +94,13 @@ async function loadList() {
       author: authorFilter.value || undefined,
       from: dateFrom.value || undefined,
       to: dateTo.value || undefined,
+      rebuild: opts.rebuild === true,
     });
     archiveDir.value = data.dir;
     authors.value = data.authors;
     listTotal.value = data.total;
+    indexBuiltAt.value = data.indexBuiltAt ?? "";
+    listCached.value = Boolean(data.cached);
     items.value = data.items;
     const q = String(route.query.v ?? "");
     if (q && items.value.some((x) => String(x.videoId) === q)) {
@@ -166,6 +182,67 @@ function setRecentDays(days) {
   onFilterChange();
 }
 
+async function rebuildIndex() {
+  rebuilding.value = true;
+  error.value = "";
+  try {
+    await rebuildYoutubeArchivesIndex({ backfill: false });
+    await loadList({ rebuild: true });
+  } catch (e) {
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    rebuilding.value = false;
+  }
+}
+
+async function backfillMeta() {
+  rebuilding.value = true;
+  error.value = "";
+  analyzeMsg.value = "后台补全作者/日期中，完成后请点刷新…";
+  try {
+    await rebuildYoutubeArchivesIndex({ backfill: true });
+  } catch (e) {
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    rebuilding.value = false;
+  }
+}
+
+async function purgeFiltered() {
+  if (!hasActiveFilters.value) return;
+  const range =
+    dateFrom.value && dateTo.value
+      ? `${dateFrom.value} 至 ${dateTo.value}`
+      : dateFrom.value
+        ? `从 ${dateFrom.value} 起`
+        : dateTo.value
+          ? `至 ${dateTo.value} 止`
+          : "";
+  const author = authorFilter.value ? `作者「${authorFilter.value}」` : "";
+  const msg = `将永久删除${author}${author && range ? " · " : ""}${range} 范围内的 ${items.value.length} 篇文稿（.json / .md），不可恢复。确认？`;
+  if (!window.confirm(msg)) return;
+
+  purging.value = true;
+  error.value = "";
+  try {
+    const out = await purgeYoutubeArchives({
+      author: authorFilter.value || undefined,
+      from: dateFrom.value || undefined,
+      to: dateTo.value || undefined,
+    });
+    selectedId.value = "";
+    article.value = null;
+    analyzeMsg.value = out.deletedCount
+      ? `已删除 ${out.deletedCount} 篇归档`
+      : "未删除任何归档";
+    await loadList({ rebuild: true });
+  } catch (e) {
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    purging.value = false;
+  }
+}
+
 async function runAnalyze() {
   const videoId = selectedId.value;
   if (!videoId || analyzing.value) return;
@@ -208,9 +285,20 @@ onMounted(async () => {
     <aside class="archives-list">
       <div class="list-head">
         <h2>YouTube 文稿归档</h2>
-        <button type="button" class="btn-sm" :disabled="loading" @click="loadList">刷新</button>
+        <div class="head-actions">
+          <button type="button" class="btn-sm" :disabled="loading || rebuilding" @click="loadList">
+            刷新
+          </button>
+          <button type="button" class="btn-sm" :disabled="rebuilding || loading" @click="rebuildIndex">
+            {{ rebuilding ? "重建中…" : "重建索引" }}
+          </button>
+        </div>
       </div>
-      <p class="list-hint">读取 <code>youtube-fetch/archives</code> 本地 JSON</p>
+      <p class="list-hint">本地 JSON 索引 + 解析缓存，首次会写入 <code>_archives-index.json</code></p>
+      <p v-if="indexBuiltAt" class="list-cache">
+        索引 {{ formatFetched(indexBuiltAt) }}
+        <span v-if="listCached"> · 已缓存</span>
+      </p>
       <p v-if="archiveDir" class="list-dir" :title="archiveDir">{{ archiveDir }}</p>
       <div class="filters">
         <label v-if="authors.length" class="filter-row">
@@ -232,6 +320,18 @@ onMounted(async () => {
           <button type="button" class="btn-preset" @click="setRecentDays(90)">近 90 天</button>
           <button v-if="hasActiveFilters" type="button" class="btn-preset clear" @click="clearAllFilters">
             清除筛选
+          </button>
+          <button
+            v-if="hasActiveFilters"
+            type="button"
+            class="btn-preset danger"
+            :disabled="!canPurge"
+            @click="purgeFiltered"
+          >
+            {{ purging ? "清空中…" : "清空该范围" }}
+          </button>
+          <button type="button" class="btn-preset" :disabled="rebuilding" @click="backfillMeta">
+            补全作者/日期
           </button>
         </div>
         <p v-if="!loading && listTotal" class="list-count">
@@ -374,11 +474,21 @@ onMounted(async () => {
   font-size: 0.95rem;
   color: #f2f3f5;
 }
+.head-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
 .list-hint,
-.list-dir {
+.list-dir,
+.list-cache {
   margin: 0.35rem 0 0;
   font-size: 0.72rem;
   color: #949ba4;
+}
+.list-cache {
+  color: #57f287;
+  opacity: 0.9;
 }
 .list-dir {
   word-break: break-all;
@@ -439,6 +549,19 @@ onMounted(async () => {
 }
 .btn-preset.clear {
   color: #f38688;
+}
+.btn-preset.danger {
+  color: #fff;
+  background: rgba(237, 66, 69, 0.22);
+  border-color: rgba(237, 66, 69, 0.45);
+}
+.btn-preset.danger:hover:not(:disabled) {
+  background: rgba(237, 66, 69, 0.35);
+  border-color: #ed4245;
+}
+.btn-preset:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .list-count {
   margin: 0;

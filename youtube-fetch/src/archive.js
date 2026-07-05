@@ -55,6 +55,18 @@ export function buildArchivePayload(parsed, videoId, lang, analysis = null) {
     fetchedAt,
     charCount: transcript.length,
     wordCount: wordCountFromLanguageLine(languageLine),
+    parsedCache: {
+      version: 1,
+      mdMtimeMs: null,
+      parsedAt: fetchedAt,
+      transcript,
+      title,
+      sourceUrl: parsed.sourceUrl,
+      languageLine,
+      author,
+      publishedAt,
+      fetchedAt,
+    },
   };
 
   if (analysis && typeof analysis === "object") {
@@ -85,7 +97,17 @@ export async function writeArchiveFiles(archivesDir, videoId, payload) {
   const mdPath = path.join(archivesDir, `${videoId}.md`);
   const jsonPath = path.join(archivesDir, `${videoId}.json`);
   await fs.writeFile(mdPath, payload.md, "utf8");
-  await fs.writeFile(jsonPath, `${JSON.stringify(payload.meta, null, 2)}\n`, "utf8");
+  const mdMtimeMs = (await fs.stat(mdPath)).mtimeMs;
+  const meta = {
+    ...payload.meta,
+    parsedCache: {
+      ...(payload.meta.parsedCache && typeof payload.meta.parsedCache === "object"
+        ? payload.meta.parsedCache
+        : {}),
+      mdMtimeMs,
+    },
+  };
+  await fs.writeFile(jsonPath, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
   return { mdPath, jsonPath };
 }
 

@@ -60,3 +60,15 @@ export async function fetchYoutubeFetchHealth() {
   if (!data.ok) throw new Error(data.error || "youtube-fetch 不可用");
   return data;
 }
+
+/** @param {{ text?: string, title?: string, body?: string }} payload */
+export async function parsePastedYoutubeText(payload) {
+  const res = await fetch("/api/youtube-fetch/parse-text", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "解析失败");
+  return /** @type {{ title: string, preview: Record<string, unknown>, analysis: Record<string, unknown> }} */ (data);
+}

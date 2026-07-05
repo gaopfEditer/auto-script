@@ -25,6 +25,7 @@ import { hashBuffer, tryOpenStore } from "./store.js";
 import { killListenersOnPort } from "../scripts/kill-port.mjs";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
+import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
 import { createCardArchiveService } from "./card-archive-service.js";
 import { registerCardArchiveRoutes } from "./card-archive-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
@@ -82,10 +83,19 @@ async function main() {
   registerDiscordSignalRoutes(app, store, signalCards);
   registerCardArchiveRoutes(app, store, cardArchive);
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
+  void import("./youtube-archives.js")
+    .then(({ rebuildArchivesIndex, warmArchivesParsedCache }) => {
+      void rebuildArchivesIndex(config.youtubeArchivesDir).catch(() => {});
+      setImmediate(() => {
+        void warmArchivesParsedCache(config.youtubeArchivesDir, { backfill: false }).catch(() => {});
+      });
+    })
+    .catch(() => {});
   registerYoutubeFetchProxyRoutes(app, {
     baseUrl: config.youtubeFetchUrl,
     log: createLogger("yt-fetch-proxy"),
   });
+  registerYoutubePasteParseRoutes(app, createLogger("yt-paste-parse"));
 
   let frameSeq = 0;
   /** @type {null | ((guildId: string, channelId: string, trace?: { clientTraceId?: string }) => Promise<unknown>)} */

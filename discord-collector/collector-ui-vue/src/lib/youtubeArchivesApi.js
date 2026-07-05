@@ -12,7 +12,7 @@ async function parseJsonResponse(res) {
   }
 }
 
-/** @param {{ author?: string, from?: string, to?: string }} [opts] */
+/** @param {{ author?: string, from?: string, to?: string, rebuild?: boolean }} [opts] */
 export async function fetchYoutubeArchiveList(opts = {}) {
   const params = new URLSearchParams();
   const author = String(opts.author ?? "").trim();
@@ -21,16 +21,51 @@ export async function fetchYoutubeArchiveList(opts = {}) {
   if (author) params.set("author", author);
   if (from) params.set("from", from);
   if (to) params.set("to", to);
+  if (opts.rebuild) params.set("rebuild", "1");
   const qs = params.toString();
   const res = await fetch(`/api/youtube-archives${qs ? `?${qs}` : ""}`);
   const data = await parseJsonResponse(res);
   if (!data.ok) throw new Error(data.error || "加载归档列表失败");
-  return /** @type {{ dir: string, authors: string[], total: number, items: Array<Record<string, unknown>> }} */ ({
+  return /** @type {{ dir: string, authors: string[], total: number, items: Array<Record<string, unknown>>, cached?: boolean, indexBuiltAt?: string }} */ ({
     dir: data.dir,
     authors: data.authors ?? [],
     total: Number(data.total) || (data.items ?? []).length,
     items: data.items ?? [],
+    cached: data.cached,
+    indexBuiltAt: data.indexBuiltAt,
   });
+}
+
+/** @param {{ author?: string, from?: string, to?: string }} opts */
+export async function purgeYoutubeArchives(opts = {}) {
+  const params = new URLSearchParams();
+  const author = String(opts.author ?? "").trim();
+  const from = String(opts.from ?? "").trim();
+  const to = String(opts.to ?? "").trim();
+  if (author) params.set("author", author);
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  const qs = params.toString();
+  const res = await fetch(`/api/youtube-archives${qs ? `?${qs}` : ""}`, { method: "DELETE" });
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "清空归档失败");
+  return /** @type {{ deleted: string[], deletedCount: number, matchedCount: number, errors: string[] }} */ (data);
+}
+
+/** @param {{ backfill?: boolean, warm?: boolean }} [opts] */
+export async function rebuildYoutubeArchivesIndex(opts = {}) {
+  const params = new URLSearchParams();
+  if (opts.backfill) params.set("backfill", "1");
+  if (opts.warm) params.set("warm", "1");
+  const qs = params.toString();
+  const res = await fetch(`/api/youtube-archives/rebuild${qs ? `?${qs}` : ""}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ backfill: opts.backfill === true, warm: opts.warm === true }),
+  });
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "重建索引失败");
+  return data;
 }
 
 /** @param {string} videoId */

@@ -94,9 +94,14 @@ export function dismissCardToast(key) {
   toasts.value = toasts.value.filter((t) => t.key !== key);
 }
 
+export function dismissAllCardToasts() {
+  toasts.value = [];
+}
+
 export function useNewCardNotifications() {
   return {
     toasts,
     dismissCardToast,
+    dismissAllCardToasts,
   };
 }

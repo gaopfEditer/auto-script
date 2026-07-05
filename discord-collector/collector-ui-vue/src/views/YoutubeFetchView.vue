@@ -5,19 +5,83 @@ import {
   enqueueYoutubeUrls,
   fetchYoutubeFetchHealth,
   fetchYoutubeQueue,
+  parsePastedYoutubeText,
 } from "../lib/youtubeFetchApi.js";
 
 const STORAGE_KEY = "yt-fetch-submitted-urls";
+const PASTE_STORAGE_KEY = "yt-fetch-paste-draft";
 
 const urlText = ref("");
+const pasteText = ref("");
 const lang = ref("");
 const analyzeOnFetch = ref(false);
 const submitting = ref(false);
+const parsing = ref(false);
 const error = ref("");
+const pasteError = ref("");
+const parseMsg = ref("");
 const health = ref(/** @type {Record<string, unknown> | null} */ (null));
 const queueSnap = ref(/** @type {Record<string, unknown>} */ ({}));
 const jobs = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
 const lastSubmit = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
+const pastePreview = ref(/** @type {Record<string, unknown> | null} */ (null));
+
+const previewJson = computed(() =>
+  pastePreview.value ? JSON.stringify(pastePreview.value, null, 2) : ""
+);
+
+const previewCardFields = computed(() => {
+  const cf = pastePreview.value?.cardFields;
+  return cf && typeof cf === "object" ? /** @type {Record<string, unknown>} */ (cf) : null;
+});
+
+const coinActions = computed(() => {
+  const list = pastePreview.value?.coinActions;
+  return Array.isArray(list) ? list : [];
+});
+
+/** @param {string} type */
+function actionTypeLabel(type) {
+  switch (String(type)) {
+    case "new":
+      return "新开仓";
+    case "continue":
+      return "持仓更新";
+    case "toend":
+      return "临近目标";
+    case "end":
+      return "已结束";
+    default:
+      return String(type || "—");
+  }
+}
+
+/** @param {string} type */
+function actionTypeClass(type) {
+  switch (String(type)) {
+    case "new":
+      return "act-new";
+    case "continue":
+      return "act-continue";
+    case "toend":
+      return "act-toend";
+    case "end":
+      return "act-end";
+    default:
+      return "";
+  }
+}
+
+/** @param {Record<string, unknown>} coin */
+function coinActionDetail(coin) {
+  const parts = [];
+  if (coin.direction) parts.push(String(coin.direction));
+  if (coin.entry) parts.push(`入场 ${coin.entry}`);
+  if (coin.stopLoss) parts.push(`止损 ${coin.stopLoss}`);
+  if (Array.isArray(coin.targets) && coin.targets.length) parts.push(`目标 ${coin.targets.join(" / ")}`);
+  if (coin.pnl) parts.push(String(coin.pnl));
+  return parts.join(" · ") || "—";
+}
 
 /** @type {ReturnType<typeof setInterval> | null} */
 let pollTimer = null;
@@ -74,6 +138,12 @@ function loadSubmittedHistory() {
     if (Array.isArray(arr) && arr.length) {
       urlText.value = arr.filter((x) => typeof x === "string").join("\n");
     }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const draft = localStorage.getItem(PASTE_STORAGE_KEY);
+    if (draft) pasteText.value = draft;
   } catch {
     /* ignore */
   }
@@ -141,6 +211,45 @@ async function submit() {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {
     submitting.value = false;
+  }
+}
+
+async function runPasteParse() {
+  const text = pasteText.value.trim();
+  if (!text) {
+    pasteError.value = "请粘贴文稿：第一行标题，其余为正文";
+    return;
+  }
+  parsing.value = true;
+  pasteError.value = "";
+  parseMsg.value = "正在解析概要与币种（Ollama）…";
+  pastePreview.value = null;
+  try {
+    localStorage.setItem(PASTE_STORAGE_KEY, pasteText.value);
+    const data = await parsePastedYoutubeText({ text });
+    pastePreview.value = data.preview ?? null;
+    parseMsg.value = "解析完成（预览 JSON，未写入卡片系统）";
+  } catch (e) {
+    parseMsg.value = "";
+    pasteError.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    parsing.value = false;
+  }
+}
+
+/** @param {unknown} v */
+function asStringList(v) {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => String(x)).filter(Boolean);
+}
+
+async function copyPreviewJson() {
+  if (!previewJson.value) return;
+  try {
+    await navigator.clipboard.writeText(previewJson.value);
+    parseMsg.value = "JSON 已复制到剪贴板";
+  } catch {
+    parseMsg.value = "复制失败，请手动选择 JSON 复制";
   }
 }
 
@@ -265,6 +374,95 @@ https://youtu.be/..."
         </li>
       </ul>
     </section>
+
+    <section class="panel paste-panel">
+      <div class="panel-head">
+        <h2>粘贴文稿解析</h2>
+        <span class="paste-tag">不入库 · 仅预览</span>
+      </div>
+      <p class="hint">
+        无需 URL：第一行作为标题，其余为正文。将提取文中<strong>所有币种</strong>及操作类型（新开仓 / 持仓更新 / 临近目标 / 已结束），含入场、止损、目标与简短描述，生成 JSON 预览（不入卡片系统）。
+      </p>
+      <label class="field">
+        <span>文稿（第一行 = 标题）</span>
+        <textarea
+          v-model="pasteText"
+          rows="10"
+          placeholder="BTC 弱势反弹观察63300压力
+今天视频核心观点…
+入场 62000，止损 61000，目标 64000 / 66000"
+          spellcheck="false"
+        />
+      </label>
+      <div class="actions">
+        <button type="button" class="btn primary" :disabled="parsing" @click="runPasteParse">
+          {{ parsing ? "解析中…" : "解析概要 / 提取币种" }}
+        </button>
+        <button
+          v-if="pastePreview"
+          type="button"
+          class="btn"
+          :disabled="!previewJson"
+          @click="copyPreviewJson"
+        >
+          复制 JSON
+        </button>
+      </div>
+      <p v-if="parseMsg" class="parse-msg">{{ parseMsg }}</p>
+      <p v-if="pasteError" class="err">{{ pasteError }}</p>
+
+      <div v-if="pastePreview" class="preview-wrap">
+        <div v-if="asStringList(pastePreview.summary).length" class="summary-block">
+          <div class="fn">全文概要</div>
+          <ul>
+            <li v-for="(line, i) in asStringList(pastePreview.summary)" :key="i">{{ line }}</li>
+          </ul>
+        </div>
+
+        <div v-if="coinActions.length" class="coin-actions">
+          <div class="coin-actions-head">
+            <span class="fn">币种操作</span>
+            <span class="coin-count">{{ coinActions.length }} 条</span>
+          </div>
+          <article
+            v-for="(coin, i) in coinActions"
+            :key="`${coin.symbol}-${coin.actionType}-${i}`"
+            class="coin-action-card"
+          >
+            <header class="coin-action-top">
+              <strong class="coin-sym">{{ coin.symbol }}</strong>
+              <span class="action-badge" :class="actionTypeClass(String(coin.actionType))">
+                {{ actionTypeLabel(String(coin.actionType)) }}
+              </span>
+              <span v-if="coin.direction" class="coin-dir">{{ coin.direction }}</span>
+            </header>
+            <p class="coin-desc">{{ coin.description || "—" }}</p>
+            <p class="coin-detail">{{ coinActionDetail(coin) }}</p>
+          </article>
+        </div>
+        <p v-else class="muted">未识别到币种操作，请检查文稿或重试。</p>
+
+        <div v-if="previewCardFields" class="embed-preview">
+          <h3>{{ String(previewCardFields.title ?? pastePreview.title) }}</h3>
+          <p v-if="previewCardFields.description" class="embed-desc">{{ previewCardFields.description }}</p>
+          <div v-if="Array.isArray(previewCardFields.fields)" class="embed-fields">
+            <div
+              v-for="(f, i) in previewCardFields.fields"
+              :key="i"
+              class="embed-field"
+              :class="{ inline: f.inline }"
+            >
+              <div class="fn">{{ f.name }}</div>
+              <div class="fv">{{ f.value }}</div>
+            </div>
+          </div>
+        </div>
+        <details class="json-block" open>
+          <summary>预览 JSON</summary>
+          <pre>{{ previewJson }}</pre>
+        </details>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -272,12 +470,172 @@ https://youtu.be/..."
 .fetch-page {
   display: grid;
   grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.1fr);
+  grid-template-rows: auto auto;
   gap: 1rem;
   height: 100%;
   min-height: 0;
   padding: 1rem;
   overflow: auto;
   background: #1e1f22;
+}
+.paste-panel {
+  grid-column: 1 / -1;
+}
+.paste-tag {
+  font-size: 0.72rem;
+  color: #aeb4ff;
+  background: rgba(88, 101, 242, 0.15);
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.parse-msg {
+  margin: 0.65rem 0 0;
+  font-size: 0.8rem;
+  color: #aeb4ff;
+}
+.preview-wrap {
+  margin-top: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.summary-block ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  color: #dbdee1;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+.coin-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.coin-actions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.coin-count {
+  font-size: 0.72rem;
+  color: #949ba4;
+}
+.coin-action-card {
+  background: #1e1f22;
+  border: 1px solid #3f4147;
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+}
+.coin-action-top {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.3rem;
+}
+.coin-sym {
+  font-size: 0.95rem;
+  color: #f2f3f5;
+}
+.action-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+}
+.action-badge.act-new {
+  background: rgba(88, 101, 242, 0.2);
+  color: #aeb4ff;
+}
+.action-badge.act-continue {
+  background: rgba(254, 231, 92, 0.15);
+  color: #fee75c;
+}
+.action-badge.act-toend {
+  background: rgba(87, 242, 135, 0.15);
+  color: #57f287;
+}
+.action-badge.act-end {
+  background: rgba(148, 155, 164, 0.2);
+  color: #949ba4;
+}
+.coin-dir {
+  font-size: 0.78rem;
+  color: #aeb4ff;
+}
+.coin-desc {
+  margin: 0 0 0.25rem;
+  font-size: 0.85rem;
+  color: #dbdee1;
+  line-height: 1.45;
+}
+.coin-detail {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #949ba4;
+}
+.embed-preview {
+  background: #1e1f22;
+  border-left: 4px solid #5865f2;
+  border-radius: 6px;
+  padding: 0.75rem 0.85rem;
+}
+.embed-preview h3 {
+  margin: 0 0 0.45rem;
+  font-size: 0.95rem;
+  color: #f2f3f5;
+}
+.embed-desc {
+  margin: 0 0 0.55rem;
+  color: #dbdee1;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.embed-fields {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.45rem;
+}
+.embed-field.inline {
+  grid-column: span 1;
+}
+.embed-field:not(.inline) {
+  grid-column: 1 / -1;
+}
+.fn {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #b5bac1;
+}
+.fv {
+  font-size: 0.82rem;
+  color: #f2f3f5;
+}
+.json-block {
+  margin: 0;
+}
+.json-block summary {
+  cursor: pointer;
+  color: #949ba4;
+  font-size: 0.78rem;
+  margin-bottom: 0.35rem;
+}
+.json-block pre {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  background: #1e1f22;
+  border: 1px solid #3f4147;
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #b5bac1;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .panel {
   background: #2b2d31;
