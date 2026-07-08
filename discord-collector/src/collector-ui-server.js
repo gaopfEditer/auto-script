@@ -26,6 +26,7 @@ import { killListenersOnPort } from "../scripts/kill-port.mjs";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
 import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
+import { registerYoutubePasteBatchRoutes, startPasteBatchService } from "./youtube-paste-batch.js";
 import { createCardArchiveService } from "./card-archive-service.js";
 import { registerCardArchiveRoutes } from "./card-archive-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
@@ -96,6 +97,9 @@ async function main() {
     log: createLogger("yt-fetch-proxy"),
   });
   registerYoutubePasteParseRoutes(app, createLogger("yt-paste-parse"));
+  const pasteBatchLog = createLogger("paste-batch");
+  registerYoutubePasteBatchRoutes(app, config, pasteBatchLog);
+  startPasteBatchService(config, pasteBatchLog);
 
   let frameSeq = 0;
   /** @type {null | ((guildId: string, channelId: string, trace?: { clientTraceId?: string }) => Promise<unknown>)} */

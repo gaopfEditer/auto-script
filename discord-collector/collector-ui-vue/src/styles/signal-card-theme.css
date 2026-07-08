@@ -229,6 +229,8 @@
   word-break: break-word;
   margin: 0 0 0.45rem;
   color: #dbdee1;
+  max-height: 130px;
+  overflow-y: auto;
 }
 .signal-card-actions {
   display: flex;

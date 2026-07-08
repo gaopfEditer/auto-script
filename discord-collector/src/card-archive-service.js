@@ -9,7 +9,7 @@ import {
   normalizeSymbol,
 } from "./card-fields.js";
 import { executionFromParsed, normalizeExecution, normalizePriceList } from "./discord-signal-execution.js";
-import { signalCardToClient } from "./discord-signal-card-service.js";
+import { signalCardToClient, resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { getSignalChannelConfig } from "./discord-signal-config.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 
@@ -226,7 +226,7 @@ export function archiveCardToClient(row) {
     assetClass: String(row.asset_class ?? row.assetClass ?? "crypto"),
     verifyMode: String(row.verify_mode ?? row.verifyMode ?? "1d"),
     cardFields: cardFields && typeof cardFields === "object" ? cardFields : null,
-    signalAt: row.signal_at ?? row.signalAt ?? base.createdAt,
+    signalAt: resolveCardSignalAt(row) ?? base.createdAt,
     verify3h: verify3h && typeof verify3h === "object" ? verify3h : null,
     verify1m: verify1m && typeof verify1m === "object" ? verify1m : null,
     proximity: proximity && typeof proximity === "object" ? proximity : null,

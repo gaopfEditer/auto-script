@@ -178,7 +178,7 @@ export function buildPastePreviewCard(title, content, parsed, coinActions, analy
  * @param {string} content
  * @param {ReturnType<typeof import('./logger.js').createLogger>} log
  */
-async function analyzePasteContent(title, content, log) {
+export async function analyzePasteContent(title, content, log) {
   const base = {
     transcript: content,
     title,
@@ -211,6 +211,48 @@ async function analyzePasteContent(title, content, log) {
 }
 
 /**
+ * @param {{ rawText?: string, title?: string, content?: string, log: ReturnType<typeof import('./logger.js').createLogger> }} opts
+ */
+export async function parsePasteTextToResult({ rawText = "", title = "", content = "", log }) {
+  let t = String(title ?? "").trim();
+  let c = String(content ?? "").trim();
+  const raw = String(rawText ?? "").trim();
+
+  if (raw) {
+    const split = splitPasteText(raw);
+    t = split.title;
+    c = split.content;
+  }
+
+  if (!t) throw new Error("第一行标题不能为空");
+  if (!c) throw new Error("标题下方需有正文内容");
+
+  const analysis = await analyzePasteContent(t, c, log);
+  const parsed =
+    analysis.parsed && typeof analysis.parsed === "object"
+      ? /** @type {Record<string, unknown>} */ (analysis.parsed)
+      : null;
+
+  const coinActions = normalizeCoinActions(parsed);
+  const preview = buildPastePreviewCard(t, c, parsed, coinActions, {
+    provider: analysis.provider,
+    model: analysis.model,
+    analyzedAt: analysis.analyzedAt,
+    error: analysis.error ?? null,
+    fallbackFrom: analysis.fallbackFrom ?? null,
+  });
+
+  return {
+    title: t,
+    content: c,
+    contentLength: c.length,
+    coinActions,
+    analysis,
+    preview,
+  };
+}
+
+/**
  * @param {import('express').Express} app
  * @param {ReturnType<typeof import('./logger.js').createLogger>} log
  */
@@ -218,51 +260,21 @@ export function registerYoutubePasteParseRoutes(app, log) {
   app.post("/api/youtube-fetch/parse-text", async (req, res) => {
     try {
       const body = req.body ?? {};
-      const rawText = String(body.text ?? body.content ?? "").trim();
-      let title = String(body.title ?? "").trim();
-      let content = String(body.body ?? body.transcript ?? "").trim();
-
-      if (rawText) {
-        const split = splitPasteText(rawText);
-        title = split.title;
-        content = split.content;
-      }
-
-      if (!title) {
-        res.status(400).json({ ok: false, error: "第一行标题不能为空" });
-        return;
-      }
-      if (!content) {
-        res.status(400).json({ ok: false, error: "标题下方需有正文内容" });
-        return;
-      }
-
-      const analysis = await analyzePasteContent(title, content, log);
-      const parsed =
-        analysis.parsed && typeof analysis.parsed === "object"
-          ? /** @type {Record<string, unknown>} */ (analysis.parsed)
-          : null;
-
-      const coinActions = normalizeCoinActions(parsed);
-      const preview = buildPastePreviewCard(title, content, parsed, coinActions, {
-        provider: analysis.provider,
-        model: analysis.model,
-        analyzedAt: analysis.analyzedAt,
-        error: analysis.error ?? null,
-        fallbackFrom: analysis.fallbackFrom ?? null,
+      const result = await parsePasteTextToResult({
+        rawText: String(body.text ?? body.content ?? ""),
+        title: String(body.title ?? ""),
+        content: String(body.body ?? body.transcript ?? ""),
+        log,
       });
-
-      res.json({
-        ok: true,
-        title,
-        contentLength: content.length,
-        coinActions,
-        analysis,
-        preview,
-      });
+      res.json({ ok: true, ...result });
     } catch (e) {
-      log.warn(`parse-text: ${/** @type {Error} */ (e).message}`);
-      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      if (msg.includes("标题") || msg.includes("正文")) {
+        res.status(400).json({ ok: false, error: msg });
+        return;
+      }
+      log.warn(`parse-text: ${msg}`);
+      res.status(500).json({ ok: false, error: msg });
     }
   });
 }

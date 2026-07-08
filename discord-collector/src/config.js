@@ -107,11 +107,28 @@ export const config = {
     : path.join(_repoRoot, "youtube-fetch", "archives"),
   /** youtube-fetch HTTP API（队列拉取） */
   youtubeFetchUrl: (process.env.YOUTUBE_FETCH_URL ?? "http://127.0.0.1:3920").trim(),
+  /** WhisprRT 等目录：启动后延时扫描 *.txt 并解析（第一行标题） */
+  pasteParseInputDir: (process.env.PASTE_PARSE_INPUT_DIR ?? "").trim()
+    ? path.resolve(process.env.PASTE_PARSE_INPUT_DIR.trim())
+    : path.resolve(_repoRoot, "..", "WhisprRT", "output"),
+  /** 文稿解析结果 JSON 目录（与源 txt 同名 .json，已存在则跳过） */
+  pasteParseOutputDir: (process.env.PASTE_PARSE_OUTPUT_DIR ?? "").trim()
+    ? path.resolve(process.env.PASTE_PARSE_OUTPUT_DIR.trim())
+    : path.join(_collectorRoot, "data", "paste-parse"),
+  pasteParseStartupDelayMs: Number(process.env.PASTE_PARSE_STARTUP_DELAY_MS ?? 15_000),
   /** 统一卡片开放 API Key（Header: X-Cards-Api-Key 或 Bearer） */
   cardsApiKey: (process.env.CARDS_API_KEY ?? "").trim(),
   /** 币安行情（卡片价格校验 / 接近推送） */
   binanceFapiUrl: (process.env.BINANCE_FAPI_URL ?? "https://fapi.binance.com").trim(),
   binanceRequestTimeoutMs: Number(process.env.BINANCE_REQUEST_TIMEOUT_MS ?? 15_000),
+  /** 币安 API 代理（国内直连常失败；默认同 DISCORD_WEBHOOK_PROXY） */
+  binanceProxy: (
+    process.env.BINANCE_PROXY ??
+    process.env.DISCORD_WEBHOOK_PROXY ??
+    process.env.HTTPS_PROXY ??
+    process.env.HTTP_PROXY ??
+    ""
+  ).trim(),
   cardPriceMonitorIntervalMs: Number(process.env.CARD_PRICE_MONITOR_INTERVAL_MS ?? 60_000),
   /** 加密接近推送：每 1h 检查，距关键位 ≤ 1% */
   cardProximityCryptoCheckMs: Number(process.env.CARD_PROXIMITY_CRYPTO_CHECK_MS ?? 3_600_000),
@@ -120,7 +137,7 @@ export const config = {
   cardProximityStockCheckMs: Number(process.env.CARD_PROXIMITY_STOCK_CHECK_MS ?? 86_400_000),
   cardProximityStockGapPct: Number(process.env.CARD_PROXIMITY_STOCK_GAP_PCT ?? 0.1),
   cardProximityTelegram: !["0", "false", "no", "off"].includes(
-    String(process.env.CARD_PROXIMITY_TELEGRAM ?? "1").toLowerCase()
+    String(process.env.CARD_PROXIMITY_TELEGRAM ?? "0").toLowerCase()
   ),
   /** 价格校验：加密默认 1 天（Binance K 线）；legacy 3h；股票较长周期 */
   cardVerifyCryptoWindowDays: Number(process.env.CARD_VERIFY_CRYPTO_WINDOW_DAYS ?? 1),

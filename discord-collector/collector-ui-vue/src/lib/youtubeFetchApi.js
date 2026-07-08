@@ -70,5 +70,44 @@ export async function parsePastedYoutubeText(payload) {
   });
   const data = await parseJsonResponse(res);
   if (!data.ok) throw new Error(data.error || "解析失败");
-  return /** @type {{ title: string, preview: Record<string, unknown>, analysis: Record<string, unknown> }} */ (data);
+  return /** @type {{ title: string, preview: Record<string, unknown>, analysis: Record<string, unknown>, coinActions?: unknown[] }} */ (data);
+}
+
+export async function fetchPasteFileList() {
+  const res = await fetch("/api/youtube-fetch/paste-files");
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "加载文稿列表失败");
+  return data;
+}
+
+/** @param {string} name */
+export async function fetchPasteFileResult(name) {
+  const res = await fetch(`/api/youtube-fetch/paste-files/${encodeURIComponent(name)}`);
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "加载解析结果失败");
+  return /** @type {{ data: Record<string, unknown> }} */ (data);
+}
+
+/** @param {{ force?: boolean }} [opts] */
+export async function triggerPasteFileScan(opts = {}) {
+  const res = await fetch("/api/youtube-fetch/paste-files/scan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force: opts.force === true }),
+  });
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "触发扫描失败");
+  return data;
+}
+
+/** @param {string} name @param {{ force?: boolean }} [opts] */
+export async function parsePasteFileByName(name, opts = {}) {
+  const res = await fetch(`/api/youtube-fetch/paste-files/${encodeURIComponent(name)}/parse`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force: opts.force !== false }),
+  });
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "解析失败");
+  return data;
 }

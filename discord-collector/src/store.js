@@ -23,12 +23,18 @@ export function extractSignalCardRowId(raw) {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
 }
 
-/** @param {Record<string, unknown> | null | undefined} row */
+/** @param {Record<string, unknown>} row */
 function normalizeSignalCardRow(row) {
   if (!row) return row;
   const id = extractSignalCardRowId(row.id ?? row.ID);
   return id ? { ...row, id } : row;
 }
+
+const SIGNAL_CARD_JOIN = `
+  LEFT JOIN discord_channels dc ON dc.channel_id = sc.channel_id
+  LEFT JOIN discord_messages dm ON dm.message_id = sc.message_id`;
+
+const SIGNAL_CARD_SELECT = `sc.*, dc.name AS channel_name, dm.created_at_ms AS message_created_at_ms`;
 
 /** @param {Buffer} buf */
 export function hashBuffer(buf) {
@@ -717,6 +723,28 @@ export async function openStore(cfg, log) {
     return { where, params };
   }
 
+  async function getRecentSignalCardBySymbolChannel({ symbol, channelId, withinMs = 600_000 }) {
+    const sym = String(symbol ?? "").trim().toUpperCase();
+    const ch = String(channelId ?? "").trim();
+    if (!sym || !ch) return null;
+    const ms = Number(withinMs);
+    const fromMs = Number.isFinite(ms) && ms > 0 ? Date.now() - ms : Date.now() - 600_000;
+    const { where, params } = buildSignalCardFilters({
+      channelId: ch,
+      symbol: sym,
+      fromMs,
+    });
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const [rows] = await pool.query(
+      `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       ${whereSql} ORDER BY sc.id DESC LIMIT 1`,
+      params
+    );
+    return rows[0] ? normalizeSignalCardRow(rows[0]) : null;
+  }
+
   /**
    * @param {{ channelId?: string, status?: string, limit?: number, fromMs?: number, toMs?: number, sourceType?: string, symbol?: string }} [filters]
    */
@@ -725,9 +753,9 @@ export async function openStore(cfg, log) {
     const { where, params } = buildSignalCardFilters(filters);
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const [rows] = await pool.query(
-      `SELECT sc.*, dc.name AS channel_name
+      `SELECT ${SIGNAL_CARD_SELECT}
        FROM discord_signal_cards sc
-       LEFT JOIN discord_channels dc ON dc.channel_id = sc.channel_id
+       ${SIGNAL_CARD_JOIN}
        ${whereSql}
        ORDER BY sc.id DESC
        LIMIT ${lim}`,
@@ -759,9 +787,9 @@ export async function openStore(cfg, log) {
   /** @param {number} id */
   async function getSignalCardById(id) {
     const [rows] = await pool.query(
-      `SELECT sc.*, dc.name AS channel_name
+      `SELECT ${SIGNAL_CARD_SELECT}
        FROM discord_signal_cards sc
-       LEFT JOIN discord_channels dc ON dc.channel_id = sc.channel_id
+       ${SIGNAL_CARD_JOIN}
        WHERE sc.id = ?
        LIMIT 1`,
       [id]
@@ -773,7 +801,13 @@ export async function openStore(cfg, log) {
   async function getSignalCardByMessageId(messageId) {
     const mid = String(messageId ?? "").trim();
     if (!mid) return null;
-    const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE message_id = ? LIMIT 1`, [mid]);
+    const [rows] = await pool.query(
+      `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       WHERE sc.message_id = ? LIMIT 1`,
+      [mid]
+    );
     return normalizeSignalCardRow(rows[0] ?? null);
   }
 
@@ -788,27 +822,29 @@ export async function openStore(cfg, log) {
     const stockDays = Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30) || 30;
     const now = isoToMysqlDatetime3(new Date().toISOString());
     const [rows] = await pool.query(
-      `SELECT * FROM discord_signal_cards
-       WHERE status = 'active'
-         AND symbol IS NOT NULL AND symbol != ''
+      `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       WHERE sc.status = 'active'
+         AND sc.symbol IS NOT NULL AND sc.symbol != ''
          AND (
            (
-             verify_mode = '3h'
-             AND verify_3h_json IS NULL
-             AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${hours} HOUR)
+             sc.verify_mode = '3h'
+             AND sc.verify_3h_json IS NULL
+             AND COALESCE(sc.signal_at, sc.created_at) <= DATE_SUB(?, INTERVAL ${hours} HOUR)
            )
            OR (
-             (verify_mode = '1d' OR verify_mode IS NULL OR verify_mode = '')
-             AND verify_3h_json IS NULL
-             AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${cryptoDays} DAY)
+             (sc.verify_mode = '1d' OR sc.verify_mode IS NULL OR sc.verify_mode = '')
+             AND sc.verify_3h_json IS NULL
+             AND COALESCE(sc.signal_at, sc.created_at) <= DATE_SUB(?, INTERVAL ${cryptoDays} DAY)
            )
            OR (
-             verify_mode = '30d'
-             AND verify_1m_json IS NULL
-             AND COALESCE(signal_at, created_at) <= DATE_SUB(?, INTERVAL ${stockDays} DAY)
+             sc.verify_mode = '30d'
+             AND sc.verify_1m_json IS NULL
+             AND COALESCE(sc.signal_at, sc.created_at) <= DATE_SUB(?, INTERVAL ${stockDays} DAY)
            )
          )
-       ORDER BY id ASC
+       ORDER BY sc.id ASC
        LIMIT ${lim}`,
       [now, now, now]
     );
@@ -822,15 +858,17 @@ export async function openStore(cfg, log) {
   async function listActiveCardsForProximity(opts = {}) {
     const lim = Math.min(500, Math.max(1, Number(opts.limit) || 200));
     const [rows] = await pool.query(
-      `SELECT * FROM discord_signal_cards
-       WHERE status = 'active'
-         AND symbol IS NOT NULL AND symbol != ''
+      `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       WHERE sc.status = 'active'
+         AND sc.symbol IS NOT NULL AND sc.symbol != ''
          AND (
-           execution_json IS NULL
-           OR JSON_UNQUOTE(JSON_EXTRACT(execution_json, '$.outcome')) IS NULL
-           OR JSON_UNQUOTE(JSON_EXTRACT(execution_json, '$.outcome')) = 'pending'
+           sc.execution_json IS NULL
+           OR JSON_UNQUOTE(JSON_EXTRACT(sc.execution_json, '$.outcome')) IS NULL
+           OR JSON_UNQUOTE(JSON_EXTRACT(sc.execution_json, '$.outcome')) = 'pending'
          )
-       ORDER BY id DESC
+       ORDER BY sc.id DESC
        LIMIT ${lim}`
     );
     return rows;
@@ -917,6 +955,7 @@ export async function openStore(cfg, log) {
     insertSignalCard,
     markSignalCardTelegramSent,
     listSignalCards,
+    getRecentSignalCardBySymbolChannel,
     listSignalCardChannels,
     getSignalCardById,
     getSignalCardByMessageId,
@@ -964,6 +1003,7 @@ export function createOfflineStore() {
     insertSignalCard: async () => null,
     markSignalCardTelegramSent: async () => {},
     listSignalCards: async () => [],
+    getRecentSignalCardBySymbolChannel: async () => null,
     listSignalCardChannels: async () => [],
     getSignalCardById: async () => null,
     getSignalCardByMessageId: async () => null,

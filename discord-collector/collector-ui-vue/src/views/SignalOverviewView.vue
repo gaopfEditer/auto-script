@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
 import { RouterLink } from "vue-router";
-import { fetchSignalConfig, fetchSignalOverview, fetchSignalHistory } from "../lib/discordSignalApi.js";
+import { fetchSignalConfig, fetchSignalOverview, fetchSignalHistory, formatCardTime } from "../lib/discordSignalApi.js";
 import {
   cardExecution,
   outcomeLabel,
@@ -171,7 +171,7 @@ onMounted(async () => {
           <tbody>
             <tr v-for="card in filteredHistory" :key="card.id" :class="{ inactive: !isSignalCardActive(card) }">
               <td class="sov-col-time">
-                {{ card.createdAt ? new Date(card.createdAt).toLocaleString("zh-CN") : "—" }}
+                {{ formatCardTime(card) || "—" }}
               </td>
               <td>
                 <span class="sov-status-tag" :class="isSignalCardActive(card) ? 'on' : 'off'">

@@ -13,9 +13,18 @@
  *   execution: import("./signalExecution.js").SignalExecution,
  *   source: string,
  *   isManual: boolean,
+ *   signalAt: string | null,
  *   createdAt: string,
  *   updatedAt: string,
  * }} SignalCard */
+
+/** @param {Record<string, unknown> | null | undefined} card */
+export function formatCardTime(card) {
+  const raw = card?.signalAt ?? card?.createdAt;
+  if (!raw) return "";
+  const d = new Date(String(raw));
+  return Number.isNaN(d.getTime()) ? String(raw) : d.toLocaleString("zh-CN");
+}
 
 let cachedConfig = /** @type {{ channelIds: string[], styles: Record<string, { label: string }>, channels: Record<string, unknown> } | null} */ (
   null

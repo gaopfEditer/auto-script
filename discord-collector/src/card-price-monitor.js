@@ -2,6 +2,7 @@
  * 卡片价格校验（默认 3h；股票较长周期）与接近关键价位推送。
  */
 import { archiveCardToClient } from "./card-archive-service.js";
+import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import {
   evaluatePricePath,
   fetchKlinesForCard,
@@ -31,6 +32,11 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
    * @param {Record<string, unknown>} row
    */
   function cardSignalMs(row) {
+    const resolved = resolveCardSignalAt(row);
+    if (resolved) {
+      const ms = new Date(resolved).getTime();
+      if (Number.isFinite(ms)) return ms;
+    }
     const s = row.signal_at ?? row.signalAt ?? row.created_at ?? row.createdAt;
     const ms = new Date(String(s)).getTime();
     return Number.isFinite(ms) ? ms : Date.now();
@@ -264,7 +270,8 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
     log.info(
       `卡片价格监控已启动 tick=${config.cardPriceMonitorIntervalMs}ms | ` +
         `接近推送 加密每${config.cardProximityCryptoCheckMs / 3600000}h±${config.cardProximityCryptoBandPct}% | ` +
-        `股票每${config.cardProximityStockCheckMs / 86400000}d落差${config.cardProximityStockGapPct * 100}%`
+        `股票每${config.cardProximityStockCheckMs / 86400000}d落差${config.cardProximityStockGapPct * 100}%` +
+        (config.binanceProxy ? ` | Binance 代理 ${config.binanceProxy}` : "")
     );
   }
 

@@ -7,6 +7,7 @@ import {
   resendSignalTelegram,
   updateSignalCard,
   createSignalCard,
+  formatCardTime,
 } from "../lib/discordSignalApi.js";
 import SignalEvaluationForm from "./SignalEvaluationForm.vue";
 import {
@@ -463,7 +464,7 @@ onMounted(async () => {
           </div>
         </header>
         <div class="signal-card-time">
-          {{ card.createdAt ? new Date(card.createdAt).toLocaleString("zh-CN") : "" }}
+          {{ formatCardTime(card) }}
         </div>
 
         <pre v-if="cardBody(card)" class="signal-card-body">{{ cardBody(card) }}</pre>

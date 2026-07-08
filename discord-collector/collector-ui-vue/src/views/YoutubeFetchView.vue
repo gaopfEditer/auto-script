@@ -1,16 +1,24 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { RouterLink } from "vue-router";
 import {
   enqueueYoutubeUrls,
   fetchYoutubeFetchHealth,
   fetchYoutubeQueue,
   parsePastedYoutubeText,
+  fetchPasteFileList,
+  fetchPasteFileResult,
+  triggerPasteFileScan,
+  parsePasteFileByName,
 } from "../lib/youtubeFetchApi.js";
 
 const STORAGE_KEY = "yt-fetch-submitted-urls";
 const PASTE_STORAGE_KEY = "yt-fetch-paste-draft";
+const MODE_STORAGE_KEY = "yt-fetch-mode";
 
+/** @typedef {'youtube' | 'paste'} FetchMode */
+
+const mode = ref(/** @type {FetchMode} */ ("youtube"));
 const urlText = ref("");
 const pasteText = ref("");
 const lang = ref("");
@@ -25,6 +33,15 @@ const queueSnap = ref(/** @type {Record<string, unknown>} */ ({}));
 const jobs = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
 const lastSubmit = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
 const pastePreview = ref(/** @type {Record<string, unknown> | null} */ (null));
+
+const pasteInputDir = ref("");
+const pasteOutputDir = ref("");
+const pasteScan = ref(/** @type {Record<string, unknown>} */ ({}));
+const pasteFiles = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
+const selectedPasteFile = ref("");
+const pasteListError = ref("");
+const scanningPaste = ref(false);
+const showManualPaste = ref(false);
 
 const previewJson = computed(() =>
   pastePreview.value ? JSON.stringify(pastePreview.value, null, 2) : ""
@@ -92,6 +109,8 @@ const hasActiveJobs = computed(() => {
   return pending + running > 0;
 });
 
+const pasteScanRunning = computed(() => Boolean(pasteScan.value?.running));
+
 /** @param {unknown} status */
 function statusLabel(status) {
   switch (String(status)) {
@@ -111,12 +130,26 @@ function statusLabel(status) {
 }
 
 /** @param {unknown} status */
+function pasteFileStatusLabel(status) {
+  switch (String(status)) {
+    case "done":
+      return "已解析";
+    case "parsing":
+      return "解析中";
+    case "pending":
+      return "待解析";
+    default:
+      return String(status ?? "—");
+  }
+}
+
+/** @param {unknown} status */
 function statusClass(status) {
   const s = String(status);
   if (s === "skipped") return "skipped";
   if (s === "done") return "done";
   if (s === "failed") return "failed";
-  if (s === "running") return "running";
+  if (s === "running" || s === "parsing") return "running";
   if (s === "pending") return "pending";
   return "";
 }
@@ -147,7 +180,21 @@ function loadSubmittedHistory() {
   } catch {
     /* ignore */
   }
+  try {
+    const m = localStorage.getItem(MODE_STORAGE_KEY);
+    if (m === "youtube" || m === "paste") mode.value = m;
+  } catch {
+    /* ignore */
+  }
 }
+
+watch(mode, (m) => {
+  try {
+    localStorage.setItem(MODE_STORAGE_KEY, m);
+  } catch {
+    /* ignore */
+  }
+});
 
 /** @param {string[]} urls */
 function saveSubmittedHistory(urls) {
@@ -189,6 +236,72 @@ async function refreshHealth() {
   }
 }
 
+async function refreshPasteFiles() {
+  try {
+    const data = await fetchPasteFileList();
+    pasteInputDir.value = String(data.inputDir ?? "");
+    pasteOutputDir.value = String(data.outputDir ?? "");
+    pasteScan.value = data.scan && typeof data.scan === "object" ? data.scan : {};
+    pasteFiles.value = Array.isArray(data.items) ? data.items : [];
+    pasteListError.value = "";
+  } catch (e) {
+    pasteListError.value = String(/** @type {Error} */ (e).message ?? e);
+  }
+}
+
+/** @param {string} name */
+async function selectPasteFile(name) {
+  selectedPasteFile.value = name;
+  pasteError.value = "";
+  parseMsg.value = "";
+  const row = pasteFiles.value.find((f) => f.name === name);
+  if (row?.status === "done" || row?.hasOutput) {
+    try {
+      const { data } = await fetchPasteFileResult(name);
+      pastePreview.value =
+        data.preview && typeof data.preview === "object"
+          ? /** @type {Record<string, unknown>} */ (data.preview)
+          : null;
+    } catch (e) {
+      pastePreview.value = null;
+      pasteError.value = String(/** @type {Error} */ (e).message ?? e);
+    }
+  } else {
+    pastePreview.value = null;
+  }
+}
+
+async function runPasteScan() {
+  scanningPaste.value = true;
+  pasteListError.value = "";
+  try {
+    await triggerPasteFileScan();
+    await refreshPasteFiles();
+  } catch (e) {
+    pasteListError.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    scanningPaste.value = false;
+  }
+}
+
+/** @param {string} name */
+async function forceParseFile(name) {
+  parsing.value = true;
+  pasteError.value = "";
+  parseMsg.value = `正在解析 ${name}…`;
+  try {
+    await parsePasteFileByName(name, { force: true });
+    await refreshPasteFiles();
+    await selectPasteFile(name);
+    parseMsg.value = "解析完成";
+  } catch (e) {
+    pasteError.value = String(/** @type {Error} */ (e).message ?? e);
+    parseMsg.value = "";
+  } finally {
+    parsing.value = false;
+  }
+}
+
 async function submit() {
   const urls = parseUrls(urlText.value);
   if (!urls.length) {
@@ -223,6 +336,7 @@ async function runPasteParse() {
   parsing.value = true;
   pasteError.value = "";
   parseMsg.value = "正在解析概要与币种（Ollama）…";
+  selectedPasteFile.value = "";
   pastePreview.value = null;
   try {
     localStorage.setItem(PASTE_STORAGE_KEY, pasteText.value);
@@ -256,9 +370,19 @@ async function copyPreviewJson() {
 function startPolling() {
   stopPolling();
   pollTimer = setInterval(() => {
-    void refreshQueue();
-    if (!hasActiveJobs.value) void refreshHealth();
-  }, 2000);
+    if (mode.value === "youtube") {
+      void refreshQueue();
+      if (!hasActiveJobs.value) void refreshHealth();
+    } else {
+      void refreshPasteFiles();
+      if (selectedPasteFile.value) {
+        const row = pasteFiles.value.find((f) => f.name === selectedPasteFile.value);
+        if (row?.status === "done" && !pastePreview.value) {
+          void selectPasteFile(selectedPasteFile.value);
+        }
+      }
+    }
+  }, mode.value === "youtube" ? 2000 : 3000);
 }
 
 function stopPolling() {
@@ -268,9 +392,14 @@ function stopPolling() {
   }
 }
 
+watch(mode, () => {
+  startPolling();
+  if (mode.value === "paste") void refreshPasteFiles();
+});
+
 onMounted(async () => {
   loadSubmittedHistory();
-  await Promise.all([refreshHealth(), refreshQueue()]);
+  await Promise.all([refreshHealth(), refreshQueue(), refreshPasteFiles()]);
   startPolling();
 });
 
@@ -279,207 +408,376 @@ onUnmounted(stopPolling);
 
 <template>
   <div class="fetch-page">
-    <section class="panel submit-panel">
-      <div class="panel-head">
-        <h2>提交 YouTube URL</h2>
-        <RouterLink class="link-archives" to="/archives">查看已归档文稿 →</RouterLink>
+    <header class="fetch-topbar">
+      <nav class="mode-tabs">
+        <button type="button" class="mode-tab" :class="{ on: mode === 'youtube' }" @click="mode = 'youtube'">
+          YouTube 拉取
+        </button>
+        <button type="button" class="mode-tab" :class="{ on: mode === 'paste' }" @click="mode = 'paste'">
+          文稿解析
+        </button>
+      </nav>
+      <div class="topbar-actions">
+        <RouterLink v-if="mode === 'youtube'" class="link-archives" to="/archives">查看已归档文稿 →</RouterLink>
       </div>
-      <p class="hint">
-        每行一个 URL。已归档的视频不会重复拉取；新 URL 会进入
-        <strong>youtube-fetch</strong> 串行队列逐个处理。
-      </p>
-      <p v-if="health" class="health" :class="{ bad: !health.ok && !health.cdpReady }">
-        <template v-if="health.ok">
-          youtube-fetch
-          <span :class="health.cdpReady ? 'ok' : 'warn'">
-            {{ health.cdpReady ? "CDP 就绪" : "CDP 未就绪" }}
-          </span>
-          · 队列等待 {{ queueSnap.pending ?? 0 }} · 处理中 {{ queueSnap.running ?? 0 }}
-          <template v-if="health.analyze">
-            · 分析模型 {{ health.analyze.model }}
+    </header>
+
+    <!-- YouTube 全屏 -->
+    <div v-if="mode === 'youtube'" class="mode-body mode-youtube">
+      <section class="panel submit-panel">
+        <div class="panel-head">
+          <h2>提交 YouTube URL</h2>
+        </div>
+        <p class="hint">
+          每行一个 URL。已归档的视频不会重复拉取；新 URL 会进入
+          <strong>youtube-fetch</strong> 串行队列逐个处理。
+        </p>
+        <p v-if="health" class="health" :class="{ bad: !health.ok && !health.cdpReady }">
+          <template v-if="health.ok">
+            youtube-fetch
+            <span :class="health.cdpReady ? 'ok' : 'warn'">
+              {{ health.cdpReady ? "CDP 就绪" : "CDP 未就绪" }}
+            </span>
+            · 队列等待 {{ queueSnap.pending ?? 0 }} · 处理中 {{ queueSnap.running ?? 0 }}
+            <template v-if="health.analyze"> · 分析模型 {{ health.analyze.model }} </template>
           </template>
-        </template>
-        <template v-else>{{ health.error || "youtube-fetch 不可用" }}</template>
-      </p>
-      <label class="field">
-        <span>URL（多行）</span>
-        <textarea
-          v-model="urlText"
-          rows="8"
-          placeholder="https://www.youtube.com/watch?v=...
+          <template v-else>{{ health.error || "youtube-fetch 不可用" }}</template>
+        </p>
+        <label class="field">
+          <span>URL（多行）</span>
+          <textarea
+            v-model="urlText"
+            rows="10"
+            placeholder="https://www.youtube.com/watch?v=...
 https://youtu.be/..."
-          spellcheck="false"
-        />
-      </label>
-      <label class="field inline">
-        <span>语言（可选）</span>
-        <input v-model="lang" type="text" placeholder="en" />
-      </label>
-      <label class="field checkbox">
-        <input v-model="analyzeOnFetch" type="checkbox" />
-        <span>拉取完成后调用 Ollama 分析（需 8000 端口可用）</span>
-      </label>
-      <div class="actions">
-        <button type="button" class="btn primary" :disabled="submitting" @click="submit">
-          {{ submitting ? "提交中…" : "提交并拉取" }}
-        </button>
-        <button type="button" class="btn" :disabled="submitting" @click="refreshQueue">刷新队列</button>
-      </div>
-      <p v-if="error" class="err">{{ error }}</p>
-      <ul v-if="lastSubmit.length" class="submit-results">
-        <li v-for="(row, i) in lastSubmit" :key="i">
-          <template v-if="row.ok && row.skipped">
-            <span class="badge skipped">已存在，跳过</span>
-            <span class="vid">{{ row.job?.videoId }}</span>
-          </template>
-          <template v-else-if="row.ok && row.duplicate">
-            <span class="badge pending">已在队列</span>
-            <span class="vid">{{ row.job?.videoId }}</span>
-          </template>
-          <template v-else-if="row.ok && row.queued">
-            <span class="badge pending">已入队</span>
-            <span class="vid">{{ row.job?.videoId }}</span>
-          </template>
-          <template v-else>
-            <span class="badge failed">无效</span>
-            <span class="vid">{{ row.url || "—" }}</span>
-            <span class="msg">{{ row.error }}</span>
-          </template>
-        </li>
-      </ul>
-    </section>
-
-    <section class="panel queue-panel">
-      <div class="panel-head">
-        <h2>处理队列</h2>
-        <span class="queue-meta">共 {{ queueSnap.total ?? 0 }} 条记录</span>
-      </div>
-      <p v-if="jobs.length === 0" class="muted">暂无任务；提交 URL 后将显示在这里。</p>
-      <ul v-else class="jobs">
-        <li v-for="job in jobs" :key="String(job.id)" :class="statusClass(job.status)">
-          <div class="job-top">
-            <span class="badge" :class="statusClass(job.status)">{{ statusLabel(job.status) }}</span>
-            <span class="job-id">#{{ job.id }}</span>
-            <RouterLink
-              v-if="job.status === 'done' || job.status === 'skipped'"
-              class="job-link"
-              :to="{ path: '/archives', query: { v: String(job.videoId) } }"
-            >
-              查看文稿
-            </RouterLink>
-          </div>
-          <div class="job-title">{{ job.title || job.videoId }}</div>
-          <div class="job-url" :title="String(job.url)">{{ job.url }}</div>
-          <div v-if="job.error" class="job-err">{{ job.error }}</div>
-        </li>
-      </ul>
-    </section>
-
-    <section class="panel paste-panel">
-      <div class="panel-head">
-        <h2>粘贴文稿解析</h2>
-        <span class="paste-tag">不入库 · 仅预览</span>
-      </div>
-      <p class="hint">
-        无需 URL：第一行作为标题，其余为正文。将提取文中<strong>所有币种</strong>及操作类型（新开仓 / 持仓更新 / 临近目标 / 已结束），含入场、止损、目标与简短描述，生成 JSON 预览（不入卡片系统）。
-      </p>
-      <label class="field">
-        <span>文稿（第一行 = 标题）</span>
-        <textarea
-          v-model="pasteText"
-          rows="10"
-          placeholder="BTC 弱势反弹观察63300压力
-今天视频核心观点…
-入场 62000，止损 61000，目标 64000 / 66000"
-          spellcheck="false"
-        />
-      </label>
-      <div class="actions">
-        <button type="button" class="btn primary" :disabled="parsing" @click="runPasteParse">
-          {{ parsing ? "解析中…" : "解析概要 / 提取币种" }}
-        </button>
-        <button
-          v-if="pastePreview"
-          type="button"
-          class="btn"
-          :disabled="!previewJson"
-          @click="copyPreviewJson"
-        >
-          复制 JSON
-        </button>
-      </div>
-      <p v-if="parseMsg" class="parse-msg">{{ parseMsg }}</p>
-      <p v-if="pasteError" class="err">{{ pasteError }}</p>
-
-      <div v-if="pastePreview" class="preview-wrap">
-        <div v-if="asStringList(pastePreview.summary).length" class="summary-block">
-          <div class="fn">全文概要</div>
-          <ul>
-            <li v-for="(line, i) in asStringList(pastePreview.summary)" :key="i">{{ line }}</li>
-          </ul>
+            spellcheck="false"
+          />
+        </label>
+        <label class="field inline">
+          <span>语言（可选）</span>
+          <input v-model="lang" type="text" placeholder="en" />
+        </label>
+        <label class="field checkbox">
+          <input v-model="analyzeOnFetch" type="checkbox" />
+          <span>拉取完成后调用 Ollama 分析（需 8000 端口可用）</span>
+        </label>
+        <div class="actions">
+          <button type="button" class="btn primary" :disabled="submitting" @click="submit">
+            {{ submitting ? "提交中…" : "提交并拉取" }}
+          </button>
+          <button type="button" class="btn" :disabled="submitting" @click="refreshQueue">刷新队列</button>
         </div>
+        <p v-if="error" class="err">{{ error }}</p>
+        <ul v-if="lastSubmit.length" class="submit-results">
+          <li v-for="(row, i) in lastSubmit" :key="i">
+            <template v-if="row.ok && row.skipped">
+              <span class="badge skipped">已存在，跳过</span>
+              <span class="vid">{{ row.job?.videoId }}</span>
+            </template>
+            <template v-else-if="row.ok && row.duplicate">
+              <span class="badge pending">已在队列</span>
+              <span class="vid">{{ row.job?.videoId }}</span>
+            </template>
+            <template v-else-if="row.ok && row.queued">
+              <span class="badge pending">已入队</span>
+              <span class="vid">{{ row.job?.videoId }}</span>
+            </template>
+            <template v-else>
+              <span class="badge failed">无效</span>
+              <span class="vid">{{ row.url || "—" }}</span>
+              <span class="msg">{{ row.error }}</span>
+            </template>
+          </li>
+        </ul>
+      </section>
 
-        <div v-if="coinActions.length" class="coin-actions">
-          <div class="coin-actions-head">
-            <span class="fn">币种操作</span>
-            <span class="coin-count">{{ coinActions.length }} 条</span>
-          </div>
-          <article
-            v-for="(coin, i) in coinActions"
-            :key="`${coin.symbol}-${coin.actionType}-${i}`"
-            class="coin-action-card"
+      <section class="panel queue-panel">
+        <div class="panel-head">
+          <h2>处理队列</h2>
+          <span class="queue-meta">共 {{ queueSnap.total ?? 0 }} 条记录</span>
+        </div>
+        <p v-if="jobs.length === 0" class="muted">暂无任务；提交 URL 后将显示在这里。</p>
+        <ul v-else class="jobs">
+          <li v-for="job in jobs" :key="String(job.id)" :class="statusClass(job.status)">
+            <div class="job-top">
+              <span class="badge" :class="statusClass(job.status)">{{ statusLabel(job.status) }}</span>
+              <span class="job-id">#{{ job.id }}</span>
+              <RouterLink
+                v-if="job.status === 'done' || job.status === 'skipped'"
+                class="job-link"
+                :to="{ path: '/archives', query: { v: String(job.videoId) } }"
+              >
+                查看文稿
+              </RouterLink>
+            </div>
+            <div class="job-title">{{ job.title || job.videoId }}</div>
+            <div class="job-url" :title="String(job.url)">{{ job.url }}</div>
+            <div v-if="job.error" class="job-err">{{ job.error }}</div>
+          </li>
+        </ul>
+      </section>
+    </div>
+
+    <!-- 文稿解析全屏 -->
+    <div v-else class="mode-body mode-paste">
+      <aside class="panel paste-list-panel">
+        <div class="panel-head">
+          <h2>文稿文件</h2>
+          <span class="paste-tag">自动扫描</span>
+        </div>
+        <p class="hint dir-hint" :title="pasteInputDir">
+          输入目录：<code>{{ pasteInputDir || "—" }}</code>
+        </p>
+        <p v-if="pasteScanRunning" class="scan-hint">
+          正在解析 <strong>{{ pasteScan.currentFile || "…" }}</strong>
+        </p>
+        <div class="actions">
+          <button type="button" class="btn primary" :disabled="scanningPaste || pasteScanRunning" @click="runPasteScan">
+            {{ scanningPaste || pasteScanRunning ? "扫描中…" : "扫描并解析" }}
+          </button>
+          <button type="button" class="btn" @click="refreshPasteFiles">刷新列表</button>
+        </div>
+        <p v-if="pasteListError" class="err">{{ pasteListError }}</p>
+        <p v-if="!pasteFiles.length && !pasteListError" class="muted">目录下暂无 .txt 文件。</p>
+        <ul v-else class="paste-files">
+          <li
+            v-for="file in pasteFiles"
+            :key="String(file.name)"
+            :class="[{ selected: selectedPasteFile === file.name }, statusClass(file.status)]"
+            @click="selectPasteFile(String(file.name))"
           >
-            <header class="coin-action-top">
-              <strong class="coin-sym">{{ coin.symbol }}</strong>
-              <span class="action-badge" :class="actionTypeClass(String(coin.actionType))">
-                {{ actionTypeLabel(String(coin.actionType)) }}
-              </span>
-              <span v-if="coin.direction" class="coin-dir">{{ coin.direction }}</span>
-            </header>
-            <p class="coin-desc">{{ coin.description || "—" }}</p>
-            <p class="coin-detail">{{ coinActionDetail(coin) }}</p>
-          </article>
-        </div>
-        <p v-else class="muted">未识别到币种操作，请检查文稿或重试。</p>
+            <div class="pf-top">
+              <span class="badge" :class="statusClass(file.status)">{{ pasteFileStatusLabel(file.status) }}</span>
+              <span v-if="file.coinActionCount" class="pf-count">{{ file.coinActionCount }} 币种</span>
+            </div>
+            <div class="pf-name">{{ file.name }}</div>
+            <div v-if="file.title" class="pf-title">{{ file.title }}</div>
+          </li>
+        </ul>
+        <button type="button" class="btn linkish" @click="showManualPaste = !showManualPaste">
+          {{ showManualPaste ? "收起手动粘贴" : "展开手动粘贴" }}
+        </button>
+        <div v-if="showManualPaste" class="manual-paste">
+            <label class="field">
+              <span>文稿（第一行 = 标题）</span>
+              <textarea v-model="pasteText" rows="6" spellcheck="false" />
+            </label>
+            <button type="button" class="btn primary" :disabled="parsing" @click="runPasteParse">
+              {{ parsing ? "解析中…" : "手动解析" }}
+            </button>
+          </div>
+      </aside>
 
-        <div v-if="previewCardFields" class="embed-preview">
-          <h3>{{ String(previewCardFields.title ?? pastePreview.title) }}</h3>
-          <p v-if="previewCardFields.description" class="embed-desc">{{ previewCardFields.description }}</p>
-          <div v-if="Array.isArray(previewCardFields.fields)" class="embed-fields">
-            <div
-              v-for="(f, i) in previewCardFields.fields"
-              :key="i"
-              class="embed-field"
-              :class="{ inline: f.inline }"
+      <main class="panel paste-detail-panel">
+        <div class="panel-head">
+          <h2>{{ selectedPasteFile || "解析预览" }}</h2>
+          <div v-if="selectedPasteFile" class="detail-actions">
+            <button type="button" class="btn" :disabled="parsing" @click="forceParseFile(selectedPasteFile)">
+              重新解析
+            </button>
+            <button v-if="pastePreview" type="button" class="btn" @click="copyPreviewJson">复制 JSON</button>
+          </div>
+        </div>
+        <p v-if="!selectedPasteFile && !pastePreview" class="muted">从左侧选择文件，或使用手动粘贴解析。</p>
+        <p v-if="parseMsg" class="parse-msg">{{ parseMsg }}</p>
+        <p v-if="pasteError" class="err">{{ pasteError }}</p>
+
+        <div v-if="pastePreview" class="preview-wrap">
+          <div v-if="asStringList(pastePreview.summary).length" class="summary-block">
+            <div class="fn">全文概要</div>
+            <ul>
+              <li v-for="(line, i) in asStringList(pastePreview.summary)" :key="i">{{ line }}</li>
+            </ul>
+          </div>
+
+          <div v-if="coinActions.length" class="coin-actions">
+            <div class="coin-actions-head">
+              <span class="fn">币种操作</span>
+              <span class="coin-count">{{ coinActions.length }} 条</span>
+            </div>
+            <article
+              v-for="(coin, i) in coinActions"
+              :key="`${coin.symbol}-${coin.actionType}-${i}`"
+              class="coin-action-card"
             >
-              <div class="fn">{{ f.name }}</div>
-              <div class="fv">{{ f.value }}</div>
+              <header class="coin-action-top">
+                <strong class="coin-sym">{{ coin.symbol }}</strong>
+                <span class="action-badge" :class="actionTypeClass(String(coin.actionType))">
+                  {{ actionTypeLabel(String(coin.actionType)) }}
+                </span>
+                <span v-if="coin.direction" class="coin-dir">{{ coin.direction }}</span>
+              </header>
+              <p class="coin-desc">{{ coin.description || "—" }}</p>
+              <p class="coin-detail">{{ coinActionDetail(coin) }}</p>
+            </article>
+          </div>
+          <p v-else class="muted">未识别到币种操作。</p>
+
+          <div v-if="previewCardFields" class="embed-preview">
+            <h3>{{ String(previewCardFields.title ?? pastePreview.title) }}</h3>
+            <p v-if="previewCardFields.description" class="embed-desc">{{ previewCardFields.description }}</p>
+            <div v-if="Array.isArray(previewCardFields.fields)" class="embed-fields">
+              <div
+                v-for="(f, i) in previewCardFields.fields"
+                :key="i"
+                class="embed-field"
+                :class="{ inline: f.inline }"
+              >
+                <div class="fn">{{ f.name }}</div>
+                <div class="fv">{{ f.value }}</div>
+              </div>
             </div>
           </div>
+          <details class="json-block" open>
+            <summary>预览 JSON</summary>
+            <pre>{{ previewJson }}</pre>
+          </details>
         </div>
-        <details class="json-block" open>
-          <summary>预览 JSON</summary>
-          <pre>{{ previewJson }}</pre>
-        </details>
-      </div>
-    </section>
+      </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .fetch-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 0.75rem 1rem 1rem;
+  overflow: hidden;
+  background: #1e1f22;
+}
+.fetch-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-shrink: 0;
+  margin-bottom: 0.75rem;
+}
+.mode-tabs {
+  display: flex;
+  gap: 0.35rem;
+  background: #2b2d31;
+  border: 1px solid #3f4147;
+  border-radius: 10px;
+  padding: 0.25rem;
+}
+.mode-tab {
+  border: none;
+  background: transparent;
+  color: #949ba4;
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.mode-tab.on {
+  background: #5865f2;
+  color: #fff;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.mode-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.mode-youtube {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.1fr);
-  grid-template-rows: auto auto;
+  grid-template-columns: minmax(300px, 1fr) minmax(320px, 1.1fr);
+  gap: 1rem;
+  height: 100%;
+  overflow: auto;
+}
+.mode-paste {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   gap: 1rem;
   height: 100%;
   min-height: 0;
-  padding: 1rem;
-  overflow: auto;
-  background: #1e1f22;
 }
-.paste-panel {
-  grid-column: 1 / -1;
+.paste-list-panel,
+.paste-detail-panel {
+  min-height: 0;
+  overflow: auto;
+}
+.paste-files {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.paste-files li {
+  background: #1e1f22;
+  border: 1px solid #3f4147;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.paste-files li:hover {
+  border-color: #5865f2;
+}
+.paste-files li.selected {
+  border-color: #5865f2;
+  box-shadow: 0 0 0 1px rgba(88, 101, 242, 0.35);
+}
+.pf-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+.pf-count {
+  font-size: 0.72rem;
+  color: #949ba4;
+}
+.pf-name {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.8rem;
+  color: #dbdee1;
+  word-break: break-all;
+}
+.pf-title {
+  font-size: 0.78rem;
+  color: #949ba4;
+  margin-top: 0.2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dir-hint code {
+  font-size: 0.72rem;
+  color: #aeb4ff;
+  word-break: break-all;
+}
+.scan-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: #aeb4ff;
+}
+.manual-paste {
+  margin-top: 0.5rem;
+}
+.btn.linkish {
+  margin-top: 1rem;
+  background: transparent;
+  border-color: transparent;
+  color: #949ba4;
+  font-size: 0.78rem;
+  padding: 0.25rem 0;
+}
+.detail-actions {
+  display: flex;
+  gap: 0.5rem;
 }
 .paste-tag {
   font-size: 0.72rem;
@@ -625,7 +923,7 @@ https://youtu.be/..."
 }
 .json-block pre {
   margin: 0;
-  max-height: 280px;
+  max-height: min(420px, 40vh);
   overflow: auto;
   background: #1e1f22;
   border: 1px solid #3f4147;
@@ -643,7 +941,6 @@ https://youtu.be/..."
   border-radius: 10px;
   padding: 1rem 1.1rem;
   min-height: 0;
-  overflow: auto;
 }
 .panel-head {
   display: flex;
@@ -837,8 +1134,10 @@ h2 {
   color: #f38688;
 }
 @media (max-width: 900px) {
-  .fetch-page {
+  .mode-youtube,
+  .mode-paste {
     grid-template-columns: 1fr;
+    overflow: auto;
   }
 }
 </style>

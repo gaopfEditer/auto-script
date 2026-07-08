@@ -8,9 +8,39 @@ import { parseSignalText } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
 import { executionFromParsed, formatManualRawContent, normalizeExecution } from "./discord-signal-execution.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
+import {
+  NUMERIC_DEDUP_WINDOW_MS,
+  shouldSkipNumericDuplicate,
+} from "./discord-signal-numeric-dedup.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { config } from "./config.js";
 import { extractSignalCardRowId } from "./store.js";
+
+/** @param {Record<string, unknown>} row */
+export function resolveMessageSignalAt(row) {
+  const ms = Number(row.createdAtMs ?? row.created_at_ms ?? 0);
+  if (Number.isFinite(ms) && ms > 0) {
+    return new Date(ms).toISOString();
+  }
+  const received = row.receivedAt ?? row.received_at;
+  if (received) {
+    const d = new Date(String(received));
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+}
+
+/** @param {Record<string, unknown>} row */
+export function resolveCardSignalAt(row) {
+  const msgMs = Number(row.message_created_at_ms ?? row.messageCreatedAtMs ?? 0);
+  if (Number.isFinite(msgMs) && msgMs > 0) {
+    return new Date(msgMs).toISOString();
+  }
+  const sa = row.signal_at ?? row.signalAt;
+  if (sa) return String(sa);
+  const ca = row.created_at ?? row.createdAt;
+  return ca ? String(ca) : null;
+}
 
 /**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
@@ -70,6 +100,27 @@ export function createDiscordSignalCardService(store, log, broadcast) {
     const textHash = signalTextHash(content);
     const executionJson = executionFromParsed(parsed);
     const symbol = extractSymbolFromPayload(parsed, executionJson);
+
+    if (symbol && store.getRecentSignalCardBySymbolChannel) {
+      const prev = await store.getRecentSignalCardBySymbolChannel({
+        symbol,
+        channelId,
+        withinMs: NUMERIC_DEDUP_WINDOW_MS,
+      });
+      if (
+        prev &&
+        shouldSkipNumericDuplicate(
+          normalizeExecution(prev.execution_json ?? prev.executionJson, prev.parsed_json ?? prev.parsedJson),
+          executionJson
+        )
+      ) {
+        log.debug(
+          `信号跳过数值重复 symbol=${symbol} channel=${channelId} blogger=${chCfg.name} preview=${content.slice(0, 80)}`
+        );
+        return { skipped: "duplicate_numeric" };
+      }
+    }
+
     const assetClass = detectAssetClass(symbol, parsed, executionJson, content);
     const verifyMode = resolveVerifyMode(assetClass, parsed.verifyMode);
     const cardFieldsJson = buildCardFieldsFromExecution(executionJson, parsed, content, {
@@ -91,7 +142,7 @@ export function createDiscordSignalCardService(store, log, broadcast) {
       sourceRef: channelId,
       symbol,
       cardFieldsJson,
-      signalAt: new Date().toISOString(),
+      signalAt: resolveMessageSignalAt(row),
       verifyMode,
       assetClass,
     });
@@ -169,6 +220,7 @@ export function signalCardToClient(row) {
     execution: normalizeExecution(row.execution_json ?? row.executionJson, parsedJson),
     source,
     isManual,
+    signalAt: resolveCardSignalAt(row),
     createdAt: row.created_at ?? row.createdAt ?? null,
     updatedAt: row.updated_at ?? row.updatedAt ?? null,
   };

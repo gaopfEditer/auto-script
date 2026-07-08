@@ -1,9 +1,33 @@
 /**
  * 币安 U 本位永续公开行情（价格校验 / 接近推送）。
  */
+import { fetch as undiciFetch, ProxyAgent } from "undici";
 import { config } from "./config.js";
 
 const DEFAULT_LEVERAGE = () => Number(config.cardVerifyLeverage) || 100;
+
+/** @type {import("undici").Dispatcher | undefined} */
+let binanceDispatcher;
+
+function getBinanceDispatcher() {
+  const proxy = config.binanceProxy;
+  if (!proxy) return undefined;
+  if (!binanceDispatcher) binanceDispatcher = new ProxyAgent(proxy);
+  return binanceDispatcher;
+}
+
+/**
+ * @param {string} url
+ * @param {RequestInit} [init]
+ */
+async function binanceFetch(url, init = {}) {
+  const signal = init.signal ?? AbortSignal.timeout(config.binanceRequestTimeoutMs);
+  const dispatcher = getBinanceDispatcher();
+  if (dispatcher) {
+    return undiciFetch(url, { ...init, signal, dispatcher });
+  }
+  return fetch(url, { ...init, signal });
+}
 
 /**
  * @param {string} symbol 如 BTC 或 BTCUSDT
@@ -14,7 +38,7 @@ export async function fetchFuturesPrice(symbol) {
     : `${String(symbol).toUpperCase()}USDT`;
   const base = config.binanceFapiUrl.replace(/\/$/, "");
   const url = `${base}/fapi/v1/ticker/price?symbol=${encodeURIComponent(sym)}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(config.binanceRequestTimeoutMs) });
+  const res = await binanceFetch(url);
   if (!res.ok) throw new Error(`Binance price HTTP ${res.status}`);
   const data = await res.json();
   return { symbol: sym, price: Number(data.price) };
@@ -44,7 +68,7 @@ export async function fetchFuturesKlines(symbol, startMs, endMs, interval = "5m"
       limit: "500",
     });
     const url = `${base}/fapi/v1/klines?${params}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(config.binanceRequestTimeoutMs) });
+    const res = await binanceFetch(url);
     if (!res.ok) throw new Error(`Binance klines HTTP ${res.status}`);
     const rows = await res.json();
     if (!Array.isArray(rows) || !rows.length) break;
