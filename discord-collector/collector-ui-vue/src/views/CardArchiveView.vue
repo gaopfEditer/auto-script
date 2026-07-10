@@ -2,18 +2,27 @@
 import { ref, computed, onMounted, watch, onUnmounted } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import SignalCardItem from "../components/SignalCardItem.vue";
+import SignalEvaluationForm from "../components/SignalEvaluationForm.vue";
 import {
   fetchArchiveCard,
   fetchArchiveCards,
   fetchCardChannels,
   fetchCardSources,
   buildArchivePeriodQuery,
+  runArchiveCardBacktest,
 } from "../lib/cardArchiveApi.js";
+import { updateSignalCard } from "../lib/discordSignalApi.js";
 import { useNewCardNotifications } from "../composables/useNewCardNotifications.js";
 import {
   cardExecution,
   formatPlannedSummary,
   outcomeLabel,
+  emptyExecution,
+  buildExecutionPayload,
+  executionEquals,
+  seedActualFromPlanned,
+  takeProfitText,
+  hasEvaluation,
 } from "../lib/signalExecution.js";
 
 const SOURCE_OPTIONS = [
@@ -50,6 +59,15 @@ const channelOptions = ref(/** @type {import("../lib/cardArchiveApi.js").Archive
 
 const selected = computed(() => cards.value.find((c) => c.id === selectedId.value) ?? null);
 const modalOpen = computed(() => selectedId.value > 0 && !!selected.value);
+
+const execDraft = ref(emptyExecution());
+const noteDraft = ref("");
+const actualTpText = ref("");
+const evalSaving = ref(false);
+const evalError = ref("");
+const backtestLoading = ref(false);
+/** @type {Record<number, ReturnType<typeof setTimeout>>} */
+const saveTimers = {};
 
 const groupedBySource = computed(() => {
   /** @type {Record<string, number>} */
@@ -96,8 +114,83 @@ function closeModal() {
 }
 
 /** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
+function initEvalDraft(card) {
+  execDraft.value = structuredClone(cardExecution(card));
+  seedActualFromPlanned(execDraft.value);
+  actualTpText.value = takeProfitText(execDraft.value.actual);
+  noteDraft.value = card.note ?? "";
+  evalError.value = "";
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} updated */
+function applyCardUpdate(updated) {
+  const idx = cards.value.findIndex((c) => c.id === updated.id);
+  if (idx >= 0) cards.value[idx] = updated;
+  else cards.value.unshift(updated);
+  if (selectedId.value === updated.id) initEvalDraft(updated);
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
+async function saveEvaluation(card) {
+  const payload = buildExecutionPayload(execDraft.value, { actualTp: actualTpText.value });
+  const note = String(noteDraft.value ?? "").trim();
+  const prevEx = cardExecution(card);
+  const prevNote = String(card.note ?? "").trim();
+  if (executionEquals(payload, prevEx) && note === prevNote) return;
+
+  evalSaving.value = true;
+  evalError.value = "";
+  try {
+    await updateSignalCard(card.id, { note: note || null, execution: payload });
+    const fresh = await fetchArchiveCard(card.id);
+    applyCardUpdate(fresh);
+  } catch (e) {
+    evalError.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    evalSaving.value = false;
+  }
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
+function scheduleSave(card) {
+  const id = card.id;
+  if (saveTimers[id]) clearTimeout(saveTimers[id]);
+  saveTimers[id] = setTimeout(() => void saveEvaluation(card), 500);
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
+async function triggerBacktest(card) {
+  backtestLoading.value = true;
+  evalError.value = "";
+  try {
+    const { card: fresh } = await runArchiveCardBacktest(card.id);
+    applyCardUpdate(fresh);
+  } catch (e) {
+    evalError.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    backtestLoading.value = false;
+  }
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard | null} card */
+function backtestTitle(card) {
+  if (!card?.backtest) return "分层回测";
+  const tier = card.backtest.tier === "major" ? "主流 BTC/ETH · 100x · 4h–8h" : "山寨 · 30x · 15m–3h";
+  return `分层回测 · ${tier}`;
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard | null} card */
+function backtestPendingHint(card) {
+  if (!card || card.assetClass === "stock") return "股票暂不支持分层回测";
+  const sym = String(card.symbol ?? "").toUpperCase().replace(/USDT$/, "");
+  if (sym === "BTC" || sym === "ETH") return "信号满 8 小时后自动回测，或点击手动回测";
+  return "信号满 3 小时后自动回测，或点击手动回测";
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
 function openCard(card) {
   selectedId.value = card.id;
+  initEvalDraft(card);
 }
 
 /** @param {KeyboardEvent} e */
@@ -167,6 +260,14 @@ async function applyOpenQuery() {
   delete q.open;
   void router.replace({ query: q });
 }
+
+watch(
+  () => selected.value?.id ?? 0,
+  (id) => {
+    const card = selected.value;
+    if (id > 0 && card) initEvalDraft(card);
+  }
+);
 
 watch([source, symbol, period], () => void reload());
 watch(channelId, () => void load());
@@ -329,6 +430,63 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <div class="block backtest-block">
+              <div class="backtest-head">
+                <h4>{{ backtestTitle(selected) }}</h4>
+                <button
+                  v-if="selected.assetClass !== 'stock'"
+                  type="button"
+                  class="btn-sm"
+                  :disabled="backtestLoading"
+                  @click="triggerBacktest(selected)"
+                >
+                  {{ backtestLoading ? "回测中…" : "手动回测" }}
+                </button>
+              </div>
+              <template v-if="selected.backtest && !selected.backtest.error">
+                <p class="backtest-best">
+                  最优窗口 <strong>{{ selected.backtest.bestWindow }}</strong>
+                  · {{ selected.backtest.outcome === "stop_loss" ? "止损" : "最优平仓" }}
+                  @ {{ selected.backtest.optimalExitPrice }}
+                  <template v-if="selected.backtest.pnlLabel">
+                    · <span
+                      class="pnl-tag"
+                      :class="{ gain: (selected.backtest.pnlPctOnMargin ?? 0) > 0, loss: (selected.backtest.pnlPctOnMargin ?? 0) < 0 }"
+                    >{{ selected.backtest.pnlLabel }}</span>
+                  </template>
+                </p>
+                <details v-if="selected.backtest.windows?.length" class="backtest-windows">
+                  <summary>各窗口明细 ({{ selected.backtest.windows.length }})</summary>
+                  <ul>
+                    <li v-for="(w, i) in selected.backtest.windows" :key="i">
+                      {{ w.window }}
+                      <template v-if="w.pnlLabel"> — {{ w.pnlLabel }}</template>
+                      <template v-else-if="w.error"> — {{ w.error }}</template>
+                      <template v-else-if="w.outcome === 'stop_loss'"> — 止损</template>
+                    </li>
+                  </ul>
+                </details>
+              </template>
+              <p v-else-if="selected.backtest?.error" class="muted">回测失败：{{ selected.backtest.error }}</p>
+              <p v-else class="muted">{{ backtestPendingHint(selected) }}</p>
+            </div>
+
+            <div class="block eval-block">
+              <h4>评价 / 实际成交</h4>
+              <p v-if="hasEvaluation(cardExecution(selected), selected.note)" class="muted eval-hint">
+                已填写评价，可在下方修改
+              </p>
+              <SignalEvaluationForm
+                v-model="execDraft"
+                v-model:note="noteDraft"
+                v-model:actual-tp-text="actualTpText"
+                @change="scheduleSave(selected)"
+                @save="saveEvaluation(selected)"
+              />
+              <p v-if="evalSaving" class="muted">保存中…</p>
+              <p v-if="evalError" class="err">{{ evalError }}</p>
+            </div>
+
             <details v-if="selected.rawContent" class="raw">
               <summary>原始正文</summary>
               <pre>{{ selected.rawContent }}</pre>
@@ -453,7 +611,7 @@ h3 {
   padding: 1.5rem;
 }
 .modal-panel {
-  width: min(640px, 100%);
+  width: min(720px, 100%);
   max-height: min(85vh, 900px);
   background: #2b2d31;
   border: 1px solid #3f4147;
@@ -536,6 +694,60 @@ h3 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.75rem;
+}
+.backtest-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.backtest-head h4 {
+  margin: 0;
+}
+.btn-sm {
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #3f4147;
+  background: #35373c;
+  color: #dbdee1;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.btn-sm:hover:not(:disabled) {
+  background: #5865f2;
+  color: #fff;
+}
+.btn-sm:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.backtest-best {
+  font-size: 0.85rem;
+  color: #dbdee1;
+  margin: 0.25rem 0;
+}
+.pnl-tag.gain {
+  color: #3ba55d;
+}
+.pnl-tag.loss {
+  color: #f38688;
+}
+.backtest-windows {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: #949ba4;
+}
+.backtest-windows ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+.eval-block {
+  border-top: 1px solid #3f4147;
+  padding-top: 0.75rem;
+}
+.eval-hint {
+  margin-bottom: 0.35rem;
 }
 .raw pre {
   white-space: pre-wrap;

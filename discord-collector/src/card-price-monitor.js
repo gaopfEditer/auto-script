@@ -2,6 +2,7 @@
  * 卡片价格校验（默认 3h；股票较长周期）与接近关键价位推送。
  */
 import { archiveCardToClient } from "./card-archive-service.js";
+import { isBacktestDue, runCardBacktest } from "./card-backtest-engine.js";
 import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import {
   evaluatePricePath,
@@ -79,6 +80,33 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
         ? ` | 入场均价 ${Number(result.entry).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
         : "";
     return `自动校验(${modeLabel}): ${kind} @ ${result.hitLevel || "—"}${entry}${pnl}`;
+  }
+
+  async function runBacktest() {
+    const rows = await store.listCardsForBacktest({ limit: 40 });
+    for (const row of rows) {
+      const card = archiveCardToClient(row);
+      const sym = card.symbol;
+      if (!sym) continue;
+
+      const signalMs = cardSignalMs(row);
+      const now = Date.now();
+      if (!isBacktestDue(card, signalMs, now)) continue;
+
+      try {
+        const result = await runCardBacktest(card, signalMs);
+        if (result.skipped) continue;
+
+        await store.updateSignalCard(card.id, { backtestJson: result });
+        const pnl = result.pnlLabel ? ` ${result.pnlLabel}` : "";
+        const win = result.bestWindow ? ` best=${result.bestWindow}` : "";
+        log.info(
+          `卡片 #${card.id} 回测 tier=${result.tier ?? "?"}${win}${pnl}${result.error ? ` err=${result.error}` : ""}`
+        );
+      } catch (e) {
+        log.warn(`卡片 #${card.id} 回测失败: ${/** @type {Error} */ (e).message}`);
+      }
+    }
   }
 
   async function runVerification() {
@@ -257,6 +285,7 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
 
   async function tick() {
     await runVerification();
+    await runBacktest();
     await runProximityCheck();
   }
 
@@ -282,5 +311,5 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
     }
   }
 
-  return { start, stop, tick, runVerification, runProximityCheck };
+  return { start, stop, tick, runVerification, runBacktest, runProximityCheck };
 }

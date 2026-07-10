@@ -171,6 +171,7 @@ export async function openStore(cfg, log) {
     "ADD COLUMN signal_at DATETIME(3) NULL AFTER proximity_json",
     "ADD COLUMN verify_mode VARCHAR(8) NOT NULL DEFAULT '3h' AFTER signal_at",
     "ADD COLUMN asset_class VARCHAR(16) NOT NULL DEFAULT 'crypto' AFTER verify_mode",
+    "ADD COLUMN backtest_json JSON NULL AFTER asset_class",
   ]) {
     try {
       await pool.query(`ALTER TABLE discord_signal_cards ${col}`);
@@ -815,6 +816,33 @@ export async function openStore(cfg, log) {
    * 待价格校验的卡片（每张仅一种周期：默认 3h 加密 / 30d 股票）。
    * @param {{ limit?: number }} [opts]
    */
+  async function listCardsForBacktest(opts = {}) {
+    const lim = Math.min(200, Math.max(1, Number(opts.limit) || 80));
+    const [rows] = await pool.query(
+      `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       WHERE sc.status = 'active'
+         AND sc.symbol IS NOT NULL AND sc.symbol != ''
+         AND sc.backtest_json IS NULL
+         AND (sc.asset_class = 'crypto' OR sc.asset_class IS NULL OR sc.asset_class = '')
+         AND (
+           (
+             UPPER(REPLACE(REPLACE(REPLACE(sc.symbol, 'USDT', ''), 'USDC', ''), 'BUSD', '')) IN ('BTC', 'ETH')
+             AND COALESCE(sc.signal_at, sc.created_at) <= DATE_SUB(?, INTERVAL 8 HOUR)
+           )
+           OR (
+             UPPER(REPLACE(REPLACE(REPLACE(sc.symbol, 'USDT', ''), 'USDC', ''), 'BUSD', '')) NOT IN ('BTC', 'ETH')
+             AND COALESCE(sc.signal_at, sc.created_at) <= DATE_SUB(?, INTERVAL 3 HOUR)
+           )
+         )
+       ORDER BY sc.id ASC
+       LIMIT ${lim}`,
+      [isoToMysqlDatetime3(new Date().toISOString()), isoToMysqlDatetime3(new Date().toISOString())]
+    );
+    return rows;
+  }
+
   async function listCardsForVerification(opts = {}) {
     const lim = Math.min(200, Math.max(1, Number(opts.limit) || 80));
     const hours = Number(process.env.CARD_VERIFY_DEFAULT_HOURS ?? 3) || 3;
@@ -876,7 +904,7 @@ export async function openStore(cfg, log) {
 
   /**
    * @param {number} id
-   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown }} patch
+   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown }} patch
    */
   async function updateSignalCard(id, patch) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
@@ -924,6 +952,10 @@ export async function openStore(cfg, log) {
       sets.push("card_fields_json = ?");
       params.push(serializeRawJsonColumnForMysql(patch.cardFieldsJson));
     }
+    if (patch.backtestJson !== undefined) {
+      sets.push("backtest_json = ?");
+      params.push(serializeRawJsonColumnForMysql(patch.backtestJson));
+    }
     params.push(id);
     await pool.execute(`UPDATE discord_signal_cards SET ${sets.join(", ")} WHERE id = ?`, params);
     const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [id]);
@@ -960,6 +992,7 @@ export async function openStore(cfg, log) {
     getSignalCardById,
     getSignalCardByMessageId,
     listCardsForVerification,
+    listCardsForBacktest,
     listActiveCardsForProximity,
     updateSignalCard,
     close,
@@ -1008,6 +1041,7 @@ export function createOfflineStore() {
     getSignalCardById: async () => null,
     getSignalCardByMessageId: async () => null,
     listCardsForVerification: async () => [],
+    listCardsForBacktest: async () => [],
     listActiveCardsForProximity: async () => [],
     updateSignalCard: async () => null,
     close: async () => {},

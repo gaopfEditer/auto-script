@@ -197,16 +197,19 @@ export function archiveCardToClient(row) {
   let verify3h = row.verify_3h_json ?? row.verify3hJson;
   let verify1m = row.verify_1m_json ?? row.verify1mJson;
   let proximity = row.proximity_json ?? row.proximityJson;
+  let backtest = row.backtest_json ?? row.backtestJson;
   for (const [key, val] of [
     ["verify3h", verify3h],
     ["verify1m", verify1m],
     ["proximity", proximity],
+    ["backtest", backtest],
   ]) {
     if (typeof val === "string") {
       try {
         if (key === "verify3h") verify3h = JSON.parse(val);
         if (key === "verify1m") verify1m = JSON.parse(val);
         if (key === "proximity") proximity = JSON.parse(val);
+        if (key === "backtest") backtest = JSON.parse(val);
       } catch {
         /* ignore */
       }
@@ -230,5 +233,6 @@ export function archiveCardToClient(row) {
     verify3h: verify3h && typeof verify3h === "object" ? verify3h : null,
     verify1m: verify1m && typeof verify1m === "object" ? verify1m : null,
     proximity: proximity && typeof proximity === "object" ? proximity : null,
+    backtest: backtest && typeof backtest === "object" ? backtest : null,
   };
 }
