@@ -81,6 +81,10 @@ export const config = {
   discordTelegramRealtimeChannelIds: parseIdList(process.env.DISCORD_TELEGRAM_REALTIME_CHANNEL_IDS ?? ""),
   /** 非实时频道：最后一条消息后等待毫秒再批量转发（默认 120000） */
   telegramPushDebounceMs: Number(process.env.DISCORD_TELEGRAM_PUSH_DEBOUNCE_MS ?? 120_000),
+  /** Gateway 消息：先转发 Telegram/Webhook，再入库（默认开启，省 20–150ms+） */
+  telegramPriorityForward: !["0", "false", "no", "off"].includes(
+    String(process.env.DISCORD_TELEGRAM_PRIORITY_FORWARD ?? "1").toLowerCase()
+  ),
   ollamaGenerateUrl: (process.env.OLLAMA_GENERATE_URL ?? "http://127.0.0.1:11434/api/generate").trim(),
   ollamaModel: (process.env.OLLAMA_MODEL ?? "gemma4:26b").trim(),
   ollamaGenerateTimeoutMs: Number(process.env.OLLAMA_GENERATE_TIMEOUT_MS ?? 60_000),

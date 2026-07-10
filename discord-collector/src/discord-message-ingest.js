@@ -390,6 +390,53 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       }
     }
 
+    /**
+     * @param {ReturnType<typeof extractMessageFromPayload>[]} rows
+     * @param {{ onlyNew?: Set<string> }} [opts]
+     */
+    function enqueueTelegramGatewayRows(rows, opts = {}) {
+      if (!telegramPush?.enabled || isRestBatch) return;
+      for (const r of rows) {
+        if (String(r.source ?? "") !== "gateway_ws") continue;
+        if (!String(r.content ?? "").trim()) continue;
+        const cid = String(r.channelId ?? "").trim();
+        if (isSignalChannel(cid)) continue;
+        const mid = String(r.messageId ?? "").trim();
+        if (opts.onlyNew && mid && !opts.onlyNew.has(mid)) continue;
+        telegramPush.enqueue(r);
+      }
+    }
+
+    /**
+     * @param {ReturnType<typeof extractMessageFromPayload>[]} rows
+     * @param {{ onlyNew?: Set<string> }} [opts]
+     */
+    function enqueueWebhookGatewayRows(rows, opts = {}) {
+      if (!webhookForward?.enabled || isRestBatch) return;
+      for (const r of rows) {
+        if (String(r.source ?? "") !== "gateway_ws") continue;
+        const mid = String(r.messageId ?? "").trim();
+        if (opts.onlyNew && mid && !opts.onlyNew.has(mid)) continue;
+        webhookForward.enqueue(r);
+      }
+    }
+
+    /** @type {Set<string> | null} */
+    let forwardNewIds = null;
+    if (config.telegramPriorityForward && !isRestBatch && (telegramPush?.enabled || webhookForward?.enabled)) {
+      const existing = await store.findExistingDiscordMessageIds(
+        toPersist.map((r) => String(r.messageId ?? ""))
+      );
+      forwardNewIds = new Set(
+        toPersist
+          .filter((r) => !existing.has(String(r.messageId ?? "")))
+          .map((r) => String(r.messageId ?? ""))
+          .filter(Boolean)
+      );
+      enqueueTelegramGatewayRows(toPersist, { onlyNew: forwardNewIds });
+      enqueueWebhookGatewayRows(toPersist, { onlyNew: forwardNewIds });
+    }
+
     const result = await store.insertDiscordMessagesBatch(toPersist);
 
     const pushRows = toPersist;
@@ -494,17 +541,16 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       await runSignalCardPipeline([...gatewayRows, ...restInserted]);
     }
 
-    if (telegramPush?.enabled && !isRestBatch && result.inserted > 0) {
-      for (const r of toPersist) {
-        if (String(r.source ?? "") !== "gateway_ws") continue;
-        if (!String(r.content ?? "").trim()) continue;
-        const cid = String(r.channelId ?? "").trim();
-        if (isSignalChannel(cid)) continue;
-        telegramPush.enqueue(r);
-      }
+    if (!config.telegramPriorityForward && telegramPush?.enabled && !isRestBatch && result.inserted > 0) {
+      const insertedIds = new Set(
+        (Array.isArray(result.insertedRows) ? result.insertedRows : [])
+          .map((r) => String(r.messageId ?? ""))
+          .filter(Boolean)
+      );
+      enqueueTelegramGatewayRows(toPersist, { onlyNew: insertedIds });
     }
 
-    if (webhookForward?.enabled) {
+    if (!config.telegramPriorityForward && webhookForward?.enabled) {
       const gatewayRows = isRestBatch
         ? []
         : toPersist.filter((r) => String(r.source ?? "") === "gateway_ws");

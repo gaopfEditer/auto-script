@@ -1,0 +1,34 @@
+{
+  "order": ["vpn", "fileManager", "logs", "chrome"],
+  "apps": {
+    "vpn": {
+      "enabled": true,
+      "label": "VPN (v2rayN)",
+      "path": "D:\\frontend\\main\\tools\\v2rayn7.13\\v2rayn\\v2rayN.exe",
+      "args": "",
+      "delay": 0
+    },
+    "fileManager": {
+      "enabled": true,
+      "label": "文件管理器",
+      "path": "explorer.exe",
+      "args": "C:\\Users\\eason\\Desktop\\script",
+      "delay": 300
+    },
+    "logs": {
+      "enabled": true,
+      "label": "日志目录",
+      "path": "explorer.exe",
+      "args": "C:\\Users\\eason\\Desktop\\script",
+      "delay": 300
+    },
+    "chrome": {
+      "enabled": true,
+      "label": "Chrome + 新闻",
+      "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "args": "--remote-debugging-port=9222 --user-data-dir=\"D:\\chrome_debug_profile\"",
+      "url": "https://gemini.google.com/app",
+      "delay": 1000
+    }
+  }
+}

@@ -347,6 +347,20 @@ export async function openStore(cfg, log) {
   }
 
   /**
+   * @param {string[]} messageIds
+   * @returns {Promise<Set<string>>}
+   */
+  async function findExistingDiscordMessageIds(messageIds) {
+    const ids = messageIds.map((id) => String(id ?? "").trim()).filter(Boolean);
+    if (!ids.length) return new Set();
+    const [rows] = await pool.query(
+      `SELECT message_id FROM discord_messages WHERE message_id IN (?)`,
+      [ids]
+    );
+    return new Set(rows.map((r) => String(r.message_id)));
+  }
+
+  /**
    * @param {Array<{ guildId: string, name: string, icon?: string | null, iconUrl?: string }>} rows
    */
   async function upsertDiscordGuildsBatch(rows) {
@@ -972,6 +986,7 @@ export async function openStore(cfg, log) {
     offline: false,
     insertFrame,
     insertDiscordMessagesBatch,
+    findExistingDiscordMessageIds,
     upsertDiscordGuildsBatch,
     upsertDiscordChannelsBatch,
     purgeMisclassifiedGuilds,
@@ -1021,6 +1036,7 @@ export function createOfflineStore() {
     offline: true,
     insertFrame: async () => {},
     insertDiscordMessagesBatch: async () => ({ inserted: 0, duplicate: 0, insertedRows: [] }),
+    findExistingDiscordMessageIds: async () => new Set(),
     upsertDiscordGuildsBatch: async () => 0,
     upsertDiscordChannelsBatch: async () => 0,
     purgeMisclassifiedGuilds: async () => {},
