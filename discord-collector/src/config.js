@@ -80,7 +80,7 @@ export const config = {
   /** 实时推送频道，不参与 debounce（空=无，全部走 2 分钟聚合） */
   discordTelegramRealtimeChannelIds: parseIdList(process.env.DISCORD_TELEGRAM_REALTIME_CHANNEL_IDS ?? ""),
   /** 非实时频道：最后一条消息后等待毫秒再批量转发（默认 120000） */
-  telegramPushDebounceMs: Number(process.env.DISCORD_TELEGRAM_PUSH_DEBOUNCE_MS ?? 120_000),
+  telegramPushDebounceMs: Number(process.env.DISCORD_TELEGRAM_PUSH_DEBOUNCE_MS ?? 120),
   /** Gateway 消息：先转发 Telegram/Webhook，再入库（默认开启，省 20–150ms+） */
   telegramPriorityForward: !["0", "false", "no", "off"].includes(
     String(process.env.DISCORD_TELEGRAM_PRIORITY_FORWARD ?? "1").toLowerCase()
