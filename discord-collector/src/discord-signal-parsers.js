@@ -28,7 +28,7 @@ function matchAll(text, re) {
  */
 const CN_SYMBOL_ALIASES = [
   { names: ["比特币"], symbol: "BTC" },
-  { names: ["以太坊"], symbol: "ETH" },
+  { names: ["以太币", "以太坊"], symbol: "ETH" },
 ];
 
 /** @param {string} text */
@@ -92,11 +92,11 @@ const SIGNAL_PATTERN_SETS = {
     /\d{4,}/,
   ],
   tw_opg: [
-    /#?[A-Z]{2,6}|OPG|比特币|以太坊/i,
-    /(市價|市价|進空|進多|做多|做空|空|多)/,
-    /(槓桿|杠杆|倉位|仓位)\s*[：:]/,
-    /止盈/,
+    /槓桿建議|槓桿[：:]/,
+    /倉位建議|倉位[：:]/,
+    /第[一二三四1234]止盈|止盈[：:]/,
     /(止損|止损)\s*[：:]/,
+    /#?[A-Z]{2,6}|OPG|比特币|以太坊|市[價价]|進空|進多|做多|做空/,
   ],
   dabiaoke: [
     /(Btc|BTC|Eth|ETH|[A-Z]{2,10})/i,
@@ -124,6 +124,13 @@ const SIGNAL_PATTERN_SETS = {
     /(空|多|做多|做空|再空)/,
     /止损/,
     /止盈/,
+    /\d{3,}/,
+  ],
+  biquan_suozhang: [
+    /比特币|以太坊|以太币|BTC|ETH/i,
+    /止损[：:]/,
+    /止盈|直营/,
+    /(多一下|追个?空|做多|做空|附近\s*[多空]|开一点\s*空)/,
     /\d{3,}/,
   ],
   unknown_trader: [
@@ -393,6 +400,60 @@ export function parseYanchi(text) {
 }
 
 /** @param {string} text */
+function resolveBiquanSuozhangDirection(text) {
+  const t = String(text ?? "");
+  if (/追个?空|追空|做空|开一点\s*空|附近\s*空|\s空(?:\s*$|[试（])/.test(t)) return "做空";
+  if (/多一下|追多|做多|附近\s*多|\s多(?:\s*$|[试（])/.test(t)) return "做多";
+  return "";
+}
+
+/** @param {string} firstLine */
+function parseBiquanSuozhangEntry(firstLine) {
+  const line = String(firstLine ?? "").trim();
+  const m =
+    line.match(/(?:比特币|以太坊|以太币|BTC|ETH)\s+(?:反弹)?\s*([\d.]+(?:\s*[-–—~]\s*[\d.]+)?)/i) ||
+    line.match(/(?:反弹)?\s*([\d.]+(?:\s*[-–—~]\s*[\d.]+)?)\s*附近/i);
+  if (!m) return "";
+  return String(m[1]).replace(/\s+/g, "");
+}
+
+/** @param {string} text */
+export function parseBiquanSuozhang(text) {
+  const ls = lines(text);
+  const joined = ls.join("\n");
+  const head = ls[0] ?? joined;
+  const symbol = matchSymbolFromText(head) || matchSymbolFromText(joined);
+  const direction = resolveBiquanSuozhangDirection(head) || resolveBiquanSuozhangDirection(joined);
+  const entry = parseBiquanSuozhangEntry(head);
+  const stopLoss = matchLine(
+    joined,
+    /止损[：:\s]*(?:15分钟(?:有效)?(?:跌破|突破站稳|站稳))?([\d.]+)/i
+  );
+  const tpLine = matchLine(joined, /(?:止盈|直营)[：:\s]*([^\n（]+)/i);
+  const takeProfits = tpLine
+    ? tpLine
+        .split(/[-–—~]+/)
+        .map((x) => x.trim())
+        .filter((x) => /^\d/.test(x))
+    : [];
+  const noteMatch = head.match(/[（(]([^）)]+)[）)]/);
+  const note = noteMatch ? String(noteMatch[1]).trim() : "";
+  if (!symbol || !direction || !entry) return null;
+  const sym = symbol.toUpperCase();
+  return {
+    parser: "biquan_suozhang",
+    symbol: sym,
+    asset: sym,
+    direction,
+    entry,
+    stopLoss,
+    takeProfits,
+    note,
+    title: `${sym} · 币圈所长`,
+  };
+}
+
+/** @param {string} text */
 export function parseUnknownTrader(text) {
   const joined = lines(text).join("\n");
   const symbol =
@@ -452,31 +513,79 @@ export function parseAltcoinKing(text) {
   };
 }
 
+/** @param {string} text @param {RegExp} re */
+function matchTwOpgField(text, re) {
+  const m = String(text ?? "").match(re);
+  return m ? String(m[1] ?? m[0]).trim() : "";
+}
+
+/** @param {string[]} takeProfits @param {string} stopLoss */
+function inferDirectionFromTpSl(takeProfits, stopLoss) {
+  const tps = takeProfits.map((x) => parseFloat(String(x).replace(/,/g, ""))).filter(Number.isFinite);
+  const sl = parseFloat(String(stopLoss ?? "").replace(/,/g, ""));
+  if (!tps.length || !Number.isFinite(sl)) return "";
+  const minTp = Math.min(...tps);
+  const maxTp = Math.max(...tps);
+  const ascending = tps.every((v, i) => i === 0 || v >= tps[i - 1]);
+  const descending = tps.every((v, i) => i === 0 || v <= tps[i - 1]);
+  if (sl > maxTp && descending) return "做空";
+  if (sl < minTp && ascending) return "做多";
+  if (sl > maxTp) return "做空";
+  if (sl < minTp) return "做多";
+  return "";
+}
+
+/** @param {string} text */
+function resolveTwOpgDirection(text) {
+  const t = String(text ?? "");
+  if (/進空|做空/.test(t)) return "做空";
+  if (/進多|做多/.test(t)) return "做多";
+  const mkt = matchLine(t, /(市價|市价)\s*(進空|進多|做空|做多|[空多])/);
+  if (mkt) {
+    if (/空|進空|做空/.test(mkt)) return "做空";
+    if (/多|進多|做多/.test(mkt)) return "做多";
+  }
+  return "";
+}
+
 /** @param {string} text */
 export function parseTwOpg(text) {
   const joined = lines(text).join("\n");
-  const symbol = matchSymbolFromText(joined) || "OPG";
-  const direction = /進空|做空|空/.test(joined)
-    ? "做空"
-    : /進多|做多|多/.test(joined)
-      ? "做多"
-      : matchLine(joined, /(市價|市价)([^\n]+)/);
-  const leverage = matchLine(joined, /槓桿建議[：:\s]*([^\n]+)/i) || matchLine(joined, /杠杆[：:\s]*([^\n]+)/i);
-  const position = matchLine(joined, /倉位建議[：:\s]*([^\n]+)/i) || matchLine(joined, /仓位[：:\s]*([^\n]+)/i);
-  const takeProfits = matchAll(joined, /第[一二三四1234]止盈[：:\s]*([\d.]+)/gi);
+  let symbol = matchSymbolFromText(joined);
+  if (!symbol) {
+    const symM = joined.match(/(?:^|[\s#])#?([A-Z]{2,10})(?:USDT)?(?:\s|$|[^a-z])/i);
+    if (symM) symbol = symM[1].toUpperCase();
+  }
+  const leverage =
+    matchTwOpgField(joined, /槓桿建議[：:\s]*([\s\S]+?)(?=倉位建議|仓位建议|第一止盈|止盈[：:]|止損|止损|穩健操作建議|$)/i) ||
+    matchTwOpgField(joined, /杠杆[：:\s]*([\s\S]+?)(?=仓位建议|倉位建議|第一止盈|止盈[：:]|止损|止損|稳健操作建议|$)/i);
+  const position =
+    matchTwOpgField(joined, /倉位建議[：:\s]*([\s\S]+?)(?=第一止盈|止盈[：:]|止損|止损|穩健操作建議|$)/i) ||
+    matchTwOpgField(joined, /仓位建议[：:\s]*([\s\S]+?)(?=第一止盈|止盈[：:]|止损|止損|稳健操作建议|$)/i);
+  const takeProfits = [
+    ...matchAll(joined, /第[一二三四1234]止盈[：:\s]*([\d.]+)/gi),
+    ...matchAll(joined, /(?:^|[\s，,;；])止盈[：:\s]*([\d.]+)/gi),
+  ].filter(Boolean);
   const stopLoss = matchLine(joined, /止損[：:\s]*([\d.]+)/i) || matchLine(joined, /止损[：:\s]*([\d.]+)/i);
-  const note = matchLine(joined, /穩健操作建議[：:\s]*([^\n]+)/i);
-  if (!direction || !takeProfits.length || !stopLoss) return null;
+  const note = matchTwOpgField(joined, /穩健操作建議[：:\s]*([\s\S]+?)$/i);
+  if (!takeProfits.length || !stopLoss) return null;
+
+  let direction = resolveTwOpgDirection(joined);
+  if (!direction) direction = inferDirectionFromTpSl(takeProfits, stopLoss);
+
+  const dirLabel = direction || "待确认";
+  const title = symbol ? `${symbol} ${dirLabel}` : `seven ${dirLabel}`;
+
   return {
     parser: "tw_opg",
-    symbol,
-    direction,
+    symbol: symbol || "",
+    direction: dirLabel,
     leverage,
     position,
     takeProfits,
     stopLoss,
     note,
-    title: `${symbol} ${typeof direction === "string" && direction.length <= 4 ? direction : "信号"}`,
+    title,
   };
 }
 
@@ -505,6 +614,8 @@ export function parseSignalText(text, kind) {
       return parseFengge(t);
     case "yanchi":
       return parseYanchi(t);
+    case "biquan_suozhang":
+      return parseBiquanSuozhang(t);
     case "unknown_trader":
       return parseUnknownTrader(t);
     case "altcoin_king":
@@ -517,6 +628,7 @@ export function parseSignalText(text, kind) {
         parseFeiyang(t) ||
         parseFengge(t) ||
         parseYanchi(t) ||
+        parseBiquanSuozhang(t) ||
         parseUnknownTrader(t) ||
         parseAltcoinKing(t) ||
         parseTwOpg(t) ||
@@ -571,7 +683,7 @@ export function formatCardFallback(parsed, styleId) {
       .join("\n");
   }
 
-  if (parsed.parser === "dabiaoke" || parsed.parser === "feiyang" || parsed.parser === "fengge" || parsed.parser === "yanchi" || parsed.parser === "unknown_trader" || parsed.parser === "altcoin_king") {
+  if (parsed.parser === "dabiaoke" || parsed.parser === "feiyang" || parsed.parser === "fengge" || parsed.parser === "yanchi" || parsed.parser === "biquan_suozhang" || parsed.parser === "unknown_trader" || parsed.parser === "altcoin_king") {
     const tps = /** @type {string[]} */ (parsed.takeProfits ?? []).join(" · ") || String(parsed.takeProfit ?? "");
     return [
       parsed.title ?? parsed.symbol ?? "信号",

@@ -9,6 +9,7 @@ import {
   createSignalCard,
   formatCardTime,
 } from "../lib/discordSignalApi.js";
+import { pushNewCardToast } from "../composables/useNewCardNotifications.js";
 import SignalEvaluationForm from "./SignalEvaluationForm.vue";
 import {
   cardExecution,
@@ -23,6 +24,7 @@ import {
   seedActualFromPlanned,
   calcProfitPercents,
   formatProfitPercent,
+  formatCardId,
 } from "../lib/signalExecution.js";
 
 const props = defineProps({
@@ -166,7 +168,7 @@ function cardTitle(card) {
     const sym = String(/** @type {Record<string, unknown>} */ (p).symbol ?? /** @type {Record<string, unknown>} */ (p).asset ?? "").trim();
     if (sym) return sym.replace(/^\$/, "");
   }
-  return `#${card.id}`;
+  return "";
 }
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} updated */
@@ -188,17 +190,24 @@ function cardHasEvaluation(card) {
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 function cardEvalProfit(card) {
   const ex = cardExecution(card);
-  return calcProfitPercents(ex.actual.buyPrice, ex.actual.sellPrice, ex.direction);
+  return calcProfitPercents(
+    ex.actual.buyPrice,
+    ex.actual.sellPrice,
+    ex.direction,
+    undefined,
+    ex.symbol || card.symbol
+  );
 }
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 function cardEvalProfitBadge(card) {
   const profit = cardEvalProfit(card);
   if (!profit) return null;
+  const pct = profit.leveragePct;
   return {
-    text: formatProfitPercent(profit.spot),
-    gain: profit.spot > 0,
-    loss: profit.spot < 0,
+    text: formatProfitPercent(pct),
+    gain: pct > 0,
+    loss: pct < 0,
   };
 }
 
@@ -339,6 +348,7 @@ async function submitManualCard() {
       note: manualForm.value.note.trim() || undefined,
     });
     upsertCard(created);
+    pushNewCardToast(/** @type {Record<string, unknown>} */ (created), "signal_card_created");
     manualForm.value = {
       symbol: "",
       direction: "",
@@ -421,7 +431,8 @@ onMounted(async () => {
       >
         <header class="signal-card-top">
           <div class="signal-card-top-left">
-            <span class="signal-card-symbol">{{ cardTitle(card) }}</span>
+            <span v-if="formatCardId(card.id)" class="signal-card-id">{{ formatCardId(card.id) }}</span>
+            <span class="signal-card-symbol">{{ cardTitle(card) || "—" }}</span>
             <span class="signal-card-status" :class="isActive(card) ? 'on' : 'off'">
               {{ isActive(card) ? "有效" : "已失效" }}
             </span>
@@ -476,6 +487,7 @@ onMounted(async () => {
             v-model="executionDraftById[card.id]"
             v-model:actual-tp-text="actualTpTextById[card.id]"
             v-model:note="noteDraftById[card.id]"
+            :symbol="cardTitle(card)"
             @change="scheduleSave(card)"
             @save="saveCardFields(card)"
           />

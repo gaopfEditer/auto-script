@@ -3,6 +3,7 @@
  */
 import { calcLeveragePnl, fetchKlinesForCard, parseEntryPrice, parsePrice } from "./card-price-fetch.js";
 import { getCardBacktestPlan } from "./card-backtest-policy.js";
+import { hasEvaluatedYield } from "./discord-signal-execution.js";
 
 /**
  * @param {{
@@ -165,6 +166,27 @@ export async function runCardBacktest(card, signalMs) {
 }
 
 /**
+ * @param {string} reason
+ */
+export function buildSkippedBacktestJson(reason) {
+  return {
+    skipped: true,
+    reason,
+    skippedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * @param {ReturnType<typeof import("./card-archive-service.js").archiveCardToClient>} card
+ */
+export function shouldSkipCardBacktest(card) {
+  if (hasEvaluatedYield(card.execution)) {
+    return { skip: true, reason: "user_evaluated" };
+  }
+  return { skip: false };
+}
+
+/**
  * @param {ReturnType<typeof import("./card-archive-service.js").archiveCardToClient>} card
  * @param {number} signalMs
  * @param {number} [nowMs]
@@ -172,6 +194,7 @@ export async function runCardBacktest(card, signalMs) {
 export function isBacktestDue(card, signalMs, nowMs = Date.now()) {
   const plan = getCardBacktestPlan(card.symbol, card.assetClass);
   if (plan.skip) return false;
+  if (shouldSkipCardBacktest(card).skip) return false;
   if (card.backtest && typeof card.backtest === "object") return false;
   return nowMs - signalMs >= plan.spec.minDueMs;
 }

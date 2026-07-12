@@ -1,18 +1,22 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, ref, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
-import { useCollectorSocket } from "../composables/useCollectorSocket.js";
 import {
-  handleNewCardSocketMessage,
   useNewCardNotifications,
 } from "../composables/useNewCardNotifications.js";
+import { formatCardId } from "../lib/signalExecution.js";
 
 const router = useRouter();
-const { toasts, dismissCardToast, dismissAllCardToasts } = useNewCardNotifications();
+const { toasts, dismissCardToast, dismissAllCardToasts, notificationPrefs, ensureNotificationPrefs } =
+  useNewCardNotifications();
 
 const expanded = ref(false);
 
-useCollectorSocket(handleNewCardSocketMessage);
+onMounted(() => {
+  void ensureNotificationPrefs();
+});
+
+const toastPosition = computed(() => notificationPrefs.value.position ?? "bottom-right");
 
 const stackCount = computed(() => toasts.value.length);
 const isStacked = computed(() => stackCount.value > 1 && !expanded.value);
@@ -46,7 +50,12 @@ function closeOne(key) {
 
 <template>
   <Teleport to="body">
-    <div v-if="stackCount" class="toast-stack-wrap" aria-live="polite">
+    <div
+      v-if="stackCount"
+      class="toast-stack-wrap"
+      :class="toastPosition === 'top-right' ? 'pos-top-right' : 'pos-bottom-right'"
+      aria-live="polite"
+    >
       <header class="stack-toolbar">
         <span class="stack-count">{{ stackCount }} 张新卡片</span>
         <div class="stack-toolbar-actions">
@@ -83,7 +92,10 @@ function closeOne(key) {
             </button>
           </header>
           <div class="toast-title">
-            <strong>{{ toast.title }}</strong>
+            <strong>
+              <span v-if="formatCardId(toast.cardId)" class="toast-card-id">{{ formatCardId(toast.cardId) }}</span>
+              {{ toast.title || "—" }}
+            </strong>
             <span v-if="toast.direction" class="toast-dir">{{ toast.direction }}</span>
           </div>
           <p v-if="toast.preview" class="toast-preview">{{ toast.preview }}</p>
@@ -101,10 +113,15 @@ function closeOne(key) {
 .toast-stack-wrap {
   position: fixed;
   right: 1rem;
-  bottom: 1rem;
   z-index: 1200;
   max-width: min(360px, calc(100vw - 2rem));
   pointer-events: none;
+}
+.toast-stack-wrap.pos-bottom-right {
+  bottom: 1rem;
+}
+.toast-stack-wrap.pos-top-right {
+  top: 3.5rem;
 }
 .stack-toolbar {
   pointer-events: auto;
@@ -277,6 +294,12 @@ function closeOne(key) {
 .toast-title strong {
   font-size: 1rem;
   color: #f2f3f5;
+}
+.toast-card-id {
+  margin-right: 0.35rem;
+  font-size: 0.82rem;
+  color: #aeb4ff;
+  font-variant-numeric: tabular-nums;
 }
 .toast-dir {
   font-size: 0.75rem;

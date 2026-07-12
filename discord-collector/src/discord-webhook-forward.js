@@ -168,8 +168,10 @@ export function createDiscordWebhookForward(log, opts = {}) {
    * @param {string} via
    */
   async function postWebhookHttp(webhookUrl, payload, via) {
-    const preview = String(payload.content ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
-    log.info(`POST (${via}) ${maskWebhookUrl(webhookUrl)} | ${preview}`);
+    if (config.webhookForwardLog) {
+      const preview = String(payload.content ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+      log.info(`POST (${via}) ${maskWebhookUrl(webhookUrl)} | ${preview}`);
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.webhookForwardTimeoutMs);
     try {
@@ -201,8 +203,10 @@ export function createDiscordWebhookForward(log, opts = {}) {
     }
 
     if (browserPost) {
-      const preview = String(payload.content ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
-      log.info(`POST (Playwright) ${maskWebhookUrl(webhookUrl)} | ${preview}`);
+      if (config.webhookForwardLog) {
+        const preview = String(payload.content ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+        log.info(`POST (Playwright) ${maskWebhookUrl(webhookUrl)} | ${preview}`);
+      }
       try {
         await browserPost(webhookUrl, payload);
         return;
@@ -242,14 +246,18 @@ export function createDiscordWebhookForward(log, opts = {}) {
       String(row.authorGlobalName ?? "").trim() ||
       String(row.authorUsername ?? "").trim() ||
       "?";
-    log.info(
-      `准备转发 channel=${channelId} guild=${guildId || "?"} message=${messageId} author=${author}`
-    );
+    if (config.webhookForwardLog) {
+      log.info(
+        `准备转发 channel=${channelId} guild=${guildId || "?"} message=${messageId} author=${author}`
+      );
+    }
     try {
       await postWebhook(rule.webhookUrl, payload);
-      log.info(
-        `✓ 已转发 channel=${channelId} message=${messageId} → ${rule.name || maskWebhookUrl(rule.webhookUrl)}`
-      );
+      if (config.webhookForwardLog) {
+        log.info(
+          `✓ 已转发 channel=${channelId} message=${messageId} → ${rule.name || maskWebhookUrl(rule.webhookUrl)}`
+        );
+      }
       return {};
     } catch (e) {
       seen.delete(dedupKey);
@@ -269,7 +277,12 @@ export function createDiscordWebhookForward(log, opts = {}) {
     const guildId = String(row.guildId ?? "").trim();
     if (!findWebhookForward(channelId, guildId, cfg)) return;
     void forward(row).then((res) => {
-      if (res.skipped && res.skipped !== "duplicate" && res.skipped !== "no_rule") {
+      if (
+        config.webhookForwardLog &&
+        res.skipped &&
+        res.skipped !== "duplicate" &&
+        res.skipped !== "no_rule"
+      ) {
         log.info(
           `未转发 channel=${channelId} message=${row.messageId ?? "?"} reason=${res.skipped}`
         );

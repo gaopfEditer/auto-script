@@ -6,6 +6,10 @@ const props = defineProps({
   modelValue: { type: Object, required: true },
   actualTpText: { type: String, default: "" },
   note: { type: String, default: "" },
+  /** 用于推断默认杠杆（BTC/ETH 100x，山寨 20x） */
+  symbol: { type: String, default: "" },
+  /** 隐藏保存按钮（预览场景仅本地填写） */
+  hideSave: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["update:modelValue", "update:actualTpText", "update:note", "change", "save"]);
@@ -37,11 +41,17 @@ const closedAtLocal = computed({
 
 const tradeSide = computed(() => resolveTradeDirection(props.modelValue?.direction));
 
+const evalSymbol = computed(
+  () => String(props.symbol || props.modelValue?.symbol || "").trim()
+);
+
 const profit = computed(() =>
   calcProfitPercents(
     props.modelValue?.actual?.buyPrice,
     props.modelValue?.actual?.sellPrice,
-    props.modelValue?.direction
+    props.modelValue?.direction,
+    undefined,
+    evalSymbol.value
   )
 );
 
@@ -88,7 +98,7 @@ function setTradeSide(side) {
     </div>
     <div v-if="profit" class="signal-profit-row" :class="{ gain: profit.spot > 0, loss: profit.spot < 0 }">
       <span>{{ directionLabel(profit.side) }} · 盈利 {{ formatProfitPercent(profit.spot) }}</span>
-      <span>100x {{ formatProfitPercent(profit.leverage100) }}</span>
+      <span>{{ profit.leverage }}x {{ formatProfitPercent(profit.leveragePct) }}</span>
     </div>
     <div class="signal-field-row compact">
       <label>止盈</label>
@@ -139,7 +149,7 @@ function setTradeSide(side) {
         @input="emit('update:note', ($event.target).value); emit('change')"
       />
     </label>
-    <button type="button" class="signal-act primary eval-save" @click="emit('save')">保存评价</button>
+    <button v-if="!hideSave" type="button" class="signal-act primary eval-save" @click="emit('save')">保存评价</button>
   </div>
 </template>
 

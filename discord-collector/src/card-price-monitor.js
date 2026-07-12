@@ -2,7 +2,7 @@
  * 卡片价格校验（默认 3h；股票较长周期）与接近关键价位推送。
  */
 import { archiveCardToClient } from "./card-archive-service.js";
-import { isBacktestDue, runCardBacktest } from "./card-backtest-engine.js";
+import { isBacktestDue, runCardBacktest, shouldSkipCardBacktest, buildSkippedBacktestJson } from "./card-backtest-engine.js";
 import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import {
   evaluatePricePath,
@@ -12,6 +12,7 @@ import {
 import {
   collectProximityLevels,
   getCardProximityPolicy,
+  getCardProximityCheckIntervalMs,
   isLevelNear,
   levelKindLabel,
   proximityDistanceLabel,
@@ -28,6 +29,11 @@ import { config } from "./config.js";
  */
 export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
   let timer = null;
+
+  /** @param {string} msg */
+  function logCardPullDetail(msg) {
+    if (config.cardPullForwardLog) log.info(msg);
+  }
 
   /**
    * @param {Record<string, unknown>} row
@@ -51,6 +57,8 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
       kind: lv.kind,
       price: lv.price,
       referencePrice: lv.referencePrice,
+      entryRange: lv.entryRange,
+      bandPct: lv.bandPct,
     }));
   }
 
@@ -91,6 +99,14 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
 
       const signalMs = cardSignalMs(row);
       const now = Date.now();
+      const skip = shouldSkipCardBacktest(card);
+      if (skip.skip && skip.reason === "user_evaluated" && !card.backtest) {
+        await store.updateSignalCard(card.id, {
+          backtestJson: buildSkippedBacktestJson("user_evaluated"),
+        });
+        log.debug(`卡片 #${card.id} 已人工评价，跳过回测`);
+        continue;
+      }
       if (!isBacktestDue(card, signalMs, now)) continue;
 
       try {
@@ -100,7 +116,7 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
         await store.updateSignalCard(card.id, { backtestJson: result });
         const pnl = result.pnlLabel ? ` ${result.pnlLabel}` : "";
         const win = result.bestWindow ? ` best=${result.bestWindow}` : "";
-        log.info(
+        logCardPullDetail(
           `卡片 #${card.id} 回测 tier=${result.tier ?? "?"}${win}${pnl}${result.error ? ` err=${result.error}` : ""}`
         );
       } catch (e) {
@@ -155,7 +171,7 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
         }
         await store.updateSignalCard(card.id, patch);
         const pnl = result.pnl100x?.pnlLabel ? ` pnl=${result.pnl100x.pnlLabel}` : "";
-        log.info(
+        logCardPullDetail(
           `卡片 #${card.id} ${verifyMode} 校验 asset=${assetClass} outcome=${result.outcome}${pnl}${result.error ? ` err=${result.error}` : ""}`
         );
       } catch (e) {
@@ -173,10 +189,11 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
     for (const row of rows) {
       const card = archiveCardToClient(row);
       const policy = getCardProximityPolicy(card);
+      const checkIntervalMs = getCardProximityCheckIntervalMs(card);
       let proximity =
         card.proximity && typeof card.proximity === "object" ? { ...card.proximity } : {};
 
-      if (!shouldCheckCardProximity(proximity, now, policy.checkIntervalMs)) {
+      if (!shouldCheckCardProximity(proximity, now, checkIntervalMs)) {
         continue;
       }
 
@@ -211,14 +228,14 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
       const alerts = [];
 
       for (const lv of levels) {
-        const near = isLevelNear(price, lv.price, policy.assetClass, lv.referencePrice);
+        const near = isLevelNear(price, lv.price, policy.assetClass, lv.referencePrice, lv);
         const key = `${lv.kind}_${lv.price}`;
         const prev = proximity[key];
-        const distLabel = proximityDistanceLabel(price, lv.price, policy.assetClass, lv.referencePrice);
+        const distLabel = proximityDistanceLabel(price, lv.price, policy.assetClass, lv.referencePrice, lv);
 
         if (near) {
           const lastAlert = prev?.lastAlertAt ? new Date(String(prev.lastAlertAt)).getTime() : 0;
-          if (now - lastAlert >= policy.checkIntervalMs) {
+          if (now - lastAlert >= checkIntervalMs) {
             alerts.push({
               kind: lv.kind,
               kindLabel: levelKindLabel(lv.kind),
@@ -243,7 +260,7 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
         ...(proximity._meta && typeof proximity._meta === "object" ? proximity._meta : {}),
         lastCheckAt: new Date().toISOString(),
         assetClass: policy.assetClass,
-        checkIntervalMs: policy.checkIntervalMs,
+        checkIntervalMs,
       };
 
       await store.updateSignalCard(card.id, { proximityJson: proximity });
@@ -278,7 +295,7 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
         if (config.cardProximityTelegram) {
           await systemTelegram.notify(text, { kind: "card_proximity" });
         }
-        log.info(`接近推送 #${card.id} ${sym} [${policy.assetClass}] alerts=${alerts.length}`);
+        logCardPullDetail(`接近推送 #${card.id} ${sym} [${policy.assetClass}] alerts=${alerts.length}`);
       }
     }
   }

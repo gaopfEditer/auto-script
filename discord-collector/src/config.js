@@ -66,6 +66,23 @@ export const config = {
   gatewayMessageLog: ["1", "true", "yes", "on"].includes(
     String(process.env.DISCORD_GATEWAY_MESSAGE_LOG ?? "0").toLowerCase()
   ),
+  /** Webhook 转发逐条日志（POST / 已转发等，默认关） */
+  webhookForwardLog: ["1", "true", "yes", "on"].includes(
+    String(process.env.DISCORD_WEBHOOK_FORWARD_LOG ?? "0").toLowerCase()
+  ),
+  /** 卡片价格校验 / 回测 / 接近检查逐条日志（默认关） */
+  cardPullForwardLog: ["1", "true", "yes", "on"].includes(
+    String(process.env.DISCORD_CARDPULL_FORWARD_LOG ?? "0").toLowerCase()
+  ),
+  /** 新卡片桌面通知（浏览器 Notification API，默认关） */
+  cardToastDesktop: ["1", "true", "yes", "on"].includes(
+    String(process.env.CARD_TOAST_DESKTOP ?? "0").toLowerCase()
+  ),
+  /** 新卡片 Toast 位置：bottom-right | top-right */
+  cardToastPosition:
+    String(process.env.CARD_TOAST_POSITION ?? "bottom-right").toLowerCase() === "top-right"
+      ? "top-right"
+      : "bottom-right",
   collectUiPort: Number(process.env.COLLECTOR_UI_PORT ?? 3851),
   requiredTopLevelKeys: (process.env.COLLECTOR_REQUIRED_KEYS ?? "")
     .split(",")
@@ -149,6 +166,10 @@ export const config = {
   cardVerifyStockWindowDays: Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30),
   /** 自动校验盈亏按杠杆倍数（默认 100x） */
   cardVerifyLeverage: Number(process.env.CARD_VERIFY_LEVERAGE ?? 100),
+  /** 评价表单：主流 BTC/ETH 默认杠杆 */
+  cardEvalMajorLeverage: Number(process.env.CARD_EVAL_MAJOR_LEVERAGE ?? 100),
+  /** 评价表单：山寨默认杠杆 */
+  cardEvalAltcoinLeverage: Number(process.env.CARD_EVAL_ALTCOIN_LEVERAGE ?? 20),
   /** 源频道 → Webhook 转发映射 JSON（见 config/channel-webhook-forwards.json） */
   webhookForwardsFile: (process.env.DISCORD_WEBHOOK_FORWARDS_FILE ?? "").trim()
     ? path.resolve(process.env.DISCORD_WEBHOOK_FORWARDS_FILE.trim())

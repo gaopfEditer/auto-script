@@ -18,6 +18,8 @@
  *   updatedAt: string,
  * }} SignalCard */
 
+import { configureEvalLeverage } from "./signalExecution.js";
+
 /** @param {Record<string, unknown> | null | undefined} card */
 export function formatCardTime(card) {
   const raw = card?.signalAt ?? card?.createdAt;
@@ -26,7 +28,7 @@ export function formatCardTime(card) {
   return Number.isNaN(d.getTime()) ? String(raw) : d.toLocaleString("zh-CN");
 }
 
-let cachedConfig = /** @type {{ channelIds: string[], styles: Record<string, { label: string }>, channels: Record<string, unknown> } | null} */ (
+let cachedConfig = /** @type {{ channelIds: string[], styles: Record<string, { label: string }>, channels: Record<string, unknown>, evalLeverage?: { major: number, altcoin: number }, cardNotifications?: { desktop: boolean, position: string } } | null} */ (
   null
 );
 
@@ -35,10 +37,13 @@ export async function fetchSignalConfig() {
   const r = await fetch("/api/discord/signal-config");
   const j = await r.json();
   if (!j.ok) throw new Error(j.error || "signal-config failed");
+  if (j.evalLeverage) configureEvalLeverage(j.evalLeverage);
   cachedConfig = {
     channelIds: Array.isArray(j.channelIds) ? j.channelIds.map(String) : [],
     styles: j.styles ?? {},
     channels: j.channels ?? {},
+    evalLeverage: j.evalLeverage ?? undefined,
+    cardNotifications: j.cardNotifications ?? undefined,
   };
   return cachedConfig;
 }

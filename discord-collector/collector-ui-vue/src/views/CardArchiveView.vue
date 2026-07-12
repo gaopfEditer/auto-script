@@ -11,7 +11,7 @@ import {
   buildArchivePeriodQuery,
   runArchiveCardBacktest,
 } from "../lib/cardArchiveApi.js";
-import { updateSignalCard } from "../lib/discordSignalApi.js";
+import { updateSignalCard, fetchSignalConfig } from "../lib/discordSignalApi.js";
 import { useNewCardNotifications } from "../composables/useNewCardNotifications.js";
 import {
   cardExecution,
@@ -287,6 +287,11 @@ watch(
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
   try {
+    await fetchSignalConfig();
+  } catch {
+    /* ignore */
+  }
+  try {
     sources.value = await fetchCardSources();
   } catch {
     /* ignore */
@@ -363,7 +368,10 @@ onUnmounted(() => {
       <div v-if="modalOpen && selected" class="modal-backdrop" @click.self="closeModal">
         <div class="modal-panel" role="dialog" aria-modal="true">
           <header class="modal-head">
-            <h3>{{ selected.cardFields?.title || `卡片 #${selected.id}` }}</h3>
+            <h3>
+              <span v-if="selected.id" class="modal-card-id">#{{ selected.id }}</span>
+              {{ selected.cardFields?.title || "卡片详情" }}
+            </h3>
             <button type="button" class="modal-close" aria-label="关闭" @click="closeModal">×</button>
           </header>
           <div class="modal-body">
@@ -443,7 +451,10 @@ onUnmounted(() => {
                   {{ backtestLoading ? "回测中…" : "手动回测" }}
                 </button>
               </div>
-              <template v-if="selected.backtest && !selected.backtest.error">
+              <template v-if="selected.backtest?.skipped">
+                <p class="muted">已人工评价并结算，跳过自动回测</p>
+              </template>
+              <template v-else-if="selected.backtest && !selected.backtest.error">
                 <p class="backtest-best">
                   最优窗口 <strong>{{ selected.backtest.bestWindow }}</strong>
                   · {{ selected.backtest.outcome === "stop_loss" ? "止损" : "最优平仓" }}
@@ -480,6 +491,7 @@ onUnmounted(() => {
                 v-model="execDraft"
                 v-model:note="noteDraft"
                 v-model:actual-tp-text="actualTpText"
+                :symbol="selected.symbol || cardExecution(selected).symbol"
                 @change="scheduleSave(selected)"
                 @save="saveEvaluation(selected)"
               />
@@ -521,6 +533,19 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: baseline;
   gap: 0.5rem;
+}
+.modal-head h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+.modal-card-id {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #aeb4ff;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 h2,
 h3 {

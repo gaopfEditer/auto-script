@@ -95,6 +95,8 @@ pnpm run collect
 | `COLLECTOR_NETWORK_TRACE` | `0` | `1` 时终端打印 HTTP 请求 |
 | `COLLECTOR_WS_FRAME_TRACE` | `0` | `1` 时打印 Gateway 帧（仍跳过心跳/Presence） |
 | `DISCORD_GATEWAY_MESSAGE_LOG` | `0` | `1` 时打印 `[gateway MESSAGE_CREATE]` 群聊消息行 |
+| `DISCORD_WEBHOOK_FORWARD_LOG` | `0` | `1` 时打印 Webhook 转发逐条日志（POST / 已转发） |
+| `DISCORD_CARDPULL_FORWARD_LOG` | `0` | `1` 时打印卡片价格校验 / 回测 / 接近检查逐条日志 |
 
 ## 数据表
 

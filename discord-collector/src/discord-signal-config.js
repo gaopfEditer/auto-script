@@ -3,7 +3,7 @@
  */
 import { config } from "./config.js";
 
-/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"unknown_trader"|"altcoin_king"|"generic"} ParserKind */
+/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"biquan_suozhang"|"unknown_trader"|"altcoin_king"|"generic"} ParserKind */
 
 /**
  * @typedef {{
@@ -76,7 +76,16 @@ export const DEFAULT_SIGNAL_CHANNELS = {
     styles: ["cn_formal", "cn_brief", "tw_formal"],
     telegramStyle: "cn_brief",
   },
+  "1444963405185159238": {
+    name: "币圈所长",
+    parser: "biquan_suozhang",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
 };
+
+/** YouTube paste coin-action 卡片暂归颜驰（/signals 频道概览） */
+export const COIN_ACTION_SIGNAL_CHANNEL_ID = "1444963689194192947";
 
 /** @type {Record<string, { label: string, promptHint: string }>} */
 export const SIGNAL_STYLE_META = {

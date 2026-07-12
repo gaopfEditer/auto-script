@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { RouterLink, RouterView } from "vue-router";
 import NewCardToastStack from "./components/NewCardToastStack.vue";
+import "./composables/useNewCardNotifications.js";
 import { useDebugMode } from "./composables/useDebugMode.js";
 import { ensureCollectorSocket, useCollectorSocket } from "./composables/useCollectorSocket.js";
 

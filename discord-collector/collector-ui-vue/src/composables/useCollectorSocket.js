@@ -96,6 +96,17 @@ export function ensureCollectorSocket() {
 }
 
 /**
+ * 立即注册 WS 回调（不依赖组件 onMounted）。
+ * @param {(msg: Record<string, unknown>) => void} handler
+ * @returns {() => void}
+ */
+export function subscribeCollectorSocket(handler) {
+  ensureCollectorSocket();
+  handlers.add(handler);
+  return () => handlers.delete(handler);
+}
+
+/**
  * @param {(msg: Record<string, unknown>) => void} [onMessage]
  */
 export function useCollectorSocket(onMessage) {

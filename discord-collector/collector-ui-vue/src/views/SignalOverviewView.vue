@@ -8,12 +8,14 @@ import {
   statLineFromCards,
   calcProfitPercents,
   formatProfitPercent,
+  sumLeverageProfitFromCards,
   formatPlannedSummary,
   formatActualSummary,
   cardBodyPreview,
   isSignalCardActive,
   cardStatusLabel,
   directionLabel,
+  formatCardId,
 } from "../lib/signalExecution.js";
 
 const PERIOD_OPTIONS = [
@@ -49,6 +51,8 @@ const filteredHistory = computed(() => {
 });
 
 const filteredStats = computed(() => statLineFromCards(filteredHistory.value));
+
+const historyProfitSum = computed(() => sumLeverageProfitFromCards(filteredHistory.value));
 
 async function loadOverview() {
   loading.value = true;
@@ -86,7 +90,13 @@ async function loadHistory() {
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 function cardProfit(cell) {
   const ex = cardExecution(cell);
-  return calcProfitPercents(ex.actual.buyPrice, ex.actual.sellPrice, ex.direction);
+  return calcProfitPercents(
+    ex.actual.buyPrice,
+    ex.actual.sellPrice,
+    ex.direction,
+    undefined,
+    ex.symbol
+  );
 }
 
 /** @param {Record<string, number>} stats */
@@ -143,7 +153,16 @@ onMounted(async () => {
 
     <section v-if="selectedChannel" class="sov-history">
       <header class="sov-history-head">
-        <h2>{{ selectedChannel.name }} · 盈利明细</h2>
+        <h2>
+          {{ selectedChannel.name }} · 盈利明细
+          <span
+            v-if="historyProfitSum"
+            class="sov-profit-sum"
+            :class="{ gain: historyProfitSum.sum > 0, loss: historyProfitSum.sum < 0 }"
+          >
+            （{{ formatProfitPercent(historyProfitSum.sum) }}）
+          </span>
+        </h2>
         <div class="sov-history-filters">
           <select v-model="statusFilter" class="sov-select">
             <option v-for="o in STATUS_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
@@ -164,7 +183,7 @@ onMounted(async () => {
               <th>信号信息</th>
               <th>实际做单</th>
               <th>盈利率</th>
-              <th>100x</th>
+              <th>杠杆盈</th>
               <th>结果</th>
             </tr>
           </thead>
@@ -179,7 +198,10 @@ onMounted(async () => {
                 </span>
               </td>
               <td class="sov-col-signal">
-                <div class="sov-cell-main">{{ formatPlannedSummary(cardExecution(card)) }}</div>
+                <div class="sov-cell-main">
+                  <span v-if="formatCardId(card.id)" class="sov-card-id">{{ formatCardId(card.id) }}</span>
+                  {{ formatPlannedSummary(cardExecution(card)) }}
+                </div>
                 <div v-if="cardBodyPreview(card)" class="sov-cell-sub">{{ cardBodyPreview(card) }}</div>
               </td>
               <td class="sov-col-actual">
@@ -204,7 +226,8 @@ onMounted(async () => {
                   class="sov-profit"
                   :class="{ gain: cardProfit(card).spot > 0, loss: cardProfit(card).spot < 0 }"
                 >
-                  {{ formatProfitPercent(cardProfit(card).leverage100) }}
+                  <span class="sov-lev-tag">{{ cardProfit(card).leverage }}x</span>
+                  {{ formatProfitPercent(cardProfit(card).leveragePct) }}
                 </span>
                 <span v-else class="sov-muted">—</span>
               </td>
@@ -336,6 +359,16 @@ onMounted(async () => {
   margin: 0;
   font-size: 1rem;
 }
+.sov-profit-sum {
+  font-weight: 700;
+  margin-left: 0.15rem;
+}
+.sov-profit-sum.gain {
+  color: #49e57a;
+}
+.sov-profit-sum.loss {
+  color: #f38688;
+}
 .sov-history-filters {
   display: flex;
   align-items: center;
@@ -427,6 +460,20 @@ onMounted(async () => {
 }
 .sov-profit.loss {
   color: #f38688;
+}
+.sov-lev-tag {
+  display: inline-block;
+  margin-right: 0.25rem;
+  font-size: 0.72rem;
+  color: #949ba4;
+  font-weight: 600;
+}
+.sov-card-id {
+  margin-right: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #aeb4ff;
+  font-variant-numeric: tabular-nums;
 }
 .sov-muted {
   color: #6d7480;

@@ -111,3 +111,18 @@ export async function parsePasteFileByName(name, opts = {}) {
   if (!data.ok) throw new Error(data.error || "解析失败");
   return data;
 }
+
+/**
+ * 注册 coin-action 入场价位监听（±3% / 每 1h，Telegram 同卡片接近推送）
+ * @param {{ sourceRef: string, title?: string, rawContent?: string, coinActions?: unknown[], bandPct?: number }} payload
+ */
+export async function registerCoinActionWatches(payload) {
+  const res = await fetch("/api/youtube-fetch/coin-actions/watch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "注册监听失败");
+  return data;
+}

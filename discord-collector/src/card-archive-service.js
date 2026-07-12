@@ -10,7 +10,7 @@ import {
 } from "./card-fields.js";
 import { executionFromParsed, normalizeExecution, normalizePriceList } from "./discord-signal-execution.js";
 import { signalCardToClient, resolveCardSignalAt } from "./discord-signal-card-service.js";
-import { getSignalChannelConfig } from "./discord-signal-config.js";
+import { getSignalChannelConfig, COIN_ACTION_SIGNAL_CHANNEL_ID } from "./discord-signal-config.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 
 /** @param {string} channelId @param {string|null|undefined} [dbName] */
@@ -180,7 +180,142 @@ export function createCardArchiveService(store, log, broadcast) {
     });
   }
 
-  return { archiveCard, archiveFromYoutube, archiveCardToClient };
+  /** YouTube 文稿 coin-action 入场监听默认 ±3%、每 1h */
+  const COIN_WATCH_BAND_PCT = 3;
+  const COIN_WATCH_CHECK_MS = 3_600_000;
+
+  /**
+   * 将 paste 预览中的 coinActions 注册为可监听的归档卡片（仅入场 ±band）。
+   * @param {{
+   *   sourceRef: string,
+   *   title?: string,
+   *   rawContent?: string,
+   *   coinActions?: Array<Record<string, unknown>>,
+   *   bandPct?: number,
+   * }} input
+   */
+  async function registerCoinActionWatches(input) {
+    const sourceRef = String(input.sourceRef ?? "").trim();
+    if (!sourceRef) throw new Error("sourceRef required");
+
+    if (store.migrateCoinActionPasteCards) {
+      const moved = await store.migrateCoinActionPasteCards(COIN_ACTION_SIGNAL_CHANNEL_ID);
+      if (moved > 0) {
+        log.info(`coin-action 卡片迁移至颜驰 channel=${COIN_ACTION_SIGNAL_CHANNEL_ID} count=${moved}`);
+      }
+    }
+
+    const bandPct = Number(input.bandPct) > 0 ? Number(input.bandPct) : COIN_WATCH_BAND_PCT;
+    const list = Array.isArray(input.coinActions) ? input.coinActions : [];
+    /** @type {ReturnType<typeof archiveCardToClient>[]} */
+    const cards = [];
+
+    for (let i = 0; i < list.length; i++) {
+      const coin = /** @type {Record<string, unknown>} */ (list[i]);
+      const symbol = String(coin.symbol ?? "").trim();
+      const entry = String(coin.entry ?? "").trim();
+      const actionType = String(coin.actionType ?? "new");
+      if (!symbol || !entry || actionType === "end") continue;
+
+      const safeRef = sourceRef.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
+      const messageId = `yt-paste-${safeRef}-${symbol}-${actionType}-${i}`.slice(0, 180);
+
+      const execution = normalizeExecution({
+        symbol,
+        direction: coin.direction,
+        planned: {
+          entryPrice: entry,
+          takeProfitPrices: normalizePriceList(coin.targets),
+          stopLossPrice: coin.stopLoss,
+        },
+        outcome: "pending",
+      });
+
+      const parsedJson = {
+        youtube: true,
+        paste: true,
+        blogger: "颜驰",
+        sourceRef,
+        coinActionIndex: i,
+        actionType,
+        description: coin.description,
+        coinWatch: {
+          entryOnly: true,
+          bandPct,
+          checkIntervalMs: COIN_WATCH_CHECK_MS,
+        },
+      };
+
+      const cardFields = buildDiscordCardFields({
+        symbol,
+        direction: String(coin.direction ?? ""),
+        entry,
+        targets: normalizePriceList(coin.targets),
+        stopLoss: String(coin.stopLoss ?? ""),
+        title: `${symbol} · ${actionTypeLabel(actionType)}`,
+        description: String(coin.description ?? input.title ?? "").slice(0, 500),
+        sourceType: "youtube",
+        sourceRef,
+        note: `颜驰 · 文稿 coin-action · 入场监听 ±${bandPct}% · 每 1h`,
+      });
+
+      const existing = store.getSignalCardByMessageId
+        ? await store.getSignalCardByMessageId(messageId)
+        : null;
+
+      if (existing) {
+        const id = Number(existing.id ?? existing.ID);
+        await store.updateSignalCard(id, {
+          channelId: COIN_ACTION_SIGNAL_CHANNEL_ID,
+          executionJson: execution,
+          parsedJson,
+          cardFieldsJson: cardFields,
+          symbol: normalizeSymbol(symbol),
+          status: "active",
+          note: `颜驰 · 文稿 coin-action · 入场监听 ±${bandPct}% · 每 1h`,
+        });
+        const row = await store.getSignalCardById(id);
+        if (row) cards.push(archiveCardToClient(row));
+        continue;
+      }
+
+      const created = await archiveCard({
+        messageId,
+        channelId: COIN_ACTION_SIGNAL_CHANNEL_ID,
+        sourceType: "youtube",
+        sourceRef,
+        rawContent: String(input.rawContent ?? input.title ?? sourceRef).slice(0, 4000),
+        parsedJson,
+        execution,
+        cardFields,
+        symbol,
+        note: `颜驰 · 文稿 coin-action · 入场监听 ±${bandPct}% · 每 1h`,
+        signalAt: new Date().toISOString(),
+      });
+      cards.push(created);
+    }
+
+    log.info(`coin-action 监听注册 source=${sourceRef} count=${cards.length}/${list.length}`);
+    return cards;
+  }
+
+  /** @param {string} type */
+  function actionTypeLabel(type) {
+    switch (String(type)) {
+      case "new":
+        return "新开仓";
+      case "continue":
+        return "持仓更新";
+      case "toend":
+        return "临近目标";
+      case "end":
+        return "已结束";
+      default:
+        return String(type || "信号");
+    }
+  }
+
+  return { archiveCard, archiveFromYoutube, archiveCardToClient, registerCoinActionWatches };
 }
 
 /** @param {Record<string, unknown>} row */

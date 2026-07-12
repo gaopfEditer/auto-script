@@ -18,6 +18,7 @@ import { createDiscordTelegramMessagePush } from "./discord-telegram-message-pus
 import { createDiscordWebhookForward } from "./discord-webhook-forward.js";
 import { createSystemTelegramAlert } from "./discord-system-telegram.js";
 import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
+import { COIN_ACTION_SIGNAL_CHANNEL_ID } from "./discord-signal-config.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
 import { isBlockedWsPayload, isForwardableFramePayload } from "./ws-noise-filter.js";
 import { createLogger, setLogLevel } from "./logger.js";
@@ -81,7 +82,7 @@ async function main() {
 
   app.use(express.json({ limit: "512kb" }));
 
-  registerDiscordSignalRoutes(app, store, signalCards);
+  registerDiscordSignalRoutes(app, store, signalCards, broadcast);
   registerCardArchiveRoutes(app, store, cardArchive);
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")
@@ -98,7 +99,7 @@ async function main() {
   });
   registerYoutubePasteParseRoutes(app, createLogger("yt-paste-parse"));
   const pasteBatchLog = createLogger("paste-batch");
-  registerYoutubePasteBatchRoutes(app, config, pasteBatchLog);
+  registerYoutubePasteBatchRoutes(app, config, pasteBatchLog, { archiveService: cardArchive });
   startPasteBatchService(config, pasteBatchLog);
 
   let frameSeq = 0;
@@ -413,6 +414,14 @@ async function main() {
     log.warn("MySQL 离线 — 服务已启动但无持久化；修复数据库后请重启 collect:ui");
   } else {
     cardPriceMonitor.start();
+    if (store.migrateCoinActionPasteCards) {
+      void store
+        .migrateCoinActionPasteCards(COIN_ACTION_SIGNAL_CHANNEL_ID)
+        .then((n) => {
+          if (n > 0) log.info(`coin-action 卡片已迁移至颜驰（/signals）共 ${n} 条`);
+        })
+        .catch((e) => log.warn(`coin-action 迁移: ${/** @type {Error} */ (e).message}`));
+    }
   }
   log.info(
     `[api] /api/cards /api/v1/cards /api/discord/signal-cards（debugMode=${isDebugMode()}）`

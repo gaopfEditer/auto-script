@@ -19,6 +19,20 @@ export const DEFAULT_TELEGRAM_PUSH_CHANNEL_IDS = [
 /** 实时推送、不参与 2 分钟聚合的频道 */
 export const DEFAULT_TELEGRAM_REALTIME_CHANNEL_IDS = [];
 
+/** 大镖客信号频道：无法解析为卡片时，含特定关键词仍推 Telegram */
+export const DABIAOKE_SIGNAL_CHANNEL_ID = "1444962339743989843";
+
+/**
+ * @param {string} channelId
+ * @param {unknown} content
+ */
+export function shouldTelegramPushSignalChannelComment(channelId, content) {
+  const cid = String(channelId ?? "").trim();
+  const text = String(content ?? "").trim();
+  if (cid !== DABIAOKE_SIGNAL_CHANNEL_ID || !text) return false;
+  return /时间太久/.test(text);
+}
+
 /** @returns {Set<string>} */
 export function getTelegramPushChannelIds() {
   const fromEnv = config.discordTelegramPushChannelIds;

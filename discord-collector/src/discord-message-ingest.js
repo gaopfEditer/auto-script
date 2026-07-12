@@ -30,6 +30,7 @@ import {
 import { createChannelMessageDedup, messageDedupKey } from "./discord-message-dedup.js";
 import { normalizeSignalText } from "./discord-signal-dedup.js";
 import { isSignalChannel, getSignalChannelConfig } from "./discord-signal-config.js";
+import { shouldTelegramPushSignalChannelComment } from "./discord-telegram-push-config.js";
 import { isBlockedWsPayload } from "./ws-noise-filter.js";
 
 /**
@@ -526,10 +527,27 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
         log.info(
           `信号卡片处理 channel=${cid} message=${r.messageId} source=${src || "unknown"} preview=${content.slice(0, 60)}`
         );
-        void signalCards.onMessage(r, { skipDedup: true }).catch((e) => {
+        /** @type {{ skipped?: string, card?: Record<string, unknown> } | undefined} */
+        let cardResult;
+        try {
+          cardResult = await signalCards.onMessage(r, { skipDedup: true });
+        } catch (e) {
           log.warn(`signal card: ${/** @type {Error} */ (e).message}`);
-        });
+          continue;
+        }
         await signalCards.dedup.remember(cid, content);
+
+        if (
+          telegramPush?.enabled &&
+          src === "gateway_ws" &&
+          cardResult?.skipped === "parse_failed" &&
+          shouldTelegramPushSignalChannelComment(cid, content)
+        ) {
+          telegramPush.enqueue(r);
+          log.info(
+            `大镖客 commentary → Telegram channel=${cid} message=${r.messageId ?? "?"}`
+          );
+        }
       }
     }
 

@@ -1,6 +1,13 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted, reactive } from "vue";
 import { RouterLink } from "vue-router";
+import SignalEvaluationForm from "../components/SignalEvaluationForm.vue";
+import { fetchSignalConfig } from "../lib/discordSignalApi.js";
+import {
+  emptyExecution,
+  seedActualFromPlanned,
+  takeProfitText,
+} from "../lib/signalExecution.js";
 import {
   enqueueYoutubeUrls,
   fetchYoutubeFetchHealth,
@@ -10,7 +17,13 @@ import {
   fetchPasteFileResult,
   triggerPasteFileScan,
   parsePasteFileByName,
+  registerCoinActionWatches,
 } from "../lib/youtubeFetchApi.js";
+import {
+  calcProfitPercents,
+  formatProfitPercent,
+  directionLabel,
+} from "../lib/signalExecution.js";
 
 const STORAGE_KEY = "yt-fetch-submitted-urls";
 const PASTE_STORAGE_KEY = "yt-fetch-paste-draft";
@@ -56,6 +69,142 @@ const coinActions = computed(() => {
   const list = pastePreview.value?.coinActions;
   return Array.isArray(list) ? list : [];
 });
+
+const coinEvalEditing = computed(() => {
+  const key = coinEvalEditingKey.value;
+  if (!key) return null;
+  for (let i = 0; i < coinActions.value.length; i++) {
+    const coin = /** @type {Record<string, unknown>} */ (coinActions.value[i]);
+    if (coinEvalKey(coin, i) === key) return { coin, i, key };
+  }
+  return null;
+});
+
+/** @type {Record<string, import("../lib/signalExecution.js").SignalExecution>} */
+const coinEvalByKey = reactive({});
+/** @type {Record<string, string>} */
+const coinEvalTpByKey = reactive({});
+/** @type {Record<string, string>} */
+const coinEvalNoteByKey = reactive({});
+const coinEvalEditingKey = ref("");
+const coinWatchMsg = ref("");
+
+/** @param {Record<string, unknown>} coin @param {number} i */
+function coinEvalKey(coin, i) {
+  return `${String(coin.symbol)}-${String(coin.actionType)}-${i}`;
+}
+
+/** @param {Record<string, unknown>} coin */
+function executionFromCoin(coin) {
+  const targets = Array.isArray(coin.targets) ? coin.targets.map((t) => String(t)) : [];
+  return {
+    ...emptyExecution(),
+    symbol: String(coin.symbol ?? ""),
+    direction: String(coin.direction ?? "").trim(),
+    planned: {
+      entryPrice: String(coin.entry ?? ""),
+      takeProfitPrices: targets,
+      stopLossPrice: String(coin.stopLoss ?? ""),
+    },
+    actual: { ...emptyExecution().actual },
+  };
+}
+
+/** @param {Record<string, unknown>} coin */
+function initCoinEvalDraft(coin) {
+  const ex = executionFromCoin(coin);
+  seedActualFromPlanned(ex);
+  return ex;
+}
+
+function resetCoinEvalDrafts() {
+  for (const k of Object.keys(coinEvalByKey)) delete coinEvalByKey[k];
+  for (const k of Object.keys(coinEvalTpByKey)) delete coinEvalTpByKey[k];
+  for (const k of Object.keys(coinEvalNoteByKey)) delete coinEvalNoteByKey[k];
+  coinEvalEditingKey.value = "";
+}
+
+/** @param {string} key */
+function openCoinEdit(key) {
+  if (!coinEvalByKey[key]) return;
+  coinEvalEditingKey.value = key;
+}
+
+function closeCoinEdit() {
+  coinEvalEditingKey.value = "";
+}
+
+/** @param {string} key */
+function coinEvalSummaryLine(key) {
+  const ex = coinEvalByKey[key];
+  if (!ex) return "";
+  const entry = String(ex.actual?.buyPrice ?? ex.planned?.entryPrice ?? "").trim();
+  const note = String(coinEvalNoteByKey[key] ?? ex.outcomeNote ?? "").trim();
+  const profit = calcProfitPercents(
+    ex.actual?.buyPrice,
+    ex.actual?.sellPrice,
+    ex.direction,
+    undefined,
+    ex.symbol
+  );
+  const parts = [];
+  if (entry) parts.push(`入场 ${entry}`);
+  if (ex.direction) parts.push(String(ex.direction));
+  if (profit) {
+    parts.push(`${directionLabel(profit.side)} ${formatProfitPercent(profit.leveragePct)} (${profit.leverage}x)`);
+  }
+  if (note) parts.push(note.slice(0, 80));
+  return parts.join(" · ") || "—";
+}
+
+/** @param {Record<string, unknown>} coin */
+function coinBriefNote(coin, key) {
+  const note = String(coinEvalNoteByKey[key] ?? coin.description ?? "").trim();
+  return note || "—";
+}
+
+async function syncCoinActionWatchRegistration() {
+  coinWatchMsg.value = "";
+  const list = coinActions.value;
+  if (!list.length || !pastePreview.value) return;
+  const sourceRef =
+    selectedPasteFile.value ||
+    `manual-${String(pastePreview.value.title ?? "paste").slice(0, 60)}`;
+  try {
+    const data = await registerCoinActionWatches({
+      sourceRef,
+      title: String(pastePreview.value.title ?? ""),
+      rawContent: String(pastePreview.value.content ?? pastePreview.value.description ?? ""),
+      coinActions: list,
+    });
+    coinWatchMsg.value = `已注册 ${data.registered ?? 0} 条入场监听（颜驰 · ±3% · 每 1h）`;
+  } catch (e) {
+    coinWatchMsg.value = String(/** @type {Error} */ (e).message ?? e);
+  }
+}
+
+function syncCoinEvalDrafts() {
+  const list = coinActions.value;
+  for (let i = 0; i < list.length; i++) {
+    const coin = /** @type {Record<string, unknown>} */ (list[i]);
+    const key = coinEvalKey(coin, i);
+    if (coinEvalByKey[key]) continue;
+    coinEvalByKey[key] = initCoinEvalDraft(coin);
+    coinEvalTpByKey[key] = takeProfitText(coinEvalByKey[key].actual);
+    coinEvalNoteByKey[key] = "";
+  }
+}
+
+watch(coinActions, () => syncCoinEvalDrafts(), { immediate: true });
+watch(
+  () =>
+    `${selectedPasteFile.value}|${String(pastePreview.value?.generatedAt ?? "")}|${String(pastePreview.value?.title ?? "")}|${coinActions.value.length}`,
+  () => {
+    resetCoinEvalDrafts();
+    syncCoinEvalDrafts();
+    void syncCoinActionWatchRegistration();
+  }
+);
 
 /** @param {string} type */
 function actionTypeLabel(type) {
@@ -399,11 +548,20 @@ watch(mode, () => {
 
 onMounted(async () => {
   loadSubmittedHistory();
-  await Promise.all([refreshHealth(), refreshQueue(), refreshPasteFiles()]);
+  await Promise.all([refreshHealth(), refreshQueue(), refreshPasteFiles(), fetchSignalConfig()]);
   startPolling();
+  document.addEventListener("keydown", onCoinEditEscape);
 });
 
-onUnmounted(stopPolling);
+onUnmounted(() => {
+  stopPolling();
+  document.removeEventListener("keydown", onCoinEditEscape);
+});
+
+/** @param {KeyboardEvent} e */
+function onCoinEditEscape(e) {
+  if (e.key === "Escape" && coinEvalEditingKey.value) closeCoinEdit();
+}
 </script>
 
 <template>
@@ -595,10 +753,15 @@ https://youtu.be/..."
               <span class="fn">币种操作</span>
               <span class="coin-count">{{ coinActions.length }} 条</span>
             </div>
+            <p v-if="coinWatchMsg" class="coin-watch-msg">{{ coinWatchMsg }}</p>
             <article
               v-for="(coin, i) in coinActions"
               :key="`${coin.symbol}-${coin.actionType}-${i}`"
               class="coin-action-card"
+              role="button"
+              tabindex="0"
+              @click="openCoinEdit(coinEvalKey(coin, i))"
+              @keydown.enter="openCoinEdit(coinEvalKey(coin, i))"
             >
               <header class="coin-action-top">
                 <strong class="coin-sym">{{ coin.symbol }}</strong>
@@ -606,9 +769,26 @@ https://youtu.be/..."
                   {{ actionTypeLabel(String(coin.actionType)) }}
                 </span>
                 <span v-if="coin.direction" class="coin-dir">{{ coin.direction }}</span>
+                <span v-if="coin.entry" class="coin-watch-badge">监听 ±3%</span>
               </header>
-              <p class="coin-desc">{{ coin.description || "—" }}</p>
-              <p class="coin-detail">{{ coinActionDetail(coin) }}</p>
+              <p class="coin-brief-line">
+                <span class="coin-brief-label">入场</span>
+                {{ coin.entry || "—" }}
+              </p>
+              <p class="coin-brief-line coin-brief-note">
+                <span class="coin-brief-label">备注</span>
+                {{ coinBriefNote(coin, coinEvalKey(coin, i)) }}
+              </p>
+              <p v-if="coinEvalByKey[coinEvalKey(coin, i)]" class="coin-brief-eval">
+                {{ coinEvalSummaryLine(coinEvalKey(coin, i)) }}
+              </p>
+              <button
+                type="button"
+                class="coin-edit-btn"
+                @click.stop="openCoinEdit(coinEvalKey(coin, i))"
+              >
+                编辑评价
+              </button>
             </article>
           </div>
           <p v-else class="muted">未识别到币种操作。</p>
@@ -634,6 +814,32 @@ https://youtu.be/..."
           </details>
         </div>
       </main>
+    </div>
+  </div>
+
+  <div
+    v-if="coinEvalEditing && coinEvalByKey[coinEvalEditing.key]"
+    class="modal-backdrop"
+    @click.self="closeCoinEdit"
+  >
+    <div class="modal-panel" role="dialog" aria-modal="true">
+      <header class="modal-head">
+        <h3>
+          {{ coinEvalEditing.coin.symbol }}
+          <span class="modal-sub">{{ actionTypeLabel(String(coinEvalEditing.coin.actionType)) }}</span>
+        </h3>
+        <button type="button" class="modal-close" aria-label="关闭" @click="closeCoinEdit">×</button>
+      </header>
+      <div class="modal-body">
+        <p class="coin-detail">{{ coinActionDetail(coinEvalEditing.coin) }}</p>
+        <SignalEvaluationForm
+          v-model="coinEvalByKey[coinEvalEditing.key]"
+          v-model:note="coinEvalNoteByKey[coinEvalEditing.key]"
+          v-model:actual-tp-text="coinEvalTpByKey[coinEvalEditing.key]"
+          :symbol="String(coinEvalEditing.coin.symbol)"
+          hide-save
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -807,10 +1013,12 @@ https://youtu.be/..."
 }
 .coin-actions {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 0.5rem;
 }
 .coin-actions-head {
+  flex: 1 1 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -821,10 +1029,131 @@ https://youtu.be/..."
   color: #949ba4;
 }
 .coin-action-card {
+  box-sizing: border-box;
+  min-width: min(260px, 100%);
+  width: fit-content;
+  max-width: 100%;
+  flex: 0 1 auto;
   background: #1e1f22;
   border: 1px solid #3f4147;
   border-radius: 8px;
   padding: 0.6rem 0.7rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.coin-action-card:hover {
+  border-color: #5865f2;
+  background: #232428;
+}
+.coin-watch-msg {
+  margin: 0 0 0.45rem;
+  font-size: 0.72rem;
+  color: #57f287;
+}
+.coin-watch-badge {
+  margin-left: auto;
+  font-size: 0.62rem;
+  color: #949ba4;
+  border: 1px solid #3f4147;
+  border-radius: 999px;
+  padding: 0.08rem 0.35rem;
+}
+.coin-brief-line {
+  margin: 0.25rem 0 0;
+  font-size: 0.78rem;
+  color: #dbdee1;
+  line-height: 1.4;
+}
+.coin-brief-label {
+  color: #949ba4;
+  margin-right: 0.35rem;
+}
+.coin-brief-note {
+  color: #b5bac1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.coin-brief-eval {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: #57f287;
+}
+.coin-edit-btn {
+  margin-top: 0.45rem;
+  border: 1px solid #3f4147;
+  background: #2b2d31;
+  color: #dbdee1;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.coin-edit-btn:hover {
+  border-color: #5865f2;
+  color: #fff;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+.modal-panel {
+  width: min(720px, 100%);
+  max-height: min(85vh, 900px);
+  background: #2b2d31;
+  border: 1px solid #3f4147;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid #3f4147;
+  flex-shrink: 0;
+}
+.modal-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #f2f3f5;
+}
+.modal-sub {
+  margin-left: 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #949ba4;
+}
+.modal-close {
+  border: none;
+  background: #35373c;
+  color: #dbdee1;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 6px;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.modal-close:hover {
+  background: #5865f2;
+  color: #fff;
+}
+.modal-body {
+  padding: 0.85rem 1rem 1rem;
+  overflow: auto;
 }
 .coin-action-top {
   display: flex;
@@ -832,6 +1161,7 @@ https://youtu.be/..."
   gap: 0.45rem;
   flex-wrap: wrap;
   margin-bottom: 0.3rem;
+  width: 100%;
 }
 .coin-sym {
   font-size: 0.95rem;
@@ -870,7 +1200,7 @@ https://youtu.be/..."
   line-height: 1.45;
 }
 .coin-detail {
-  margin: 0;
+  margin: 0 0 0.65rem;
   font-size: 0.78rem;
   color: #949ba4;
 }

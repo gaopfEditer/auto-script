@@ -172,6 +172,23 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
     }
   });
 
+  /** YouTube paste coin-action 入场价位监听（±3% / 1h，逻辑同卡片接近推送） */
+  app.post("/api/youtube-fetch/coin-actions/watch", async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const cards = await archiveService.registerCoinActionWatches({
+        sourceRef: String(body.sourceRef ?? body.sourceFile ?? ""),
+        title: body.title,
+        rawContent: body.rawContent ?? body.content,
+        coinActions: body.coinActions,
+        bandPct: body.bandPct,
+      });
+      res.json({ ok: true, registered: cards.length, cards });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
   /** 对外开放 v1 */
   app.get("/api/v1/cards", requireOpenApiKey, listHandler);
 

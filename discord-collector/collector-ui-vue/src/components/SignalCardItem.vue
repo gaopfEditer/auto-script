@@ -6,6 +6,7 @@ import {
   hasEvaluation,
   calcProfitPercents,
   formatProfitPercent,
+  formatCardId,
 } from "../lib/signalExecution.js";
 
 const props = defineProps({
@@ -32,7 +33,7 @@ function cardTitle(card) {
     ).trim();
     if (fromParsed) return fromParsed.replace(/^\$/, "");
   }
-  return `#${card.id}`;
+  return "";
 }
 
 /** @param {Record<string, unknown>} card */
@@ -64,12 +65,19 @@ function cardHasEvaluation(card) {
 /** @param {Record<string, unknown>} card */
 function cardEvalProfitBadge(card) {
   const ex = cardExecution(/** @type {import("../lib/discordSignalApi.js").SignalCard} */ (card));
-  const profit = calcProfitPercents(ex.actual.buyPrice, ex.actual.sellPrice, ex.direction);
+  const profit = calcProfitPercents(
+    ex.actual.buyPrice,
+    ex.actual.sellPrice,
+    ex.direction,
+    undefined,
+    ex.symbol || card.symbol
+  );
   if (!profit) return null;
+  const pct = profit.leveragePct;
   return {
-    text: formatProfitPercent(profit.spot),
-    gain: profit.spot > 0,
-    loss: profit.spot < 0,
+    text: formatProfitPercent(pct),
+    gain: pct > 0,
+    loss: pct < 0,
   };
 }
 
@@ -105,7 +113,8 @@ function onClick() {
   >
     <header class="signal-card-top">
       <div class="signal-card-top-left">
-        <span class="signal-card-symbol">{{ title }}</span>
+        <span v-if="formatCardId(card.id)" class="signal-card-id">{{ formatCardId(card.id) }}</span>
+        <span class="signal-card-symbol">{{ title || "—" }}</span>
         <span class="signal-card-status" :class="active ? 'on' : 'off'">
           {{ active ? "有效" : "已失效" }}
         </span>

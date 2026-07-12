@@ -228,9 +228,16 @@ export function evaluationSummaryLines(ex, note = "") {
   if (tp) lines.push(`止盈：${tp}`);
   if (a.stopLossPrice) lines.push(`止损：${a.stopLossPrice}`);
   if (a.exitPrice) lines.push(`平仓：${a.exitPrice}`);
-  const profit = calcProfitPercents(a.buyPrice, a.sellPrice, ex.direction);
+  const profit = calcProfitPercents(
+    a.buyPrice,
+    a.sellPrice,
+    ex.direction,
+    resolveEvalLeverage(ex.symbol)
+  );
   if (profit) {
-    lines.push(`${directionLabel(profit.side)} · 盈利 ${formatProfitPercent(profit.spot)}（100x ${formatProfitPercent(profit.leverage100)}）`);
+    lines.push(
+      `${directionLabel(profit.side)} · 盈利 ${formatProfitPercent(profit.spot)}（${profit.leverage}x ${formatProfitPercent(profit.leveragePct)}）`
+    );
   }
   if (a.closedAt) {
     lines.push(`时间：${new Date(a.closedAt).toLocaleString("zh-CN")}`);
@@ -239,6 +246,12 @@ export function evaluationSummaryLines(ex, note = "") {
   const n = String(note ?? "").trim();
   if (n) lines.push(`备注：${n}`);
   return lines;
+}
+
+/** @param {unknown} id @returns {string} */
+export function formatCardId(id) {
+  const n = Number(id);
+  return Number.isFinite(n) && n > 0 ? `#${n}` : "";
 }
 
 /** @param {string} v @returns {string} */
@@ -276,6 +289,56 @@ export function directionLabel(side) {
   return "—";
 }
 
+/** @type {{ major: number, altcoin: number }} */
+const DEFAULT_EVAL_LEVERAGE = { major: 100, altcoin: 20 };
+
+/** @type {{ major: number, altcoin: number }} */
+let evalLeverageConfig = { ...DEFAULT_EVAL_LEVERAGE };
+
+/** @param {{ major?: number, altcoin?: number } | null | undefined} cfg */
+export function configureEvalLeverage(cfg) {
+  if (!cfg || typeof cfg !== "object") return;
+  const major = Number(cfg.major);
+  const altcoin = Number(cfg.altcoin);
+  if (Number.isFinite(major) && major > 0) evalLeverageConfig.major = major;
+  if (Number.isFinite(altcoin) && altcoin > 0) evalLeverageConfig.altcoin = altcoin;
+}
+
+/** @returns {{ major: number, altcoin: number }} */
+export function getEvalLeverageConfig() {
+  return { ...evalLeverageConfig };
+}
+
+/**
+ * @param {unknown} symbol
+ * @returns {"major" | "altcoin"}
+ */
+export function detectSymbolTier(symbol) {
+  const bare = String(symbol ?? "")
+    .toUpperCase()
+    .trim()
+    .replace(/USDT$|USDC$|BUSD$/, "");
+  return bare === "BTC" || bare === "ETH" ? "major" : "altcoin";
+}
+
+/**
+ * @param {unknown} symbol
+ * @param {number} [override]
+ * @returns {number}
+ */
+export function resolveEvalLeverage(symbol, override) {
+  const n = Number(override);
+  if (Number.isFinite(n) && n > 0) return n;
+  return detectSymbolTier(symbol) === "major"
+    ? evalLeverageConfig.major
+    : evalLeverageConfig.altcoin;
+}
+
+/** @param {unknown} symbol @returns {string} */
+export function evalLeverageLabel(symbol) {
+  return `${resolveEvalLeverage(symbol)}x`;
+}
+
 /** @param {string} price @returns {number | null} */
 export function parsePrice(price) {
   const s = String(price ?? "").trim().replace(/,/g, "");
@@ -288,9 +351,11 @@ export function parsePrice(price) {
  * @param {string} buy 入场
  * @param {string} sell 出场
  * @param {string} [direction]
- * @returns {{ spot: number, leverage100: number, side: "long" | "short" } | null}
+ * @param {number} [leverage] 不传则按 symbol 推断（需配合第 5 参）
+ * @param {unknown} [symbol]
+ * @returns {{ spot: number, leveragePct: number, leverage: number, side: "long" | "short" } | null}
  */
-export function calcProfitPercents(buy, sell, direction) {
+export function calcProfitPercents(buy, sell, direction, leverage, symbol) {
   const entry = parsePrice(buy);
   const exit = parsePrice(sell);
   const side = resolveTradeDirection(direction);
@@ -298,7 +363,9 @@ export function calcProfitPercents(buy, sell, direction) {
   const spot = side === "short"
     ? ((entry - exit) / entry) * 100
     : ((exit - entry) / entry) * 100;
-  return { spot, leverage100: spot * 100, side };
+  const lev = resolveEvalLeverage(symbol, leverage);
+  const leveragePct = spot * lev;
+  return { spot, leveragePct, leverage: lev, side };
 }
 
 /** @param {number | null | undefined} pct @returns {string} */
@@ -325,6 +392,31 @@ export function statLineFromCards(cards) {
     else stats.pending++;
   }
   return stats;
+}
+
+/**
+ * 汇总卡片杠杆后收益率（仅含已填入场+出场且可计算的单）。
+ * @param {import("./discordSignalApi.js").SignalCard[]} cards
+ * @returns {{ sum: number, count: number } | null}
+ */
+export function sumLeverageProfitFromCards(cards) {
+  let sum = 0;
+  let count = 0;
+  for (const c of cards) {
+    const ex = cardExecution(c);
+    const profit = calcProfitPercents(
+      ex.actual.buyPrice,
+      ex.actual.sellPrice,
+      ex.direction,
+      undefined,
+      ex.symbol
+    );
+    if (!profit) continue;
+    sum += profit.leveragePct;
+    count += 1;
+  }
+  if (!count) return null;
+  return { sum, count };
 }
 
 /** @param {import("./discordSignalApi.js").SignalCard} card */

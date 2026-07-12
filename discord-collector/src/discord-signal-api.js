@@ -2,12 +2,16 @@
  * Discord 信号卡片 REST API。
  */
 import { SIGNAL_STYLE_META, getSignalChannelConfig, getSignalChannelIds } from "./discord-signal-config.js";
+import { getEvalLeverageConfig } from "./card-eval-leverage.js";
+import { config } from "./config.js";
 import { signalCardToClient } from "./discord-signal-card-service.js";
 import {
   formatManualRawContent,
   normalizeExecution,
   normalizePriceList,
+  hasEvaluatedYield,
 } from "./discord-signal-execution.js";
+import { buildSkippedBacktestJson } from "./card-backtest-engine.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { signalTextHash } from "./discord-signal-dedup.js";
@@ -50,8 +54,9 @@ function summarizeCards(cards) {
  * @param {import("express").Express} app
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./discord-signal-card-service.js").createDiscordSignalCardService>} signalService
+ * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
  */
-export function registerDiscordSignalRoutes(app, store, signalService) {
+export function registerDiscordSignalRoutes(app, store, signalService, broadcast) {
   app.get("/api/discord/signal-config", (_req, res) => {
     /** @type {Record<string, unknown>} */
     const channels = {};
@@ -63,6 +68,11 @@ export function registerDiscordSignalRoutes(app, store, signalService) {
       styles: SIGNAL_STYLE_META,
       channelIds: [...getSignalChannelIds()],
       channels,
+      evalLeverage: getEvalLeverageConfig(),
+      cardNotifications: {
+        desktop: config.cardToastDesktop,
+        position: config.cardToastPosition,
+      },
     });
   });
 
@@ -162,7 +172,26 @@ export function registerDiscordSignalRoutes(app, store, signalService) {
         executionJson = normalizeExecution(executionJson, null);
       }
 
-      const row = await store.updateSignalCard(id, { status, expiresAt, cardsByStyle, note, executionJson });
+      /** @type {Record<string, unknown>} */
+      const patch = { status, expiresAt, cardsByStyle, note, executionJson };
+      if (executionJson && hasEvaluatedYield(executionJson)) {
+        const existing = await store.getSignalCardById(id);
+        const prevBacktest = existing?.backtest_json ?? existing?.backtestJson;
+        let hasBacktest = false;
+        if (prevBacktest) {
+          try {
+            const parsed = typeof prevBacktest === "string" ? JSON.parse(prevBacktest) : prevBacktest;
+            hasBacktest = parsed && typeof parsed === "object" && !parsed.skipped;
+          } catch {
+            hasBacktest = true;
+          }
+        }
+        if (!hasBacktest) {
+          patch.backtestJson = buildSkippedBacktestJson("user_evaluated");
+        }
+      }
+
+      const row = await store.updateSignalCard(id, patch);
       if (!row) {
         res.status(404).json({ ok: false, error: "not found" });
         return;
@@ -253,7 +282,9 @@ export function registerDiscordSignalRoutes(app, store, signalService) {
         verifyMode,
         assetClass,
       });
-      res.json({ ok: true, card: signalCardToClient(row) });
+      const card = signalCardToClient(row);
+      broadcast?.("meta", { kind: "signal_card_created", card });
+      res.json({ ok: true, card });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }

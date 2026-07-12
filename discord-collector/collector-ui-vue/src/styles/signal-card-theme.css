@@ -116,6 +116,13 @@
   font-size: 0.82rem;
   color: #fff;
 }
+.signal-card-id {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #aeb4ff;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
 .signal-card-manual-tag {
   font-size: 0.6rem;
   padding: 0.05rem 0.3rem;

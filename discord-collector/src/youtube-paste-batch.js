@@ -96,7 +96,16 @@ export async function parseTxtFileAndSave({ inputDir, outputDir, txtName, log, f
   await fs.writeFile(outPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   log.info(`paste-batch: 已解析 ${txtName} → ${path.basename(outPath)}`);
 
-  return { ok: true, skipped: false, txtName, outPath, title: result.title };
+  return {
+    ok: true,
+    skipped: false,
+    txtName,
+    outPath,
+    title: result.title,
+    content: result.content,
+    coinActions: result.coinActions,
+    preview: result.preview,
+  };
 }
 
 /**
@@ -121,7 +130,12 @@ export async function scanAndParseTxtFiles({ inputDir, outputDir, log, force = f
       try {
         const row = await parseTxtFileAndSave({ inputDir, outputDir, txtName, log, force });
         if (row.skipped) stats.skipped += 1;
-        else stats.parsed += 1;
+        else {
+          stats.parsed += 1;
+          if (row.coinActions?.length) {
+            await syncCoinActionWatches(archiveService, txtName, row, log);
+          }
+        }
       } catch (e) {
         stats.failed += 1;
         log.warn(`paste-batch: ${txtName} 失败: ${/** @type {Error} */ (e).message}`);
@@ -184,11 +198,35 @@ export async function listPasteFileItems({ inputDir, outputDir }) {
 }
 
 /**
+ * @param {ReturnType<typeof import('./card-archive-service.js').createCardArchiveService>} [archiveService]
+ * @param {string} txtName
+ * @param {{ title?: string, content?: string, coinActions?: unknown[] }} result
+ * @param {ReturnType<typeof import('./logger.js').createLogger>} log
+ */
+async function syncCoinActionWatches(archiveService, txtName, result, log) {
+  if (!archiveService?.registerCoinActionWatches) return;
+  const list = Array.isArray(result.coinActions) ? result.coinActions : [];
+  if (!list.length) return;
+  try {
+    await archiveService.registerCoinActionWatches({
+      sourceRef: txtName,
+      title: result.title,
+      rawContent: result.content,
+      coinActions: /** @type {Array<Record<string, unknown>>} */ (list),
+    });
+  } catch (e) {
+    log.warn(`coin-action watch ${txtName}: ${/** @type {Error} */ (e).message}`);
+  }
+}
+
+/**
  * @param {import('express').Express} app
  * @param {{ pasteParseInputDir: string, pasteParseOutputDir: string }} config
  * @param {ReturnType<typeof import('./logger.js').createLogger>} log
+ * @param {{ archiveService?: ReturnType<typeof import('./card-archive-service.js').createCardArchiveService> }} [opts]
  */
-export function registerYoutubePasteBatchRoutes(app, config, log) {
+export function registerYoutubePasteBatchRoutes(app, config, log, opts = {}) {
+  const archiveService = opts.archiveService;
   const dirs = () => ({
     inputDir: config.pasteParseInputDir,
     outputDir: config.pasteParseOutputDir,
@@ -258,6 +296,9 @@ export function registerYoutubePasteBatchRoutes(app, config, log) {
       const force = req.body?.force !== false;
       const { inputDir, outputDir } = dirs();
       const row = await parseTxtFileAndSave({ inputDir, outputDir, txtName: name, log, force });
+      if (!row.skipped && row.coinActions?.length) {
+        await syncCoinActionWatches(archiveService, name, row, log);
+      }
       res.json({ ok: true, ...row });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });

@@ -196,4 +196,24 @@ export function summarizeCardExecution(row) {
   return { execution: ex, outcome: ex.outcome };
 }
 
+/** @param {unknown} v @returns {number | null} */
+function parseEvalPrice(v) {
+  const n = Number(String(v ?? "").trim().replace(/,/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * 用户已填写入场/出场且可计算收益率 → 无需自动回测。
+ * @param {SignalExecution} ex
+ */
+export function hasEvaluatedYield(ex) {
+  const a = ex?.actual;
+  if (!a) return false;
+  const entry = parseEvalPrice(a.buyPrice);
+  const exit = parseEvalPrice(a.sellPrice);
+  if (entry == null || exit == null) return false;
+  const dir = String(ex.direction ?? "");
+  return /空|short|sell|多|long|buy/i.test(dir);
+}
+
 export const OUTCOME_VALUES = ["pending", "take_profit", "stop_loss", "manual_close", "cancelled"];

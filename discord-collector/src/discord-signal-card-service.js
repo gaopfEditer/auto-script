@@ -42,6 +42,53 @@ export function resolveCardSignalAt(row) {
   return ca ? String(ca) : null;
 }
 
+/** @param {unknown} raw */
+function parseJsonField(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return /** @type {Record<string, unknown>} */ (raw);
+  try {
+    return /** @type {Record<string, unknown>} */ (JSON.parse(String(raw)));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * seven 频道常先发入场、再发止盈止损补充；从同频道最近卡片补全 symbol / direction。
+ * @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store
+ * @param {string} channelId
+ * @param {Record<string, unknown>} parsed
+ */
+async function enrichTwOpgFromRecentCard(store, channelId, parsed) {
+  if (parsed.parser !== "tw_opg" || !store.getRecentSignalCardByChannel) return parsed;
+
+  const needSymbol = !String(parsed.symbol ?? "").trim();
+  const dir = String(parsed.direction ?? "").trim();
+  const needDirection = !dir || dir === "待确认";
+
+  if (!needSymbol && !needDirection) return parsed;
+
+  const recent = await store.getRecentSignalCardByChannel({ channelId, withinMs: 1_800_000 });
+  if (!recent) return parsed;
+
+  const prev = parseJsonField(recent.parsed_json ?? recent.parsedJson);
+  if (!prev) return parsed;
+
+  const out = { ...parsed };
+  if (needSymbol && String(prev.symbol ?? "").trim()) {
+    out.symbol = String(prev.symbol).trim();
+  }
+  if (needDirection && String(prev.direction ?? "").trim() && String(prev.direction) !== "待确认") {
+    out.direction = String(prev.direction).trim();
+  }
+  const sym = String(out.symbol ?? "").trim();
+  const d = String(out.direction ?? "").trim();
+  if (sym || d) {
+    out.title = sym ? `${sym} ${d || "信号"}` : String(out.title ?? "seven 信号");
+  }
+  return out;
+}
+
 /**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
@@ -87,6 +134,9 @@ export function createDiscordSignalCardService(store, log, broadcast) {
       parsed = await extractSignalWithAi(content, chCfg.parser, chCfg.name, {
         debug: (s) => log.debug(s),
       });
+    }
+    if (parsed && chCfg.parser === "tw_opg") {
+      parsed = await enrichTwOpgFromRecentCard(store, channelId, parsed);
     }
     if (!parsed) {
       log.info(`信号未识别 channel=${channelId} parser=${chCfg.parser} preview=${content.slice(0, 80)}`);

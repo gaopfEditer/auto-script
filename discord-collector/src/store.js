@@ -626,6 +626,7 @@ export async function openStore(cfg, log) {
          created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
+         channel_id = VALUES(channel_id),
          source_text_hash = VALUES(source_text_hash),
          raw_content = VALUES(raw_content),
          parsed_json = VALUES(parsed_json),
@@ -683,6 +684,21 @@ export async function openStore(cfg, log) {
       if (byHash[0]) return normalizeSignalCardRow(byHash[0]);
     }
     throw new Error(`insertSignalCard: 写入后未找到记录 message_id=${messageId}`);
+  }
+
+  /** @param {string} targetChannelId */
+  async function migrateCoinActionPasteCards(targetChannelId) {
+    const ch = String(targetChannelId ?? "").trim();
+    if (!ch) return 0;
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const [result] = await pool.execute(
+      `UPDATE discord_signal_cards
+       SET channel_id = ?, updated_at = ?
+       WHERE message_id LIKE 'yt-paste-%'
+         AND channel_id != ?`,
+      [ch, now, ch]
+    );
+    return Number(/** @type {import("mysql2").ResultSetHeader} */ (result).affectedRows) || 0;
   }
 
   /** @param {number} id */
@@ -749,6 +765,24 @@ export async function openStore(cfg, log) {
       symbol: sym,
       fromMs,
     });
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const [rows] = await pool.query(
+      `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       ${whereSql} ORDER BY sc.id DESC LIMIT 1`,
+      params
+    );
+    return rows[0] ? normalizeSignalCardRow(rows[0]) : null;
+  }
+
+  /** @param {{ channelId: string, withinMs?: number }} opts */
+  async function getRecentSignalCardByChannel({ channelId, withinMs = 1_800_000 }) {
+    const ch = String(channelId ?? "").trim();
+    if (!ch) return null;
+    const ms = Number(withinMs);
+    const fromMs = Number.isFinite(ms) && ms > 0 ? Date.now() - ms : Date.now() - 1_800_000;
+    const { where, params } = buildSignalCardFilters({ channelId: ch, fromMs });
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const [rows] = await pool.query(
       `SELECT ${SIGNAL_CARD_SELECT}
@@ -918,7 +952,7 @@ export async function openStore(cfg, log) {
 
   /**
    * @param {number} id
-   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown }} patch
+   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, channelId?: string, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown }} patch
    */
   async function updateSignalCard(id, patch) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
@@ -926,6 +960,10 @@ export async function openStore(cfg, log) {
     const sets = ["updated_at = ?"];
     /** @type {unknown[]} */
     const params = [now];
+    if (patch.channelId != null) {
+      sets.push("channel_id = ?");
+      params.push(String(patch.channelId).trim());
+    }
     if (patch.status != null) {
       sets.push("status = ?");
       params.push(patch.status);
@@ -1000,9 +1038,11 @@ export async function openStore(cfg, log) {
     listChannelMessageDedupCaches,
     upsertChannelMessageDedupCache,
     insertSignalCard,
+    migrateCoinActionPasteCards,
     markSignalCardTelegramSent,
     listSignalCards,
     getRecentSignalCardBySymbolChannel,
+    getRecentSignalCardByChannel,
     listSignalCardChannels,
     getSignalCardById,
     getSignalCardByMessageId,
@@ -1050,9 +1090,11 @@ export function createOfflineStore() {
     listChannelMessageDedupCaches: async () => [],
     upsertChannelMessageDedupCache: async () => {},
     insertSignalCard: async () => null,
+    migrateCoinActionPasteCards: async () => 0,
     markSignalCardTelegramSent: async () => {},
     listSignalCards: async () => [],
     getRecentSignalCardBySymbolChannel: async () => null,
+    getRecentSignalCardByChannel: async () => null,
     listSignalCardChannels: async () => [],
     getSignalCardById: async () => null,
     getSignalCardByMessageId: async () => null,
