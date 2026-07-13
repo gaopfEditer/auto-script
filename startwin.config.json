@@ -1,5 +1,5 @@
 {
-  "order": ["vpn", "fileManager", "logs", "chrome"],
+  "order": ["vpn", "fileManager", "logs", "chrome", "cursor", "pull_code_script"],
   "apps": {
     "vpn": {
       "enabled": true,
@@ -24,11 +24,25 @@
     },
     "chrome": {
       "enabled": true,
-      "label": "Chrome + 新闻",
+      "label": "Chrome + gemini",
       "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
       "args": "--remote-debugging-port=9222 --user-data-dir=\"D:\\chrome_debug_profile\"",
       "url": "https://gemini.google.com/app",
       "delay": 1000
+    },
+    "cursor": {
+      "enabled": true,
+      "label": "打开Cursor项目",
+      "path": "C:\\Users\\eason\\AppData\\Local\\Programs\\cursor\\Cursor.exe",
+      "args": "D:\\frontend\\3d\\Code\\GUI",
+      "delay": 1000
+    },
+    "pull_code_script": {
+      "enabled": true,
+      "label": "执行拉取代码脚本",
+      "path": "C:\\Users\\eason\\Desktop\\script\\pull_code.bat",
+      "args": "",
+      "delay": 500
     }
   }
 }
