@@ -2,7 +2,7 @@
 /**
  * 入口：collect = CDP 监听 Discord 网页 Gateway/API + 可选落库。
  */
-import "dotenv/config";
+import "./load-env.js";
 import { buildFrameChannelPayload } from "./collect-ws-decode.js";
 import { config } from "./config.js";
 import { setDebugMode } from "./discord-debug.js";

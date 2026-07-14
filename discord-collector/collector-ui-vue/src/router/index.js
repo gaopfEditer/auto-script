@@ -10,6 +10,7 @@ export default createRouter({
     { path: "/cards", name: "cards", component: () => import("../views/CardArchiveView.vue") },
     { path: "/fetch", name: "fetch", component: () => import("../views/YoutubeFetchView.vue") },
     { path: "/archives", name: "archives", component: () => import("../views/YoutubeArchivesView.vue") },
+    { path: "/trade", name: "trade", component: () => import("../views/BitgetTradeView.vue") },
     { path: "/messages", redirect: "/show" },
   ],
 });

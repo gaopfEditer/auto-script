@@ -2,7 +2,7 @@
 /**
  * Discord CDP 采集 + HTTP 静态 UI + WebSocket 实时推送。
  */
-import "dotenv/config";
+import "./load-env.js";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,10 @@ import { createDiscordTelegramMessagePush } from "./discord-telegram-message-pus
 import { createDiscordWebhookForward } from "./discord-webhook-forward.js";
 import { createSystemTelegramAlert } from "./discord-system-telegram.js";
 import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
-import { COIN_ACTION_SIGNAL_CHANNEL_ID } from "./discord-signal-config.js";
+import { COIN_ACTION_SIGNAL_CHANNEL_ID, getSignalChannelConfig } from "./discord-signal-config.js";
+import { getBitgetTradeStatus, loadBitgetTradeConfig } from "./bitget-trade-config.js";
+import { getWeexTradeStatus, loadWeexTradeConfig } from "./weex-trade-config.js";
+import { isStagedTradeChannel } from "./discord-signal-staged-trade.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
 import { isBlockedWsPayload, isForwardableFramePayload } from "./ws-noise-filter.js";
 import { createLogger, setLogLevel } from "./logger.js";
@@ -31,6 +34,17 @@ import { registerYoutubePasteBatchRoutes, startPasteBatchService } from "./youtu
 import { createCardArchiveService } from "./card-archive-service.js";
 import { registerCardArchiveRoutes } from "./card-archive-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
+import { createBitgetOrderService } from "./bitget-order-service.js";
+import { createWeexOrderService } from "./weex-order-service.js";
+import { createBitgetManualService } from "./bitget-manual-service.js";
+import { registerBitgetRoutes } from "./bitget-api-routes.js";
+import { registerWeexRoutes } from "./weex-api-routes.js";
+import { getBitgetProxyInUse } from "./bitget-api.js";
+import {
+  getAutoTradeChannelIds,
+  getTradePlatformToggles,
+  setTradePlatformToggles,
+} from "./trade-platform-toggles.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public", "collector-ui");
@@ -58,7 +72,24 @@ async function main() {
   const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
   const webhookForward = createDiscordWebhookForward(createLogger("webhook-forward"));
   const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"));
-  const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast);
+  const bitgetOrder = createBitgetOrderService(store, createLogger("bitget"));
+  const weexOrder = createWeexOrderService(store, createLogger("weex"));
+  const bitgetManual = createBitgetManualService(createLogger("bitget-manual"));
+  if (config.bitgetEnabled) {
+    const bgProxy = getBitgetProxyInUse();
+    const bgCfg = loadBitgetTradeConfig();
+    log.info(
+      `Bitget 自动交易 enabled ${bgCfg.dryRun ? "dryRun=模拟" : "LIVE=实盘"}${bgProxy ? ` proxy=${bgProxy}` : "（未配置代理，国内直连可能失败）"}`
+    );
+  }
+  if (config.weexEnabled) {
+    const wxCfg = loadWeexTradeConfig();
+    log.info(`WEEX 自动交易 enabled ${wxCfg.dryRun ? "dryRun=模拟" : "LIVE=实盘"}（参数与 Bitget 共用）`);
+  }
+  const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast, {
+    bitgetOrder,
+    weexOrder,
+  });
   const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast);
   const cardPriceMonitor = createCardPriceMonitor(
     store,
@@ -83,6 +114,8 @@ async function main() {
   app.use(express.json({ limit: "512kb" }));
 
   registerDiscordSignalRoutes(app, store, signalCards, broadcast);
+  registerBitgetRoutes(app, bitgetOrder, bitgetManual);
+  registerWeexRoutes(app, weexOrder);
   registerCardArchiveRoutes(app, store, cardArchive);
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")
@@ -234,6 +267,118 @@ async function main() {
         return;
       }
       res.json({ ok: true, channelId, text });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
+  const DEBUG_SIMULATE_CHANNELS = [
+    { id: "1444963506431463474", name: "山寨之王", parser: "altcoin_king" },
+    { id: "1444963372134301827", name: "seven", parser: "tw_opg" },
+  ];
+
+  app.get("/api/debug/trade-platforms", (_req, res) => {
+    res.json({
+      ok: true,
+      platforms: getTradePlatformToggles(),
+      requiredChannelIds: getAutoTradeChannelIds(),
+    });
+  });
+
+  app.post("/api/debug/trade-platforms", (req, res) => {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const platforms = setTradePlatformToggles({
+      bitget: typeof body.bitget === "boolean" ? body.bitget : undefined,
+      weex: typeof body.weex === "boolean" ? body.weex : undefined,
+    });
+    log.info(`[debug] trade platforms bitget=${platforms.bitget} weex=${platforms.weex}`);
+    res.json({ ok: true, platforms, requiredChannelIds: getAutoTradeChannelIds() });
+  });
+
+  app.get("/api/debug/simulate-signal", (_req, res) => {
+    res.json({
+      ok: true,
+      defaultChannelId: "1444963506431463474",
+      channels: DEBUG_SIMULATE_CHANNELS,
+      tradePlatforms: getTradePlatformToggles(),
+      requiredChannelIds: getAutoTradeChannelIds(),
+      bitget: getBitgetTradeStatus(),
+      weex: getWeexTradeStatus(),
+      examples: {
+        altcoin_king: {
+          open: "#SOL 市价多",
+          tpsl: "止盈：508-501-477\n止損：520",
+        },
+        tw_opg: {
+          open: "开单 #BTC 市价進多",
+          tpsl: "止盈：4.71   止損：4.9",
+        },
+      },
+      hints: [
+        "回车提交；Shift+Enter 换行",
+        "Debug 模式：跳过去重 / 不走 Ollama，响应更快",
+        "第 1 条通常为市价开仓（Bitget + WEEX 同步，BTC/ETH 100x / 山寨 30x）",
+        "开仓同时挂市价 -4.3% 初始止损",
+        "第 2 条通常为 TP/SL 补充（合并到同币种未完结卡片）",
+        "正式 Discord 信号仍保留 4h 同币种去重",
+        "下方勾选控制 Bitget / WEEX 是否下单（localStorage + 服务端同步）；频道须在 BITGET_AUTO_TRADE_CHANNEL_IDS",
+      ],
+    });
+  });
+
+  app.post("/api/debug/simulate-signal", async (req, res) => {
+    const channelId = String(req.body?.channelId ?? "1444963506431463474").trim();
+    const content = String(req.body?.content ?? "").trim();
+    if (!content) {
+      res.status(400).json({ ok: false, error: "content_required" });
+      return;
+    }
+    if (!isStagedTradeChannel(channelId)) {
+      res.status(400).json({ ok: false, error: "channel_not_staged", hint: "仅支持分阶段交易频道" });
+      return;
+    }
+    const chCfg = getSignalChannelConfig(channelId);
+    if (!chCfg) {
+      res.status(400).json({ ok: false, error: "invalid_channel" });
+      return;
+    }
+    const messageId = `debug-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const bodyPlatforms =
+      req.body?.tradePlatforms && typeof req.body.tradePlatforms === "object" ? req.body.tradePlatforms : null;
+    const simulateOpts = { skipDedup: true, skipTelegram: true, debugSimulate: true };
+    if (bodyPlatforms) {
+      simulateOpts.tradePlatforms = {
+        bitget: bodyPlatforms.bitget !== false,
+        weex: bodyPlatforms.weex !== false,
+      };
+    }
+    try {
+      const result = await signalCards.onMessage(
+        {
+          channelId,
+          messageId,
+          guildId: String(req.body?.guildId ?? "").trim(),
+          content,
+          timestamp: new Date().toISOString(),
+        },
+        simulateOpts
+      );
+      const ok = !result.skipped || result.merged;
+      log.info(
+        `[debug-simulate] channel=${channelId} skipped=${result.skipped ?? "-"} phase=${String(result.parsed?.signalPhase ?? "")} card=#${result.card?.id ?? "-"}`
+      );
+      res.json({
+        ok,
+        channelId,
+        channelName: chCfg.name,
+        messageId,
+        content,
+        ...result,
+        bitget: getBitgetTradeStatus(),
+        weex: getWeexTradeStatus(),
+        tradePlatforms: getTradePlatformToggles(),
+        requiredChannelIds: getAutoTradeChannelIds(),
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }

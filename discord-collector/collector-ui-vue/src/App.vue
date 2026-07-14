@@ -38,6 +38,7 @@ async function toggleDebug() {
         <RouterLink to="/cards">卡片</RouterLink>
         <RouterLink to="/fetch">拉取</RouterLink>
         <RouterLink to="/archives">文稿</RouterLink>
+        <RouterLink to="/trade">下单</RouterLink>
         <RouterLink to="/debug">Debug</RouterLink>
       </nav>
       <button

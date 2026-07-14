@@ -115,7 +115,7 @@ ${String(rawContent ?? "").slice(0, 2000)}
  * @param {Record<string, unknown>} parsed
  * @param {string[]} styleIds
  * @param {string} rawContent
- * @param {{ debug?: (s: string) => void }} [opts]
+ * @param {{ debug?: (s: string) => void; fastFallback?: boolean }} [opts]
  * @returns {Promise<Record<string, string>>}
  */
 export async function generateCardsByStyles(parsed, styleIds, rawContent, opts = {}) {
@@ -123,7 +123,7 @@ export async function generateCardsByStyles(parsed, styleIds, rawContent, opts =
   const out = {};
   const styles = styleIds.length ? styleIds : ["cn_brief"];
 
-  if (!config.ollamaEnabled) {
+  if (opts.fastFallback || !config.ollamaEnabled) {
     for (const sid of styles) {
       out[sid] = formatCardFallback(parsed, sid);
     }

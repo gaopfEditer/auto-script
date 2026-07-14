@@ -49,6 +49,17 @@ function parseIdList(raw) {
   ];
 }
 
+/** @param {string[]} envKeys */
+function envProxy(...envKeys) {
+  for (const key of envKeys) {
+    const v = (process.env[key] ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+const commonProxy = envProxy("COMMON_PROXY");
+
 export const config = {
   mysql,
   logLevel: process.env.LOG_LEVEL ?? "info",
@@ -139,17 +150,13 @@ export const config = {
   pasteParseStartupDelayMs: Number(process.env.PASTE_PARSE_STARTUP_DELAY_MS ?? 15_000),
   /** 统一卡片开放 API Key（Header: X-Cards-Api-Key 或 Bearer） */
   cardsApiKey: (process.env.CARDS_API_KEY ?? "").trim(),
+  /** 统一 HTTP(S) 代理（Bitget / WEEX / Webhook / 币安等默认共用） */
+  commonProxy,
   /** 币安行情（卡片价格校验 / 接近推送） */
   binanceFapiUrl: (process.env.BINANCE_FAPI_URL ?? "https://fapi.binance.com").trim(),
   binanceRequestTimeoutMs: Number(process.env.BINANCE_REQUEST_TIMEOUT_MS ?? 15_000),
-  /** 币安 API 代理（国内直连常失败；默认同 DISCORD_WEBHOOK_PROXY） */
-  binanceProxy: (
-    process.env.BINANCE_PROXY ??
-    process.env.DISCORD_WEBHOOK_PROXY ??
-    process.env.HTTPS_PROXY ??
-    process.env.HTTP_PROXY ??
-    ""
-  ).trim(),
+  /** 币安 API 代理（国内直连常失败；默认 COMMON_PROXY） */
+  binanceProxy: envProxy("BINANCE_PROXY", "COMMON_PROXY", "DISCORD_WEBHOOK_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
   cardPriceMonitorIntervalMs: Number(process.env.CARD_PRICE_MONITOR_INTERVAL_MS ?? 60_000),
   /** 加密接近推送：每 1h 检查，距关键位 ≤ 1% */
   cardProximityCryptoCheckMs: Number(process.env.CARD_PROXIMITY_CRYPTO_CHECK_MS ?? 3_600_000),
@@ -176,5 +183,39 @@ export const config = {
     : path.join(_collectorRoot, "config", "channel-webhook-forwards.json"),
   webhookForwardTimeoutMs: Number(process.env.DISCORD_WEBHOOK_FORWARD_TIMEOUT_MS ?? 15_000),
   /** Node 发 Discord Webhook 用的 HTTP(S) 代理，需与 Chrome 一致，如 http://127.0.0.1:7890 */
-  webhookForwardProxy: (process.env.DISCORD_WEBHOOK_PROXY ?? process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? "").trim(),
+  webhookForwardProxy: envProxy("DISCORD_WEBHOOK_PROXY", "COMMON_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
+  /** Bitget 合约自动下单（密钥仅来自环境变量） */
+  bitgetEnabled: !["0", "false", "no", "off"].includes(String(process.env.BITGET_ENABLED ?? "0").toLowerCase()),
+  bitgetDryRun: !["0", "false", "no", "off"].includes(String(process.env.BITGET_DRY_RUN ?? "1").toLowerCase()),
+  bitgetApiKey: (process.env.BITGET_API_KEY ?? "").trim(),
+  bitgetApiSecret: (process.env.BITGET_API_SECRET ?? "").trim(),
+  bitgetPassphrase: (process.env.BITGET_PASSPHRASE ?? "").trim(),
+  bitgetBaseUrl: (process.env.BITGET_BASE_URL ?? "https://api.bitget.com").trim(),
+  bitgetRequestTimeoutMs: Number(process.env.BITGET_REQUEST_TIMEOUT_MS ?? 15_000),
+  /** Bitget API 代理（国内直连常失败；默认 COMMON_PROXY） */
+  bitgetProxy: envProxy("BITGET_PROXY", "COMMON_PROXY", "DISCORD_WEBHOOK_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
+  /** 非空时仅这些频道触发下单（否则读 JSON channels） */
+  bitgetAutoTradeChannelIds: parseIdList(process.env.BITGET_AUTO_TRADE_CHANNEL_IDS ?? ""),
+  bitgetDefaultLeverage: Number(process.env.BITGET_DEFAULT_LEVERAGE ?? 30),
+  bitgetOrderSizeUsdt: Number(process.env.BITGET_ORDER_SIZE_USDT ?? 1),
+  bitgetMajorLeverage: Number(process.env.BITGET_MAJOR_LEVERAGE ?? 100),
+  bitgetAltcoinLeverage: Number(process.env.BITGET_ALTCOIN_LEVERAGE ?? 30),
+  bitgetInitialSlPct: Number(process.env.BITGET_INITIAL_SL_PCT ?? 4.3),
+  bitgetTradeConfigFile: (process.env.BITGET_TRADE_CONFIG_FILE ?? "").trim()
+    ? path.resolve(process.env.BITGET_TRADE_CONFIG_FILE.trim())
+    : path.join(_collectorRoot, "config", "bitget-trade-channels.json"),
+  /** WEEX 合约自动下单（交易参数默认与 Bitget 共用 BITGET_*） */
+  weexEnabled: !["0", "false", "no", "off"].includes(String(process.env.WEEX_ENABLED ?? "0").toLowerCase()),
+  weexDryRun: !["0", "false", "no", "off"].includes(
+    String(process.env.WEEX_DRY_RUN ?? process.env.BITGET_DRY_RUN ?? "1").toLowerCase()
+  ),
+  weexApiKey: (process.env.WEEX_API_KEY ?? "").trim(),
+  weexApiSecret: (process.env.WEEX_API_SECRET ?? "").trim(),
+  weexPassphrase: (process.env.WEEX_PASSPHRASE ?? "").trim(),
+  weexBaseUrl: (process.env.WEEX_BASE_URL ?? "https://api-contract.weex.com").trim(),
+  weexRequestTimeoutMs: Number(process.env.WEEX_REQUEST_TIMEOUT_MS ?? process.env.BITGET_REQUEST_TIMEOUT_MS ?? 15_000),
+  weexProxy: envProxy("WEEX_PROXY", "COMMON_PROXY", "BITGET_PROXY", "DISCORD_WEBHOOK_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
+  weexAutoTradeChannelIds: parseIdList(
+    process.env.WEEX_AUTO_TRADE_CHANNEL_IDS ?? process.env.BITGET_AUTO_TRADE_CHANNEL_IDS ?? ""
+  ),
 };
