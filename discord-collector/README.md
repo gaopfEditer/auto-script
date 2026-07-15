@@ -7,6 +7,12 @@
 
 架构与 [`stream-collector`](../stream-collector) 相同：Playwright 附加到你已登录的 Chrome，不注入脚本、不走 Bot Token。
 
+## 文档
+
+- **[前端部署手册](docs/frontend-deploy.md)** — 构建、`ui:build`、Nginx、发版、Umami、检查清单
+- [前端上云 + 后台本地](docs/deploy-frontend-remote-backend-local.md) — SSH 隧道完整步骤
+- [WebSocket 推送架构](docs/websocket-push-architecture.md)
+
 ## 环境准备
 
 ```bash
@@ -92,6 +98,7 @@ pnpm run collect
 | `DISCORD_TELEGRAM_REALTIME_CHANNEL_IDS` | 空 | 实时推送，不参与 2 分钟聚合（逗号分隔，可单独配置） |
 | `DISCORD_TELEGRAM_PUSH_DEBOUNCE_MS` | `120000` | 其他频道：最后一条消息后等待多久再批量转发 |
 | `DISCORD_TELEGRAM_PRIORITY_FORWARD` | `1` | Gateway 消息先转发 Telegram/Webhook，再异步入库（省约 20–150ms） |
+| Umami | — | `collector-ui-vue/index.html` 已嵌入 [`bz.ezcoin.ink/script.js`](https://bz.ezcoin.ink/script.js)（website-id `2a409684-5ffa-4c8c-8b28-68c2b22c21ee`） |
 | `COLLECTOR_NETWORK_TRACE` | `0` | `1` 时终端打印 HTTP 请求 |
 | `COLLECTOR_WS_FRAME_TRACE` | `0` | `1` 时打印 Gateway 帧（仍跳过心跳/Presence） |
 | `DISCORD_GATEWAY_MESSAGE_LOG` | `0` | `1` 时打印 `[gateway MESSAGE_CREATE]` 群聊消息行 |

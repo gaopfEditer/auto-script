@@ -29,6 +29,7 @@ export default defineConfig(({ mode }) => {
       },
     ],
     root,
+    envDir: collectorRoot,
     publicDir: false,
     build: {
       outDir: path.resolve(root, "../public/collector-ui"),
