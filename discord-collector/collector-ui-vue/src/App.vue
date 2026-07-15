@@ -5,11 +5,17 @@ import NewCardToastStack from "./components/NewCardToastStack.vue";
 import "./composables/useNewCardNotifications.js";
 import { useDebugMode } from "./composables/useDebugMode.js";
 import { ensureCollectorSocket, useCollectorSocket } from "./composables/useCollectorSocket.js";
+import { getDefaultDeployPath, getNavPages, getUiMode, isDeployUi, isPageEnabled } from "./lib/uiMode.js";
 
 const { debugMode, setDebugMode } = useDebugMode();
 
 ensureCollectorSocket();
 const { status: wsStatus, error: wsError, reconnect: reconnectWs } = useCollectorSocket();
+
+const uiMode = getUiMode();
+const navPages = getNavPages();
+const brandTo = isDeployUi() ? getDefaultDeployPath() : "/";
+const showDebugToggle = !isDeployUi() || isPageEnabled("debug");
 
 const wsStatusLabel = computed(() => {
   switch (wsStatus.value) {
@@ -30,16 +36,11 @@ async function toggleDebug() {
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :data-ui-mode="uiMode">
     <header class="top-nav">
-      <RouterLink to="/" class="brand">discord-collector</RouterLink>
+      <RouterLink :to="brandTo" class="brand">discord-collector</RouterLink>
       <nav class="nav-links">
-        <RouterLink to="/show">Show</RouterLink>
-        <RouterLink to="/cards">卡片</RouterLink>
-        <RouterLink to="/fetch">拉取</RouterLink>
-        <RouterLink to="/archives">文稿</RouterLink>
-        <RouterLink to="/trade">下单</RouterLink>
-        <RouterLink to="/debug">Debug</RouterLink>
+        <RouterLink v-for="p in navPages" :key="p.name" :to="p.path">{{ p.label }}</RouterLink>
       </nav>
       <button
         type="button"
@@ -50,7 +51,12 @@ async function toggleDebug() {
       >
         {{ wsStatusLabel }}
       </button>
-      <button class="debug-toggle" :class="{ on: debugMode }" @click="toggleDebug">
+      <button
+        v-if="showDebugToggle"
+        class="debug-toggle"
+        :class="{ on: debugMode }"
+        @click="toggleDebug"
+      >
         {{ debugMode ? "Debug 开" : "精简模式" }}
       </button>
     </header>
