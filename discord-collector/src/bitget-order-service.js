@@ -32,6 +32,8 @@ import {
 
 import { isStagedTradeSignal } from "./discord-signal-staged-trade.js";
 
+import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
+
 
 
 /**
@@ -332,6 +334,17 @@ export function createBitgetOrderService(store, log) {
     if (!resolved) return { skipped: "channel_not_configured" };
 
 
+
+
+    const autoTradeSym = String(input.symbol ?? input.parsed?.symbol ?? "").trim();
+
+    if (isAutoTradeExcludedMajorSymbol(autoTradeSym)) {
+
+      log.info(`Bitget 跳过主流币自动交易 symbol=${autoTradeSym} card=#${input.cardId}`);
+
+      return { skipped: "major_symbol_excluded", symbol: autoTradeSym };
+
+    }
 
     if (isStagedTradeSignal(input.parsed) || resolved.channel.stagedTrade) {
 

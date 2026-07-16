@@ -136,6 +136,7 @@ const SKIP_HINTS = {
   duplicate_text: "正文完全相同",
   parse_failed: "无法解析信号，检查格式",
   not_signal_channel: "非信号频道",
+  major_symbol_excluded: "主流币 BTC/ETH 不自动交易",
 };
 
 async function submitSimulateSignal() {
@@ -177,6 +178,7 @@ async function submitSimulateSignal() {
         if (sl) detail += ` SL=${sl}`;
       } else if (b.failed) detail += ` · Bitget 失败: ${b.reason ?? "?"}`;
       else if (b.skipped === "platform_toggle_off") detail += " · Bitget 未推送（Debug 勾选关闭）";
+      else if (b.skipped === "major_symbol_excluded") detail += " · Bitget 跳过主流币 BTC/ETH";
       else if (b.skipped) detail += ` · Bitget 跳过: ${b.skipped}`;
       else if (b.dryRun) detail += " · Bitget dry-run";
     }
@@ -188,6 +190,7 @@ async function submitSimulateSignal() {
         detail += ` · WEEX ${rec.status ?? "ok"} ${rec.symbol ?? ""} ${rec.leverage ?? "?"}x`;
       } else if (w.failed) detail += ` · WEEX 失败: ${w.reason ?? "?"}${w.error ? ` (${w.error})` : ""}`;
       else if (w.skipped === "platform_toggle_off") detail += " · WEEX 未推送（Debug 勾选关闭）";
+      else if (w.skipped === "major_symbol_excluded") detail += " · WEEX 跳过主流币 BTC/ETH";
       else if (w.skipped) detail += ` · WEEX 跳过: ${w.skipped}`;
     }
     simResultOk.value = Boolean(data.ok);

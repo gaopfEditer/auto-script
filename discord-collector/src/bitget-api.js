@@ -37,109 +37,83 @@ import { config } from "./config.js";
 
 
 /** @type {Map<string, import("undici").Dispatcher>} */
-
 const dispatcherCache = new Map();
 
-
+/** @param {string} [proxyUrl] */
+function resolveBitgetProxyUrl(proxyUrl) {
+  return (
+    String(proxyUrl ?? config.bitgetProxy ?? "").trim() ||
+    String(config.webhookForwardProxy ?? "").trim()
+  );
+}
 
 /** @param {string} [proxyUrl] */
-
 function getBitgetDispatcher(proxyUrl) {
-
-  const proxy =
-
-    String(proxyUrl ?? config.bitgetProxy ?? "").trim() ||
-
-    String(config.webhookForwardProxy ?? "").trim();
-
+  const proxy = resolveBitgetProxyUrl(proxyUrl);
   if (!proxy) return undefined;
-
   let d = dispatcherCache.get(proxy);
-
   if (!d) {
-
     d = new ProxyAgent(proxy);
-
     dispatcherCache.set(proxy, d);
-
   }
-
   return d;
-
 }
 
+/** @param {string} [proxyUrl] */
+function invalidateBitgetDispatcher(proxyUrl) {
+  const proxy = resolveBitgetProxyUrl(proxyUrl);
+  if (proxy) dispatcherCache.delete(proxy);
+}
 
-
-/** @param {unknown} err */
-
-function wrapBitgetNetworkError(err) {
-
+/** @param {unknown} err @param {string} [proxyUrl] */
+function wrapBitgetNetworkError(err, proxyUrl) {
   const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
-
   if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED") {
-
-    const proxyHint = config.bitgetProxy || config.webhookForwardProxy;
-
-    return new Error(
-
-      `Bitget 网络连接失败 (${code})${proxyHint ? "" : "，请在 .env 设置 COMMON_PROXY 或 BITGET_PROXY（如 http://127.0.0.1:7890）"}`
-
-    );
-
+    const proxy = proxyUrl || resolveBitgetProxyUrl();
+    const hint = proxy
+      ? `（经代理 ${proxy}，连接被重置/超时；请确认 Clash 等代理端口可用，或检查 COMMON_PROXY）`
+      : "，请在 .env 设置 COMMON_PROXY 或 BITGET_PROXY（如 http://127.0.0.1:7890）";
+    return new Error(`Bitget 网络连接失败 (${code})${hint}`);
   }
-
   return err instanceof Error ? err : new Error(String(err));
-
 }
-
-
 
 /**
-
  * @param {BitgetCredentials} creds
-
  */
 
 export function createBitgetClient(creds) {
-
   const baseUrl = (creds.baseUrl ?? config.bitgetBaseUrl ?? "https://api.bitget.com").replace(/\/$/, "");
-
   const timeoutMs = creds.timeoutMs ?? config.bitgetRequestTimeoutMs ?? 15_000;
+  const proxyUrl = resolveBitgetProxyUrl(creds.proxy);
 
-  const dispatcher = getBitgetDispatcher(creds.proxy);
-
-
-
-  /**
-
-   * @param {string} url
-
-   * @param {import("undici").Dispatcher.RequestOptions} opts
-
-   */
-
+  /** @param {string} url @param {import("undici").Dispatcher.RequestOptions} opts */
   async function httpRequest(url, opts) {
-
-    try {
-
-      return await request(url, {
-
-        ...opts,
-
-        dispatcher,
-
-        headersTimeout: timeoutMs,
-
-        bodyTimeout: timeoutMs,
-
-      });
-
-    } catch (e) {
-
-      throw wrapBitgetNetworkError(e);
-
+    const maxAttempts = 3;
+    /** @type {unknown} */
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const dispatcher = getBitgetDispatcher(creds.proxy);
+        return await request(url, {
+          ...opts,
+          dispatcher,
+          headersTimeout: timeoutMs,
+          bodyTimeout: timeoutMs,
+        });
+      } catch (e) {
+        lastErr = e;
+        const code = e && typeof e === "object" && "code" in e ? String(e.code) : "";
+        const retryable = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].includes(code);
+        if (attempt < maxAttempts && retryable) {
+          if (code === "ECONNRESET") invalidateBitgetDispatcher(creds.proxy);
+          await new Promise((r) => setTimeout(r, 400 * attempt));
+          continue;
+        }
+        throw wrapBitgetNetworkError(e, proxyUrl);
+      }
     }
-
+    throw wrapBitgetNetworkError(lastErr, proxyUrl);
   }
 
 
@@ -665,9 +639,7 @@ export function createBitgetClient(creds) {
 /** @returns {string} */
 
 export function getBitgetProxyInUse() {
-
-  return String(config.bitgetProxy || config.webhookForwardProxy || "").trim();
-
+  return resolveBitgetProxyUrl();
 }
 
 

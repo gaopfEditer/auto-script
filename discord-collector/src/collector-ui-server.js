@@ -40,6 +40,7 @@ import { createBitgetManualService } from "./bitget-manual-service.js";
 import { registerBitgetRoutes } from "./bitget-api-routes.js";
 import { registerWeexRoutes } from "./weex-api-routes.js";
 import { getBitgetProxyInUse } from "./bitget-api.js";
+import { getWeexProxyInUse } from "./weex-api.js";
 import {
   getAutoTradeChannelIds,
   getTradePlatformToggles,
@@ -84,7 +85,10 @@ async function main() {
   }
   if (config.weexEnabled) {
     const wxCfg = loadWeexTradeConfig();
-    log.info(`WEEX 自动交易 enabled ${wxCfg.dryRun ? "dryRun=模拟" : "LIVE=实盘"}（参数与 Bitget 共用）`);
+    const wxProxy = getWeexProxyInUse();
+    log.info(
+      `WEEX 自动交易 enabled ${wxCfg.dryRun ? "dryRun=模拟" : "LIVE=实盘"}${wxProxy ? ` proxy=${wxProxy}` : "（未配置代理）"}（参数与 Bitget 共用）`
+    );
   }
   const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast, {
     bitgetOrder,
@@ -322,6 +326,7 @@ async function main() {
         "第 2 条通常为 TP/SL 补充（合并到同币种未完结卡片）",
         "正式 Discord 信号仍保留 4h 同币种去重",
         "下方勾选控制 Bitget / WEEX 是否下单（localStorage + 服务端同步）；频道须在 BITGET_AUTO_TRADE_CHANNEL_IDS",
+        "主流币 BTC/ETH 不自动交易，仅山寨币自动下单",
       ],
     });
   });

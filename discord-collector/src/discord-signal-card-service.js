@@ -27,7 +27,11 @@ import {
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { config } from "./config.js";
 import { extractSignalCardRowId } from "./store.js";
-import { isAutoTradeChannel, shouldPushToTradePlatform } from "./trade-platform-toggles.js";
+import {
+  isAutoTradeChannel,
+  isAutoTradeExcludedMajorSymbol,
+  shouldPushToTradePlatform,
+} from "./trade-platform-toggles.js";
 
 /** @param {Record<string, unknown>} row */
 export function resolveMessageSignalAt(row) {
@@ -313,7 +317,12 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
           cardsByStyle,
           cardFieldsJson,
         });
-        if (bitgetOrder?.onTpslUpdate && shouldPushToTradePlatform("bitget", channelId, opts)) {
+        const skipMajorTpsl = isAutoTradeExcludedMajorSymbol(symbol);
+        if (skipMajorTpsl && isAutoTradeChannel(channelId)) {
+          bitgetResult = { skipped: "major_symbol_excluded", symbol };
+          weexResult = { skipped: "major_symbol_excluded", symbol };
+          log.info(`自动交易跳过主流币 TP/SL symbol=${symbol} card=#${openId}`);
+        } else if (bitgetOrder?.onTpslUpdate && shouldPushToTradePlatform("bitget", channelId, opts)) {
           try {
             bitgetResult = await bitgetOrder.onTpslUpdate({
               cardId: openId,
@@ -328,7 +337,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         } else if (bitgetOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("bitget", channelId, opts)) {
           bitgetResult = { skipped: "platform_toggle_off", platform: "bitget" };
         }
-        if (weexOrder?.onTpslUpdate && shouldPushToTradePlatform("weex", channelId, opts)) {
+        if (!skipMajorTpsl && weexOrder?.onTpslUpdate && shouldPushToTradePlatform("weex", channelId, opts)) {
           try {
             weexResult = await weexOrder.onTpslUpdate({
               cardId: openId,
@@ -340,7 +349,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
           } catch (e) {
             log.warn(`WEEX TP/SL 更新异常: ${/** @type {Error} */ (e).message}`);
           }
-        } else if (weexOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("weex", channelId, opts)) {
+        } else if (!skipMajorTpsl && weexOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("weex", channelId, opts)) {
           weexResult = { skipped: "platform_toggle_off", platform: "weex" };
         }
         const updated = await store.getSignalCardById?.(openId);
@@ -467,49 +476,56 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       }
     }
 
-    if (bitgetOrder && shouldPushToTradePlatform("bitget", channelId, opts)) {
-      try {
-        bitgetResult = await bitgetOrder.onSignalCardCreated({
-          cardId,
-          channelId,
-          parsed,
-          executionJson,
-          symbol,
-          channelName: chCfg.name,
-          isReverse,
-          prevBitgetOrder,
-          linkedCardId: linkedCardId ?? undefined,
-        });
-        if (bitgetResult && !("skipped" in /** @type {Record<string, unknown>} */ (bitgetResult) && /** @type {Record<string, unknown>} */ (bitgetResult).skipped)) {
-          const refreshed = await store.getSignalCardById?.(cardId);
-          if (refreshed) cardRow = refreshed;
+    const skipMajor = isAutoTradeExcludedMajorSymbol(symbol);
+    if (skipMajor && isAutoTradeChannel(channelId)) {
+      bitgetResult = { skipped: "major_symbol_excluded", symbol };
+      weexResult = { skipped: "major_symbol_excluded", symbol };
+      log.info(`自动交易跳过主流币 symbol=${symbol} card=#${cardId}（BTC/ETH 不自动下单）`);
+    } else {
+      if (bitgetOrder && shouldPushToTradePlatform("bitget", channelId, opts)) {
+        try {
+          bitgetResult = await bitgetOrder.onSignalCardCreated({
+            cardId,
+            channelId,
+            parsed,
+            executionJson,
+            symbol,
+            channelName: chCfg.name,
+            isReverse,
+            prevBitgetOrder,
+            linkedCardId: linkedCardId ?? undefined,
+          });
+          if (bitgetResult && !("skipped" in /** @type {Record<string, unknown>} */ (bitgetResult) && /** @type {Record<string, unknown>} */ (bitgetResult).skipped)) {
+            const refreshed = await store.getSignalCardById?.(cardId);
+            if (refreshed) cardRow = refreshed;
+          }
+        } catch (e) {
+          log.warn(`Bitget 自动下单异常: ${/** @type {Error} */ (e).message}`);
         }
-      } catch (e) {
-        log.warn(`Bitget 自动下单异常: ${/** @type {Error} */ (e).message}`);
+      } else if (bitgetOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("bitget", channelId, opts)) {
+        bitgetResult = { skipped: "platform_toggle_off", platform: "bitget" };
       }
-    } else if (bitgetOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("bitget", channelId, opts)) {
-      bitgetResult = { skipped: "platform_toggle_off", platform: "bitget" };
-    }
 
-    if (weexOrder && shouldPushToTradePlatform("weex", channelId, opts)) {
-      try {
-        weexResult = await weexOrder.onSignalCardCreated({
-          cardId,
-          channelId,
-          parsed,
-          channelName: chCfg.name,
-          isReverse,
-          prevWeexOrder,
-        });
-        if (weexResult && !("skipped" in /** @type {Record<string, unknown>} */ (weexResult) && /** @type {Record<string, unknown>} */ (weexResult).skipped)) {
-          const refreshed = await store.getSignalCardById?.(cardId);
-          if (refreshed) cardRow = refreshed;
+      if (weexOrder && shouldPushToTradePlatform("weex", channelId, opts)) {
+        try {
+          weexResult = await weexOrder.onSignalCardCreated({
+            cardId,
+            channelId,
+            parsed,
+            channelName: chCfg.name,
+            isReverse,
+            prevWeexOrder,
+          });
+          if (weexResult && !("skipped" in /** @type {Record<string, unknown>} */ (weexResult) && /** @type {Record<string, unknown>} */ (weexResult).skipped)) {
+            const refreshed = await store.getSignalCardById?.(cardId);
+            if (refreshed) cardRow = refreshed;
+          }
+        } catch (e) {
+          log.warn(`WEEX 自动下单异常: ${/** @type {Error} */ (e).message}`);
         }
-      } catch (e) {
-        log.warn(`WEEX 自动下单异常: ${/** @type {Error} */ (e).message}`);
+      } else if (weexOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("weex", channelId, opts)) {
+        weexResult = { skipped: "platform_toggle_off", platform: "weex" };
       }
-    } else if (weexOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("weex", channelId, opts)) {
-      weexResult = { skipped: "platform_toggle_off", platform: "weex" };
     }
 
     const clientCard = signalCardToClient(cardRow);

@@ -1,8 +1,10 @@
 /**
  * 交易平台开关：Debug 页 localStorage 同步到服务端，信号建卡时决定是否向 Bitget / WEEX 下单。
  * 频道白名单以 BITGET_AUTO_TRADE_CHANNEL_IDS 为准（必须配置）。
+ * 主流币种 BTC/ETH 不参与自动交易。
  */
 import { config } from "./config.js";
+import { detectSymbolTier } from "./card-backtest-policy.js";
 
 /** @typedef {{ bitget: boolean; weex: boolean }} TradePlatformToggles */
 
@@ -20,6 +22,14 @@ export function isAutoTradeChannel(channelId) {
   const cid = String(channelId ?? "").trim();
   if (!cid || !ids.length) return false;
   return ids.includes(cid);
+}
+
+/**
+ * 自动交易排除主流币（BTC/ETH）；山寨才下单。
+ * @param {unknown} symbol
+ */
+export function isAutoTradeExcludedMajorSymbol(symbol) {
+  return detectSymbolTier(symbol) === "major";
 }
 
 /** @returns {TradePlatformToggles} */

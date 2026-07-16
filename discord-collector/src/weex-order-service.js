@@ -10,6 +10,7 @@ import {
   executeWeexStagedTpslUpdate,
 } from "./weex-staged-order.js";
 import { isStagedTradeSignal } from "./discord-signal-staged-trade.js";
+import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
 
 /** @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store @param {ReturnType<typeof import("./logger.js").createLogger>} log */
 export function createWeexOrderService(store, log) {
@@ -149,6 +150,11 @@ export function createWeexOrderService(store, log) {
     reloadConfig();
     const resolved = resolveChannelWeexTrade(input.channelId, tradeCfg);
     if (!resolved) return { skipped: "channel_not_configured" };
+    const autoTradeSym = String(input.parsed?.symbol ?? "").trim();
+    if (isAutoTradeExcludedMajorSymbol(autoTradeSym)) {
+      log.info(`WEEX 跳过主流币自动交易 symbol=${autoTradeSym} card=#${input.cardId}`);
+      return { skipped: "major_symbol_excluded", symbol: autoTradeSym };
+    }
     if (!isStagedTradeSignal(input.parsed) && !resolved.channel.stagedTrade) {
       return { skipped: "not_staged_signal" };
     }
