@@ -10,6 +10,80 @@ import { parseEntryPriceForOrder, resolveOrderLeverage, resolveBitgetOrderSize, 
 import { normalizeSymbol } from "./card-fields.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 
+/** @param {number} ms */
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** @param {unknown} resp */
+function unwrapBitgetRows(resp) {
+  if (!resp || typeof resp !== "object") return [];
+  const data = /** @type {Record<string, unknown>} */ (resp).data;
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === "object") {
+    const o = /** @type {Record<string, unknown>} */ (data);
+    if (Array.isArray(o.list)) return o.list;
+    if (Array.isArray(o.entrustedList)) return o.entrustedList;
+    if ("symbol" in o) return [o];
+  }
+  return [];
+}
+
+/**
+ * 查询是否已有该币种仓位或挂单（用于开仓成功校验 / 重试前防重复）。
+ * @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client
+ * @param {{ symbol: string; productType: string; holdSide: string; marginCoin?: string }} p
+ */
+export async function hasBitgetSymbolExposure(client, p) {
+  const symbol = String(p.symbol).toUpperCase();
+  const wantSide = String(p.holdSide ?? "").toLowerCase();
+  const sideAlts = new Set(
+    wantSide === "long" || wantSide === "buy"
+      ? ["long", "buy"]
+      : wantSide === "short" || wantSide === "sell"
+        ? ["short", "sell"]
+        : []
+  );
+
+  try {
+    const posResp = await client.getSinglePosition({
+      symbol,
+      productType: p.productType,
+      marginCoin: p.marginCoin ?? "USDT",
+    });
+    for (const row of unwrapBitgetRows(posResp)) {
+      if (!row || typeof row !== "object") continue;
+      const r = /** @type {Record<string, unknown>} */ (row);
+      if (String(r.symbol ?? "").toUpperCase() !== symbol) continue;
+      const total = Number(r.total ?? r.available ?? r.locked ?? 0);
+      if (!(total > 0)) continue;
+      if (!sideAlts.size) return true;
+      const hs = String(r.holdSide ?? "").toLowerCase();
+      if (!hs || sideAlts.has(hs)) return true;
+    }
+  } catch {
+    /* 持仓查询失败时再看挂单 */
+  }
+
+  try {
+    const pendingResp = await client.getOrdersPending({
+      productType: p.productType,
+      symbol,
+    });
+    for (const row of unwrapBitgetRows(pendingResp)) {
+      if (!row || typeof row !== "object") continue;
+      const r = /** @type {Record<string, unknown>} */ (row);
+      if (String(r.symbol ?? "").toUpperCase() === symbol) return true;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return false;
+}
+
+const BITGET_OPEN_MAX_ATTEMPTS = 3;
+
 /** @param {number} price */
 function priceStr(price) {
   if (!Number.isFinite(price) || price <= 0) return "";
@@ -186,84 +260,139 @@ export async function executeStagedMarketOpen(client, input) {
   }
 
   const marginMode = String(channelTrade.marginMode ?? "isolated");
-  const openBase = {
-    symbol,
-    productType,
-    marginMode,
-    marginCoin,
-    size,
-    side,
-    tradeSide: "open",
-    orderType: "market",
-    clientOid: `dc-open-${input.cardId}-${Date.now()}`,
-  };
+  /** @type {string[]} */
+  const attemptErrors = [];
+  let placed = false;
 
-  try {
-    const openResp = await client.placeOrder({
-      ...openBase,
-      presetStopLossPrice: initialSl ? priceStr(initialSl) : undefined,
-    });
-    const openData =
-      openResp && typeof openResp === "object" && "data" in openResp
-        ? /** @type {Record<string, unknown>} */ (openResp.data)
-        : {};
-    record.openOrderId = openData.orderId ?? null;
-    record.openResponse = openResp;
-    if (initialSl) {
-      record.presetStopLossPrice = priceStr(initialSl);
-      record.slOrderId = "preset_on_open";
+  for (let attempt = 1; attempt <= BITGET_OPEN_MAX_ATTEMPTS; attempt++) {
+    // 重试前先查仓位/挂单，避免重复开仓
+    if (attempt > 1) {
+      try {
+        if (
+          await hasBitgetSymbolExposure(client, {
+            symbol,
+            productType,
+            holdSide,
+            marginCoin,
+          })
+        ) {
+          placed = true;
+          record.openRecoveredFromQuery = true;
+          record.openAttempts = attempt - 1;
+          break;
+        }
+      } catch {
+        /* continue to place */
+      }
+      await sleep(400 * attempt);
     }
-  } catch (openErr) {
-    const openMsg = String(/** @type {Error} */ (openErr).message ?? openErr);
+
+    const openBase = {
+      symbol,
+      productType,
+      marginMode,
+      marginCoin,
+      size,
+      side,
+      tradeSide: "open",
+      orderType: "market",
+      clientOid: `dc-open-${input.cardId}-${Date.now()}-${attempt}`,
+    };
+
     try {
-      const openResp = await client.placeOrder(openBase);
+      let openResp;
+      let openPresetSlError = "";
+      try {
+        openResp = await client.placeOrder({
+          ...openBase,
+          presetStopLossPrice: initialSl ? priceStr(initialSl) : undefined,
+        });
+        if (initialSl) {
+          record.presetStopLossPrice = priceStr(initialSl);
+          record.slOrderId = "preset_on_open";
+        }
+      } catch (openErr) {
+        openPresetSlError = String(/** @type {Error} */ (openErr).message ?? openErr);
+        openResp = await client.placeOrder(openBase);
+        if (openPresetSlError) record.openPresetSlError = openPresetSlError;
+
+        if (initialSl) {
+          try {
+            const markAfter = (await fetchMarkPrice(client, symbol, productType)) ?? fillPrice;
+            const slPrice = calcInitialStopLoss(markAfter, direction, initialSlPct);
+            if (!slPrice || !isValidStopLoss(markAfter, slPrice, holdSide)) {
+              record.slError = `fallback SL invalid: ${slPrice} vs ${markAfter}`;
+            } else {
+              const slResp = await client.withHoldSideFallback(
+                (hs) =>
+                  client.placeTpslOrder({
+                    symbol,
+                    productType,
+                    marginCoin,
+                    planType: "loss_plan",
+                    triggerPrice: priceStr(slPrice),
+                    holdSide: hs,
+                    size,
+                    clientOid: `dc-sl-init-${input.cardId}-${Date.now()}-${attempt}`,
+                  }),
+                holdSide
+              );
+              const slData =
+                slResp && typeof slResp === "object" && "data" in slResp
+                  ? /** @type {Record<string, unknown>} */ (slResp.data)
+                  : {};
+              record.slOrderId = slData.orderId ?? slData.planId ?? null;
+              record.slResponse = slResp;
+              record.initialSlPrice = slPrice;
+              record.presetStopLossPrice = priceStr(slPrice);
+            }
+          } catch (e) {
+            record.slError = String(/** @type {Error} */ (e).message ?? e);
+          }
+        }
+      }
+
       const openData =
         openResp && typeof openResp === "object" && "data" in openResp
           ? /** @type {Record<string, unknown>} */ (openResp.data)
           : {};
       record.openOrderId = openData.orderId ?? null;
       record.openResponse = openResp;
-      record.openPresetSlError = openMsg;
-    } catch (e) {
-      return { ok: false, reason: "open_failed", error: String(/** @type {Error} */ (e).message ?? e) };
-    }
+      record.openAttempts = attempt;
 
-    if (initialSl) {
-      try {
-        const markAfter = (await fetchMarkPrice(client, symbol, productType)) ?? fillPrice;
-        const slPrice = calcInitialStopLoss(markAfter, direction, initialSlPct);
-        if (!slPrice || !isValidStopLoss(markAfter, slPrice, holdSide)) {
-          record.slError = `fallback SL invalid: ${slPrice} vs ${markAfter}`;
-        } else {
-          const slResp = await client.withHoldSideFallback(
-            (hs) =>
-              client.placeTpslOrder({
-                symbol,
-                productType,
-                marginCoin,
-                planType: "loss_plan",
-                triggerPrice: priceStr(slPrice),
-                holdSide: hs,
-                size,
-                clientOid: `dc-sl-init-${input.cardId}-${Date.now()}`,
-              }),
-            holdSide
-          );
-          const slData =
-            slResp && typeof slResp === "object" && "data" in slResp
-              ? /** @type {Record<string, unknown>} */ (slResp.data)
-              : {};
-          record.slOrderId = slData.orderId ?? slData.planId ?? null;
-          record.slResponse = slResp;
-          record.initialSlPrice = slPrice;
-          record.presetStopLossPrice = priceStr(slPrice);
-        }
-      } catch (e) {
-        record.slError = String(/** @type {Error} */ (e).message ?? e);
+      // 等撮合落地后再查仓位/挂单
+      await sleep(500 * attempt);
+      const exposed = await hasBitgetSymbolExposure(client, {
+        symbol,
+        productType,
+        holdSide,
+        marginCoin,
+      });
+      if (exposed) {
+        placed = true;
+        break;
       }
+
+      const miss = `attempt ${attempt}: api ok but no position/pending for ${symbol}`;
+      attemptErrors.push(miss);
+      record.verifyMiss = miss;
+    } catch (e) {
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      attemptErrors.push(`attempt ${attempt}: ${msg}`);
+      record.lastOpenError = msg;
     }
   }
 
+  if (!placed) {
+    return {
+      ok: false,
+      reason: "open_failed",
+      error: attemptErrors.join(" | ") || "open failed after retries",
+      attempts: BITGET_OPEN_MAX_ATTEMPTS,
+    };
+  }
+
+  if (attemptErrors.length) record.openRetryErrors = attemptErrors;
   return { ok: true, record };
 }
 

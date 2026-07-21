@@ -28,6 +28,8 @@ import {
 
   executeStagedTpslUpdate,
 
+  hasBitgetSymbolExposure,
+
 } from "./bitget-staged-order.js";
 
 import { isStagedTradeSignal } from "./discord-signal-staged-trade.js";
@@ -251,11 +253,21 @@ export function createBitgetOrderService(store, log) {
 
     if (!result.ok) {
 
+      log.warn(
+
+        `Bitget 分阶段失败 card=#${input.cardId} reason=${result.reason} attempts=${result.attempts ?? "-"} err=${result.error ?? "-"}`
+
+      );
+
       await persistOrderResult(input.cardId, input.parsed, {
 
         status: "failed",
 
         reason: result.reason,
+
+        error: result.error ?? null,
+
+        attempts: result.attempts ?? null,
 
         staged: true,
 
@@ -263,7 +275,7 @@ export function createBitgetOrderService(store, log) {
 
       });
 
-      return { failed: true, reason: result.reason };
+      return { failed: true, reason: result.reason, error: result.error, attempts: result.attempts };
 
     }
 
@@ -283,7 +295,7 @@ export function createBitgetOrderService(store, log) {
 
     log.info(
 
-      `Bitget 分阶段 ${record.status} card=#${input.cardId} ${record.symbol ?? ""} ${input.isReverse ? "(反手)" : ""}${record.leverage ? ` lev=${record.leverage}x` : ""}`
+      `Bitget 分阶段 ${record.status} card=#${input.cardId} ${record.symbol ?? ""} ${input.isReverse ? "(反手)" : ""}${record.leverage ? ` lev=${record.leverage}x` : ""}${record.openAttempts ? ` attempts=${record.openAttempts}` : ""}`
 
     );
 
@@ -524,51 +536,173 @@ export function createBitgetOrderService(store, log) {
 
     try {
 
-      const resp = await client.placeOrder({
+      const holdSide = plan.side === "buy" ? "long" : "short";
 
-        symbol: plan.symbol,
+      const maxAttempts = 3;
 
-        productType: plan.productType,
+      /** @type {string[]} */
 
-        marginMode: plan.marginMode,
+      const attemptErrors = [];
 
-        marginCoin: plan.marginCoin,
+      let placedOk = false;
 
-        size: plan.size,
+      let orderId = null;
 
-        side: plan.side,
+      let lastResp = null;
 
-        tradeSide: plan.tradeSide,
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 
-        orderType: plan.orderType,
+        if (attempt > 1) {
 
-        price: plan.price != null ? String(plan.price) : undefined,
+          try {
 
-        clientOid: plan.clientOid,
+            if (
 
-        presetStopSurplusPrice: plan.takeProfitPrice ?? undefined,
+              await hasBitgetSymbolExposure(client, {
 
-        presetStopLossPrice: plan.stopLossPrice ?? undefined,
+                symbol: plan.symbol,
 
-      });
+                productType: plan.productType,
 
+                holdSide,
 
+                marginCoin: plan.marginCoin,
 
-      const data = resp && typeof resp === "object" && "data" in resp ? /** @type {Record<string, unknown>} */ (resp.data) : {};
+              })
 
-      orderRecord.status = "placed";
+            ) {
 
-      orderRecord.orderId = data.orderId ?? data.order_id ?? null;
+              placedOk = true;
 
-      orderRecord.clientOid = plan.clientOid;
+              orderRecord.openRecoveredFromQuery = true;
 
-      orderRecord.response = resp;
+              break;
 
+            }
 
+          } catch {
+
+            /* continue */
+
+          }
+
+          await new Promise((r) => setTimeout(r, 400 * attempt));
+
+        }
+
+        try {
+
+          const clientOid = `${String(plan.clientOid)}-r${attempt}`.slice(0, 50);
+
+          const resp = await client.placeOrder({
+
+            symbol: plan.symbol,
+
+            productType: plan.productType,
+
+            marginMode: plan.marginMode,
+
+            marginCoin: plan.marginCoin,
+
+            size: plan.size,
+
+            side: plan.side,
+
+            tradeSide: plan.tradeSide,
+
+            orderType: plan.orderType,
+
+            price: plan.price != null ? String(plan.price) : undefined,
+
+            clientOid,
+
+            presetStopSurplusPrice: plan.takeProfitPrice ?? undefined,
+
+            presetStopLossPrice: plan.stopLossPrice ?? undefined,
+
+          });
+
+          const data = resp && typeof resp === "object" && "data" in resp ? /** @type {Record<string, unknown>} */ (resp.data) : {};
+
+          orderId = data.orderId ?? data.order_id ?? null;
+
+          lastResp = resp;
+
+          await new Promise((r) => setTimeout(r, 500 * attempt));
+
+          const exposed = await hasBitgetSymbolExposure(client, {
+
+            symbol: plan.symbol,
+
+            productType: plan.productType,
+
+            holdSide,
+
+            marginCoin: plan.marginCoin,
+
+          });
+
+          if (exposed) {
+
+            placedOk = true;
+
+            orderRecord.status = "placed";
+
+            orderRecord.orderId = orderId;
+
+            orderRecord.clientOid = clientOid;
+
+            orderRecord.response = resp;
+
+            orderRecord.openAttempts = attempt;
+
+            break;
+
+          }
+
+          attemptErrors.push(`attempt ${attempt}: api ok but no position/pending`);
+
+        } catch (e) {
+
+          attemptErrors.push(`attempt ${attempt}: ${String(/** @type {Error} */ (e).message ?? e)}`);
+
+        }
+
+      }
+
+      if (!placedOk) {
+
+        const errMsg = attemptErrors.join(" | ") || "place failed after retries";
+
+        log.warn(`Bitget 下单失败（已重试 ${maxAttempts} 次） card=#${input.cardId}: ${errMsg}`);
+
+        orderRecord.status = "failed";
+
+        orderRecord.reason = "place_failed";
+
+        orderRecord.error = errMsg;
+
+        orderRecord.attempts = maxAttempts;
+
+        await persistOrderResult(input.cardId, input.parsed, orderRecord);
+
+        return { failed: true, reason: "place_failed", error: errMsg };
+
+      }
+
+      if (!orderRecord.status) {
+
+        orderRecord.status = "placed";
+
+        orderRecord.orderId = orderId;
+
+        orderRecord.response = lastResp;
+
+      }
 
       log.info(
 
-        `Bitget 已下单 card=#${input.cardId} ${plan.symbol} ${plan.side} orderId=${orderRecord.orderId ?? "-"}`
+        `Bitget 已下单 card=#${input.cardId} ${plan.symbol} ${plan.side} orderId=${orderRecord.orderId ?? "-"} attempts=${orderRecord.openAttempts ?? 1}`
 
       );
 

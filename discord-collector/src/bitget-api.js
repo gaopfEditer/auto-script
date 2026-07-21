@@ -618,7 +618,25 @@ export function createBitgetClient(creds) {
 
     /** @param {{ productType: string; symbol?: string }} q */
 
-    async getOrdersPending(q) {
+    
+    /** @param {{ symbol: string; productType: string; marginCoin?: string }} p */
+    async getSinglePosition(p) {
+      return signedRequest("GET", "/api/v2/mix/position/single-position", {
+        symbol: p.symbol,
+        productType: p.productType,
+        marginCoin: p.marginCoin ?? "USDT",
+      }, null);
+    },
+
+    /** @param {{ productType: string; marginCoin?: string }} p */
+    async getAllPositions(p) {
+      return signedRequest("GET", "/api/v2/mix/position/all-position", {
+        productType: p.productType,
+        marginCoin: p.marginCoin ?? "USDT",
+      }, null);
+    },
+
+async getOrdersPending(q) {
 
       return signedRequest("GET", "/api/v2/mix/order/orders-pending", {
 
