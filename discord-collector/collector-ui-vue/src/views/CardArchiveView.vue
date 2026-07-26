@@ -9,14 +9,12 @@ import {
   fetchCardChannels,
   fetchCardSources,
   buildArchivePeriodQuery,
-  runArchiveCardBacktest,
 } from "../lib/cardArchiveApi.js";
 import { updateSignalCard, fetchSignalConfig } from "../lib/discordSignalApi.js";
 import { useNewCardNotifications } from "../composables/useNewCardNotifications.js";
 import {
   cardExecution,
   formatPlannedSummary,
-  outcomeLabel,
   emptyExecution,
   buildExecutionPayload,
   executionEquals,
@@ -65,7 +63,6 @@ const noteDraft = ref("");
 const actualTpText = ref("");
 const evalSaving = ref(false);
 const evalError = ref("");
-const backtestLoading = ref(false);
 /** @type {Record<number, ReturnType<typeof setTimeout>>} */
 const saveTimers = {};
 
@@ -88,25 +85,6 @@ function fmtTime(v) {
   if (!v) return "—";
   const d = new Date(String(v));
   return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString("zh-CN", { hour12: false });
-}
-
-/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
-function verifyModeText(mode) {
-  if (mode === "30d") return "长周期";
-  if (mode === "3h") return "3h";
-  return "1天";
-}
-
-/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
-function verifyPanelTitle(card) {
-  if (card.verifyMode === "30d") return "长周期校验（股票）";
-  if (card.verifyMode === "3h") return "3 小时校验";
-  return "1 天校验（加密 · Binance）";
-}
-
-/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
-function activeVerifyResult(card) {
-  return card.verifyMode === "30d" ? card.verify1m : card.verify3h;
 }
 
 function closeModal() {
@@ -156,35 +134,6 @@ function scheduleSave(card) {
   const id = card.id;
   if (saveTimers[id]) clearTimeout(saveTimers[id]);
   saveTimers[id] = setTimeout(() => void saveEvaluation(card), 500);
-}
-
-/** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
-async function triggerBacktest(card) {
-  backtestLoading.value = true;
-  evalError.value = "";
-  try {
-    const { card: fresh } = await runArchiveCardBacktest(card.id);
-    applyCardUpdate(fresh);
-  } catch (e) {
-    evalError.value = String(/** @type {Error} */ (e).message ?? e);
-  } finally {
-    backtestLoading.value = false;
-  }
-}
-
-/** @param {import("../lib/cardArchiveApi.js").ArchiveCard | null} card */
-function backtestTitle(card) {
-  if (!card?.backtest) return "分层回测";
-  const tier = card.backtest.tier === "major" ? "主流 BTC/ETH · 100x · 4h–8h" : "山寨 · 30x · 15m–3h";
-  return `分层回测 · ${tier}`;
-}
-
-/** @param {import("../lib/cardArchiveApi.js").ArchiveCard | null} card */
-function backtestPendingHint(card) {
-  if (!card || card.assetClass === "stock") return "股票暂不支持分层回测";
-  const sym = String(card.symbol ?? "").toUpperCase().replace(/USDT$/, "");
-  if (sym === "BTC" || sym === "ETH") return "信号满 8 小时后自动回测，或点击手动回测";
-  return "信号满 3 小时后自动回测，或点击手动回测";
 }
 
 /** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
@@ -369,7 +318,7 @@ onUnmounted(() => {
         <div class="modal-panel" role="dialog" aria-modal="true">
           <header class="modal-head">
             <h3>
-              <span v-if="selected.id" class="modal-card-id">#{{ selected.id }}</span>
+              <span v-if="selected.uid || selected.id" class="modal-card-id">{{ selected.uid || `SC-${selected.id}` }}</span>
               {{ selected.cardFields?.title || "卡片详情" }}
             </h3>
             <button type="button" class="modal-close" aria-label="关闭" @click="closeModal">×</button>
@@ -380,8 +329,6 @@ onUnmounted(() => {
               <template v-if="selected.channelName"> · 频道 {{ selected.channelName }}</template>
               <template v-if="selected.sourceRef"> · {{ selected.sourceRef }}</template>
               · {{ fmtTime(selected.signalAt || selected.createdAt) }}
-              · 校验周期
-              {{ selected.verifyMode === "30d" ? "长周期(股票)" : selected.verifyMode === "3h" ? "3小时" : "1天" }}
             </p>
 
             <div v-if="selected.cardFields?.fields?.length" class="embed-preview">
@@ -402,84 +349,6 @@ onUnmounted(() => {
             <div class="block">
               <h4>计划价位</h4>
               <p>{{ formatPlannedSummary(cardExecution(selected)) }}</p>
-            </div>
-
-            <div class="block verify-grid">
-              <div>
-                <h4>{{ verifyPanelTitle(selected) }}</h4>
-                <p v-if="activeVerifyResult(selected)">
-                  {{ outcomeLabel(String(activeVerifyResult(selected)?.outcome ?? "pending")) }}
-                  <template v-if="activeVerifyResult(selected)?.hitLevel">
-                    @ {{ activeVerifyResult(selected)?.hitLevel }}
-                  </template>
-                  <template v-if="activeVerifyResult(selected)?.entry">
-                    · 入场均价 {{ activeVerifyResult(selected)?.entry }}
-                  </template>
-                  <template v-if="activeVerifyResult(selected)?.pnl100x?.pnlLabel">
-                    · {{ activeVerifyResult(selected)?.pnl100x?.pnlLabel }}
-                  </template>
-                  <span v-if="activeVerifyResult(selected)?.error" class="muted">
-                    （{{ activeVerifyResult(selected)?.error }}）
-                  </span>
-                </p>
-                <p v-else class="muted">
-                  {{
-                    selected.verifyMode === "30d"
-                      ? "未满长周期窗口或待执行"
-                      : selected.verifyMode === "3h"
-                        ? "未满 3 小时或待执行"
-                        : "未满 1 天或待执行"
-                  }}
-                </p>
-              </div>
-              <div v-if="selected.verifyMode !== '30d' && selected.verify1m">
-                <h4>补充长周期记录</h4>
-                <p>{{ outcomeLabel(String(selected.verify1m.outcome ?? "pending")) }}</p>
-              </div>
-            </div>
-
-            <div class="block backtest-block">
-              <div class="backtest-head">
-                <h4>{{ backtestTitle(selected) }}</h4>
-                <button
-                  v-if="selected.assetClass !== 'stock'"
-                  type="button"
-                  class="btn-sm"
-                  :disabled="backtestLoading"
-                  @click="triggerBacktest(selected)"
-                >
-                  {{ backtestLoading ? "回测中…" : "手动回测" }}
-                </button>
-              </div>
-              <template v-if="selected.backtest?.skipped">
-                <p class="muted">已人工评价并结算，跳过自动回测</p>
-              </template>
-              <template v-else-if="selected.backtest && !selected.backtest.error">
-                <p class="backtest-best">
-                  最优窗口 <strong>{{ selected.backtest.bestWindow }}</strong>
-                  · {{ selected.backtest.outcome === "stop_loss" ? "止损" : "最优平仓" }}
-                  @ {{ selected.backtest.optimalExitPrice }}
-                  <template v-if="selected.backtest.pnlLabel">
-                    · <span
-                      class="pnl-tag"
-                      :class="{ gain: (selected.backtest.pnlPctOnMargin ?? 0) > 0, loss: (selected.backtest.pnlPctOnMargin ?? 0) < 0 }"
-                    >{{ selected.backtest.pnlLabel }}</span>
-                  </template>
-                </p>
-                <details v-if="selected.backtest.windows?.length" class="backtest-windows">
-                  <summary>各窗口明细 ({{ selected.backtest.windows.length }})</summary>
-                  <ul>
-                    <li v-for="(w, i) in selected.backtest.windows" :key="i">
-                      {{ w.window }}
-                      <template v-if="w.pnlLabel"> — {{ w.pnlLabel }}</template>
-                      <template v-else-if="w.error"> — {{ w.error }}</template>
-                      <template v-else-if="w.outcome === 'stop_loss'"> — 止损</template>
-                    </li>
-                  </ul>
-                </details>
-              </template>
-              <p v-else-if="selected.backtest?.error" class="muted">回测失败：{{ selected.backtest.error }}</p>
-              <p v-else class="muted">{{ backtestPendingHint(selected) }}</p>
             </div>
 
             <div class="block eval-block">
@@ -715,58 +584,6 @@ h3 {
   font-size: 0.8rem;
   color: #b5bac1;
 }
-.verify-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-}
-.backtest-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.25rem;
-}
-.backtest-head h4 {
-  margin: 0;
-}
-.btn-sm {
-  padding: 0.25rem 0.55rem;
-  border-radius: 6px;
-  border: 1px solid #3f4147;
-  background: #35373c;
-  color: #dbdee1;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-.btn-sm:hover:not(:disabled) {
-  background: #5865f2;
-  color: #fff;
-}
-.btn-sm:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.backtest-best {
-  font-size: 0.85rem;
-  color: #dbdee1;
-  margin: 0.25rem 0;
-}
-.pnl-tag.gain {
-  color: #3ba55d;
-}
-.pnl-tag.loss {
-  color: #f38688;
-}
-.backtest-windows {
-  margin-top: 0.35rem;
-  font-size: 0.78rem;
-  color: #949ba4;
-}
-.backtest-windows ul {
-  margin: 0.35rem 0 0;
-  padding-left: 1.1rem;
-}
 .eval-block {
   border-top: 1px solid #3f4147;
   padding-top: 0.75rem;
@@ -786,9 +603,6 @@ h3 {
     grid-template-columns: 1fr;
   }
   .card-grid {
-    grid-template-columns: 1fr;
-  }
-  .verify-grid {
     grid-template-columns: 1fr;
   }
 }

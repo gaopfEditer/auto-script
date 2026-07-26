@@ -1,12 +1,13 @@
 /**
- * 山寨之王 / seven 分阶段交易：市价开仓 → 10 分钟内 TP/SL 补充 → 分批止盈；5 分钟内反手。
+ * 山寨之王 / seven 分阶段交易：市价开仓 → 20 分钟内 TP/SL 补充 → 分批止盈；5 分钟内反手。
  */
 import { normalizeSymbol } from "./card-fields.js";
 import { shouldSkipNumericDuplicate } from "./discord-signal-numeric-dedup.js";
 
 export const STAGED_SYMBOL_DEDUP_MS = 4 * 60 * 60 * 1000;
 export const STAGED_REVERSE_WINDOW_MS = 5 * 60 * 1000;
-export const STAGED_TPSL_LINK_MS = 10 * 60 * 1000;
+/** 开仓后补 TP/SL 的关联窗口（山寨之王常见 20 分钟内补发） */
+export const STAGED_TPSL_LINK_MS = 20 * 60 * 1000;
 export const STAGED_INITIAL_SL_PCT = 4.3;
 export const STAGED_TP_PARTIAL_RATIOS = [0.3, 0.3, 1];
 
@@ -106,30 +107,53 @@ export function cardAwaitingTpsl(row) {
 }
 
 /**
+ * @param {unknown} a
+ * @param {unknown} b
+ */
+function preferNonEmpty(a, b) {
+  const sa = String(a ?? "").trim();
+  const sb = String(b ?? "").trim();
+  return sa || sb;
+}
+
+/**
  * @param {Record<string, unknown>} prevParsed
  * @param {Record<string, unknown>} tpslParsed
  */
 export function mergeStagedParsed(prevParsed, tpslParsed) {
+  const nextTps = /** @type {unknown} */ (tpslParsed.takeProfits ?? tpslParsed.targets);
+  const prevTps = /** @type {unknown} */ (prevParsed.takeProfits ?? prevParsed.targets);
   const takeProfits = /** @type {string[]} */ (
-    tpslParsed.takeProfits ?? tpslParsed.targets ?? prevParsed.takeProfits ?? []
+    Array.isArray(nextTps) && nextTps.length ? nextTps : Array.isArray(prevTps) ? prevTps : []
   );
-  const stopLoss = String(tpslParsed.stopLoss ?? prevParsed.stopLoss ?? "").trim();
-  const symbol = String(tpslParsed.symbol ?? prevParsed.symbol ?? "").trim();
-  const direction = String(tpslParsed.direction ?? prevParsed.direction ?? "").trim();
+  const stopLoss = preferNonEmpty(tpslParsed.stopLoss, prevParsed.stopLoss);
+  // 开仓消息的方向/币种优先；TP/SL 补充常无币种，方向推断可能反
+  const symbol = preferNonEmpty(prevParsed.symbol, tpslParsed.symbol);
+  const direction = preferNonEmpty(prevParsed.direction, tpslParsed.direction);
+  const entry = preferNonEmpty(prevParsed.entry, tpslParsed.entry);
+  // 保留开仓标题；勿被「…TP/SL」空壳标题覆盖
+  const tpslTitle = String(tpslParsed.title ?? "").trim();
+  const title = preferNonEmpty(
+    prevParsed.title,
+    /TP\/SL/i.test(tpslTitle) ? "" : tpslTitle
+  ) || (symbol ? `${symbol} ${direction}`.trim() : tpslTitle);
   const bitgetOrder = prevParsed.bitgetOrder ?? tpslParsed.bitgetOrder;
   const weexOrder = prevParsed.weexOrder ?? tpslParsed.weexOrder;
   return {
     ...prevParsed,
     ...tpslParsed,
     symbol,
+    asset: preferNonEmpty(tpslParsed.asset, prevParsed.asset) || symbol,
     direction,
+    entry,
+    title,
     takeProfits,
     stopLoss,
     ...(bitgetOrder ? { bitgetOrder } : {}),
     ...(weexOrder ? { weexOrder } : {}),
     signalPhase: "full",
     awaitingTpsl: false,
-    orderMode: prevParsed.orderMode ?? "market",
+    orderMode: prevParsed.orderMode ?? tpslParsed.orderMode ?? "market",
   };
 }
 

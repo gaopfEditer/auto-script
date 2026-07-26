@@ -9,12 +9,12 @@ import {
   formatManualRawContent,
   normalizeExecution,
   normalizePriceList,
-  hasEvaluatedYield,
 } from "./discord-signal-execution.js";
-import { buildSkippedBacktestJson } from "./card-backtest-engine.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { signalTextHash } from "./discord-signal-dedup.js";
+import { stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
+import { extractSignalCardRowId } from "./store.js";
 
 /** @param {import("express").Request} req */
 function parseRangeMs(req) {
@@ -174,22 +174,6 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
 
       /** @type {Record<string, unknown>} */
       const patch = { status, expiresAt, cardsByStyle, note, executionJson };
-      if (executionJson && hasEvaluatedYield(executionJson)) {
-        const existing = await store.getSignalCardById(id);
-        const prevBacktest = existing?.backtest_json ?? existing?.backtestJson;
-        let hasBacktest = false;
-        if (prevBacktest) {
-          try {
-            const parsed = typeof prevBacktest === "string" ? JSON.parse(prevBacktest) : prevBacktest;
-            hasBacktest = parsed && typeof parsed === "object" && !parsed.skipped;
-          } catch {
-            hasBacktest = true;
-          }
-        }
-        if (!hasBacktest) {
-          patch.backtestJson = buildSkippedBacktestJson("user_evaluated");
-        }
-      }
 
       const row = await store.updateSignalCard(id, patch);
       if (!row) {
@@ -282,7 +266,47 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
         verifyMode,
         assetClass,
       });
-      const card = signalCardToClient(row);
+      const cardId = extractSignalCardRowId(row?.id ?? row?.ID);
+      let stamped = row;
+      if (cardId) {
+        stamped =
+          (await store.updateSignalCard(cardId, {
+            cardsByStyle: stampCardsByStyle({ manual: rawContent }, cardId),
+            cardFieldsJson: stampCardFieldsUid(
+              buildCardFieldsFromExecution(execution, parsedJson, rawContent, {
+                sourceType: "manual",
+                sourceRef: channelId,
+              }),
+              cardId
+            ),
+          })) ?? row;
+      }
+      const card = signalCardToClient(stamped);
+      if (typeof signalService.pushExternalCard === "function") {
+        await signalService.pushExternalCard({
+          text: String(card.cardsByStyle?.manual ?? rawContent),
+          card,
+          message: {
+            channelId,
+            guildId,
+            content: rawContent,
+            timestamp: new Date().toISOString(),
+          },
+          channelName: chCfg?.name ?? "",
+          channelId,
+          guildId,
+          event: "created",
+          parsed: parsedJson,
+          execution,
+        });
+      } else if (typeof signalService.pushExternal === "function") {
+        await signalService.pushExternal(String(card.cardsByStyle?.manual ?? rawContent), {
+          cardId: Number(card.id),
+          uid: String(card.uid ?? ""),
+          channelId,
+          channelName: chCfg?.name,
+        });
+      }
       broadcast?.("meta", { kind: "signal_card_created", card });
       res.json({ ok: true, card });
     } catch (e) {

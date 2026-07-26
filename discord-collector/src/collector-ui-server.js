@@ -34,6 +34,7 @@ import { registerYoutubePasteBatchRoutes, startPasteBatchService } from "./youtu
 import { createCardArchiveService } from "./card-archive-service.js";
 import { registerCardArchiveRoutes } from "./card-archive-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
+import { createCardExternalSink } from "./card-external-sink.js";
 import { createBitgetOrderService } from "./bitget-order-service.js";
 import { createWeexOrderService } from "./weex-order-service.js";
 import { createBitgetManualService } from "./bitget-manual-service.js";
@@ -90,11 +91,14 @@ async function main() {
       `WEEX 自动交易 enabled ${wxCfg.dryRun ? "dryRun=模拟" : "LIVE=实盘"}${wxProxy ? ` proxy=${wxProxy}` : "（未配置代理）"}（参数与 Bitget 共用）`
     );
   }
+  const cardSink = createCardExternalSink(createLogger("card-sink"));
+  cardSink.start();
   const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast, {
     bitgetOrder,
     weexOrder,
+    cardSink,
   });
-  const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast);
+  const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast, { cardSink });
   const cardPriceMonitor = createCardPriceMonitor(
     store,
     createLogger("card-price"),
@@ -310,12 +314,12 @@ async function main() {
       weex: getWeexTradeStatus(),
       examples: {
         altcoin_king: {
-          open: "#SOL 市价多",
-          tpsl: "止盈：508-501-477\n止損：520",
+          open: "#ORDI 市價空 進場3.958",
+          tpsl: "止盈：3.799-3.685\n止损4.13",
         },
         tw_opg: {
-          open: "开单 #BTC 市价進多",
-          tpsl: "止盈：4.71   止損：4.9",
+          open: "#EPIC 市價進空",
+          tpsl: "槓桿建議：穩健10x\n倉位建議：總資金的5%\n第二止盈：0.6294\n第三止盈：0.59\n止損：0.8411",
         },
       },
       hints: [
@@ -323,7 +327,7 @@ async function main() {
         "Debug 模式：跳过去重 / 不走 Ollama，响应更快",
         "第 1 条通常为市价开仓（Bitget + WEEX 同步，BTC/ETH 100x / 山寨 30x）",
         "开仓同时挂市价 -4.3% 初始止损",
-        "第 2 条通常为 TP/SL 补充（合并到同币种未完结卡片）",
+        "第 2 条通常为 TP/SL 补充（20 分钟内合并到同币种未完结卡片；山寨之王 / seven）",
         "正式 Discord 信号仍保留 4h 同币种去重",
         "下方勾选控制 Bitget / WEEX 是否下单（localStorage + 服务端同步）；频道须在 BITGET_AUTO_TRADE_CHANNEL_IDS",
         "主流币 BTC/ETH 不自动交易，仅山寨币自动下单",
@@ -516,6 +520,7 @@ async function main() {
   const shutdown = async (reason = "shutdown") => {
     log.info(`退出 (${reason})`);
     cardPriceMonitor.stop();
+    cardSink.stop();
     await telegramPush.flushAll().catch((e) => log.warn(String(e?.message ?? e)));
     if (session) await session.close().catch((e) => log.warn(String(e?.message ?? e)));
     await store.close().catch((e) => log.warn(String(e?.message ?? e)));

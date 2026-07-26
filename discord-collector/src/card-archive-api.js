@@ -6,8 +6,6 @@ import {
   createCardArchiveService,
   resolveCardChannelName,
 } from "./card-archive-service.js";
-import { runCardBacktest } from "./card-backtest-engine.js";
-import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { detectAssetClass } from "./card-verify-policy.js";
 import { config } from "./config.js";
@@ -129,34 +127,6 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
         return;
       }
       res.json({ ok: true, card: archiveCardToClient(row) });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
-    }
-  });
-
-  app.post("/api/cards/:id/backtest", async (req, res) => {
-    try {
-      const id = Number(req.params.id);
-      const row = await store.getSignalCardById(id);
-      if (!row) {
-        res.status(404).json({ ok: false, error: "not found" });
-        return;
-      }
-      const card = archiveCardToClient(row);
-      const signalAt = resolveCardSignalAt(row);
-      const signalMs = signalAt ? new Date(signalAt).getTime() : NaN;
-      if (!Number.isFinite(signalMs)) {
-        res.status(400).json({ ok: false, error: "invalid signal time" });
-        return;
-      }
-      const result = await runCardBacktest(card, signalMs);
-      if (result.skipped) {
-        res.status(400).json({ ok: false, error: `skipped: ${result.reason}` });
-        return;
-      }
-      await store.updateSignalCard(id, { backtestJson: result });
-      const updated = await store.getSignalCardById(id);
-      res.json({ ok: true, backtest: result, card: archiveCardToClient(updated) });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }

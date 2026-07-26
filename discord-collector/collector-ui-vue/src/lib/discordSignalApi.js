@@ -1,5 +1,6 @@
 /** @typedef {{
  *   id: number,
+ *   uid: string,
  *   messageId: string,
  *   channelId: string,
  *   guildId: string,

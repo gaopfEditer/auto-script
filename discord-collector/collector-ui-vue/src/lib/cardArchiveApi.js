@@ -1,5 +1,6 @@
 /** @typedef {{
  *   id: number,
+ *   uid: string,
  *   messageId: string,
  *   channelId: string,
  *   channelName: string,
@@ -109,15 +110,4 @@ export async function fetchCardChannels(opts = {}) {
   const j = await res.json();
   if (!j.ok) throw new Error(j.error || "加载频道失败");
   return /** @type {ArchiveChannelOption[]} */ (j.channels ?? []);
-}
-
-/** @param {number} id */
-export async function runArchiveCardBacktest(id) {
-  const res = await fetch(`/api/cards/${id}/backtest`, { method: "POST" });
-  const j = await res.json();
-  if (!j.ok) throw new Error(j.error || "回测失败");
-  return /** @type {{ card: ArchiveCard, backtest: Record<string, unknown> }} */ ({
-    card: j.card,
-    backtest: j.backtest,
-  });
 }

@@ -177,6 +177,14 @@ export const config = {
   cardEvalMajorLeverage: Number(process.env.CARD_EVAL_MAJOR_LEVERAGE ?? 100),
   /** 评价表单：山寨默认杠杆 */
   cardEvalAltcoinLeverage: Number(process.env.CARD_EVAL_ALTCOIN_LEVERAGE ?? 20),
+  /** 卡片外送（外部评估服务）：默认开，WS 优先、HTTP 回退 */
+  cardSinkEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_SINK_ENABLED ?? "1").toLowerCase()
+  ),
+  cardSinkWsUrl: (process.env.CARD_SINK_WS_URL ?? "ws://127.0.0.1:8765/ws/cards").trim(),
+  cardSinkHttpUrl: (process.env.CARD_SINK_HTTP_URL ?? "http://127.0.0.1:8765/api/cards").trim(),
+  cardSinkTimeoutMs: Number(process.env.CARD_SINK_TIMEOUT_MS ?? 8_000),
+  cardSinkReconnectMs: Number(process.env.CARD_SINK_RECONNECT_MS ?? 3_000),
   /** 源频道 → Webhook 转发映射 JSON（见 config/channel-webhook-forwards.json） */
   webhookForwardsFile: (process.env.DISCORD_WEBHOOK_FORWARDS_FILE ?? "").trim()
     ? path.resolve(process.env.DISCORD_WEBHOOK_FORWARDS_FILE.trim())

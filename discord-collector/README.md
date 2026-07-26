@@ -12,6 +12,7 @@
 - **[前端部署手册](docs/frontend-deploy.md)** — 构建、`ui:build`、Nginx、发版、Umami、检查清单
 - [前端上云 + 后台本地](docs/deploy-frontend-remote-backend-local.md) — SSH 隧道完整步骤
 - [WebSocket 推送架构](docs/websocket-push-architecture.md)
+- **[信号卡片模板（对外评估）](docs/card-templates.md)** — 风格 / 排版骨架 / Embed；机读样本 [`card-template-catalog.json`](docs/card-template-catalog.json)
 
 ## 环境准备
 

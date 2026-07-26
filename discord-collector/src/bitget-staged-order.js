@@ -234,7 +234,7 @@ export async function executeStagedMarketOpen(client, input) {
     leverage,
     initialSlPct,
     initialSlPrice: initialSl,
-    marginMode: channelTrade.marginMode ?? "isolated",
+    marginMode: channelTrade.marginMode ?? "crossed",
     productType,
     volumePlace: contractMeta.volumePlace,
     sizeMultiplier: contractMeta.sizeMultiplier,
@@ -253,13 +253,13 @@ export async function executeStagedMarketOpen(client, input) {
       marginCoin,
       leverage,
       holdSide,
-      marginMode: String(channelTrade.marginMode ?? "isolated"),
+      marginMode: String(channelTrade.marginMode ?? "crossed"),
     });
   } catch (e) {
     return { ok: false, reason: "set_leverage_failed", error: String(/** @type {Error} */ (e).message ?? e) };
   }
 
-  const marginMode = String(channelTrade.marginMode ?? "isolated");
+  const marginMode = String(channelTrade.marginMode ?? "crossed");
   /** @type {string[]} */
   const attemptErrors = [];
   let placed = false;

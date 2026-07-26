@@ -1,0 +1,357 @@
+{
+  "version": "1.1",
+  "purpose": "供外部评估的信号卡片模板目录（风格文案 + 解析器回退排版 + Embed 结构化字段）",
+  "cardUid": {
+    "format": "SC-{dbId}",
+    "description": "每张卡片入库后写入唯一标识；正文末行 ID SC-xxx，Embed 含「标识」字段与 footer；外部回填请用此 uid",
+    "example": "SC-1004"
+  },
+  "styleTemplates": {
+    "cn_formal": {
+      "id": "cn_formal",
+      "label": "简体·正式",
+      "promptHint": "简体中文，正式完整，条理清晰",
+      "usage": "AI 生成卡片正文时的语言/语气约束；fallback 时影响用词（简/繁/英）"
+    },
+    "cn_brief": {
+      "id": "cn_brief",
+      "label": "简体·极简",
+      "promptHint": "简体中文，极简 Telegram 风格，≤80字",
+      "usage": "AI 生成卡片正文时的语言/语气约束；fallback 时影响用词（简/繁/英）"
+    },
+    "tw_formal": {
+      "id": "tw_formal",
+      "label": "繁体·正式",
+      "promptHint": "繁体中文，正式完整",
+      "usage": "AI 生成卡片正文时的语言/语气约束；fallback 时影响用词（简/繁/英）"
+    },
+    "en_brief": {
+      "id": "en_brief",
+      "label": "English",
+      "promptHint": "Concise English for traders, ≤100 chars",
+      "usage": "AI 生成卡片正文时的语言/语气约束；fallback 时影响用词（简/繁/英）"
+    }
+  },
+  "parserFallbackLayouts": {
+    "binance_killers": {
+      "fields": [
+        "title·symbol",
+        "方向",
+        "入场",
+        "杠杆",
+        "目标(多档)",
+        "止损",
+        "signalId",
+        "ID SC-{id}"
+      ],
+      "description": "币安杀手：英系信号字段，目标用 targets[]"
+    },
+    "btc_cn": {
+      "fields": [
+        "title",
+        "方向",
+        "入场",
+        "倍数",
+        "止盈(单档)",
+        "止损",
+        "ID SC-{id}"
+      ],
+      "description": "淑琴/BTC 中文：单档止盈 takeProfit"
+    },
+    "streak_cn": {
+      "fields": [
+        "title|symbol",
+        "入场(可多档 entries)",
+        "止盈(多档)",
+        "止损",
+        "ID SC-{id}"
+      ],
+      "description": "三马连胜：多入场点 + 多止盈"
+    },
+    "cn_market_family": {
+      "parsers": [
+        "dabiaoke",
+        "feiyang",
+        "fengge",
+        "yanchi",
+        "biquan_suozhang",
+        "unknown_trader",
+        "altcoin_king"
+      ],
+      "fields": [
+        "title|symbol",
+        "方向",
+        "入场",
+        "止盈(多档)",
+        "止损",
+        "备注",
+        "ID SC-{id}"
+      ],
+      "description": "大镖客/飞扬/峰哥/颜驰/币圈所长/unknown/山寨之王：统一中文市价家族排版"
+    },
+    "tw_opg": {
+      "fields": [
+        "#symbol 方向",
+        "槓桿",
+        "倉位",
+        "止盈",
+        "止損",
+        "备注",
+        "ID SC-{id}"
+      ],
+      "description": "seven 繁体：固定繁体标签，标题行 #币种+方向"
+    }
+  },
+  "channelToStyles": {
+    "1444962339743989843": {
+      "name": "大镖客",
+      "parser": "dabiaoke",
+      "styles": [
+        "cn_formal",
+        "cn_brief"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1444962376066793513": {
+      "name": "淑琴",
+      "parser": "btc_cn",
+      "styles": [
+        "cn_formal",
+        "cn_brief",
+        "tw_formal"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1444962410002911396": {
+      "name": "飞扬",
+      "parser": "feiyang",
+      "styles": [
+        "cn_formal",
+        "cn_brief"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1444962439471955989": {
+      "name": "三马",
+      "parser": "streak_cn",
+      "styles": [
+        "cn_formal",
+        "cn_brief",
+        "tw_formal"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1444963372134301827": {
+      "name": "seven",
+      "parser": "tw_opg",
+      "styles": [
+        "tw_formal",
+        "cn_formal",
+        "cn_brief"
+      ],
+      "telegramStyle": "tw_formal"
+    },
+    "1444963929393729686": {
+      "name": "峰哥",
+      "parser": "fengge",
+      "styles": [
+        "cn_formal",
+        "cn_brief"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1444963689194192947": {
+      "name": "颜驰",
+      "parser": "yanchi",
+      "styles": [
+        "cn_formal",
+        "cn_brief"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1444967547169669160": {
+      "name": "币安杀手",
+      "parser": "binance_killers",
+      "styles": [
+        "cn_formal",
+        "cn_brief",
+        "en_brief"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1459861535815110810": {
+      "name": "unknown-trader",
+      "parser": "unknown_trader",
+      "styles": [
+        "cn_formal",
+        "cn_brief",
+        "en_brief"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1444963506431463474": {
+      "name": "山寨之王",
+      "parser": "altcoin_king",
+      "styles": [
+        "cn_formal",
+        "cn_brief",
+        "tw_formal"
+      ],
+      "telegramStyle": "cn_brief"
+    },
+    "1444963405185159238": {
+      "name": "币圈所长",
+      "parser": "biquan_suozhang",
+      "styles": [
+        "cn_formal",
+        "cn_brief"
+      ],
+      "telegramStyle": "cn_brief"
+    }
+  },
+  "embedSchema": {
+    "type": "DiscordEmbed-like",
+    "fields": [
+      "title",
+      "description?",
+      "color",
+      "fields[{name,value,inline}]",
+      "footer",
+      "timestamp"
+    ],
+    "color": {
+      "long": "0x57f287",
+      "short": "0xed4245",
+      "neutral": "0x5865f2"
+    },
+    "example": {
+      "title": "SOL 市价多",
+      "color": 5763719,
+      "fields": [
+        {
+          "name": "币种",
+          "value": "SOL",
+          "inline": true
+        },
+        {
+          "name": "方向",
+          "value": "做多",
+          "inline": true
+        },
+        {
+          "name": "入场",
+          "value": "市价",
+          "inline": true
+        },
+        {
+          "name": "止盈",
+          "value": "180 / 185 / 190",
+          "inline": false
+        },
+        {
+          "name": "止损",
+          "value": "170",
+          "inline": true
+        },
+        {
+          "name": "来源",
+          "value": "discord · 山寨之王",
+          "inline": true
+        },
+        {
+          "name": "备注",
+          "value": "轻仓",
+          "inline": false
+        },
+        {
+          "name": "标识",
+          "value": "SC-1004",
+          "inline": true
+        }
+      ],
+      "footer": {
+        "text": "source:discord · SC-1004"
+      },
+      "timestamp": "2026-07-25T02:00:00.000Z"
+    }
+  },
+  "renderedSamples": {
+    "binance_killers": {
+      "sampleUid": "SC-1001",
+      "parser": "binance_killers",
+      "styles": {
+        "cn_formal": "Long Setup · BTC\n方向：做多\n入场：64000-64500\n杠杆：10x\n目标：65000 · 66000 · 68000\n止损：63000\nID BK-1024\nID SC-1001",
+        "cn_brief": "Long Setup · BTC\n方向：做多\n入场：64000-64500\n杠杆：10x\n目标：65000 · 66000 · 68000\n止损：63000\nID BK-1024\nID SC-1001",
+        "tw_formal": "Long Setup · BTC\n方向：做多\n入場：64000-64500\n槓桿：10x\n目標：65000 · 66000 · 68000\n止損：63000\nID BK-1024\nID SC-1001",
+        "en_brief": "Long Setup · BTC\n做多 BTC\nEntry 64000-64500\nLev 10x\nTP: 65000, 66000, 68000\nSL 63000\nID BK-1024\nID SC-1001"
+      }
+    },
+    "btc_cn": {
+      "sampleUid": "SC-1002",
+      "parser": "btc_cn",
+      "styles": {
+        "cn_formal": "BTC 波段\n方向：做空\n入场：65000\n倍数：20x\n止盈：63000\n止损：67000\nID SC-1002",
+        "cn_brief": "BTC 波段\n方向：做空\n入场：65000\n倍数：20x\n止盈：63000\n止损：67000\nID SC-1002",
+        "tw_formal": "BTC 波段\n方向：做空\n入場：65000\n倍數：20x\n止盈：63000\n止損：67000\nID SC-1002",
+        "en_brief": "BTC 波段\n做空\nEntry 65000\nLev 20x\nTP 63000\nSL 67000\nID SC-1002"
+      }
+    },
+    "streak_cn": {
+      "sampleUid": "SC-1003",
+      "parser": "streak_cn",
+      "styles": {
+        "cn_formal": "ETH 连胜单\n入场：3200 / 3180\n止盈：3300 · 3400\n止损：3100\nID SC-1003",
+        "cn_brief": "ETH 连胜单\n入场：3200 / 3180\n止盈：3300 · 3400\n止损：3100\nID SC-1003",
+        "tw_formal": "ETH 连胜单\n入場：3200 / 3180\n止盈：3300 · 3400\n止損：3100\nID SC-1003",
+        "en_brief": "ETH 连胜单\nEntry 3200/3180\nTP 3300 · 3400\nSL 3100\nID SC-1003"
+      }
+    },
+    "dabiaoke": {
+      "sampleUid": "SC-1004",
+      "parser": "dabiaoke",
+      "styles": {
+        "cn_formal": "SOL\n方向：市价多\n入场：市价\n止盈：180 · 185 · 190\n止损：170\n轻仓试错\nID SC-1004",
+        "cn_brief": "SOL\n方向：市价多\n入场：市价\n止盈：180 · 185 · 190\n止损：170\n轻仓试错\nID SC-1004",
+        "tw_formal": "SOL\n方向：市价多\n入場：市价\n止盈：180 · 185 · 190\n止損：170\n轻仓试错\nID SC-1004",
+        "en_brief": "SOL\n市价多\nEntry 市价\nTP 180 · 185 · 190\nSL 170\n轻仓试错\nID SC-1004"
+      }
+    },
+    "altcoin_king": {
+      "sampleUid": "SC-1005",
+      "parser": "altcoin_king",
+      "styles": {
+        "cn_formal": "ZEC\n方向：市价多\n入场：市价\n止盈：508 · 501 · 477\n止损：520\nID SC-1005",
+        "cn_brief": "ZEC\n方向：市价多\n入场：市价\n止盈：508 · 501 · 477\n止损：520\nID SC-1005",
+        "tw_formal": "ZEC\n方向：市价多\n入場：市价\n止盈：508 · 501 · 477\n止損：520\nID SC-1005",
+        "en_brief": "ZEC\n市价多\nEntry 市价\nTP 508 · 501 · 477\nSL 520\nID SC-1005"
+      }
+    },
+    "tw_opg": {
+      "sampleUid": "SC-1006",
+      "parser": "tw_opg",
+      "styles": {
+        "cn_formal": "#OPG 進多\n槓桿：10x\n倉位：5%\n止盈：0.12 · 0.15\n止損：0.09\n分批止盈\nID SC-1006",
+        "cn_brief": "#OPG 進多\n槓桿：10x\n倉位：5%\n止盈：0.12 · 0.15\n止損：0.09\n分批止盈\nID SC-1006",
+        "tw_formal": "#OPG 進多\n槓桿：10x\n倉位：5%\n止盈：0.12 · 0.15\n止損：0.09\n分批止盈\nID SC-1006",
+        "en_brief": "#OPG 進多\n槓桿：10x\n倉位：5%\n止盈：0.12 · 0.15\n止損：0.09\n分批止盈\nID SC-1006"
+      }
+    },
+    "unknown_trader": {
+      "sampleUid": "SC-1007",
+      "parser": "unknown_trader",
+      "styles": {
+        "cn_formal": "DOGE\n方向：做空\n入场：0.16\n止盈：0.15 · 0.14\n止损：0.17\nID SC-1007",
+        "cn_brief": "DOGE\n方向：做空\n入场：0.16\n止盈：0.15 · 0.14\n止损：0.17\nID SC-1007",
+        "tw_formal": "DOGE\n方向：做空\n入場：0.16\n止盈：0.15 · 0.14\n止損：0.17\nID SC-1007",
+        "en_brief": "DOGE\n做空\nEntry 0.16\nTP 0.15 · 0.14\nSL 0.17\nID SC-1007"
+      }
+    }
+  },
+  "evaluationHints": [
+    "每张卡片有唯一标识 uid=SC-{dbId}；外部评估/数据补充请以此为准回填",
+    "评估时请同时看：①风格文案差异 ②解析器排版骨架 ③Embed 结构化字段（含「标识」）",
+    "线上卡片优先 Ollama 按风格生成；失败或 Debug 快速模式走 formatCardFallback；入库后统一追加 ID SC-xxx",
+    "Telegram 推送正文亦含 ID 行",
+    "内部延时自动校验/分层回测已关闭"
+  ]
+}

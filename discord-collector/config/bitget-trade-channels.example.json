@@ -2,7 +2,7 @@
   "enabled": true,
   "dryRun": true,
   "default": {
-    "marginMode": "isolated",
+    "marginMode": "crossed",
     "leverage": 20,
     "orderSizeUsdt": 1,
     "orderType": "market",

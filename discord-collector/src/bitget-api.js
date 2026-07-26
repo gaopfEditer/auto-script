@@ -255,7 +255,7 @@ export function createBitgetClient(creds) {
      */
     async ensureLeverage(p) {
       const lev = Number(p.leverage);
-      const marginMode = p.marginMode === "crossed" ? "crossed" : "isolated";
+      const marginMode = p.marginMode === "isolated" ? "isolated" : "crossed";
       const base = {
         symbol: p.symbol,
         productType: p.productType,

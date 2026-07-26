@@ -115,7 +115,7 @@ export async function executeWeexStagedMarketOpen(client, input) {
     leverage,
     initialSlPct,
     initialSlPrice: initialSl,
-    marginMode: channelTrade.marginMode ?? "isolated",
+    marginMode: channelTrade.marginMode ?? "crossed",
     volumePlace: contractMeta.volumePlace,
     sizeMultiplier: contractMeta.sizeMultiplier,
     pricePrecision: contractMeta.pricePrecision,
@@ -130,7 +130,7 @@ export async function executeWeexStagedMarketOpen(client, input) {
       symbol,
       leverage,
       holdSide,
-      marginMode: String(channelTrade.marginMode ?? "isolated"),
+      marginMode: String(channelTrade.marginMode ?? "crossed"),
     });
     if (levResult?.leverage > 0) record.leverage = levResult.leverage;
     if (levResult?.marginType === "CROSSED") record.marginMode = "crossed";

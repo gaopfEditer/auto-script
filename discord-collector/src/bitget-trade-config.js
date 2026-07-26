@@ -74,7 +74,7 @@ function normalizeTradeConfig(raw) {
 
   /** @type {Required<BitgetTradeDefaults>} */
   const defaults = {
-    marginMode: defRaw.marginMode === "crossed" ? "crossed" : "isolated",
+    marginMode: defRaw.marginMode === "isolated" ? "isolated" : "crossed",
     leverage: numOr(defRaw.leverage, config.bitgetDefaultLeverage),
     orderSizeUsdt: numOr(defRaw.orderSizeUsdt, config.bitgetOrderSizeUsdt),
     orderType: defRaw.orderType === "market" ? "market" : "limit",

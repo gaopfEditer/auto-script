@@ -12,6 +12,9 @@ import { executionFromParsed, normalizeExecution, normalizePriceList } from "./d
 import { signalCardToClient, resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { getSignalChannelConfig, COIN_ACTION_SIGNAL_CHANNEL_ID } from "./discord-signal-config.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
+import { stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
+import { buildCardSinkPayload, pickCardSinkText } from "./card-external-sink.js";
+import { extractSignalCardRowId } from "./store.js";
 
 /** @param {string} channelId @param {string|null|undefined} [dbName] */
 export function resolveCardChannelName(channelId, dbName) {
@@ -30,8 +33,10 @@ export const SOURCE_TYPES = /** @type {const} */ (["discord", "youtube", "api", 
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
+ * @param {{ cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink> }} [deps]
  */
-export function createCardArchiveService(store, log, broadcast) {
+export function createCardArchiveService(store, log, broadcast, deps = {}) {
+  const cardSink = deps.cardSink ?? null;
   /**
    * @param {{
    *   messageId?: string,
@@ -105,9 +110,47 @@ export function createCardArchiveService(store, log, broadcast) {
       assetClass,
     });
 
-    const clientCard = archiveCardToClient(row);
+    const cardId = extractSignalCardRowId(row?.id ?? row?.ID);
+    let stampedRow = row;
+    if (cardId) {
+      const styles = stampCardsByStyle(
+        input.cardsByStyle ?? { archive: rawContent || String(cardFields.title ?? "") },
+        cardId
+      );
+      const fields = stampCardFieldsUid(cardFields, cardId);
+      stampedRow = (await store.updateSignalCard(cardId, {
+        cardsByStyle: styles,
+        cardFieldsJson: fields,
+      })) ?? row;
+    }
+
+    const clientCard = archiveCardToClient(stampedRow);
+    if (cardSink?.enabled) {
+      const text = pickCardSinkText(clientCard);
+      if (text) {
+        try {
+          await cardSink.publish(
+            buildCardSinkPayload({
+              text,
+              card: clientCard,
+              channelId: String(clientCard.channelId ?? ""),
+              channelName: String(clientCard.channelName ?? ""),
+              event: "archived",
+              parsed:
+                clientCard.parsedJson && typeof clientCard.parsedJson === "object"
+                  ? /** @type {Record<string, unknown>} */ (clientCard.parsedJson)
+                  : null,
+              execution: clientCard.execution,
+              embed: clientCard.cardFields,
+            })
+          );
+        } catch (e) {
+          log.warn(`卡片外送异常: ${/** @type {Error} */ (e).message}`);
+        }
+      }
+    }
     broadcast?.("meta", { kind: "card_archived", card: clientCard });
-    log.info(`卡片归档 #${clientCard.id} source=${sourceType} symbol=${symbol}`);
+    log.info(`卡片归档 ${clientCard.uid || `#${clientCard.id}`} source=${sourceType} symbol=${symbol}`);
     return clientCard;
   }
 

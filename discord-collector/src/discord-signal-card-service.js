@@ -32,6 +32,8 @@ import {
   isAutoTradeExcludedMajorSymbol,
   shouldPushToTradePlatform,
 } from "./trade-platform-toggles.js";
+import { formatCardUid, stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
+import { buildCardSinkPayload, pickCardSinkText } from "./card-external-sink.js";
 
 /** @param {Record<string, unknown>} row */
 export function resolveMessageSignalAt(row) {
@@ -223,14 +225,52 @@ async function enrichTwOpgFromRecentCard(store, channelId, parsed) {
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
- * @param {{ bitgetOrder?: ReturnType<typeof import("./bitget-order-service.js").createBitgetOrderService>; weexOrder?: ReturnType<typeof import("./weex-order-service.js").createWeexOrderService> }} [deps]
+ * @param {{ bitgetOrder?: ReturnType<typeof import("./bitget-order-service.js").createBitgetOrderService>; weexOrder?: ReturnType<typeof import("./weex-order-service.js").createWeexOrderService>; cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink> }} [deps]
  */
 export function createDiscordSignalCardService(store, log, broadcast, deps = {}) {
   const dedup = createChannelTextDedup(store);
   const telegram = createDiscordSignalTelegramPush(log);
   const bitgetOrder = deps.bitgetOrder ?? null;
   const weexOrder = deps.weexOrder ?? null;
+  const cardSink = deps.cardSink ?? null;
   let hydrated = false;
+
+  /**
+   * @param {string | Record<string, unknown>} textOrPayload
+   * @param {Record<string, unknown>} [meta]
+   */
+  async function pushExternal(textOrPayload, meta = {}) {
+    if (!cardSink?.enabled) return;
+    try {
+      await cardSink.publish(textOrPayload, meta);
+    } catch (e) {
+      log.warn(`卡片外送异常: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  /**
+   * @param {{
+   *   text: string,
+   *   card: Record<string, unknown>,
+   *   message: Record<string, unknown>,
+   *   channelName: string,
+   *   channelId: string,
+   *   guildId?: string,
+   *   event: string,
+   *   parsed?: Record<string, unknown> | null,
+   *   execution?: unknown,
+   *   embed?: unknown,
+   * }} input
+   */
+  async function pushExternalCard(input) {
+    if (!cardSink?.enabled) return;
+    try {
+      const payload = buildCardSinkPayload(input);
+      await cardSink.publish(payload);
+    } catch (e) {
+      log.warn(`卡片外送异常: ${/** @type {Error} */ (e).message}`);
+    }
+  }
 
   async function ensureHydrated() {
     if (hydrated) return;
@@ -303,14 +343,20 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
             : null;
         const executionJson = executionFromParsed(mergedParsed);
         const symbol = extractSymbolFromPayload(mergedParsed, executionJson);
-        const cardsByStyle = await generateCardsByStyles(mergedParsed, chCfg.styles, content, {
-          debug: (s) => log.debug(s),
-          fastFallback: opts.debugSimulate,
-        });
-        const cardFieldsJson = buildCardFieldsFromExecution(executionJson, mergedParsed, content, {
-          sourceType: "discord",
-          sourceRef: channelId,
-        });
+        const cardsByStyle = stampCardsByStyle(
+          await generateCardsByStyles(mergedParsed, chCfg.styles, content, {
+            debug: (s) => log.debug(s),
+            fastFallback: opts.debugSimulate,
+          }),
+          openId
+        );
+        const cardFieldsJson = stampCardFieldsUid(
+          buildCardFieldsFromExecution(executionJson, mergedParsed, content, {
+            sourceType: "discord",
+            sourceRef: channelId,
+          }),
+          openId
+        );
         await store.updateSignalCard(openId, {
           parsedJson: mergedParsed,
           executionJson,
@@ -354,6 +400,23 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         }
         const updated = await store.getSignalCardById?.(openId);
         const clientCard = signalCardToClient(updated ?? openCard);
+        const mergeText =
+          pickCardSinkText(clientCard, chCfg.telegramStyle) ||
+          cardsByStyle[chCfg.telegramStyle] ||
+          Object.values(cardsByStyle)[0] ||
+          content;
+        await pushExternalCard({
+          text: String(mergeText),
+          card: clientCard,
+          message: row,
+          channelName: chCfg.name,
+          channelId,
+          guildId,
+          event: "updated",
+          parsed: mergedParsed,
+          execution: executionJson,
+          embed: cardFieldsJson,
+        });
         broadcast?.("meta", { kind: "signal_card_updated", card: clientCard });
         log.info(`信号 TP/SL 合并 → 卡片 #${openId} channel=${channelId} symbol=${symbol}`);
         return { card: clientCard, merged: true, parsed: mergedParsed, bitgetResult, weexResult };
@@ -459,8 +522,16 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       return { skipped: "insert_no_id" };
     }
 
+    const stampedStyles = stampCardsByStyle(cardsByStyle, cardId);
+    const stampedFields = stampCardFieldsUid(cardFieldsJson, cardId);
+    cardRow = await store.updateSignalCard(cardId, {
+      cardsByStyle: stampedStyles,
+      cardFieldsJson: stampedFields,
+    });
+    Object.assign(cardsByStyle, stampedStyles);
+
     const telegramStyle = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";
-    const telegramText = cardsByStyle[telegramStyle] ?? Object.values(cardsByStyle)[0] ?? content;
+    const telegramText = stampedStyles[telegramStyle] ?? Object.values(stampedStyles)[0] ?? content;
 
     if (telegram.enabled && !opts.skipTelegram) {
       try {
@@ -475,6 +546,19 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         log.warn(`Telegram 推送失败: ${/** @type {Error} */ (e).message}`);
       }
     }
+
+    await pushExternalCard({
+      text: telegramText,
+      card: signalCardToClient(cardRow),
+      message: row,
+      channelName: chCfg.name,
+      channelId,
+      guildId,
+      event: "created",
+      parsed,
+      execution: executionJson,
+      embed: stampedFields,
+    });
 
     const skipMajor = isAutoTradeExcludedMajorSymbol(symbol);
     if (skipMajor && isAutoTradeChannel(channelId)) {
@@ -535,7 +619,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     return { card: clientCard, parsed, bitgetResult, weexResult };
   }
 
-  return { onMessage, dedup, telegram, signalCardToClient, ensureHydrated, formatManualRawContent };
+  return { onMessage, dedup, telegram, signalCardToClient, ensureHydrated, formatManualRawContent, pushExternal, pushExternalCard };
 }
 
 /** @param {Record<string, unknown>} row */
@@ -559,8 +643,10 @@ export function signalCardToClient(row) {
   const source = String(row.source ?? "auto");
   const messageId = String(row.message_id ?? row.messageId ?? "");
   const isManual = source === "manual" || messageId.startsWith("manual-");
+  const id = extractSignalCardRowId(row.id ?? row.ID);
   return {
-    id: extractSignalCardRowId(row.id ?? row.ID),
+    id,
+    uid: formatCardUid(id),
     messageId,
     channelId: String(row.channel_id ?? row.channelId ?? ""),
     guildId: String(row.guild_id ?? row.guildId ?? ""),

@@ -252,7 +252,7 @@ export function createWeexClient(creds) {
 
     /** @param {{ symbol: string; marginMode?: string }} p */
     async ensureMarginType(p) {
-      const marginType = p.marginMode === "crossed" ? "CROSSED" : "ISOLATED";
+      const marginType = p.marginMode === "isolated" ? "ISOLATED" : "CROSSED";
       await signedRequest("POST", "/capi/v3/account/marginType", null, {
         symbol: p.symbol,
         marginType,
@@ -268,7 +268,7 @@ export function createWeexClient(creds) {
     async ensureLeverage(p) {
       let lev = Math.max(1, Math.floor(Number(p.leverage)));
       const holdSide = p.holdSide === "short" ? "short" : "long";
-      const wantMargin = p.marginMode === "crossed" ? "CROSSED" : "ISOLATED";
+      const wantMargin = p.marginMode === "isolated" ? "ISOLATED" : "CROSSED";
 
       try {
         const info = await this.getContractInfo({ symbol: p.symbol });

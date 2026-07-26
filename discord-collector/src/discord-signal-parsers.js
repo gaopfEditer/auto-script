@@ -143,8 +143,9 @@ const SIGNAL_PATTERN_SETS = {
   altcoin_king: [
     /#[A-Z0-9]+/i,
     /市[價价][多空]/,
-    /止盈[：:]/,
-    /止[損损][：:]/,
+    /止盈/,
+    /止[損损]/,
+    /進場|入場|入场/,
     /\d+\.\d+/,
   ],
   generic: [
@@ -506,34 +507,62 @@ function parseTakeProfitLevels(raw) {
 }
 
 /**
- * 通用止盈/止损提取：支持同行或分行、单档或多档。
- * 例：`止盈：4.71   止損：4.9`、`止盈：4.71\n止損：4.9`、`止盈：64.5-65.5-67 止損：63.7`
+ * 通用止盈/止损提取：支持同行或分行、单档或多档；止损可无冒号（止损4.13）。
+ * 例：`止盈：4.71   止損：4.9`、`止盈：3.799-3.685\n止损4.13`、`止盈：64.5-65.5-67 止損：63.7`
  * @param {string} text
  */
 function extractTpslFields(text) {
   const joined = String(text ?? "");
   const tpLine = matchLine(joined, /止盈[：:\s]*([^\n]+)/i);
   const takeProfits = parseTakeProfitLevels(tpLine);
-  const stopLoss = matchLine(joined, /止[损損][：:\s]*([\d.]+)/i);
+  const stopLoss = matchLine(joined, /止[损損]\s*[：:]?\s*([\d.]+)/i);
   return { takeProfits, stopLoss };
 }
 
 /** @param {string} text */
 function isSimpleTpslText(text) {
   const t = String(text ?? "");
-  return /止盈[：:\s]/.test(t) && /止[损損][：:\s]/.test(t) && /\d/.test(t);
+  if (!/止盈/.test(t) || !/止[损損]/.test(t)) return false;
+  const { takeProfits, stopLoss } = extractTpslFields(t);
+  return takeProfits.length > 0 && Boolean(stopLoss);
+}
+
+/** 市价开仓方向：市價空 / 市價進空 / 市价进空 等 */
+const MARKET_DIR_RE = String.raw`(?:進空|进空|進多|进多|做空|做多|[空多])`;
+
+/**
+ * @param {string} text
+ * @returns {{ symbol: string, direction: string, entry: string } | null}
+ */
+function matchMarketOpen(text) {
+  const joined = String(text ?? "");
+  const m =
+    joined.match(new RegExp(String.raw`#([A-Z0-9]+)\s*市[價价]\s*(${MARKET_DIR_RE})(?:\s*(?:進場|进场|入場|入场)?\s*([\d.]+))?`, "i")) ||
+    joined.match(new RegExp(String.raw`开单\s+#?([A-Z0-9]+)\s*市[價价]?\s*(${MARKET_DIR_RE})`, "i"));
+  if (!m) return null;
+  const dirRaw = String(m[2] ?? "");
+  const direction = /空|short/i.test(dirRaw) ? "做空" : /多|long/i.test(dirRaw) ? "做多" : "";
+  if (!direction) return null;
+  return {
+    symbol: String(m[1] ?? "").toUpperCase(),
+    direction,
+    entry: String(m[3] ?? "").trim(),
+  };
+}
+
+/** @param {string} text */
+function isMarketOpenText(text) {
+  return Boolean(matchMarketOpen(text));
 }
 
 /** @param {string} text */
 export function parseAltcoinKing(text) {
   const joined = lines(text).join("\n");
-  const openM = joined.match(/#([A-Z0-9]+)\s+市[價价]([多空])(?:\s+([\d.]+))?/i);
+  const open = matchMarketOpen(joined);
   const { takeProfits, stopLoss } = extractTpslFields(joined);
 
-  if (openM) {
-    const symbol = openM[1].toUpperCase();
-    const direction = openM[2] === "空" ? "做空" : "做多";
-    const entry = openM[3] ?? "";
+  if (open) {
+    const { symbol, direction, entry } = open;
     const hasTpsl = takeProfits.length > 0 && Boolean(stopLoss);
     return {
       parser: "altcoin_king",
@@ -593,12 +622,12 @@ function inferDirectionFromTpSl(takeProfits, stopLoss) {
 /** @param {string} text */
 function resolveTwOpgDirection(text) {
   const t = String(text ?? "");
-  if (/進空|做空/.test(t)) return "做空";
-  if (/進多|做多/.test(t)) return "做多";
-  const mkt = matchLine(t, /(市價|市价)\s*(進空|進多|做空|做多|[空多])/);
+  if (/進空|进空|做空/.test(t)) return "做空";
+  if (/進多|进多|做多/.test(t)) return "做多";
+  const mkt = matchLine(t, new RegExp(String.raw`(市價|市价)\s*(${MARKET_DIR_RE})`));
   if (mkt) {
-    if (/空|進空|做空/.test(mkt)) return "做空";
-    if (/多|進多|做多/.test(mkt)) return "做多";
+    if (/空|進空|进空|做空/i.test(mkt)) return "做空";
+    if (/多|進多|进多|做多/i.test(mkt)) return "做多";
   }
   return "";
 }
@@ -611,33 +640,35 @@ export function parseTwOpg(text) {
     const symM = joined.match(/(?:^|[\s#])#?([A-Z0-9]{2,12})(?:USDT)?(?:\s|$|[^a-z])/i);
     if (symM) symbol = symM[1].toUpperCase();
   }
-  const openM = joined.match(/开单\s+#?([A-Z0-9]+)\s+市[價价]?(進空|進多|做空|做多|[空多])/i);
+  const open = matchMarketOpen(joined);
+  const tpBoundary = "第[一二三四1234]止盈|止盈[：:]|止[損损]|穩健操作建議|稳健操作建议|$";
   const leverage =
-    matchTwOpgField(joined, /槓桿建議[：:\s]*([\s\S]+?)(?=倉位建議|仓位建议|第一止盈|止盈[：:]|止損|止损|穩健操作建議|$)/i) ||
-    matchTwOpgField(joined, /杠杆[：:\s]*([\s\S]+?)(?=仓位建议|倉位建議|第一止盈|止盈[：:]|止损|止損|稳健操作建议|$)/i);
+    matchTwOpgField(
+      joined,
+      new RegExp(`槓桿建議[：:\\s]*([\\s\\S]+?)(?=倉位建議|仓位建议|${tpBoundary})`, "i")
+    ) ||
+    matchTwOpgField(
+      joined,
+      new RegExp(`杠杆[：:\\s]*([\\s\\S]+?)(?=仓位建议|倉位建議|${tpBoundary})`, "i")
+    );
   const position =
-    matchTwOpgField(joined, /倉位建議[：:\s]*([\s\S]+?)(?=第一止盈|止盈[：:]|止損|止损|穩健操作建議|$)/i) ||
-    matchTwOpgField(joined, /仓位建议[：:\s]*([\s\S]+?)(?=第一止盈|止盈[：:]|止损|止損|稳健操作建议|$)/i);
-  const numberedTps = [
-    ...matchAll(joined, /第[一二三四1234]止盈[：:\s]*([\d.]+)/gi),
-  ].filter(Boolean);
+    matchTwOpgField(joined, new RegExp(`倉位建議[：:\\s]*([\\s\\S]+?)(?=${tpBoundary})`, "i")) ||
+    matchTwOpgField(joined, new RegExp(`仓位建议[：:\\s]*([\\s\\S]+?)(?=${tpBoundary})`, "i"));
+  const numberedTps = [...matchAll(joined, /第[一二三四1234]止盈[：:\s]*([\d.]+)/gi)].filter(Boolean);
   const { takeProfits: simpleTps, stopLoss } = extractTpslFields(joined);
   const takeProfits = numberedTps.length ? numberedTps : simpleTps;
-  const note = matchTwOpgField(joined, /穩健操作建議[：:\s]*([\s\S]+?)$/i);
+  const note = matchTwOpgField(joined, /穩健操作建議[：:\s]*([\s\S]+?)$/i) || matchTwOpgField(joined, /稳健操作建议[：:\s]*([\s\S]+?)$/i);
 
-  if (openM && !takeProfits.length && !stopLoss) {
-    const openSymbol = openM[1].toUpperCase();
-    const direction = resolveTwOpgDirection(openM[0]) || resolveTwOpgDirection(joined);
-    if (!direction) return null;
+  if (open && !takeProfits.length && !stopLoss) {
     return {
       parser: "tw_opg",
-      symbol: openSymbol,
-      direction,
-      entry: "",
+      symbol: open.symbol,
+      direction: open.direction,
+      entry: open.entry,
       orderMode: "market",
       signalPhase: "open",
       awaitingTpsl: true,
-      title: `${openSymbol} ${direction}`,
+      title: `${open.symbol} ${open.direction}`,
     };
   }
 
@@ -647,20 +678,20 @@ export function parseTwOpg(text) {
   if (!direction) direction = inferDirectionFromTpSl(takeProfits, stopLoss);
 
   const dirLabel = direction || "待确认";
-  const isTpslOnly = !openM && !resolveTwOpgDirection(joined.replace(/开单/g, ""));
+  const isTpslOnly = !open && !resolveTwOpgDirection(joined.replace(/开单/g, ""));
 
   return {
     parser: "tw_opg",
-    symbol: symbol || "",
+    symbol: (open?.symbol || symbol || "").trim(),
     direction: dirLabel,
-    leverage,
-    position,
+    leverage: String(leverage ?? "").trim(),
+    position: String(position ?? "").trim(),
     takeProfits,
     stopLoss,
     note,
     signalPhase: isTpslOnly ? "tpsl" : "full",
-    orderMode: openM ? "market" : undefined,
-    title: symbol ? `${symbol} ${dirLabel}` : `seven ${dirLabel}`,
+    orderMode: open ? "market" : undefined,
+    title: open?.symbol || symbol ? `${open?.symbol || symbol} ${dirLabel}` : `seven ${dirLabel}`,
   };
 }
 
@@ -672,14 +703,15 @@ export function parseSignalText(text, kind) {
   const t = String(text ?? "").trim();
   if (!t) return null;
 
-  if (kind === "altcoin_king" && /#([A-Z0-9]+)\s+市[價价]([多空])/i.test(t)) {
-    return parseAltcoinKing(t);
+  if (kind === "altcoin_king" && (isMarketOpenText(t) || /#[A-Z0-9]+/i.test(t))) {
+    const r = parseAltcoinKing(t);
+    if (r) return r;
   }
-  if (kind === "tw_opg" && (/开单\s+#?[A-Z0-9]+\s+市[價价]/i.test(t) || looksLikeSignal(t, kind))) {
+  if (kind === "tw_opg" && (isMarketOpenText(t) || looksLikeSignal(t, kind))) {
     const r = parseTwOpg(t);
     if (r) return r;
   }
-  if (kind === "tw_opg" && isSimpleTpslText(t)) {
+  if (kind === "tw_opg" && (isSimpleTpslText(t) || /第[一二三四1234]止盈/.test(t))) {
     const r = parseTwOpg(t);
     if (r) return r;
   }

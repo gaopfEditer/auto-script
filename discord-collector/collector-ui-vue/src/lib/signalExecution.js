@@ -251,7 +251,8 @@ export function evaluationSummaryLines(ex, note = "") {
 /** @param {unknown} id @returns {string} */
 export function formatCardId(id) {
   const n = Number(id);
-  return Number.isFinite(n) && n > 0 ? `#${n}` : "";
+  if (!Number.isFinite(n) || n <= 0) return "";
+  return `SC-${Math.trunc(n)}`;
 }
 
 /** @param {string} v @returns {string} */
