@@ -18,6 +18,12 @@
 .show-app.has-signal-cards {
   grid-template-columns: 72px 260px 1fr 280px;
 }
+.show-app.no-guild-rail {
+  grid-template-columns: 260px 1fr;
+}
+.show-app.no-guild-rail.has-signal-cards {
+  grid-template-columns: 260px 1fr 280px;
+}
 .show-app > .guild-rail,
 .show-app > .channel-panel,
 .show-app > .main,

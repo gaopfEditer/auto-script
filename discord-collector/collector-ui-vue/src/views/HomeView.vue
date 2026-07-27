@@ -16,8 +16,12 @@ import { RouterLink } from "vue-router";
       <RouterLink class="btn" to="/fetch">提交 YouTube URL 拉取文稿</RouterLink>
       <RouterLink class="btn" to="/archives">YouTube 文稿归档预览</RouterLink>
       <RouterLink class="btn" to="/trade">Bitget 手动下单</RouterLink>
+      <RouterLink class="btn primary" to="/oi">OI Monitor（行情 / 形态 / 沙盒）</RouterLink>
       <RouterLink class="btn" to="/debug">Debug（网络 / WS 帧）</RouterLink>
     </div>
+    <p class="note">
+      OI 模块需另开终端 <code>pnpm run oi:start</code>（完整）或 <code>oi:dev</code>；顶栏可在 Discord / OI 间切换。部署版已包含 OI，上云需 frp 映射 8765 并配置 <code>OI_PUBLIC_EMBED_URL</code>。
+    </p>
   </div>
 </template>
 
@@ -67,5 +71,11 @@ code {
   background: #5865f2;
   border-color: #5865f2;
   color: #fff;
+}
+.note {
+  margin-top: 1.25rem;
+  color: #949ba4;
+  font-size: 0.88rem;
+  line-height: 1.5;
 }
 </style>

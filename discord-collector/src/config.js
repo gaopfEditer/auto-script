@@ -185,6 +185,20 @@ export const config = {
   cardSinkHttpUrl: (process.env.CARD_SINK_HTTP_URL ?? "http://127.0.0.1:8765/api/cards").trim(),
   cardSinkTimeoutMs: Number(process.env.CARD_SINK_TIMEOUT_MS ?? 8_000),
   cardSinkReconnectMs: Number(process.env.CARD_SINK_RECONNECT_MS ?? 3_000),
+  /** OI Monitor（同仓 oi_mornitor）：健康检查与 UI 嵌入地址 */
+  oiWebBaseUrl: (process.env.OI_WEB_BASE_URL ?? "http://127.0.0.1:8765").replace(/\/$/, ""),
+  /** iframe 优先地址；空则用 oiWebBaseUrl。oi:dev 时可设 http://127.0.0.1:5173 */
+  oiEmbedUrl: (process.env.OI_EMBED_URL ?? process.env.VITE_OI_EMBED_URL ?? "").replace(/\/$/, ""),
+  /**
+   * 浏览器侧公网嵌入地址（前端上云时必填）。
+   * 本地探测仍用 oiWebBaseUrl；iframe 优先用本字段，避免把 127.0.0.1 塞给访客浏览器。
+   */
+  oiPublicEmbedUrl: (
+    process.env.OI_PUBLIC_EMBED_URL ??
+    process.env.VITE_OI_PUBLIC_EMBED_URL ??
+    ""
+  ).replace(/\/$/, ""),
+  oiHealthTimeoutMs: Number(process.env.OI_HEALTH_TIMEOUT_MS ?? 3_000),
   /** 源频道 → Webhook 转发映射 JSON（见 config/channel-webhook-forwards.json） */
   webhookForwardsFile: (process.env.DISCORD_WEBHOOK_FORWARDS_FILE ?? "").trim()
     ? path.resolve(process.env.DISCORD_WEBHOOK_FORWARDS_FILE.trim())

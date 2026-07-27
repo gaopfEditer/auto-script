@@ -16,7 +16,7 @@
 | 模式 | 何时生效 | 导航 / 路由 | 典型用途 |
 |------|----------|-------------|----------|
 | **local** | `pnpm run dev:ui-vue`，或 `VITE_UI_MODE=local` | **全部页面**（Show / 卡片 / 拉取 / 文稿 / 下单 / Debug…） | 本机开发、运维调试 |
-| **deploy** | `pnpm run ui:build`（生产构建默认），或 `VITE_UI_MODE=deploy` | **仅配置的页面**（默认 **Show + 卡片**） | 服务器静态站点、对外只读展示 |
+| **deploy** | `pnpm run ui:build`（生产构建默认），或 `VITE_UI_MODE=deploy` | **仅配置的页面**（默认 **Show + 卡片 + OI**） | 服务器静态站点、对外展示 |
 
 默认规则（未手动设 `VITE_UI_MODE` 时）：
 
@@ -28,7 +28,7 @@
 | 文件 | 作用 |
 |------|------|
 | `.env.development` | `VITE_UI_MODE=local` |
-| `.env.production` | `VITE_UI_MODE=deploy` + `VITE_UI_PAGES=show,cards` |
+| `.env.production` | `VITE_UI_MODE=deploy` + `VITE_UI_PAGES=show,cards,oi` |
 
 ### 1.1 配置项
 
@@ -40,14 +40,14 @@ VITE_UI_MODE=deploy
 
 # 部署版可见页面（逗号分隔，对应路由 name）
 # 可选：show, cards, fetch, archives, trade, signals, debug, home
-VITE_UI_PAGES=show,cards
+VITE_UI_PAGES=show,cards,oi
 ```
 
 示例：部署版还要开放 Debug：
 
 ```env
 VITE_UI_MODE=deploy
-VITE_UI_PAGES=show,cards,debug
+VITE_UI_PAGES=show,cards,oi,debug
 ```
 
 > **改 `VITE_UI_*` 后必须重新 `pnpm run ui:build`**，变量在构建期打进 JS，不会读取服务器运行时环境。

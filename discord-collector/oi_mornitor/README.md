@@ -109,9 +109,10 @@ cd discord-collector/oi_mornitor && python run.py --dev
 
 ### 与 discord-collector 联调
 
-1. 先起本服务（`:8765`，含 `/ws/cards`、`POST /api/cards`）
-2. 再起 `pnpm run collect:ui`；`.env` 中 `CARD_SINK_WS_URL` / `CARD_SINK_HTTP_URL` 默认已指向本机 8765
-3. 新信号卡片会推入沙盒，便于后续按行情结算收益率
+1. `pnpm run collect:ui` + `pnpm run dev:ui-vue`（Discord 主体）
+2. `pnpm run oi:dev` 或 `oi:start`（本服务）
+3. 顶栏切换到 **OI Monitor** → 探测 `/api/snapshot` 成功后嵌入本页
+4. 卡片经 `CARD_SINK_*` 推入沙盒；可选 `OI_EMBED_URL=http://127.0.0.1:5173`（仅 oi:dev）
 
 ## 外部调用
 

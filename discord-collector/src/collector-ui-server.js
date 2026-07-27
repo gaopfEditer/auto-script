@@ -181,6 +181,64 @@ async function main() {
     });
   });
 
+  /** OI Monitor 模块：探测后端是否在跑，并返回 iframe 嵌入地址 */
+  app.get("/api/oi/status", async (_req, res) => {
+    const apiBase = config.oiWebBaseUrl;
+    const timeoutMs = Number.isFinite(config.oiHealthTimeoutMs) ? config.oiHealthTimeoutMs : 3_000;
+    /** 浏览器可访问的嵌入地址（上云时用公网 / frp 口，勿把 127.0.0.1 给访客） */
+    const publicEmbed =
+      config.oiPublicEmbedUrl || config.oiEmbedUrl || apiBase;
+    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, latencyMs?: number, error?: string, hint?: string }} */
+    const out = {
+      ok: true,
+      active: false,
+      apiBase,
+      embedUrl: publicEmbed,
+      publicEmbedUrl: publicEmbed,
+      hint: "另开终端：pnpm run oi:start（完整 OI）或 oi:dev；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8765",
+    };
+
+    /** @param {string} url */
+    async function probe(url) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const r = await fetch(url, { signal: ctrl.signal });
+        return r.ok;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    const t0 = Date.now();
+    try {
+      const snapOk = await probe(`${apiBase}/api/snapshot`);
+      out.latencyMs = Date.now() - t0;
+      if (!snapOk) {
+        out.error = `无法连接 ${apiBase}`;
+        res.json(out);
+        return;
+      }
+      out.active = true;
+      out.hint = undefined;
+      // 仅本地开发且未配公网嵌入时：优先 Vite 热更新
+      if (!config.oiPublicEmbedUrl && !config.oiEmbedUrl) {
+        const viteDev = "http://127.0.0.1:5173";
+        if (await probe(viteDev + "/")) {
+          out.embedUrl = viteDev;
+          out.publicEmbedUrl = viteDev;
+        }
+      }
+      res.json(out);
+    } catch (e) {
+      out.latencyMs = Date.now() - t0;
+      out.error = String(/** @type {Error} */ (e).message ?? e);
+      res.json(out);
+    }
+  });
+
   app.get("/api/config", (_req, res) => {
     res.json({ ok: true, mysql: !mysqlOffline, ...getDebugConfig() });
   });

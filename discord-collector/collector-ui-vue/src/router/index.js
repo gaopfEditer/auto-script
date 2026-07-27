@@ -16,6 +16,7 @@ const allRoutes = [
   { path: "/fetch", name: "fetch", component: () => import("../views/YoutubeFetchView.vue") },
   { path: "/archives", name: "archives", component: () => import("../views/YoutubeArchivesView.vue") },
   { path: "/trade", name: "trade", component: () => import("../views/BitgetTradeView.vue") },
+  { path: "/oi", name: "oi", component: () => import("../views/OiMonitorView.vue") },
   { path: "/messages", redirect: "/show" },
 ];
 

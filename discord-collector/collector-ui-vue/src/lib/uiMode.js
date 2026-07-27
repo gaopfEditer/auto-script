@@ -3,28 +3,40 @@
  * - local：本地开发，显示全部页面
  * - deploy：打包部署版，仅保留配置的页面（默认 show + cards）
  *
+ * 顶层模块：
+ * - discord：采集 / 卡片 / 下单等（主体）
+ * - oi：OI Monitor（可切换；运行时探测 oi_mornitor 后嵌入）
+ *
  * 环境变量（discord-collector/.env*）：
  *   VITE_UI_MODE=local|deploy
- *   VITE_UI_PAGES=show,cards          # deploy 模式白名单（路径名，逗号分隔）
+ *   VITE_UI_PAGES=show,cards,oi       # deploy 模式白名单（路径名，逗号分隔）
+ *   VITE_OI_EMBED_URL=http://127.0.0.1:5173  # 可选，oi:dev 时指向 Vite
  *
  * 未设置 VITE_UI_MODE 时：开发 → local，生产构建 → deploy
  */
 
-/** @typedef {{ path: string, name: string, label: string, nav?: boolean }} UiPageDef */
+/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" }} UiPageDef */
 
 /** @type {UiPageDef[]} */
 export const ALL_UI_PAGES = [
-  { path: "/", name: "home", label: "首页", nav: false },
-  { path: "/show", name: "show", label: "Show", nav: true },
-  { path: "/cards", name: "cards", label: "卡片", nav: true },
-  { path: "/fetch", name: "fetch", label: "拉取", nav: true },
-  { path: "/archives", name: "archives", label: "文稿", nav: true },
-  { path: "/trade", name: "trade", label: "下单", nav: true },
-  { path: "/signals", name: "signals", label: "信号", nav: false },
-  { path: "/debug", name: "debug", label: "Debug", nav: true },
+  { path: "/", name: "home", label: "首页", nav: false, module: "discord" },
+  { path: "/show", name: "show", label: "Show", nav: true, module: "discord" },
+  { path: "/cards", name: "cards", label: "卡片", nav: true, module: "discord" },
+  { path: "/fetch", name: "fetch", label: "拉取", nav: true, module: "discord" },
+  { path: "/archives", name: "archives", label: "文稿", nav: true, module: "discord" },
+  { path: "/trade", name: "trade", label: "下单", nav: true, module: "discord" },
+  { path: "/signals", name: "signals", label: "信号", nav: false, module: "discord" },
+  { path: "/debug", name: "debug", label: "Debug", nav: true, module: "discord" },
+  { path: "/oi", name: "oi", label: "OI", nav: false, module: "oi" },
 ];
 
-const DEFAULT_DEPLOY_PAGES = ["show", "cards"];
+/** @type {{ id: "discord" | "oi", label: string, to: string }[]} */
+export const UI_MODULES = [
+  { id: "discord", label: "Discord", to: "/show" },
+  { id: "oi", label: "OI Monitor", to: "/oi" },
+];
+
+const DEFAULT_DEPLOY_PAGES = ["show", "cards", "oi"];
 
 /**
  * @returns {"local" | "deploy"}
@@ -64,10 +76,25 @@ export function isPageEnabled(name) {
   return getEnabledPageNames().has(String(name));
 }
 
-/** 顶栏导航项（仅 nav:true 且已启用） */
+/** 顶栏导航项（仅 Discord 模块、nav:true 且已启用） */
 export function getNavPages() {
   const enabled = getEnabledPageNames();
-  return ALL_UI_PAGES.filter((p) => p.nav && enabled.has(p.name));
+  return ALL_UI_PAGES.filter((p) => (p.module ?? "discord") === "discord" && p.nav && enabled.has(p.name));
+}
+
+/**
+ * @param {string} path
+ * @returns {"discord" | "oi"}
+ */
+export function getModuleFromPath(path) {
+  const p = String(path ?? "");
+  if (p === "/oi" || p.startsWith("/oi/")) return "oi";
+  return "discord";
+}
+
+/** OI 模块是否在当前 UI 模式启用 */
+export function isOiModuleEnabled() {
+  return isPageEnabled("oi");
 }
 
 /** 部署版默认落地页 */
@@ -75,6 +102,8 @@ export function getDefaultDeployPath() {
   const enabled = getEnabledPageNames();
   if (enabled.has("show")) return "/show";
   if (enabled.has("cards")) return "/cards";
-  const first = ALL_UI_PAGES.find((p) => enabled.has(p.name) && p.path !== "/");
+  const first = ALL_UI_PAGES.find(
+    (p) => enabled.has(p.name) && p.path !== "/" && (p.module ?? "discord") === "discord"
+  );
   return first?.path ?? "/show";
 }

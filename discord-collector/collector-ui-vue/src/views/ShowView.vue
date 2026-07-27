@@ -37,6 +37,9 @@ const SHOW_CACHE_KEY = "discord-collector.show.v1";
 const SHOW_LAYOUT_KEY = "discord-collector.show.layout.v1";
 const SHOW_CACHE_VERSION = 5;
 const MAX_MSGS_PER_CHANNEL = 300;
+/** 默认固定服务器（…504831）；guild-rail 隐藏时不可切换 */
+const DEFAULT_SHOW_GUILD_ID = "1444959079209504831";
+const SHOW_GUILD_RAIL = false;
 
 /** @typedef {{ guildId: string, name: string, iconUrl: string, channelCount: number }} GuildItem */
 /** @typedef {{ channelId: string, guildId: string, name: string, lastMessagePreview: string, lastMessageAtMs: number }} ChannelItem */
@@ -57,7 +60,7 @@ const ungroupedOrderByGuild = reactive(/** @type {Record<string, string[]>} */ (
 /** channelId → 未读条数（Gateway 实时推送） */
 const unreadCountByChannelId = reactive(/** @type {Record<string, number>} */ ({}));
 
-const selectedGuildId = ref("");
+const selectedGuildId = ref(DEFAULT_SHOW_GUILD_ID);
 /** @type {import('vue').Ref<ChannelItem | null>} */
 const selectedChannel = ref(null);
 /** CDP Discord 页签当前频道（由 meta / WS 推送同步） */
@@ -502,6 +505,15 @@ function applyLayoutFromObject(o) {
   }
   if (o.selectedGuildId) selectedGuildId.value = String(o.selectedGuildId);
   if (o.selectedChannel) selectedChannel.value = /** @type {ChannelItem} */ (o.selectedChannel);
+  if (!SHOW_GUILD_RAIL) {
+    selectedGuildId.value = DEFAULT_SHOW_GUILD_ID;
+    if (
+      selectedChannel.value &&
+      String(selectedChannel.value.guildId || "") !== DEFAULT_SHOW_GUILD_ID
+    ) {
+      selectedChannel.value = null;
+    }
+  }
 }
 
 function loadLayoutCache() {
@@ -615,7 +627,9 @@ async function reloadGuilds() {
     if (!guilds.value.length) {
       await inferGuildsFromContext();
     }
-    if (!selectedGuildId.value && guilds.value.length) {
+    if (!SHOW_GUILD_RAIL) {
+      selectedGuildId.value = DEFAULT_SHOW_GUILD_ID;
+    } else if (!selectedGuildId.value && guilds.value.length) {
       selectedGuildId.value = guilds.value[0].guildId;
     }
     scheduleSave();
@@ -659,7 +673,9 @@ async function loadChannelsForGuild(guildId, { force = false } = {}) {
   if (!guildId) return;
   const existing = channelsByGuild[guildId] ?? [];
   if (!force && existing.length) return;
-  loadingChannels.value = true;
+  // 仅首次空列表时显示「加载频道…」；WS/强制刷新做静默合并，避免闪屏
+  const showLoading = existing.length === 0;
+  if (showLoading) loadingChannels.value = true;
   try {
     const rows = await fetchChannels(guildId);
     const mapped = rows.map((r) => channelRowToClient(r));
@@ -673,7 +689,7 @@ async function loadChannelsForGuild(guildId, { force = false } = {}) {
     }
     scheduleSave();
   } finally {
-    loadingChannels.value = false;
+    if (showLoading) loadingChannels.value = false;
   }
 }
 
@@ -722,11 +738,16 @@ async function syncViewToIncomingMessage(m, opts = {}) {
   const bucket = gid || selectedGuildId.value;
 
   if (adoptSelection && gid && gid !== selectedGuildId.value) {
+    if (!SHOW_GUILD_RAIL) {
+      // 固定单服：其它服务器消息不切换视图
+      return;
+    }
     selectedGuildId.value = gid;
     await loadChannelsForGuild(gid, { force: true });
   }
 
   if (bucket) {
+    if (!SHOW_GUILD_RAIL && bucket !== DEFAULT_SHOW_GUILD_ID) return;
     let ch = channelsByGuild[bucket]?.find((c) => c.channelId === cid);
     if (!ch) {
       ch = {
@@ -1160,6 +1181,7 @@ onMounted(async () => {
   }
   const hadCache = loadCache();
   loadLayoutCache();
+  if (!SHOW_GUILD_RAIL) selectedGuildId.value = DEFAULT_SHOW_GUILD_ID;
   await reloadGuilds();
   if (selectedGuildId.value) {
     await loadChannelsForGuild(selectedGuildId.value, { force: !hadCache });
@@ -1168,10 +1190,13 @@ onMounted(async () => {
     const cdp = await fetchCdpActiveChannel();
     if (cdp.cdpChannelId && !selectedChannel.value) {
       updateCdpActive(cdp.cdpChannelId, cdp.cdpGuildId);
-      await syncViewToIncomingMessage({
-        channelId: cdp.cdpChannelId,
-        guildId: cdp.cdpGuildId,
-      });
+      const cdpGid = String(cdp.cdpGuildId ?? "");
+      if (SHOW_GUILD_RAIL || !cdpGid || cdpGid === DEFAULT_SHOW_GUILD_ID) {
+        await syncViewToIncomingMessage({
+          channelId: cdp.cdpChannelId,
+          guildId: cdp.cdpGuildId,
+        });
+      }
     }
   } catch {
     /* CDP 未就绪 */
@@ -1190,8 +1215,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="show-app" :class="{ 'has-signal-cards': showSignalCards }">
-    <aside class="guild-rail">
+  <div
+    class="show-app"
+    :class="{ 'has-signal-cards': showSignalCards, 'no-guild-rail': !SHOW_GUILD_RAIL }"
+  >
+    <aside v-if="SHOW_GUILD_RAIL" class="guild-rail">
       <button
         v-for="g in guilds"
         :key="g.guildId"

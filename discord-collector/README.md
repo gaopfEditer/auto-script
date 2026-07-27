@@ -15,21 +15,25 @@
 - **[信号卡片模板（对外评估）](docs/card-templates.md)** — 风格 / 排版骨架 / Embed；机读样本 [`card-template-catalog.json`](docs/card-template-catalog.json)
 - **[OI Monitor（计价 / 沙盒 / 卡片结算）](oi_mornitor/README.md)** — 币安永续行情与持仓雷达；接收 `CARD_SINK_*` 推送的卡片
 
-## OI Monitor（同仓子项目）
+## OI Monitor（同仓子项目 · 可切换模块）
 
 目录：[`oi_mornitor/`](oi_mornitor/)（原 `auto-deal-eth/oi_mornitor`）。默认 **http://127.0.0.1:8765**，提供行情、形态追踪、沙盒纸面交易，以及卡片入口 `WS /ws/cards`、`POST /api/cards`。
 
-```bash
-# 首次
-cd oi_mornitor && python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+**UI**：Discord 面板顶栏可切换 **Discord | OI Monitor**；切到 OI 后探测后端就绪再嵌入（运行时激活）。前后端仍按原方式分别启动，不合并进程。
 
-# 之后可在 discord-collector 根目录
-pnpm run oi:dev      # Vite :5173 + API :8765
-pnpm run oi:start    # 生产式一键（build 前端 + 后端）
+```bash
+# 终端 1 — Discord 后端
+pnpm run collect:ui
+
+# 终端 2 — Discord 前端
+pnpm run dev:ui-vue
+
+# 终端 3 — OI（二选一）
+pnpm run oi:dev      # Vite :5173 + API :8765；嵌入可用 OI_EMBED_URL=http://127.0.0.1:5173
+pnpm run oi:start    # 一体托管 :8765（默认嵌入地址）
 ```
 
-与采集联调：先起 OI，再 `pnpm run collect:ui`；卡片外送默认打到本机 8765，便于按币种现价算收益率。
+卡片外送默认打到本机 8765。部署版若要露出 OI：`VITE_UI_PAGES=show,cards,oi`。
 
 ## 环境准备
 
