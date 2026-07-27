@@ -1,5 +1,6 @@
 /**
- * 卡片对外唯一标识：SC-{dbId}，便于外部评估回填与数据补充。
+ * 卡片对外唯一标识：SC-{dbId}。
+ * 仅写入结构化字段（uid / Embed「标识」），不写入卡片正文。
  */
 
 /** @param {unknown} id */
@@ -10,28 +11,35 @@ export function formatCardUid(id) {
 }
 
 /**
+ * 从正文去掉 ID SC-xxx / 单独一行的 SC-xxx（历史卡片清洗）。
  * @param {string} text
- * @param {unknown} cardId
  */
-export function ensureCardUidInText(text, cardId) {
-  const uid = formatCardUid(cardId);
-  const t = String(text ?? "").trimEnd();
-  if (!uid) return t;
-  if (new RegExp(`\\bID\\s+${uid}\\b`, "i").test(t)) return t;
-  if (new RegExp(`(?:^|\\n)${uid}(?:\\n|$)`).test(t)) return t;
-  return t ? `${t}\nID ${uid}` : `ID ${uid}`;
+export function stripCardUidFromText(text) {
+  return String(text ?? "")
+    .replace(/(?:^|\n)[ \t]*ID[ \t]+SC-\d+[ \t]*(?=\n|$)/gi, "\n")
+    .replace(/(?:^|\n)[ \t]*SC-\d+[ \t]*(?=\n|$)/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * @param {string} text
+ * @param {unknown} [_cardId] 保留参数兼容旧调用，不再追加正文
+ */
+export function ensureCardUidInText(text, _cardId) {
+  return stripCardUidFromText(text);
 }
 
 /**
  * @param {Record<string, string> | null | undefined} cardsByStyle
- * @param {unknown} cardId
+ * @param {unknown} [_cardId]
  * @returns {Record<string, string>}
  */
-export function stampCardsByStyle(cardsByStyle, cardId) {
+export function stampCardsByStyle(cardsByStyle, _cardId) {
   /** @type {Record<string, string>} */
   const out = {};
   for (const [k, v] of Object.entries(cardsByStyle ?? {})) {
-    out[k] = ensureCardUidInText(String(v ?? ""), cardId);
+    out[k] = stripCardUidFromText(String(v ?? ""));
   }
   return out;
 }
@@ -45,7 +53,9 @@ export function stampCardFieldsUid(cardFields, cardId) {
   if (!uid || !cardFields || typeof cardFields !== "object") return cardFields ?? null;
   const next = { ...cardFields };
   const fields = Array.isArray(next.fields) ? [...next.fields] : [];
-  const hasId = fields.some((f) => f && typeof f === "object" && String(/** @type {Record<string, unknown>} */ (f).name) === "标识");
+  const hasId = fields.some(
+    (f) => f && typeof f === "object" && String(/** @type {Record<string, unknown>} */ (f).name) === "标识"
+  );
   if (!hasId) {
     fields.push({ name: "标识", value: uid, inline: true });
   }

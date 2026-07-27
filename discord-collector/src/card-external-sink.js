@@ -51,8 +51,7 @@ export function buildCardSinkText(bodyText, meta = {}) {
   const body = String(bodyText ?? "").trim();
   /** @type {string[]} */
   const head = [];
-  const uid = String(meta.uid || meta.card_id || "").trim();
-  if (uid) head.push(`卡片：${uid}`);
+  // uid / card_id 不写进正文，仅在 JSON 结构化字段中携带
   const sourceLabel = String(meta.source_label || "").trim();
   if (sourceLabel) head.push(`来源：${sourceLabel}`);
   const channelName = String(meta.channel_name || "").trim();

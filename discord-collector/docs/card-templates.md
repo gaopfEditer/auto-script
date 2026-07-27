@@ -4,7 +4,7 @@
 
 配套机读样本：[`card-template-catalog.json`](./card-template-catalog.json)（含各 parser × 风格的完整渲染示例）。
 
-**唯一标识**：每张卡片入库后固定为 `SC-{数据库id}`（如 `SC-1004`）。正文末行 `ID SC-xxx`，Embed 有「标识」字段；外部评估与后续数据补充请用此 uid 对齐。
+**唯一标识**：每张卡片入库后固定为 `SC-{数据库id}`（如 `SC-1004`），存在 `uid` / Embed「标识」中，**不写进卡片正文**。外部评估与回填用此 uid 对齐。
 
 ---
 

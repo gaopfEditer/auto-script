@@ -1,0 +1,7 @@
+# oi_mornitor — 币安永续 OI 动态热钱雷达
+# 安装: cd oi_mornitor && pip install -r requirements.txt
+
+aiohttp>=3.9.0
+python-dotenv>=1.0.0
+pandas>=2.0.0
+websockets>=12.0

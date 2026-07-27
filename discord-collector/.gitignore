@@ -4,3 +4,11 @@ data/
 .env
 config/channel-webhook-forwards.json
 public/collector-ui/
+
+# oi_mornitor（Python 子项目）
+oi_mornitor/venv/
+oi_mornitor/.venv/
+oi_mornitor/__pycache__/
+oi_mornitor/**/__pycache__/
+oi_mornitor/data/
+oi_mornitor/frontend/node_modules/

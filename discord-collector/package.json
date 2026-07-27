@@ -12,7 +12,10 @@
     "ui:build": "vite build --config collector-ui-vue/vite.config.js",
     "dev:ui-vue": "node scripts/pre-dev-ui-vue.mjs && vite --config collector-ui-vue/vite.config.js",
     "dev:collect": "nodemon src/index.js",
-    "dev:collect:ui": "node scripts/pre-collect-ui.mjs && nodemon src/collector-ui-server.js"
+    "dev:collect:ui": "node scripts/pre-collect-ui.mjs && nodemon src/collector-ui-server.js",
+    "oi:start": "python oi_mornitor/run.py",
+    "oi:dev": "python oi_mornitor/run.py --dev",
+    "oi:rebuild": "python oi_mornitor/run.py --rebuild"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",

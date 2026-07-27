@@ -13,6 +13,23 @@
 - [前端上云 + 后台本地](docs/deploy-frontend-remote-backend-local.md) — SSH 隧道完整步骤
 - [WebSocket 推送架构](docs/websocket-push-architecture.md)
 - **[信号卡片模板（对外评估）](docs/card-templates.md)** — 风格 / 排版骨架 / Embed；机读样本 [`card-template-catalog.json`](docs/card-template-catalog.json)
+- **[OI Monitor（计价 / 沙盒 / 卡片结算）](oi_mornitor/README.md)** — 币安永续行情与持仓雷达；接收 `CARD_SINK_*` 推送的卡片
+
+## OI Monitor（同仓子项目）
+
+目录：[`oi_mornitor/`](oi_mornitor/)（原 `auto-deal-eth/oi_mornitor`）。默认 **http://127.0.0.1:8765**，提供行情、形态追踪、沙盒纸面交易，以及卡片入口 `WS /ws/cards`、`POST /api/cards`。
+
+```bash
+# 首次
+cd oi_mornitor && python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+
+# 之后可在 discord-collector 根目录
+pnpm run oi:dev      # Vite :5173 + API :8765
+pnpm run oi:start    # 生产式一键（build 前端 + 后端）
+```
+
+与采集联调：先起 OI，再 `pnpm run collect:ui`；卡片外送默认打到本机 8765，便于按币种现价算收益率。
 
 ## 环境准备
 
