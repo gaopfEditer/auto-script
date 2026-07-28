@@ -8,9 +8,11 @@ import {
   updateSignalCard,
   createSignalCard,
   formatCardTime,
+  compareCardsByTimeDesc,
 } from "../lib/discordSignalApi.js";
 import { pushNewCardToast } from "../composables/useNewCardNotifications.js";
 import SignalEvaluationForm from "./SignalEvaluationForm.vue";
+import { resolveCardSourceLink } from "../lib/cardSourceLink.js";
 import {
   cardExecution,
   canTraceMessage,
@@ -64,7 +66,7 @@ const manualForm = ref({
 });
 
 const sortedCards = computed(() =>
-  [...cards.value].sort((a, b) => Number(b.id) - Number(a.id))
+  [...cards.value].sort(compareCardsByTimeDesc)
 );
 
 const renderedCards = computed(() => {
@@ -129,6 +131,32 @@ function activeStyle(card) {
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 function cardBody(card) {
+  const p = card.parsedJson;
+  if (p && typeof p === "object") {
+    const parsed = /** @type {Record<string, unknown>} */ (p);
+    if (parsed.paste || parsed.coinWatch) {
+      /** @type {string[]} */
+      const lines = [];
+      const action = String(parsed.actionType ?? "new");
+      const actionLabel =
+        action === "new"
+          ? "新开仓"
+          : action === "continue"
+            ? "持仓更新"
+            : action === "toend"
+              ? "临近目标"
+              : action === "end"
+                ? "已结束"
+                : "";
+      const ex = cardExecution(card);
+      if (actionLabel) lines.push(actionLabel);
+      if (ex.direction) lines.push(String(ex.direction));
+      const band = /** @type {Record<string, unknown>} */ (parsed.coinWatch ?? {}).bandPct;
+      if (band) lines.push(`监听 ±${band}%`);
+      if (ex.planned?.entryPrice) lines.push(`入场 ${ex.planned.entryPrice}`);
+      if (lines.length) return lines.join("\n");
+    }
+  }
   const sid = activeStyle(card);
   return card.cardsByStyle?.[sid] ?? card.rawContent ?? "";
 }
@@ -169,6 +197,11 @@ function cardTitle(card) {
     if (sym) return sym.replace(/^\$/, "");
   }
   return "";
+}
+
+/** @param {Record<string, unknown>} card */
+function cardSource(card) {
+  return resolveCardSourceLink(card);
 }
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} updated */
@@ -436,6 +469,15 @@ onMounted(async () => {
             <span class="signal-card-status" :class="isActive(card) ? 'on' : 'off'">
               {{ isActive(card) ? "有效" : "已失效" }}
             </span>
+            <RouterLink
+              v-if="cardSource(card)"
+              class="signal-card-source-tag"
+              :class="cardSource(card).kind"
+              :to="cardSource(card).to"
+              :title="`打开来源：${cardSource(card).title}`"
+            >
+              {{ cardSource(card).label }} · {{ cardSource(card).displayName }}
+            </RouterLink>
             <span v-if="card.isManual" class="signal-card-manual-tag">手动</span>
             <span
               v-if="cardExecution(card).outcome && cardExecution(card).outcome !== 'pending'"
@@ -632,5 +674,30 @@ onMounted(async () => {
 .signal-card-profit-tag.loss {
   background: rgba(243, 134, 136, 0.15);
   color: #f38688;
+}
+.signal-card-source-tag {
+  font-size: 0.6rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  text-decoration: none;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.signal-card-source-tag.article {
+  background: rgba(87, 242, 135, 0.12);
+  color: #57f287;
+  border-color: rgba(87, 242, 135, 0.35);
+}
+.signal-card-source-tag.youtube {
+  background: rgba(255, 92, 92, 0.12);
+  color: #ff8e8e;
+  border-color: rgba(255, 92, 92, 0.35);
+}
+.signal-card-source-tag:hover {
+  filter: brightness(1.15);
+  text-decoration: underline;
 }
 </style>

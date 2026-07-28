@@ -440,20 +440,40 @@ def _apply_envelope_meta(card: ParsedCard, payload: dict[str, Any]) -> ParsedCar
 def _try_parse_from_parsed_block(
     payload: dict[str, Any], *, card_id: str | None
 ) -> ParsedCard | None:
-    """优先用顶层 symbol/direction + parsed 结构化字段。"""
+    """优先用顶层 symbol/direction + parsed / execution.planned 结构化字段。"""
     parsed = payload.get("parsed")
     if not isinstance(parsed, dict):
         parsed = {}
-    # 合并 execution 里可能带的入场/止损
+    else:
+        parsed = dict(parsed)
+
+    # 合并 execution（含 Discord collector 的 planned.*）
     execution = payload.get("execution")
     if isinstance(execution, dict):
+        if execution.get("symbol") and not parsed.get("symbol"):
+            parsed["symbol"] = execution.get("symbol")
+        if execution.get("direction") and not parsed.get("direction"):
+            parsed["direction"] = execution.get("direction")
+        planned = execution.get("planned")
+        if isinstance(planned, dict):
+            if planned.get("entryPrice") is not None and parsed.get("entry") is None:
+                parsed["entry"] = planned.get("entryPrice")
+            if planned.get("stopLossPrice") is not None and parsed.get("sl") is None:
+                parsed["sl"] = planned.get("stopLossPrice")
+            tps_planned = planned.get("takeProfitPrices")
+            if tps_planned is not None and not parsed.get("tps"):
+                parsed["tps"] = tps_planned
         for k in ("entry", "entry_low", "entry_high", "sl", "tps", "leverage", "entry_type"):
             if k not in parsed and execution.get(k) is not None:
                 parsed[k] = execution[k]
 
     sym = payload.get("symbol") or parsed.get("symbol")
     side = _side_from_direction(
-        payload.get("direction") or payload.get("side") or parsed.get("side") or parsed.get("direction")
+        payload.get("direction")
+        or payload.get("side")
+        or parsed.get("side")
+        or parsed.get("direction")
+        or (execution.get("direction") if isinstance(execution, dict) else None)
     )
     text = str(
         payload.get("text")
@@ -484,9 +504,26 @@ def _try_parse_from_parsed_block(
             tps = _parse_nums(tps)
         elif not isinstance(tps, list):
             tps = []
+        else:
+            # takeProfitPrices 可能是数字或字符串
+            cleaned: list[float] = []
+            for x in tps:
+                try:
+                    if isinstance(x, (int, float)):
+                        v = float(x)
+                    else:
+                        nums = _parse_nums(str(x))
+                        v = nums[0] if nums else 0.0
+                    if v > 0:
+                        cleaned.append(v)
+                except (TypeError, ValueError):
+                    continue
+            tps = cleaned
         sl = parsed.get("sl")
+        if sl is not None and not isinstance(sl, (int, float)):
+            nums = _parse_nums(str(sl))
+            sl = nums[0] if nums else None
         if sl is None and text:
-            # 从正文补止损
             sm = _SL_RE.search(text)
             if sm:
                 try:
@@ -512,7 +549,6 @@ def _try_parse_from_parsed_block(
         except (TypeError, ValueError):
             card = None
         if card and not card.card_id:
-            # 正文里再抠 ID
             from_text = parse_card_text(text, card_id=None)
             if from_text:
                 card.card_id = from_text.card_id
@@ -520,10 +556,17 @@ def _try_parse_from_parsed_block(
                     card.sl = from_text.sl
                 if not card.tps:
                     card.tps = from_text.tps
-        if card and card.card_id and card.sl:
-            if card.entry_type == "limit" and card.entry_low is None and card.tps:
-                card.entry_type = "market"
-            return _apply_envelope_meta(card, payload)
+        if card and card.card_id:
+            # 缺止损时按入场合成 ±3%，保证可接入监听
+            if card.sl is None or card.sl <= 0:
+                ref = card.entry_low or card.entry_high
+                if ref and ref > 0:
+                    pad = 0.03
+                    card.sl = ref * (1 - pad) if card.side == "LONG" else ref * (1 + pad)
+            if card.sl and card.sl > 0:
+                if card.entry_type == "limit" and card.entry_low is None and card.tps:
+                    card.entry_type = "market"
+                return _apply_envelope_meta(card, payload)
 
     # 纯正文 / embed
     if payload.get("embed") and isinstance(payload["embed"], dict):
@@ -538,7 +581,6 @@ def _try_parse_from_parsed_block(
             source_label=str(payload.get("source_label") or payload.get("source") or ""),
         )
         if card:
-            # 顶层 symbol/direction 可覆盖正文猜测
             if sym:
                 card.symbol = normalize_symbol(str(sym))
             if side:

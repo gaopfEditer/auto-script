@@ -194,6 +194,13 @@ export async function listPasteFileItems({ inputDir, outputDir }) {
     });
   }
 
+  items.sort((a, b) => {
+    const tb = Number(b.sourceMtimeMs) || 0;
+    const ta = Number(a.sourceMtimeMs) || 0;
+    if (tb !== ta) return tb - ta;
+    return String(a.name).localeCompare(String(b.name), "zh");
+  });
+
   return items;
 }
 
@@ -204,18 +211,19 @@ export async function listPasteFileItems({ inputDir, outputDir }) {
  * @param {ReturnType<typeof import('./logger.js').createLogger>} log
  */
 async function syncCoinActionWatches(archiveService, txtName, result, log) {
-  if (!archiveService?.registerCoinActionWatches) return;
+  if (!archiveService?.registerCoinActionWatches) return null;
   const list = Array.isArray(result.coinActions) ? result.coinActions : [];
-  if (!list.length) return;
+  if (!list.length) return { registered: 0, skipped: 0, cards: [] };
   try {
-    await archiveService.registerCoinActionWatches({
+    const sync = await archiveService.registerCoinActionWatches({
       sourceRef: txtName,
       title: result.title,
-      rawContent: result.content,
       coinActions: /** @type {Array<Record<string, unknown>>} */ (list),
     });
+    return sync;
   } catch (e) {
     log.warn(`coin-action watch ${txtName}: ${/** @type {Error} */ (e).message}`);
+    return null;
   }
 }
 
@@ -269,6 +277,28 @@ export function registerYoutubePasteBatchRoutes(app, config, log, opts = {}) {
     }
   });
 
+  /** 原文 .txt 全文（不依赖是否已解析） */
+  app.get("/api/youtube-fetch/paste-files/:name/raw", async (req, res) => {
+    try {
+      const name = path.basename(String(req.params.name ?? ""));
+      if (!name.toLowerCase().endsWith(".txt")) {
+        res.status(400).json({ ok: false, error: "无效文件名" });
+        return;
+      }
+      const { inputDir } = dirs();
+      const srcPath = path.join(inputDir, name);
+      const text = await fs.readFile(srcPath, "utf8");
+      res.json({ ok: true, name, text });
+    } catch (e) {
+      const err = /** @type {NodeJS.ErrnoException} */ (e);
+      if (err.code === "ENOENT") {
+        res.status(404).json({ ok: false, error: "源文件不存在" });
+        return;
+      }
+      res.status(500).json({ ok: false, error: String(err.message ?? e) });
+    }
+  });
+
   app.post("/api/youtube-fetch/paste-files/scan", async (req, res) => {
     try {
       if (scanState.running) {
@@ -296,10 +326,22 @@ export function registerYoutubePasteBatchRoutes(app, config, log, opts = {}) {
       const force = req.body?.force !== false;
       const { inputDir, outputDir } = dirs();
       const row = await parseTxtFileAndSave({ inputDir, outputDir, txtName: name, log, force });
+      /** @type {Record<string, unknown> | null} */
+      let sync = null;
       if (!row.skipped && row.coinActions?.length) {
-        await syncCoinActionWatches(archiveService, name, row, log);
+        sync = await syncCoinActionWatches(archiveService, name, row, log);
       }
-      res.json({ ok: true, ...row });
+      res.json({
+        ok: true,
+        ...row,
+        sync: sync
+          ? {
+              registered: sync.registered ?? sync.cards?.length ?? 0,
+              skipped: sync.skipped ?? 0,
+              skippedItems: sync.skippedItems ?? [],
+            }
+          : null,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }

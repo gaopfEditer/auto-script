@@ -2147,6 +2147,34 @@ button {
   background: rgba(100, 181, 246, 0.18);
 }
 
+.sandbox-algo-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+  margin: 0.35rem 0 0.15rem;
+}
+
+.sandbox-algo-chip {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: baseline;
+  padding: 0.12rem 0.45rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.sandbox-algo-chip .pos {
+  color: #66bb6a;
+}
+
+.sandbox-algo-chip .neg {
+  color: #ef5350;
+}
+
 .sandbox-range-stats {
   display: inline-flex;
   flex-wrap: wrap;

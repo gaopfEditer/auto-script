@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, reactive } from "vue";
-import { RouterLink } from "vue-router";
+import { RouterLink, useRoute } from "vue-router";
 import SignalEvaluationForm from "../components/SignalEvaluationForm.vue";
 import { fetchSignalConfig } from "../lib/discordSignalApi.js";
 import {
@@ -15,6 +15,7 @@ import {
   parsePastedYoutubeText,
   fetchPasteFileList,
   fetchPasteFileResult,
+  fetchPasteFileRaw,
   triggerPasteFileScan,
   parsePasteFileByName,
   registerCoinActionWatches,
@@ -30,6 +31,8 @@ const PASTE_STORAGE_KEY = "yt-fetch-paste-draft";
 const MODE_STORAGE_KEY = "yt-fetch-mode";
 
 /** @typedef {'youtube' | 'paste'} FetchMode */
+
+const route = useRoute();
 
 const mode = ref(/** @type {FetchMode} */ ("youtube"));
 const urlText = ref("");
@@ -55,10 +58,21 @@ const selectedPasteFile = ref("");
 const pasteListError = ref("");
 const scanningPaste = ref(false);
 const showManualPaste = ref(false);
+/** 右侧详情：概要&卡片 | 全文 */
+const pasteDetailTab = ref(/** @type {"cards" | "fulltext"} */ ("cards"));
+const pasteFullText = ref("");
 
 const previewJson = computed(() =>
   pastePreview.value ? JSON.stringify(pastePreview.value, null, 2) : ""
 );
+
+const pasteFullTextDisplay = computed(() => {
+  const raw = String(pasteFullText.value ?? "").trim();
+  if (raw) return raw;
+  return String(
+    pastePreview.value?.content ?? pastePreview.value?.rawContent ?? ""
+  ).trim();
+});
 
 const previewCardFields = computed(() => {
   const cf = pastePreview.value?.cardFields;
@@ -174,10 +188,14 @@ async function syncCoinActionWatchRegistration() {
     const data = await registerCoinActionWatches({
       sourceRef,
       title: String(pastePreview.value.title ?? ""),
-      rawContent: String(pastePreview.value.content ?? pastePreview.value.description ?? ""),
       coinActions: list,
     });
-    coinWatchMsg.value = `已注册 ${data.registered ?? 0} 条入场监听（颜驰 · ±3% · 每 1h）`;
+    const n = Number(data.registered ?? 0);
+    const s = Number(data.skipped ?? 0);
+    coinWatchMsg.value =
+      s > 0
+        ? `已同步 ${n} 条（跳过近1小时重复 ${s} 条 · 颜驰 · ±5%）`
+        : `已同步 ${n} 条入场监听（颜驰 · ±5% · 每 5min）`;
   } catch (e) {
     coinWatchMsg.value = String(/** @type {Error} */ (e).message ?? e);
   }
@@ -202,7 +220,7 @@ watch(
   () => {
     resetCoinEvalDrafts();
     syncCoinEvalDrafts();
-    void syncCoinActionWatchRegistration();
+    // 同步仅在「解析完成」后触发，选中已有文件不自动同步
   }
 );
 
@@ -403,14 +421,30 @@ async function selectPasteFile(name) {
   selectedPasteFile.value = name;
   pasteError.value = "";
   parseMsg.value = "";
+  pasteFullText.value = "";
+  pasteDetailTab.value = "cards";
   const row = pasteFiles.value.find((f) => f.name === name);
+  try {
+    const raw = await fetchPasteFileRaw(name);
+    pasteFullText.value = String(raw.text ?? "");
+  } catch {
+    pasteFullText.value = "";
+  }
   if (row?.status === "done" || row?.hasOutput) {
     try {
       const { data } = await fetchPasteFileResult(name);
       pastePreview.value =
         data.preview && typeof data.preview === "object"
           ? /** @type {Record<string, unknown>} */ (data.preview)
-          : null;
+          : data && typeof data === "object"
+            ? /** @type {Record<string, unknown>} */ (data)
+            : null;
+      // 无原文时才回退到解析结果里的正文
+      if (!pasteFullText.value.trim()) {
+        pasteFullText.value = String(
+          pastePreview.value?.content ?? data.content ?? ""
+        );
+      }
     } catch (e) {
       pastePreview.value = null;
       pasteError.value = String(/** @type {Error} */ (e).message ?? e);
@@ -439,10 +473,19 @@ async function forceParseFile(name) {
   pasteError.value = "";
   parseMsg.value = `正在解析 ${name}…`;
   try {
-    await parsePasteFileByName(name, { force: true });
+    const row = await parsePasteFileByName(name, { force: true });
     await refreshPasteFiles();
     await selectPasteFile(name);
-    parseMsg.value = "解析完成";
+    const sync = row.sync && typeof row.sync === "object" ? row.sync : null;
+    const n = Number(sync?.registered ?? 0);
+    const s = Number(sync?.skipped ?? 0);
+    if (sync) {
+      parseMsg.value =
+        s > 0 ? `解析完成；同步 ${n} 条，跳过近1小时重复 ${s} 条` : `解析完成；同步 ${n} 条币种卡片`;
+      coinWatchMsg.value = parseMsg.value;
+    } else {
+      parseMsg.value = "解析完成";
+    }
   } catch (e) {
     pasteError.value = String(/** @type {Error} */ (e).message ?? e);
     parseMsg.value = "";
@@ -487,11 +530,14 @@ async function runPasteParse() {
   parseMsg.value = "正在解析概要与币种（Ollama）…";
   selectedPasteFile.value = "";
   pastePreview.value = null;
+  pasteFullText.value = text;
+  pasteDetailTab.value = "cards";
   try {
     localStorage.setItem(PASTE_STORAGE_KEY, pasteText.value);
     const data = await parsePastedYoutubeText({ text });
     pastePreview.value = data.preview ?? null;
-    parseMsg.value = "解析完成（预览 JSON，未写入卡片系统）";
+    await syncCoinActionWatchRegistration();
+    parseMsg.value = coinWatchMsg.value || "解析完成";
   } catch (e) {
     parseMsg.value = "";
     pasteError.value = String(/** @type {Error} */ (e).message ?? e);
@@ -546,9 +592,36 @@ watch(mode, () => {
   if (mode.value === "paste") void refreshPasteFiles();
 });
 
+/** 从卡片来源跳转：/fetch?mode=paste&file=xxx.txt&tab=fulltext */
+async function applyRouteQuery() {
+  const q = route.query;
+  const modeQ = String(q.mode ?? "").trim();
+  if (modeQ === "youtube" || modeQ === "paste") {
+    mode.value = modeQ;
+  }
+  const tabQ = String(q.tab ?? "").trim();
+  if (tabQ === "cards" || tabQ === "fulltext") {
+    pasteDetailTab.value = tabQ;
+  }
+  const file = String(q.file ?? "").trim();
+  if (!file || !file.toLowerCase().endsWith(".txt")) return;
+  if (mode.value !== "paste") mode.value = "paste";
+  await refreshPasteFiles();
+  await selectPasteFile(file);
+  if (tabQ === "fulltext") pasteDetailTab.value = "fulltext";
+}
+
+watch(
+  () => `${route.query.mode ?? ""}|${route.query.file ?? ""}|${route.query.tab ?? ""}`,
+  () => {
+    void applyRouteQuery();
+  }
+);
+
 onMounted(async () => {
   loadSubmittedHistory();
   await Promise.all([refreshHealth(), refreshQueue(), refreshPasteFiles(), fetchSignalConfig()]);
+  await applyRouteQuery();
   startPolling();
   document.addEventListener("keydown", onCoinEditEscape);
 });
@@ -740,78 +813,111 @@ https://youtu.be/..."
         <p v-if="parseMsg" class="parse-msg">{{ parseMsg }}</p>
         <p v-if="pasteError" class="err">{{ pasteError }}</p>
 
-        <div v-if="pastePreview" class="preview-wrap">
-          <div v-if="asStringList(pastePreview.summary).length" class="summary-block">
-            <div class="fn">全文概要</div>
-            <ul>
-              <li v-for="(line, i) in asStringList(pastePreview.summary)" :key="i">{{ line }}</li>
-            </ul>
-          </div>
+        <nav v-if="selectedPasteFile || pastePreview || pasteFullTextDisplay" class="detail-tabs">
+          <button
+            type="button"
+            class="detail-tab"
+            :class="{ on: pasteDetailTab === 'cards' }"
+            @click="pasteDetailTab = 'cards'"
+          >
+            概要&卡片
+          </button>
+          <button
+            type="button"
+            class="detail-tab"
+            :class="{ on: pasteDetailTab === 'fulltext' }"
+            @click="pasteDetailTab = 'fulltext'"
+          >
+            全文
+          </button>
+        </nav>
 
-          <div v-if="coinActions.length" class="coin-actions">
-            <div class="coin-actions-head">
-              <span class="fn">币种操作</span>
-              <span class="coin-count">{{ coinActions.length }} 条</span>
-            </div>
-            <p v-if="coinWatchMsg" class="coin-watch-msg">{{ coinWatchMsg }}</p>
-            <article
-              v-for="(coin, i) in coinActions"
-              :key="`${coin.symbol}-${coin.actionType}-${i}`"
-              class="coin-action-card"
-              role="button"
-              tabindex="0"
-              @click="openCoinEdit(coinEvalKey(coin, i))"
-              @keydown.enter="openCoinEdit(coinEvalKey(coin, i))"
-            >
-              <header class="coin-action-top">
-                <strong class="coin-sym">{{ coin.symbol }}</strong>
-                <span class="action-badge" :class="actionTypeClass(String(coin.actionType))">
-                  {{ actionTypeLabel(String(coin.actionType)) }}
-                </span>
-                <span v-if="coin.direction" class="coin-dir">{{ coin.direction }}</span>
-                <span v-if="coin.entry" class="coin-watch-badge">监听 ±3%</span>
-              </header>
-              <p class="coin-brief-line">
-                <span class="coin-brief-label">入场</span>
-                {{ coin.entry || "—" }}
-              </p>
-              <p class="coin-brief-line coin-brief-note">
-                <span class="coin-brief-label">备注</span>
-                {{ coinBriefNote(coin, coinEvalKey(coin, i)) }}
-              </p>
-              <p v-if="coinEvalByKey[coinEvalKey(coin, i)]" class="coin-brief-eval">
-                {{ coinEvalSummaryLine(coinEvalKey(coin, i)) }}
-              </p>
-              <button
-                type="button"
-                class="coin-edit-btn"
-                @click.stop="openCoinEdit(coinEvalKey(coin, i))"
-              >
-                编辑评价
-              </button>
-            </article>
-          </div>
-          <p v-else class="muted">未识别到币种操作。</p>
+        <div v-if="pasteDetailTab === 'cards'" class="detail-tab-body">
+          <div v-if="pastePreview" class="preview-wrap">
+            <div class="preview-upper">
+              <div v-if="asStringList(pastePreview.summary).length" class="summary-block">
+                <div class="fn">全文概要</div>
+                <ul>
+                  <li v-for="(line, i) in asStringList(pastePreview.summary)" :key="i">{{ line }}</li>
+                </ul>
+              </div>
 
-          <div v-if="previewCardFields" class="embed-preview">
-            <h3>{{ String(previewCardFields.title ?? pastePreview.title) }}</h3>
-            <p v-if="previewCardFields.description" class="embed-desc">{{ previewCardFields.description }}</p>
-            <div v-if="Array.isArray(previewCardFields.fields)" class="embed-fields">
-              <div
-                v-for="(f, i) in previewCardFields.fields"
-                :key="i"
-                class="embed-field"
-                :class="{ inline: f.inline }"
-              >
-                <div class="fn">{{ f.name }}</div>
-                <div class="fv">{{ f.value }}</div>
+              <div v-if="coinActions.length" class="coin-actions">
+                <div class="coin-actions-head">
+                  <span class="fn">币种操作</span>
+                  <span class="coin-count">{{ coinActions.length }} 条</span>
+                </div>
+                <p v-if="coinWatchMsg" class="coin-watch-msg">{{ coinWatchMsg }}</p>
+                <article
+                  v-for="(coin, i) in coinActions"
+                  :key="`${coin.symbol}-${coin.actionType}-${i}`"
+                  class="coin-action-card"
+                  role="button"
+                  tabindex="0"
+                  @click="openCoinEdit(coinEvalKey(coin, i))"
+                  @keydown.enter="openCoinEdit(coinEvalKey(coin, i))"
+                >
+                  <header class="coin-action-top">
+                    <strong class="coin-sym">{{ coin.symbol }}</strong>
+                    <span class="action-badge" :class="actionTypeClass(String(coin.actionType))">
+                      {{ actionTypeLabel(String(coin.actionType)) }}
+                    </span>
+                    <span v-if="coin.direction" class="coin-dir">{{ coin.direction }}</span>
+                    <span v-if="coin.entry" class="coin-watch-badge">监听 ±5%</span>
+                  </header>
+                  <p class="coin-brief-line">
+                    <span class="coin-brief-label">入场</span>
+                    {{ coin.entry || "—" }}
+                  </p>
+                  <p class="coin-brief-line coin-brief-note">
+                    <span class="coin-brief-label">备注</span>
+                    {{ coinBriefNote(coin, coinEvalKey(coin, i)) }}
+                  </p>
+                  <p v-if="coinEvalByKey[coinEvalKey(coin, i)]" class="coin-brief-eval">
+                    {{ coinEvalSummaryLine(coinEvalKey(coin, i)) }}
+                  </p>
+                  <button
+                    type="button"
+                    class="coin-edit-btn"
+                    @click.stop="openCoinEdit(coinEvalKey(coin, i))"
+                  >
+                    编辑评价
+                  </button>
+                </article>
+              </div>
+              <p v-else class="muted">未识别到币种操作。</p>
+
+              <div v-if="previewCardFields" class="embed-preview">
+                <h3>{{ String(previewCardFields.title ?? pastePreview.title) }}</h3>
+                <p v-if="previewCardFields.description" class="embed-desc">{{ previewCardFields.description }}</p>
+                <div v-if="Array.isArray(previewCardFields.fields)" class="embed-fields">
+                  <div
+                    v-for="(f, i) in previewCardFields.fields"
+                    :key="i"
+                    class="embed-field"
+                    :class="{ inline: f.inline }"
+                  >
+                    <div class="fn">{{ f.name }}</div>
+                    <div class="fv">{{ f.value }}</div>
+                  </div>
+                </div>
               </div>
             </div>
+            <details class="json-block" open>
+              <summary>预览 JSON</summary>
+              <div class="json-scroll">
+                <pre>{{ previewJson }}</pre>
+              </div>
+            </details>
           </div>
-          <details class="json-block" open>
-            <summary>预览 JSON</summary>
-            <pre>{{ previewJson }}</pre>
-          </details>
+          <p v-else-if="selectedPasteFile" class="muted">尚未解析；可点「重新解析」，或先切换到「全文」查看原文。</p>
+        </div>
+
+        <div v-else class="detail-tab-body fulltext-tab">
+          <div v-if="pasteFullTextDisplay" class="fulltext-scroll">
+            <pre class="fulltext-pre">{{ pasteFullTextDisplay }}</pre>
+          </div>
+          <p v-else class="muted">暂无全文内容。</p>
         </div>
       </main>
     </div>
@@ -908,10 +1014,76 @@ https://youtu.be/..."
   height: 100%;
   min-height: 0;
 }
-.paste-list-panel,
+.paste-list-panel {
+  min-height: 0;
+  overflow: auto;
+}
 .paste-detail-panel {
   min-height: 0;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.paste-detail-panel > .panel-head,
+.paste-detail-panel > .muted,
+.paste-detail-panel > .parse-msg,
+.paste-detail-panel > .err,
+.paste-detail-panel > .detail-tabs {
+  flex-shrink: 0;
+}
+.detail-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.75rem 0 0;
+  border-bottom: 1px solid #3f4147;
+  padding-bottom: 0;
+}
+.detail-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 0.45rem 0.85rem;
+  color: #949ba4;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.detail-tab:hover {
+  color: #dbdee1;
+}
+.detail-tab.on {
+  color: #fff;
+  border-bottom-color: #5865f2;
+}
+.detail-tab-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin-top: 0.75rem;
+}
+.fulltext-tab {
+  display: flex;
+  flex-direction: column;
+}
+.fulltext-scroll {
+  flex: 1 1 auto;
+  min-height: clamp(280px, 55vh, calc(100dvh - 240px));
+  overflow: auto;
+  background: #1e1f22;
+  border: 1px solid #3f4147;
+  border-radius: 8px;
+  padding: 0.75rem 0.85rem;
+  -webkit-overflow-scrolling: touch;
+}
+.fulltext-pre {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: #dbdee1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Consolas, monospace;
 }
 .paste-files {
   list-style: none;
@@ -999,7 +1171,16 @@ https://youtu.be/..."
   color: #aeb4ff;
 }
 .preview-wrap {
-  margin-top: 0.85rem;
+  margin-top: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  overflow: auto;
+}
+.preview-upper {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
@@ -1244,6 +1425,7 @@ https://youtu.be/..."
 }
 .json-block {
   margin: 0;
+  flex: 0 0 auto;
 }
 .json-block summary {
   cursor: pointer;
@@ -1251,19 +1433,27 @@ https://youtu.be/..."
   font-size: 0.78rem;
   margin-bottom: 0.35rem;
 }
-.json-block pre {
-  margin: 0;
-  max-height: min(420px, 40vh);
+.json-scroll {
+  height: clamp(320px, 58vh, calc(100dvh - 220px));
   overflow: auto;
   background: #1e1f22;
   border: 1px solid #3f4147;
   border-radius: 8px;
   padding: 0.65rem 0.75rem;
+  -webkit-overflow-scrolling: touch;
+}
+.json-scroll pre {
+  margin: 0;
+  max-height: none;
+  overflow: visible;
   font-size: 0.75rem;
   line-height: 1.45;
   color: #b5bac1;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.json-block:not([open]) .json-scroll {
+  display: none;
 }
 .panel {
   background: #2b2d31;

@@ -132,6 +132,84 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
     }
   });
 
+  /**
+   * oi_mornitor / 外部系统回写：自动评价结算（TP1/2/3 或 SL）
+   * body: { card_id|uid|id, outcome, best_tp, settlement_price, entry_price, ... }
+   */
+  app.post("/api/cards/settlement", async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const rawId = String(body.card_id ?? body.uid ?? body.id ?? "").trim();
+      let id = Number(body.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        const m = rawId.match(/(\d+)\s*$/);
+        id = m ? Number(m[1]) : 0;
+      }
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ ok: false, error: "card_id required" });
+        return;
+      }
+      const row = await store.getSignalCardById(id);
+      if (!row) {
+        res.status(404).json({ ok: false, error: "not found" });
+        return;
+      }
+      const card = archiveCardToClient(row);
+      const ex = normalizeExecution(card.execution);
+      const outcome = String(body.outcome ?? "").trim() || "pending";
+      const settlement = Number(body.settlement_price ?? body.settlementPrice);
+      const entry = Number(body.entry_price ?? body.entryPrice ?? ex.planned?.entryPrice);
+      const bestTp = body.best_tp ?? body.bestTp ?? null;
+      const isShort = /空|short|sell/i.test(String(ex.direction ?? body.side ?? ""));
+
+      /** @type {Record<string, unknown>} */
+      const patch = {
+        backtestJson: {
+          ...(card.backtest && typeof card.backtest === "object" ? card.backtest : {}),
+          mode: "oi_settlement",
+          outcome,
+          bestTp,
+          settlementPrice: Number.isFinite(settlement) ? settlement : null,
+          entry: Number.isFinite(entry) ? entry : null,
+          source: body.source ?? "oi_mornitor",
+          exitCode: body.exit_code ?? body.exitCode ?? null,
+          settledAt: new Date().toISOString(),
+        },
+      };
+
+      if (
+        (outcome === "take_profit" || outcome === "stop_loss") &&
+        Number.isFinite(settlement) &&
+        settlement > 0 &&
+        Number.isFinite(entry) &&
+        entry > 0
+      ) {
+        patch.executionJson = {
+          ...ex,
+          outcome,
+          actual: {
+            ...ex.actual,
+            buyPrice: isShort ? String(settlement) : String(entry),
+            sellPrice: isShort ? String(entry) : String(settlement),
+            takeProfitPrices: ex.actual?.takeProfitPrices ?? [],
+            stopLossPrice: ex.actual?.stopLossPrice ?? "",
+          },
+          autoEval: {
+            bestTp,
+            settlementPrice: settlement,
+            source: body.source ?? "oi_mornitor",
+          },
+        };
+      }
+
+      await store.updateSignalCard(id, patch);
+      const updated = await store.getSignalCardById(id);
+      res.json({ ok: true, card: updated ? archiveCardToClient(updated) : null });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
   /** 内部：YouTube 归档 */
   app.post("/api/cards/from-youtube", async (req, res) => {
     try {
@@ -146,14 +224,23 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
   app.post("/api/youtube-fetch/coin-actions/watch", async (req, res) => {
     try {
       const body = req.body ?? {};
-      const cards = await archiveService.registerCoinActionWatches({
+      const result = await archiveService.registerCoinActionWatches({
         sourceRef: String(body.sourceRef ?? body.sourceFile ?? ""),
         title: body.title,
         rawContent: body.rawContent ?? body.content,
         coinActions: body.coinActions,
         bandPct: body.bandPct,
       });
-      res.json({ ok: true, registered: cards.length, cards });
+      const cards = Array.isArray(result) ? result : result.cards ?? [];
+      const registered = Array.isArray(result) ? cards.length : Number(result.registered ?? cards.length);
+      const skipped = Array.isArray(result) ? 0 : Number(result.skipped ?? 0);
+      res.json({
+        ok: true,
+        registered,
+        skipped,
+        skippedItems: Array.isArray(result) ? [] : result.skippedItems ?? [],
+        cards,
+      });
     } catch (e) {
       res.status(400).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }

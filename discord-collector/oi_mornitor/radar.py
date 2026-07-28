@@ -1219,9 +1219,13 @@ class RadarService:
         self.pattern_engine = PatternMonitorEngine()
         self.pullback_engine = PullbackStrategyEngine(self.pattern_engine)
         self.sandbox_engine = SandboxEngine()
+        from oi_mornitor.tv_alert_sync import TvAlertSync
+
+        self.tv_alert_sync = TvAlertSync()
         self._session: aiohttp.ClientSession | None = None
         self._session_trust_env: bool | None = None
         self._task: asyncio.Task[None] | None = None
+        self._tv_alert_task: asyncio.Task[None] | None = None
         self._running = False
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
@@ -1287,7 +1291,24 @@ class RadarService:
             fallback_symbols=self.radar.heavyweight_symbol_list,
             pattern_states=self.pattern_engine.last_states,
         )
+        # 多榜共振 → TradingView BB-Wicks 信号监听（CDP；同时只跑一个任务）
+        task = getattr(self, "_tv_alert_task", None)
+        if task is None or task.done():
+            self._tv_alert_task = asyncio.create_task(
+                self._tv_alert_tick_safe(list(self.radar.last_all_rows)),
+                name="oi-tv-alert-tick",
+            )
         return hot
+
+    async def _tv_alert_tick_safe(self, rows: list[dict[str, Any]]) -> None:
+        try:
+            result = await self.tv_alert_sync.tick(rows)
+            if result.get("added"):
+                logger.info("TV 信号监听新增: %s", ",".join(result["added"]))
+            if result.get("errors"):
+                logger.warning("TV 信号监听错误: %s", "; ".join(result["errors"][:5]))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TV 信号监听 tick 失败: %s", exc)
 
     async def _loop(self, interval_sec: int) -> None:
         while self._running:
@@ -1353,6 +1374,7 @@ class RadarService:
                 "oi_usd_limit": self.radar.oi_usd_limit,
                 "oi_pct_limit": self.radar.oi_pct_limit,
             },
+            "tv_alert": self.tv_alert_sync.get_payload(),
         }
 
     async def get_market_matrix(self, *, force: bool = False) -> dict[str, Any]:

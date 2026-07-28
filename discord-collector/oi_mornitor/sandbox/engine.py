@@ -307,6 +307,54 @@ class SandboxEngine:
             }
         )
 
+    @staticmethod
+    def _ensure_card_pattern_slot(symbol: str) -> None:
+        """卡片币种进入形态追踪预留槽并长置顶。"""
+        try:
+            from oi_mornitor.radar import get_service
+
+            pe = get_service().pattern_engine
+            ok = pe.ensure_card_symbol(symbol)
+            if ok:
+                logger.info("卡片币已占形态槽 %s", symbol)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("卡片占形态槽失败 %s: %s", symbol, exc)
+
+    @staticmethod
+    def _schedule_settlement_callback(payload: dict[str, Any]) -> None:
+        """异步回写 collector 自动评价（不阻塞雷达）。"""
+        from oi_mornitor.config import CARD_SETTLEMENT_URL
+
+        url = (CARD_SETTLEMENT_URL or "").strip()
+        if not url:
+            return
+
+        async def _post() -> None:
+            try:
+                timeout = aiohttp.ClientTimeout(total=8)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, json=payload) as resp:
+                        if resp.status >= 400:
+                            body = await resp.text()
+                            logger.warning(
+                                "卡片结算回写失败 HTTP %s: %s", resp.status, body[:200]
+                            )
+                        else:
+                            logger.info(
+                                "卡片结算已回写 %s best=%s @ %s",
+                                payload.get("card_id"),
+                                payload.get("best_tp"),
+                                payload.get("settlement_price"),
+                            )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("卡片结算回写异常: %s", exc)
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_post())
+        except RuntimeError:
+            pass
+
     def ingest_card(self, payload: dict[str, Any] | str) -> dict[str, Any]:
         """接入一张卡片：幂等按 card_id；市价立即评估为待入场/已入场。"""
         if not SANDBOX_ENABLED:
@@ -340,6 +388,7 @@ class SandboxEngine:
             "created_at": (existing or {}).get("created_at") or time.time(),
         }
         self.tracker.upsert_card_order(order)
+        self._ensure_card_pattern_slot(card.symbol)
         logger.info(
             "卡片接入 %s %s %s %s entry=%s SL=%s TPs=%s",
             card.card_id,
@@ -663,13 +712,40 @@ class SandboxEngine:
                 if alert:
                     alerts.append(alert)
                     if sig.action == "exit":
-                        # 同步卡片订单状态
+                        # 同步卡片订单状态 + 回写 collector 自动评价
                         cid = pos_meta.get("card_id")
                         if cid:
                             co = self.tracker.get_card_order(str(cid))
                             if co:
                                 co["status"] = "closed"
                                 self.tracker.upsert_card_order(co)
+                        exit_code = str((sig.meta or {}).get("exit_code") or "")
+                        best_tp = None
+                        if exit_code == "card_tp":
+                            done = int((sig.meta or {}).get("card_tp_done") or 0)
+                            best_tp = f"TP{done}" if done > 0 else "TP1"
+                        elif exit_code == "card_sl":
+                            best_tp = "SL"
+                        self._schedule_settlement_callback(
+                            {
+                                "card_id": cid or pos_meta.get("card_id"),
+                                "symbol": pos.symbol,
+                                "side": pos.side,
+                                "outcome": (
+                                    "take_profit"
+                                    if exit_code == "card_tp"
+                                    else "stop_loss"
+                                    if exit_code == "card_sl"
+                                    else "manual_close"
+                                ),
+                                "best_tp": best_tp,
+                                "settlement_price": float(sig.price),
+                                "entry_price": float(pos.entry_price),
+                                "exit_code": exit_code,
+                                "exit_label": (sig.meta or {}).get("exit_label"),
+                                "source": "oi_mornitor",
+                            }
+                        )
                         break
                     current = self.tracker.get_position_by_id(pos.id)
                     if current is None:
@@ -1157,6 +1233,9 @@ class SandboxEngine:
                     "interval": iv,
                     "ref_intervals": meta.get("ref_intervals"),
                     "card_id": meta.get("card_id"),
+                    "trend_status": meta.get("trend_status"),
+                    "vegas_direction": meta.get("vegas_direction"),
+                    "vegas_direction_label": meta.get("vegas_direction_label"),
                 }
             ]
             new_pos = PaperPosition(
@@ -1354,6 +1433,35 @@ class SandboxEngine:
             if pos.logic == "C":
                 meta["card_tp_done"] = int(sm.get("card_tp_done") or meta.get("card_tp_done") or 0)
                 meta["partial_done"] = False
+                # TP1 分批后：止损抬到开仓价（保本）
+                if (
+                    sm.get("move_sl_to_entry")
+                    and sig.sl is not None
+                    and float(sig.sl) > 0
+                ):
+                    new_sl = float(sig.sl)
+                    old_sl = float(pos.sl) if pos.sl is not None else 0.0
+                    tighten = (
+                        (pos.side == "LONG" and (old_sl <= 0 or new_sl > old_sl))
+                        or (pos.side == "SHORT" and (old_sl <= 0 or new_sl < old_sl))
+                    )
+                    if tighten:
+                        pos.sl = new_sl
+                        meta["breakeven_armed"] = True
+                        meta["card_sl_after_tp1"] = new_sl
+                        self._append_event(
+                            meta,
+                            {
+                                "type": "trail",
+                                "time": bar_time,
+                                "price": exit_px,
+                                "sl": new_sl,
+                                "reason": "card_tp1_be",
+                                "exit_code": "card_tp1_be",
+                                "exit_label": exit_reason_label("card_tp1_be"),
+                                "message": f"卡片TP1后保本 · SL={new_sl:.6g}",
+                            },
+                        )
             elif not force:
                 meta["partial_done"] = True
             meta["stage"] = 2

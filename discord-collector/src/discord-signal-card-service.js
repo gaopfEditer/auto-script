@@ -659,6 +659,8 @@ export function signalCardToClient(row) {
     note: row.note != null ? String(row.note) : "",
     execution: normalizeExecution(row.execution_json ?? row.executionJson, parsedJson),
     source,
+    sourceType: String(row.source_type ?? row.sourceType ?? "discord"),
+    sourceRef: row.source_ref ?? row.sourceRef ?? null,
     isManual,
     signalAt: resolveCardSignalAt(row),
     createdAt: row.created_at ?? row.createdAt ?? null,

@@ -14,6 +14,7 @@ from oi_mornitor.config import (
     MATRIX_TOP_N,
     OI_OI_BATCH_CONCURRENCY,
     PATTERN_AUTO_PICK_COUNT,
+    PATTERN_CARD_RESERVED,
     PATTERN_CHART_DEFAULT_LIMIT,
     PATTERN_CHART_MAX_LIMIT,
     PATTERN_KLINE_INTERVAL,
@@ -313,6 +314,28 @@ class PatternMonitorEngine:
         """手动置顶至少一天（兼容旧 API 名）。"""
         return self.tracker.pin_watch(symbol)
 
+    def pin_symbol(self, symbol: str, *, ttl_sec: float | None = None) -> bool:
+        return self.tracker.pin_watch(symbol, ttl_sec=ttl_sec)
+
+    def ensure_card_symbol(self, symbol: str, *, ttl_sec: float | None = None) -> bool:
+        """卡片接入：加入形态池并长置顶，占用卡片预留槽。"""
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return False
+        watch = {w.symbol.upper() for w in self.tracker.list_watchlist()}
+        if sym not in watch:
+            while len(self.tracker.list_watchlist()) >= MAX_WATCH_SYMBOLS:
+                evicted = self._evict_one_replaceable()
+                if not evicted:
+                    break
+            if not self.tracker.add_watch(sym):
+                return False
+        from oi_mornitor.config import PATTERN_CARD_PIN_TTL_SEC
+
+        return self.tracker.pin_watch(
+            sym, ttl_sec=float(ttl_sec if ttl_sec is not None else PATTERN_CARD_PIN_TTL_SEC)
+        )
+
     def unpin_symbol(self, symbol: str) -> bool:
         return self.tracker.unpin_watch(symbol)
 
@@ -388,11 +411,15 @@ class PatternMonitorEngine:
         # 只保护仍在 watchlist 内的
         protected &= set(current)
 
+        # 热榜最多占用「总槽 - 卡片预留」；卡片置顶币始终保留
+        hot_cap = max(0, MAX_WATCH_SYMBOLS - PATTERN_CARD_RESERVED)
+        hot_pick_n = min(PATTERN_AUTO_PICK_COUNT, hot_cap) if hot_cap else 0
+
         hot = pick_hot_flow_and_oi(
             pool_rows,
-            count=PATTERN_AUTO_PICK_COUNT,
+            count=max(hot_pick_n, 1) if hot_pick_n else 0,
             fallback_symbols=fallback_symbols,
-        )
+        ) if hot_pick_n else []
         if not hot and not protected:
             self._last_watchlist_refresh_ts = now
             return []
@@ -400,21 +427,27 @@ class PatternMonitorEngine:
         target: list[str] = []
         seen: set[str] = set()
         for sym in protected:
-            if sym not in seen:
+            if sym not in seen and len(target) < MAX_WATCH_SYMBOLS:
                 seen.add(sym)
                 target.append(sym)
+
+        hot_added = 0
         for sym in hot:
-            if len(target) >= PATTERN_AUTO_PICK_COUNT:
+            if hot_added >= hot_cap:
+                break
+            if len(target) >= MAX_WATCH_SYMBOLS:
                 break
             if sym in seen:
                 continue
             seen.add(sym)
             target.append(sym)
+            hot_added += 1
 
-        # 槽位未满时保留仍在列表中的未进场币（稳定过渡）
-        if len(target) < PATTERN_AUTO_PICK_COUNT:
+        # 槽位未满且未占满热榜额度时，短暂保留未进场旧币（不挤占卡片预留空位）
+        soft_cap = min(MAX_WATCH_SYMBOLS, len(protected) + hot_cap)
+        if len(target) < soft_cap:
             for sym in current:
-                if len(target) >= PATTERN_AUTO_PICK_COUNT:
+                if len(target) >= soft_cap:
                     break
                 if sym in seen:
                     continue
@@ -438,7 +471,9 @@ class PatternMonitorEngine:
 
         self._last_watchlist_refresh_ts = now
         logger.info(
-            "🔄 形态池热钱刷新：保留已进场 %d · 移除 %d · 新增 %d → %s",
+            "🔄 形态池热钱刷新：卡片预留 %d · 热榜额度 %d · 保留已进场/置顶 %d · 移除 %d · 新增 %d → %s",
+            PATTERN_CARD_RESERVED,
+            hot_cap,
             len(protected),
             len(to_remove),
             len(to_add),
@@ -547,6 +582,8 @@ class PatternMonitorEngine:
             "pattern_alerts": self._last_alerts,
             "heavyweight_pool_size": heavy_count,
             "auto_pick_count": PATTERN_AUTO_PICK_COUNT,
+            "card_reserved_slots": PATTERN_CARD_RESERVED,
+            "max_watch_symbols": MAX_WATCH_SYMBOLS,
             "watchlist_refresh_sec": PATTERN_WATCHLIST_REFRESH_SEC,
             "watchlist_refresh_tf": PATTERN_WATCHLIST_REFRESH_TF,
             "last_watchlist_refresh_ts": self._last_watchlist_refresh_ts,

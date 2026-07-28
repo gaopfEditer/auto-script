@@ -30,7 +30,7 @@ export function getBacktestSpec(tier) {
       label: "主流 (BTC/ETH)",
       windowDurationsMs: hours.map((h) => h * 60 * 60 * 1000),
       windowLabels: hours.map((h) => `${h}h`),
-      minDueMs: 8 * 60 * 60 * 1000,
+    minDueMs: 60 * 60 * 1000,
       klineInterval: "5m",
     };
   }
@@ -41,7 +41,7 @@ export function getBacktestSpec(tier) {
     label: "山寨",
     windowDurationsMs: minutes.map((m) => m * 60 * 1000),
     windowLabels: minutes.map((m) => (m >= 60 ? `${m / 60}h` : `${m}m`)),
-    minDueMs: 3 * 60 * 60 * 1000,
+    minDueMs: 30 * 60 * 1000,
     klineInterval: "5m",
   };
 }

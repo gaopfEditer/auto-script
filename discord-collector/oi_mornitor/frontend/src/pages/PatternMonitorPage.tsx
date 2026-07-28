@@ -12,10 +12,14 @@ import {
   filterHistoryByRange,
   SANDBOX_HISTORY_RANGE_OPTIONS,
   SANDBOX_HISTORY_RETAIN_DAYS,
+  summarizeHistoryByLogic,
+  summarizeHistoryByVegas,
   summarizeHistoryRange,
   type SandboxHistoryRange,
 } from "../utils/sandboxHistory";
 
+type SandboxLogicFilter = "all" | "S" | "T" | "C";
+type SandboxVegasFilter = "all" | "UP" | "DOWN";
 function fmtTradeEvents(events?: Array<Record<string, unknown>>, fallback?: string): string {
   if (!events?.length) return fallback?.trim() || "—";
   return events
@@ -114,7 +118,8 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const [closePctById, setClosePctById] = useState<Record<number, number>>({});
   const [closingId, setClosingId] = useState<number | null>(null);
   const [historyRange, setHistoryRange] = useState<SandboxHistoryRange>("7d");
-  const [sandboxFilter, setSandboxFilter] = useState<"all" | "st" | "card">("all");
+  const [sandboxLogicFilter, setSandboxLogicFilter] = useState<SandboxLogicFilter>("all");
+  const [sandboxVegasFilter, setSandboxVegasFilter] = useState<SandboxVegasFilter>("all");
   const sandboxIntervals = useMemo(() => {
     const raw = pattern?.sandbox_intervals;
     if (Array.isArray(raw) && raw.length) {
@@ -131,43 +136,51 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     scanTs: sandboxScanTs,
   });
   const filteredHistory = useMemo(() => {
-    const byRange = filterHistoryByRange(sandboxHistory, historyRange);
-    if (sandboxFilter === "card") {
-      return byRange.filter(
+    let rows = filterHistoryByRange(sandboxHistory, historyRange);
+    if (sandboxLogicFilter === "C") {
+      rows = rows.filter(
         (t) => t.logic === "C" || t.source === "card" || t.source_label === "卡片",
       );
+    } else if (sandboxLogicFilter === "S" || sandboxLogicFilter === "T") {
+      rows = rows.filter((t) => String(t.logic || "").toUpperCase() === sandboxLogicFilter);
     }
-    if (sandboxFilter === "st") {
-      return byRange.filter(
-        (t) => t.logic !== "C" && t.source !== "card" && t.source_label !== "卡片",
+    if (sandboxVegasFilter === "UP" || sandboxVegasFilter === "DOWN") {
+      rows = rows.filter(
+        (t) => String(t.vegas_direction || "").toUpperCase() === sandboxVegasFilter,
       );
     }
-    return byRange;
-  }, [sandboxHistory, historyRange, sandboxFilter]);
+    return rows;
+  }, [sandboxHistory, historyRange, sandboxLogicFilter, sandboxVegasFilter]);
   const historyRangeStats = useMemo(
     () => summarizeHistoryRange(filteredHistory),
     [filteredHistory],
   );
+  const historyByLogic = useMemo(
+    () => summarizeHistoryByLogic(filteredHistory),
+    [filteredHistory],
+  );
+  const historyByVegas = useMemo(
+    () => summarizeHistoryByVegas(filteredHistory),
+    [filteredHistory],
+  );
   const filteredPositions = useMemo(() => {
-    if (sandboxFilter === "card") {
-      return sandboxPositions.filter(
+    let rows = sandboxPositions;
+    if (sandboxLogicFilter === "C") {
+      rows = rows.filter(
         (p) => p.logic === "C" || p.source === "card" || p.source_label === "卡片",
       );
+    } else if (sandboxLogicFilter === "S" || sandboxLogicFilter === "T") {
+      rows = rows.filter((p) => String(p.logic || "").toUpperCase() === sandboxLogicFilter);
     }
-    if (sandboxFilter === "st") {
-      return sandboxPositions.filter(
-        (p) => p.logic !== "C" && p.source !== "card" && p.source_label !== "卡片",
-      );
-    }
-    return sandboxPositions;
-  }, [sandboxPositions, sandboxFilter]);
+    return rows;
+  }, [sandboxPositions, sandboxLogicFilter]);
   const cardOrders = pattern?.sandbox_card_orders ?? [];
   const filteredCardOrders = useMemo(() => {
-    if (sandboxFilter === "st") return [];
+    if (sandboxLogicFilter === "S" || sandboxLogicFilter === "T") return [];
     return cardOrders.filter((o) =>
       ["watching", "near", "ordered", "filled"].includes(o.status),
     );
-  }, [cardOrders, sandboxFilter]);
+  }, [cardOrders, sandboxLogicFilter]);
 
   const reshuffleSandbox = useCallback(async () => {
     setBusy(true);
@@ -766,12 +779,12 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                       </article>
                       <article className="strategy-brief">
                         <header>
-                          <span className="strategy-brief-tag muted">分流 · 风控</span>
-                          <strong>Trend_Status</strong>
+                          <span className="strategy-brief-tag muted">分流 · Vegas</span>
+                          <strong>蓝红方向门控</strong>
                         </header>
                         <p>
-                          RANGE 只跑 S、趋势只跑 T；保证金 1U，BTC/ETH 100x、山寨 30x；最多同时{" "}
-                          {sandboxMaxConcurrent} 币。
+                          蓝通道(EMA144/169)在红通道(EMA576/676)之上 → UP，底部信号优先做多；红在蓝上 →
+                          DOWN，顶部信号优先做空。RANGE 仍跑 S、趋势仍跑 T，但逆 Vegas 方向的自动单会被过滤。
                         </p>
                       </article>
                     </div>
@@ -788,16 +801,36 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     <div className="sandbox-history-filters">
                       {(
                         [
-                          { id: "all" as const, label: "全部" },
-                          { id: "st" as const, label: "S/T" },
-                          { id: "card" as const, label: "卡片" },
+                          { id: "all" as const, label: "全部算法" },
+                          { id: "S" as const, label: "S 猎手" },
+                          { id: "T" as const, label: "T 维加斯" },
+                          { id: "C" as const, label: "卡片" },
                         ] as const
                       ).map((opt) => (
                         <button
                           key={opt.id}
                           type="button"
-                          className={`sandbox-range-btn${sandboxFilter === opt.id ? " active" : ""}`}
-                          onClick={() => setSandboxFilter(opt.id)}
+                          className={`sandbox-range-btn${sandboxLogicFilter === opt.id ? " active" : ""}`}
+                          onClick={() => setSandboxLogicFilter(opt.id)}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                      <span className="sandbox-filter-sep" aria-hidden>
+                        |
+                      </span>
+                      {(
+                        [
+                          { id: "all" as const, label: "全部趋势" },
+                          { id: "UP" as const, label: "蓝>红↑" },
+                          { id: "DOWN" as const, label: "红>蓝↓" },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className={`sandbox-range-btn${sandboxVegasFilter === opt.id ? " active" : ""}`}
+                          onClick={() => setSandboxVegasFilter(opt.id)}
                         >
                           {opt.label}
                         </button>
@@ -838,6 +871,40 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                         </span>
                       </span>
                     </div>
+                    {historyRangeStats.trades > 0 ? (
+                      <p className="sandbox-algo-stats pattern-hint-main">
+                        按算法：
+                        {(["S", "T", "C"] as const).map((k) => {
+                          const s = historyByLogic[k];
+                          if (!s || s.trades <= 0) return null;
+                          return (
+                            <span key={k} className="sandbox-algo-chip">
+                              {k} {s.trades}笔 / {(s.win_rate * 100).toFixed(0)}% /{" "}
+                              <span className={s.pnl_usd >= 0 ? "pos" : "neg"}>
+                                {s.pnl_usd >= 0 ? "+" : ""}
+                                {s.pnl_usd.toFixed(2)}U
+                              </span>
+                            </span>
+                          );
+                        })}
+                        {" · "}
+                        按Vegas：
+                        {(["UP", "DOWN"] as const).map((k) => {
+                          const s = historyByVegas[k];
+                          if (!s || s.trades <= 0) return null;
+                          return (
+                            <span key={k} className="sandbox-algo-chip">
+                              {k === "UP" ? "蓝>红" : "红>蓝"} {s.trades}笔 /{" "}
+                              {(s.win_rate * 100).toFixed(0)}% /{" "}
+                              <span className={s.pnl_usd >= 0 ? "pos" : "neg"}>
+                                {s.pnl_usd >= 0 ? "+" : ""}
+                                {s.pnl_usd.toFixed(2)}U
+                              </span>
+                            </span>
+                          );
+                        })}
+                      </p>
+                    ) : null}
                     <div className="sandbox-pool">
                       {sandboxPool.length === 0 ? (
                         <span className="pattern-empty">等待扫描生成日池…</span>
@@ -1085,6 +1152,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                           <th>来源</th>
                           <th>周期</th>
                           <th>逻辑</th>
+                          <th>Vegas</th>
                           <th>方向</th>
                           <th>参考周期</th>
                           <th>入场原因</th>
@@ -1098,7 +1166,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                       <tbody>
                         {filteredHistory.length === 0 ? (
                           <tr>
-                            <td colSpan={13} className="pattern-empty">
+                            <td colSpan={14} className="pattern-empty">
                               该时间范围内暂无平仓记录（本地保留近 {SANDBOX_HISTORY_RETAIN_DAYS} 天）
                             </td>
                           </tr>
@@ -1120,6 +1188,13 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                                 ? t.reason.split("|")[1]
                                 : "") ||
                               "—";
+                            const vegasLabel =
+                              t.vegas_direction_label ||
+                              (t.vegas_direction === "UP"
+                                ? "蓝>红↑"
+                                : t.vegas_direction === "DOWN"
+                                  ? "红>蓝↓"
+                                  : t.vegas_direction || "—");
                             return (
                             <tr
                               key={t.key}
@@ -1143,6 +1218,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                               </td>
                               <td className="sandbox-tf">{t.interval || "15m"}</td>
                               <td>{t.logic}</td>
+                              <td className="sandbox-tf">{vegasLabel}</td>
                               <td>{t.side}</td>
                               <td className="sandbox-tf">
                                 {t.ref_intervals_label ||

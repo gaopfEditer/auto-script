@@ -1,7 +1,8 @@
 /**
- * 卡片价格接近关价位推送（不再做延时自动校验 / 分层回测）。
+ * 卡片价格接近推送 + TP1/2/3 自动评价。
  */
 import { archiveCardToClient } from "./card-archive-service.js";
+import { runCardTpSettlement, isBacktestDue } from "./card-backtest-engine.js";
 import { fetchFuturesPrice } from "./card-price-fetch.js";
 import {
   collectProximityLevels,
@@ -13,6 +14,8 @@ import {
   shouldCheckCardProximity,
 } from "./card-proximity-policy.js";
 import { getCardVerifyPlan } from "./card-verify-policy.js";
+import { hasEvaluatedYield, normalizeExecution } from "./discord-signal-execution.js";
+import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { config } from "./config.js";
 
 /**
@@ -162,8 +165,77 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
     }
   }
 
+  /**
+   * 已产生信号、尚未人工评价：按 K 线自动判定最佳 TP / SL 结算价。
+   */
+  async function runAutoEval() {
+    if (!config.cardAutoEvalEnabled) return;
+    if (!store.listCardsForBacktest) return;
+
+    const rows = await store.listCardsForBacktest({ limit: 30 });
+    for (const row of rows) {
+      const card = archiveCardToClient(row);
+      const ex = normalizeExecution(card.execution);
+      if (hasEvaluatedYield(ex)) continue;
+      if (ex.outcome && ex.outcome !== "pending") continue;
+
+      const signalAt = resolveCardSignalAt(row) ?? card.signalAt ?? card.createdAt;
+      const signalMs = signalAt ? Date.parse(String(signalAt)) : NaN;
+      if (!Number.isFinite(signalMs)) continue;
+      if (!isBacktestDue(card, signalMs)) continue;
+
+      try {
+        const result = await runCardTpSettlement(card, signalMs);
+        if (result.skipped || result.error === "missing_entry") {
+          continue;
+        }
+
+        /** @type {Record<string, unknown>} */
+        const patch = { backtestJson: result };
+        if (result.outcome === "take_profit" || result.outcome === "stop_loss") {
+          const settlement = Number(result.settlementPrice ?? result.optimalExitPrice);
+          const entry = Number(result.entry);
+          if (Number.isFinite(settlement) && settlement > 0 && Number.isFinite(entry) && entry > 0) {
+            const isShort = result.direction === "short";
+            patch.executionJson = {
+              ...ex,
+              outcome: result.outcome,
+              actual: {
+                ...ex.actual,
+                buyPrice: isShort ? String(settlement) : String(entry),
+                sellPrice: isShort ? String(entry) : String(settlement),
+                takeProfitPrices: ex.actual?.takeProfitPrices ?? [],
+                stopLossPrice: ex.actual?.stopLossPrice ?? "",
+              },
+              autoEval: {
+                bestTp: result.bestTp ?? null,
+                settlementPrice: settlement,
+                at: result.optimalAt ?? null,
+                source: "collector_auto_eval",
+              },
+            };
+          }
+        }
+
+        await store.updateSignalCard(card.id, patch);
+        broadcast?.("meta", {
+          kind: "card_auto_eval",
+          cardId: card.id,
+          symbol: card.symbol,
+          result,
+        });
+        log.info(
+          `自动评价 #${card.id} ${card.symbol} outcome=${result.outcome} best=${result.bestTp ?? "-"} @ ${result.settlementPrice ?? result.optimalExitPrice ?? "-"}`
+        );
+      } catch (e) {
+        log.debug(`自动评价失败 #${card.id}: ${/** @type {Error} */ (e).message}`);
+      }
+    }
+  }
+
   async function tick() {
     await runProximityCheck();
+    await runAutoEval();
   }
 
   function start() {
@@ -174,10 +246,9 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
     }, ms);
     void tick().catch((e) => log.warn(`价格监控首次: ${/** @type {Error} */ (e).message}`));
     log.info(
-      `卡片接近推送已启动 tick=${config.cardPriceMonitorIntervalMs}ms | ` +
-        `加密每${config.cardProximityCryptoCheckMs / 3600000}h±${config.cardProximityCryptoBandPct}% | ` +
-        `股票每${config.cardProximityStockCheckMs / 86400000}d落差${config.cardProximityStockGapPct * 100}%` +
-        `（已关闭延时自动校验/回测）` +
+      `卡片监控已启动 tick=${config.cardPriceMonitorIntervalMs}ms | ` +
+        `接近 每${Math.round(config.cardProximityCryptoCheckMs / 60000)}min±${config.cardProximityCryptoBandPct}% | ` +
+        `自动评价=${config.cardAutoEvalEnabled ? "on" : "off"}` +
         (config.binanceProxy ? ` | Binance 代理 ${config.binanceProxy}` : "")
     );
   }
@@ -189,5 +260,5 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
     }
   }
 
-  return { start, stop, tick, runProximityCheck };
+  return { start, stop, tick, runProximityCheck, runAutoEval };
 }

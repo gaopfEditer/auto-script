@@ -15,6 +15,12 @@ import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
 import { buildCardSinkPayload, pickCardSinkText } from "./card-external-sink.js";
 import { extractSignalCardRowId } from "./store.js";
+import {
+  COIN_ACTION_DEDUP_WINDOW_MS,
+  COIN_ACTION_ENTRY_SIMILAR_PCT,
+  isSimilarEntryPrice,
+  shouldSkipSimilarCoinAction,
+} from "./discord-signal-numeric-dedup.js";
 
 /** @param {string} channelId @param {string|null|undefined} [dbName] */
 export function resolveCardChannelName(channelId, dbName) {
@@ -223,12 +229,14 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     });
   }
 
-  /** YouTube 文稿 coin-action 入场监听默认 ±3%、每 1h */
-  const COIN_WATCH_BAND_PCT = 3;
-  const COIN_WATCH_CHECK_MS = 3_600_000;
+  /** YouTube 文稿 coin-action 入场监听默认 ±5%、每 5min */
+  const COIN_WATCH_BAND_PCT = 5;
+  const COIN_WATCH_CHECK_MS = 300_000;
 
   /**
    * 将 paste 预览中的 coinActions 注册为可监听的归档卡片（仅入场 ±band）。
+   * 只在文稿解析后调用；只同步币种操作结构化字段，不同步文稿全文。
+   * 近 1 小时内同币种 + 入场价相近（≤1%）则跳过。
    * @param {{
    *   sourceRef: string,
    *   title?: string,
@@ -252,6 +260,11 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     const list = Array.isArray(input.coinActions) ? input.coinActions : [];
     /** @type {ReturnType<typeof archiveCardToClient>[]} */
     const cards = [];
+    /** @type {Array<{ symbol: string, entry: string, reason: string }>} */
+    const skipped = [];
+    /** 本批次已同步的 entry，避免同文多条重复 */
+    /** @type {Array<{ symbol: string, entry: string, execution: unknown }>} */
+    const sessionSynced = [];
 
     for (let i = 0; i < list.length; i++) {
       const coin = /** @type {Record<string, unknown>} */ (list[i]);
@@ -262,26 +275,68 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
 
       const safeRef = sourceRef.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
       const messageId = `yt-paste-${safeRef}-${symbol}-${actionType}-${i}`.slice(0, 180);
+      const direction = String(coin.direction ?? "").trim();
+      const targets = normalizePriceList(coin.targets);
+      const stopLoss = String(coin.stopLoss ?? "").trim();
+      const coinNote = String(coin.description ?? "").trim().slice(0, 200);
+      const typeLabel = actionTypeLabel(actionType);
+      const bodyText = formatCoinActionCardBody({
+        actionLabel: typeLabel,
+        direction,
+        entry,
+        targets,
+        stopLoss,
+        bandPct,
+        note: coinNote,
+      });
 
       const execution = normalizeExecution({
         symbol,
         direction: coin.direction,
         planned: {
           entryPrice: entry,
-          takeProfitPrices: normalizePriceList(coin.targets),
-          stopLossPrice: coin.stopLoss,
+          takeProfitPrices: targets,
+          stopLossPrice: stopLoss || coin.stopLoss,
         },
         outcome: "pending",
       });
+
+      const existing = store.getSignalCardByMessageId
+        ? await store.getSignalCardByMessageId(messageId)
+        : null;
+
+      // 同文件重新解析 → 允许更新已有卡片；新建则做 1h 去重
+      if (!existing) {
+        const dupInSession = sessionSynced.find(
+          (s) =>
+            s.symbol === normalizeSymbol(symbol) &&
+            isSimilarEntryPrice(s.entry, entry, COIN_ACTION_ENTRY_SIMILAR_PCT)
+        );
+        if (dupInSession) {
+          skipped.push({ symbol, entry, reason: "同批文稿内币种+相近入场价" });
+          continue;
+        }
+
+        const recentDup = await findRecentSimilarCoinAction(symbol, execution);
+        if (recentDup) {
+          skipped.push({
+            symbol,
+            entry,
+            reason: `近1小时已有相近信号 #${recentDup.id ?? ""}`.trim(),
+          });
+          continue;
+        }
+      }
 
       const parsedJson = {
         youtube: true,
         paste: true,
         blogger: "颜驰",
         sourceRef,
+        sourceTitle: String(input.title ?? "").slice(0, 200),
         coinActionIndex: i,
         actionType,
-        description: coin.description,
+        description: coinNote || undefined,
         coinWatch: {
           entryOnly: true,
           bandPct,
@@ -291,20 +346,19 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
 
       const cardFields = buildDiscordCardFields({
         symbol,
-        direction: String(coin.direction ?? ""),
+        direction,
         entry,
-        targets: normalizePriceList(coin.targets),
-        stopLoss: String(coin.stopLoss ?? ""),
-        title: `${symbol} · ${actionTypeLabel(actionType)}`,
-        description: String(coin.description ?? input.title ?? "").slice(0, 500),
-        sourceType: "youtube",
+        targets,
+        stopLoss,
+        title: `${symbol} · ${typeLabel}`,
+        description: bodyText,
+        sourceType: "文章",
         sourceRef,
-        note: `颜驰 · 文稿 coin-action · 入场监听 ±${bandPct}% · 每 1h`,
+        note: `颜驰 · 文稿 coin-action · 入场监听 ±${bandPct}% · 每 5min`,
       });
 
-      const existing = store.getSignalCardByMessageId
-        ? await store.getSignalCardByMessageId(messageId)
-        : null;
+      const cardsByStyle = { archive: bodyText };
+      const note = `颜驰 · 文稿 coin-action · 入场监听 ±${bandPct}% · 每 5min`;
 
       if (existing) {
         const id = Number(existing.id ?? existing.ID);
@@ -313,12 +367,15 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
           executionJson: execution,
           parsedJson,
           cardFieldsJson: cardFields,
+          cardsByStyle: stampCardsByStyle(cardsByStyle, id),
+          rawContent: bodyText,
           symbol: normalizeSymbol(symbol),
           status: "active",
-          note: `颜驰 · 文稿 coin-action · 入场监听 ±${bandPct}% · 每 1h`,
+          note,
         });
         const row = await store.getSignalCardById(id);
         if (row) cards.push(archiveCardToClient(row));
+        sessionSynced.push({ symbol: normalizeSymbol(symbol), entry, execution });
         continue;
       }
 
@@ -327,19 +384,78 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
         channelId: COIN_ACTION_SIGNAL_CHANNEL_ID,
         sourceType: "youtube",
         sourceRef,
-        rawContent: String(input.rawContent ?? input.title ?? sourceRef).slice(0, 4000),
+        rawContent: bodyText,
+        cardsByStyle,
         parsedJson,
         execution,
         cardFields,
         symbol,
-        note: `颜驰 · 文稿 coin-action · 入场监听 ±${bandPct}% · 每 1h`,
+        note,
         signalAt: new Date().toISOString(),
       });
       cards.push(created);
+      sessionSynced.push({ symbol: normalizeSymbol(symbol), entry, execution });
     }
 
-    log.info(`coin-action 监听注册 source=${sourceRef} count=${cards.length}/${list.length}`);
-    return cards;
+    log.info(
+      `coin-action 监听注册 source=${sourceRef} registered=${cards.length} skipped=${skipped.length} total=${list.length}`
+    );
+    return { cards, registered: cards.length, skipped: skipped.length, skippedItems: skipped };
+  }
+
+  /**
+   * @param {string} symbol
+   * @param {unknown} execution
+   */
+  async function findRecentSimilarCoinAction(symbol, execution) {
+    if (!store.listSignalCards) return null;
+    const cutoff = Date.now() - COIN_ACTION_DEDUP_WINDOW_MS;
+    const rows = await store.listSignalCards({
+      channelId: COIN_ACTION_SIGNAL_CHANNEL_ID,
+      symbol: normalizeSymbol(symbol) || symbol,
+      limit: 100,
+    });
+    for (const row of rows) {
+      const t = Math.max(
+        rowTimeMs(row.signal_at ?? row.signalAt),
+        rowTimeMs(row.created_at ?? row.createdAt),
+        rowTimeMs(row.updated_at ?? row.updatedAt)
+      );
+      if (t < cutoff) continue;
+
+      const prevEx = row.execution_json ?? row.executionJson;
+      if (shouldSkipSimilarCoinAction(prevEx, execution, COIN_ACTION_ENTRY_SIMILAR_PCT)) {
+        return row;
+      }
+      const rawParsed = row.parsed_json ?? row.parsedJson;
+      const prevParsed =
+        rawParsed && typeof rawParsed === "object"
+          ? /** @type {Record<string, unknown>} */ (rawParsed)
+          : typeof rawParsed === "string"
+            ? (() => {
+                try {
+                  return /** @type {Record<string, unknown>} */ (JSON.parse(rawParsed));
+                } catch {
+                  return {};
+                }
+              })()
+            : {};
+      const prevEntry =
+        normalizeExecution(prevEx).planned.entryPrice || String(prevParsed.entry ?? "");
+      const nextEntry = normalizeExecution(execution).planned.entryPrice;
+      if (isSimilarEntryPrice(prevEntry, nextEntry, COIN_ACTION_ENTRY_SIMILAR_PCT)) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  /** @param {unknown} v */
+  function rowTimeMs(v) {
+    if (v instanceof Date) return v.getTime();
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    const n = Date.parse(String(v ?? ""));
+    return Number.isFinite(n) ? n : 0;
   }
 
   /** @param {string} type */
@@ -359,6 +475,32 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
   }
 
   return { archiveCard, archiveFromYoutube, archiveCardToClient, registerCoinActionWatches };
+}
+
+/**
+ * 币种操作 → 卡片正文（不含文稿全文）
+ * @param {{
+ *   actionLabel: string,
+ *   direction?: string,
+ *   entry?: string,
+ *   targets?: string[],
+ *   stopLoss?: string,
+ *   bandPct?: number,
+ *   note?: string,
+ * }} opts
+ */
+export function formatCoinActionCardBody(opts) {
+  /** @type {string[]} */
+  const lines = [];
+  if (opts.actionLabel) lines.push(String(opts.actionLabel));
+  if (opts.direction) lines.push(String(opts.direction));
+  if (opts.bandPct) lines.push(`监听 ±${opts.bandPct}%`);
+  if (opts.entry) lines.push(`入场 ${opts.entry}`);
+  const tps = Array.isArray(opts.targets) ? opts.targets.filter(Boolean) : [];
+  if (tps.length) lines.push(`止盈 ${tps.join(" / ")}`);
+  if (opts.stopLoss) lines.push(`止损 ${opts.stopLoss}`);
+  if (opts.note) lines.push(`备注 ${opts.note}`);
+  return lines.join("\n");
 }
 
 /** @param {Record<string, unknown>} row */

@@ -1,9 +1,121 @@
 /**
- * 分层最优回测：窗口内先判止损，否则取最大有利波动 (MFE) 作为最优平仓点。
+ * 分层最优回测 + TP1/TP2/TP3 最佳出场结算。
  */
 import { calcLeveragePnl, fetchKlinesForCard, parseEntryPrice, parsePrice } from "./card-price-fetch.js";
 import { getCardBacktestPlan } from "./card-backtest-policy.js";
-import { hasEvaluatedYield } from "./discord-signal-execution.js";
+import { hasEvaluatedYield, normalizeExecution } from "./discord-signal-execution.js";
+
+/**
+ * 在 TP1/TP2/TP3 中选「触及的最高档」作为最佳出场；若先触 SL 则止损结算。
+ * @param {{
+ *   direction?: string,
+ *   planned?: { entryPrice?: string, takeProfitPrices?: string[], stopLossPrice?: string },
+ * }} execution
+ * @param {Array<{ high: number, low: number, ts?: number }>} klines
+ * @param {number} leverage
+ */
+export function evaluateBestTpSettlement(execution, klines, leverage) {
+  const ex = normalizeExecution(execution);
+  const dir = String(ex.direction ?? execution?.direction ?? "");
+  const isShort = /空|short|sell/i.test(dir);
+  const entry = parseEntryPrice(ex.planned?.entryPrice ?? execution?.planned?.entryPrice);
+  const sl = parsePrice(ex.planned?.stopLossPrice ?? execution?.planned?.stopLossPrice);
+  /** @type {number[]} */
+  const tps = [];
+  for (const raw of ex.planned?.takeProfitPrices ?? execution?.planned?.takeProfitPrices ?? []) {
+    const p = parsePrice(raw);
+    if (p != null && p > 0) tps.push(p);
+  }
+  const levels = isShort ? [...tps].sort((a, b) => b - a) : [...tps].sort((a, b) => a - b);
+  const sorted = [...klines].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+
+  if (!entry) {
+    return { error: "missing_entry", outcome: "pending", entry: null, pnl: null };
+  }
+  if (!sorted.length) {
+    return { error: "no_klines", outcome: "pending", entry, pnl: null };
+  }
+
+  /** @type {number} */
+  let bestTpIdx = -1;
+  /** @type {number | null} */
+  let bestTpPrice = null;
+  /** @type {string} */
+  let bestAt = "";
+  /** @type {number} */
+  let bestTs = 0;
+
+  for (const k of sorted) {
+    if (sl != null) {
+      const slHit = isShort ? k.high >= sl : k.low <= sl;
+      if (slHit && bestTpIdx < 0) {
+        const pnl = calcLeveragePnl(entry, sl, isShort, leverage);
+        return {
+          outcome: "stop_loss",
+          bestTp: "SL",
+          bestTpIndex: 0,
+          settlementPrice: sl,
+          optimalExitPrice: sl,
+          optimalAt: k.ts ? new Date(k.ts).toISOString() : "",
+          entry,
+          direction: isShort ? "short" : "long",
+          stopLoss: sl,
+          takeProfits: levels,
+          pnl,
+          pnlLabel: pnl?.pnlLabel ?? null,
+          klineCount: sorted.length,
+          autoEval: true,
+        };
+      }
+      if (slHit) break;
+    }
+
+    for (let i = 0; i < levels.length; i++) {
+      const tp = levels[i];
+      const hit = isShort ? k.low <= tp : k.high >= tp;
+      if (hit && i >= bestTpIdx) {
+        bestTpIdx = i;
+        bestTpPrice = tp;
+        bestAt = k.ts ? new Date(k.ts).toISOString() : "";
+        bestTs = k.ts ?? 0;
+      }
+    }
+  }
+
+  if (bestTpIdx >= 0 && bestTpPrice != null) {
+    const pnl = calcLeveragePnl(entry, bestTpPrice, isShort, leverage);
+    const label = `TP${bestTpIdx + 1}`;
+    return {
+      outcome: "take_profit",
+      bestTp: label,
+      bestTpIndex: bestTpIdx + 1,
+      settlementPrice: bestTpPrice,
+      optimalExitPrice: bestTpPrice,
+      optimalAt: bestAt,
+      optimalTs: bestTs,
+      entry,
+      direction: isShort ? "short" : "long",
+      stopLoss: sl,
+      takeProfits: levels,
+      pnl,
+      pnlLabel: pnl?.pnlLabel ?? null,
+      klineCount: sorted.length,
+      autoEval: true,
+    };
+  }
+
+  // 未触 TP/SL：仍给 MFE 参考，但不改 outcome 为终态
+  const mfe = evaluateOptimalInWindow(execution, klines, leverage);
+  return {
+    ...mfe,
+    outcome: mfe.outcome === "stop_loss" ? "stop_loss" : "pending",
+    bestTp: mfe.outcome === "stop_loss" ? "SL" : null,
+    settlementPrice: mfe.outcome === "stop_loss" ? mfe.optimalExitPrice : null,
+    takeProfits: levels,
+    autoEval: true,
+    note: "窗口内未触及 TP，保持 pending",
+  };
+}
 
 /**
  * @param {{
@@ -95,6 +207,33 @@ export function evaluateOptimalInWindow(execution, klines, leverage) {
  * @param {ReturnType<typeof import("./card-archive-service.js").archiveCardToClient>} card
  * @param {number} signalMs
  */
+export async function runCardTpSettlement(card, signalMs) {
+  const sym = String(card.symbol ?? "").trim();
+  const plan = getCardBacktestPlan(sym, card.assetClass);
+  if (plan.skip) {
+    return { skipped: true, reason: plan.reason };
+  }
+  const { tier, spec } = plan;
+  const durationMs = spec.windowDurationsMs[spec.windowDurationsMs.length - 1] ?? 3 * 3600_000;
+  const end = Math.min(Date.now(), signalMs + durationMs);
+  const klines = await fetchKlinesForCard(sym, "crypto", signalMs, end, spec.klineInterval);
+  const result = evaluateBestTpSettlement(card.execution, klines, spec.leverage);
+  return {
+    tier,
+    leverage: spec.leverage,
+    symbol: sym,
+    signalAt: new Date(signalMs).toISOString(),
+    windowMs: durationMs,
+    ...result,
+    backtestedAt: new Date().toISOString(),
+    mode: "tp_settlement",
+  };
+}
+
+/**
+ * @param {ReturnType<typeof import("./card-archive-service.js").archiveCardToClient>} card
+ * @param {number} signalMs
+ */
 export async function runCardBacktest(card, signalMs) {
   const sym = String(card.symbol ?? "").trim();
   const plan = getCardBacktestPlan(sym, card.assetClass);
@@ -112,7 +251,7 @@ export async function runCardBacktest(card, signalMs) {
     const end = signalMs + durationMs;
     try {
       const klines = await fetchKlinesForCard(sym, "crypto", signalMs, end, spec.klineInterval);
-      const result = evaluateOptimalInWindow(card.execution, klines, spec.leverage);
+      const result = evaluateBestTpSettlement(card.execution, klines, spec.leverage);
       windows.push({
         window: label,
         durationMs,

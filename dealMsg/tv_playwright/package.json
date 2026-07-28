@@ -3,7 +3,8 @@
   "private": true,
   "description": "TradingView 截图：playwright-extra + stealth + 持久化用户目录，减轻 Reconnect/风控",
   "scripts": {
-    "screenshot": "node screenshot.js"
+    "screenshot": "node screenshot.js",
+    "tv-alert": "node tv_alert.js"
   },
   "dependencies": {
     "playwright": "^1.49.0",

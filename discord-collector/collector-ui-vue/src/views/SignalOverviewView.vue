@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
 import { RouterLink } from "vue-router";
-import { fetchSignalConfig, fetchSignalOverview, fetchSignalHistory, formatCardTime } from "../lib/discordSignalApi.js";
+import { fetchSignalConfig, fetchSignalOverview, fetchSignalHistory, formatCardTime, compareCardsByTimeDesc } from "../lib/discordSignalApi.js";
 import {
   cardExecution,
   outcomeLabel,
@@ -79,7 +79,7 @@ async function loadHistory() {
   try {
     const d = Number(days.value);
     const res = await fetchSignalHistory(selectedChannelId.value, d > 0 ? { days: d } : { days: 3650 });
-    history.value = res.cards ?? [];
+    history.value = [...(res.cards ?? [])].sort(compareCardsByTimeDesc);
   } catch (e) {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {

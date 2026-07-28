@@ -75,6 +75,14 @@
    - 本地 WS 守护：`python oi_mornitor/scripts/run_coin_monitor.py --from-watchlist`
    - 回测（成本防守 + 推动止损）：`python oi_mornitor/scripts/run_backtest.py --symbols BTCUSDT,ETHUSDT`
 
+10. **多榜共振 → TradingView BB-Wicks 信号监听（CDP `:9222`）**
+   - 币种同时出现在 ≥4 个矩阵榜单 → 通过 Playwright `connectOverCDP` 为其 **15m + 1h** 创建 TV 提醒
+   - 条件：指标 **BB-Wicks** + **任何 alert() 函数调用**；脚本：`dealMsg/tv_playwright/tv_alert.js`
+   - 容量满时淘汰本系统最早加入的币种；**BTC / ETH 永不移除**
+   - 每次 create/remove 写入 `data/tv_alert_sync.db`；状态见 `GET /api/tv-alert` 或 snapshot 的 `tv_alert`
+   - 需 Chrome 以 `--remote-debugging-port=9222` 启动并已登录 TradingView；图表布局需已加载 BB-Wicks
+   - 环境变量：`OI_TV_ALERT_ENABLED`、`OI_TV_ALERT_MIN_BOARDS`、`OI_TV_ALERT_MAX_SYMBOLS`、`OI_TV_ALERT_CDP_URL` 等
+
 ## 快速启动
 
 在 **`discord-collector/oi_mornitor/`** 内：

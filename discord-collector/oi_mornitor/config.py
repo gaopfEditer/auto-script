@@ -101,12 +101,16 @@ PATTERN_PIVOT_WINDOW = int(os.getenv("OI_PATTERN_PIVOT_WINDOW", "11"))
 PATTERN_WICK_RATIO = float(os.getenv("OI_PATTERN_WICK_RATIO", "0.3"))
 PATTERN_STAGE2_VOL_MULT = float(os.getenv("OI_PATTERN_STAGE2_VOL_MULT", "1.5"))
 PATTERN_WATCH_MAX_SEC = int(os.getenv("OI_PATTERN_WATCH_MAX_SEC", "14400"))
-PATTERN_AUTO_PICK_COUNT = int(os.getenv("OI_PATTERN_AUTO_PICK", "20"))
+PATTERN_AUTO_PICK_COUNT = int(os.getenv("OI_PATTERN_AUTO_PICK", "10"))
+# 形态 watchlist 总上限 30；为卡片预留槽位（热榜最多占剩余）
+PATTERN_CARD_RESERVED = int(os.getenv("OI_PATTERN_CARD_RESERVED", "20"))
 # 形态 watchlist：每隔 N 秒用合约流入榜 + OI 爆发榜刷新（未进场币可替换）
 PATTERN_WATCHLIST_REFRESH_SEC = int(os.getenv("OI_PATTERN_WATCHLIST_REFRESH_SEC", "7200"))
 PATTERN_WATCHLIST_REFRESH_TF = os.getenv("OI_PATTERN_WATCHLIST_REFRESH_TF", "15m").strip() or "15m"
 # 手动置顶维持时长（秒），到期自动取消；也可手动取消
 PATTERN_PIN_TTL_SEC = int(os.getenv("OI_PATTERN_PIN_TTL_SEC", "86400"))
+# 卡片接入后置顶时长（默认 7 天，保证占住预留槽）
+PATTERN_CARD_PIN_TTL_SEC = int(os.getenv("OI_PATTERN_CARD_PIN_TTL_SEC", str(7 * 86400)))
 PATTERN_STATE_DB = _PKG_ROOT / "data" / "pattern_state.db"
 PATTERN_CHART_DEFAULT_LIMIT = int(os.getenv("OI_PATTERN_CHART_LIMIT", "500"))
 PATTERN_CHART_MAX_LIMIT = int(os.getenv("OI_PATTERN_CHART_MAX_LIMIT", "1500"))
@@ -177,7 +181,7 @@ SANDBOX_REF_INTERVALS_TREND = tuple(
 SANDBOX_NOTIONAL_USD = float(os.getenv("OI_SANDBOX_NOTIONAL_USD", "1"))
 SANDBOX_INITIAL_BALANCE = float(os.getenv("OI_SANDBOX_INITIAL_BALANCE", "1000"))
 # 最大同时持仓币数
-SANDBOX_MAX_CONCURRENT = int(os.getenv("OI_SANDBOX_MAX_CONCURRENT", "10"))
+SANDBOX_MAX_CONCURRENT = int(os.getenv("OI_SANDBOX_MAX_CONCURRENT", "30"))
 # —— 短线猎手 S ——
 SANDBOX_HUNTER_SL_PAD = float(os.getenv("OI_SANDBOX_HUNTER_SL_PAD", "0.001"))  # 0.1%
 SANDBOX_HUNTER_ATR_MULT = float(os.getenv("OI_SANDBOX_HUNTER_ATR_MULT", "2"))
@@ -201,6 +205,10 @@ SANDBOX_BREAKEVEN_PCT = float(os.getenv("OI_SANDBOX_BREAKEVEN_PCT", "1.5"))
 SANDBOX_HL_TRAIL_BUF = float(os.getenv("OI_SANDBOX_HL_TRAIL_BUF", "0.005"))
 SANDBOX_BB_STOP_BUF = float(os.getenv("OI_SANDBOX_BB_STOP_BUF", "0.003"))
 SANDBOX_RANGE_SLOPE_MAX = float(os.getenv("OI_SANDBOX_RANGE_SLOPE_MAX", "0.0015"))
+# Vegas 蓝(144/169) vs 红(576/676)：UP 只做多、DOWN 只做空（S/T 自动入场）
+SANDBOX_VEGAS_DIRECTION_GATE = os.getenv(
+    "OI_SANDBOX_VEGAS_DIRECTION_GATE", "1"
+).strip().lower() in ("1", "true", "yes", "on")
 # 主动平仓旧参数（兼容）；S/T 模块主要用上面阈值
 SANDBOX_MIN_HOLD_BARS = int(os.getenv("OI_SANDBOX_MIN_HOLD_BARS", "2"))
 SANDBOX_SOFT_EXIT_MIN_MOVE_PCT = float(
@@ -233,14 +241,54 @@ CARD_WS_ENABLED = os.getenv("OI_CARD_WS_ENABLED", "1").strip().lower() in (
     "on",
 )
 CARD_WS_PATH = os.getenv("OI_CARD_WS_PATH", "/ws/cards").strip() or "/ws/cards"
-# 限价近场：山寨小杠杆（约 20x/30x）默认 1%；主流高杠杆（约 100x）默认 0.2%
-CARD_NEAR_ENTRY_PCT = float(os.getenv("OI_CARD_NEAR_ENTRY_PCT", "1.0"))
-CARD_NEAR_ENTRY_PCT_MAJOR = float(os.getenv("OI_CARD_NEAR_ENTRY_PCT_MAJOR", "0.2"))
+# 限价近场：未入场监听带宽（默认 ±5%）
+CARD_NEAR_ENTRY_PCT = float(os.getenv("OI_CARD_NEAR_ENTRY_PCT", "5.0"))
+CARD_NEAR_ENTRY_PCT_MAJOR = float(os.getenv("OI_CARD_NEAR_ENTRY_PCT_MAJOR", "5.0"))
 # 卡片杠杆 ≥ 该值视为「主流档」近场阈值（无币种信息时回退）
 CARD_NEAR_ENTRY_MAJOR_LEV = float(os.getenv("OI_CARD_NEAR_ENTRY_MAJOR_LEV", "80"))
-# 卡片仓位执行评估周期（触 TP/SL 用该周期已收盘 K 的高低点）
-CARD_EVAL_INTERVAL = os.getenv("OI_CARD_EVAL_INTERVAL", "15m").strip() or "15m"
+# 卡片仓位执行评估周期（触 TP/SL；默认 5m 刷新）
+CARD_EVAL_INTERVAL = os.getenv("OI_CARD_EVAL_INTERVAL", "5m").strip() or "5m"
 CARD_DEFAULT_LEVERAGE = float(os.getenv("OI_CARD_DEFAULT_LEVERAGE", "10"))
+# 平仓后回写 discord-collector 自动评价
+CARD_SETTLEMENT_URL = (
+    os.getenv("OI_CARD_SETTLEMENT_URL", "http://127.0.0.1:3851/api/cards/settlement").strip()
+)
+
+# —— TradingView BB-Wicks 信号监听（CDP 9222）——
+# 币种出现在 ≥ N 个雷达矩阵榜单时，为其 15m/1h 创建 TV 提醒
+TV_ALERT_ENABLED = os.getenv("OI_TV_ALERT_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+TV_ALERT_MIN_BOARDS = int(os.getenv("OI_TV_ALERT_MIN_BOARDS", "4"))
+# 最多同时监听多少个币种（每个币 15m+1h 共 2 条提醒）
+TV_ALERT_MAX_SYMBOLS = int(os.getenv("OI_TV_ALERT_MAX_SYMBOLS", "15"))
+TV_ALERT_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_TV_ALERT_INTERVALS", "15,60").split(",")
+    if x.strip()
+) or ("15", "60")
+TV_ALERT_INDICATOR = os.getenv("OI_TV_ALERT_INDICATOR", "BB-Wicks").strip() or "BB-Wicks"
+TV_ALERT_CDP_URL = (
+    os.getenv("OI_TV_ALERT_CDP_URL")
+    or os.getenv("CHROME_CDP_URL")
+    or f"http://127.0.0.1:{os.getenv('CHROME_DEBUG_PORT', '9222')}"
+).strip()
+TV_ALERT_PROTECTED = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_TV_ALERT_PROTECTED", "BTC,ETH,BTCUSDT,ETHUSDT").split(",")
+    if s.strip()
+)
+_TV_SCRIPT_DEFAULT = _PKG_ROOT.parent.parent / "dealMsg" / "tv_playwright" / "tv_alert.js"
+TV_ALERT_NODE_SCRIPT = Path(
+    os.getenv("OI_TV_ALERT_NODE_SCRIPT", str(_TV_SCRIPT_DEFAULT))
+).expanduser()
+TV_ALERT_LOG_DB = Path(
+    os.getenv("OI_TV_ALERT_LOG_DB", str(_PKG_ROOT / "data" / "tv_alert_sync.db"))
+).expanduser()
+TV_ALERT_SCRIPT_TIMEOUT_SEC = float(os.getenv("OI_TV_ALERT_SCRIPT_TIMEOUT_SEC", "180"))
 
 
 def proxy_url() -> str | None:

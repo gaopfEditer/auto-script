@@ -1,7 +1,7 @@
 /**
  * 接近价位推送策略：
- * - 加密：每 1h 检查，现价距关键位 ≤ 1%
- * - 美股/股票：每 1 天检查，距目标价剩余幅度 ≤ 总落差的 10%（例：100→110，109–110 提醒）
+ * - 加密：默认每 5min 检查，距关键位 ≤ ±5%
+ * - 美股/股票：每 1 天检查，距目标价剩余幅度 ≤ 总落差的 10%
  */
 import { config } from "./config.js";
 import { distancePct, parsePrice } from "./card-price-fetch.js";
@@ -21,10 +21,11 @@ export function getProximityPolicy(assetClass) {
       gapLabel: `${config.cardProximityStockGapPct * 100}% 落差`,
     };
   }
+  const mins = Math.max(1, Math.round(config.cardProximityCryptoCheckMs / 60_000));
   return {
     assetClass: "crypto",
     checkIntervalMs: config.cardProximityCryptoCheckMs,
-    checkLabel: "每 1 小时",
+    checkLabel: `每 ${mins} 分钟`,
     cryptoStyle: true,
     bandPct: config.cardProximityCryptoBandPct,
     bandLabel: `${config.cardProximityCryptoBandPct}%`,

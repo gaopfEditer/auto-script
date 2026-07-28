@@ -10,7 +10,7 @@ import {
   fetchCardSources,
   buildArchivePeriodQuery,
 } from "../lib/cardArchiveApi.js";
-import { updateSignalCard, fetchSignalConfig } from "../lib/discordSignalApi.js";
+import { updateSignalCard, fetchSignalConfig, compareCardsByTimeDesc } from "../lib/discordSignalApi.js";
 import { useNewCardNotifications } from "../composables/useNewCardNotifications.js";
 import {
   cardExecution,
@@ -22,6 +22,7 @@ import {
   takeProfitText,
   hasEvaluation,
 } from "../lib/signalExecution.js";
+import { resolveCardSourceLink } from "../lib/cardSourceLink.js";
 
 const SOURCE_OPTIONS = [
   { value: "", label: "全部来源" },
@@ -47,7 +48,7 @@ const { toasts: newCardToasts } = useNewCardNotifications();
 const source = ref("");
 const channelId = ref("");
 const symbol = ref("");
-const period = ref(/** @type {string | number} */ (7));
+const period = ref(/** @type {string | number} */ ("today"));
 const loading = ref(false);
 const error = ref("");
 const cards = ref(/** @type {import("../lib/cardArchiveApi.js").ArchiveCard[]} */ ([]));
@@ -56,6 +57,9 @@ const sources = ref(/** @type {string[]} */ ([]));
 const channelOptions = ref(/** @type {import("../lib/cardArchiveApi.js").ArchiveChannelOption[]} */ ([]));
 
 const selected = computed(() => cards.value.find((c) => c.id === selectedId.value) ?? null);
+const selectedSourceLink = computed(() =>
+  selected.value ? resolveCardSourceLink(selected.value) : null
+);
 const modalOpen = computed(() => selectedId.value > 0 && !!selected.value);
 
 const execDraft = ref(emptyExecution());
@@ -104,7 +108,8 @@ function initEvalDraft(card) {
 function applyCardUpdate(updated) {
   const idx = cards.value.findIndex((c) => c.id === updated.id);
   if (idx >= 0) cards.value[idx] = updated;
-  else cards.value.unshift(updated);
+  else cards.value.push(updated);
+  cards.value.sort(compareCardsByTimeDesc);
   if (selectedId.value === updated.id) initEvalDraft(updated);
 }
 
@@ -174,6 +179,7 @@ async function load() {
       ...periodQuery(),
     });
     cards.value = data.cards;
+    cards.value.sort(compareCardsByTimeDesc);
   } catch (e) {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {
@@ -192,7 +198,7 @@ async function openCardById(id) {
   if (!cards.value.some((c) => c.id === id)) {
     try {
       const card = await fetchArchiveCard(id);
-      cards.value = [card, ...cards.value.filter((c) => c.id !== id)];
+      cards.value = [card, ...cards.value.filter((c) => c.id !== id)].sort(compareCardsByTimeDesc);
     } catch {
       return;
     }
@@ -325,9 +331,20 @@ onUnmounted(() => {
           </header>
           <div class="modal-body">
             <p class="sub">
-              来源 {{ selected.sourceType }}
+              来源
+              <RouterLink
+                v-if="selectedSourceLink"
+                class="source-article-link"
+                :to="selectedSourceLink.to"
+                :title="selectedSourceLink.title"
+              >
+                {{ selectedSourceLink.label }} · {{ selectedSourceLink.displayName }}
+              </RouterLink>
+              <template v-else>{{ selected.sourceType }}</template>
               <template v-if="selected.channelName"> · 频道 {{ selected.channelName }}</template>
-              <template v-if="selected.sourceRef"> · {{ selected.sourceRef }}</template>
+              <template v-if="!selectedSourceLink && selected.sourceRef">
+                · {{ selected.sourceRef }}
+              </template>
               · {{ fmtTime(selected.signalAt || selected.createdAt) }}
             </p>
 
@@ -433,6 +450,15 @@ h3 {
   color: #949ba4;
   font-size: 0.82rem;
   line-height: 1.45;
+}
+.source-article-link {
+  color: #57f287;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(87, 242, 135, 0.45);
+  margin: 0 0.15rem;
+}
+.source-article-link:hover {
+  color: #7dffab;
 }
 .field {
   display: flex;

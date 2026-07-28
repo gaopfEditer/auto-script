@@ -45,6 +45,10 @@ export interface SandboxHistoryTrade {
   interval?: string;
   ref_intervals?: string[];
   ref_intervals_label?: string;
+  /** Vegas 蓝红方向：UP | DOWN | FLAT */
+  vegas_direction?: string;
+  vegas_direction_label?: string;
+  trend_status?: string;
   /** 合并后的阶段事件文案（; 分隔） */
   stage_events?: string;
 }
@@ -77,6 +81,9 @@ export type SandboxTradeInput = {
   interval?: string;
   ref_intervals?: string[] | string;
   ref_intervals_label?: string;
+  vegas_direction?: string;
+  vegas_direction_label?: string;
+  trend_status?: string;
 };
 
 function pad2(n: number): string {
@@ -246,6 +253,27 @@ export function normalizeTrade(
       exitLabel = exitLabel || String(ex.exit_label || "");
     }
   }
+  let vegasDirection = String(raw.vegas_direction || "").toUpperCase();
+  let vegasLabel = String(raw.vegas_direction_label || "");
+  let trendStatus = String(raw.trend_status || "");
+  if (Array.isArray(events)) {
+    const ent = events.find((e) => e?.type === "entry");
+    if (ent) {
+      if (!vegasDirection) vegasDirection = String(ent.vegas_direction || "").toUpperCase();
+      if (!vegasLabel) vegasLabel = String(ent.vegas_direction_label || "");
+      if (!trendStatus) trendStatus = String(ent.trend_status || "");
+    }
+  }
+  if (!vegasLabel && vegasDirection) {
+    vegasLabel =
+      vegasDirection === "UP"
+        ? "蓝>红↑"
+        : vegasDirection === "DOWN"
+          ? "红>蓝↓"
+          : vegasDirection === "FLAT"
+            ? "纠缠"
+            : vegasDirection;
+  }
   const stage = formatStageEvents(
     Array.isArray(events) ? events : undefined,
     String(raw.reason || ""),
@@ -278,6 +306,9 @@ export function normalizeTrade(
     interval: String(raw.interval || "15m"),
     ref_intervals: refs,
     ref_intervals_label: raw.ref_intervals_label || refs.join(" · "),
+    vegas_direction: vegasDirection || undefined,
+    vegas_direction_label: vegasLabel || undefined,
+    trend_status: trendStatus || undefined,
     stage_events: stage,
   };
 }
@@ -400,6 +431,44 @@ export function summarizeHistoryRange(
     pnl_usd: pnl,
     fee_usd: fee,
   };
+}
+
+/** 按交易算法（S/T/C）分组统计 */
+export function summarizeHistoryByLogic(
+  trades: SandboxHistoryTrade[],
+): Record<string, SandboxHistoryRangeStats> {
+  const buckets: Record<string, SandboxHistoryTrade[]> = {};
+  for (const t of trades) {
+    let key = String(t.logic || "").toUpperCase();
+    if (!key) {
+      if (t.source === "card" || t.source_label === "卡片") key = "C";
+      else key = "?";
+    }
+    if (!buckets[key]) buckets[key] = [];
+    buckets[key].push(t);
+  }
+  const out: Record<string, SandboxHistoryRangeStats> = {};
+  for (const [k, list] of Object.entries(buckets)) {
+    out[k] = summarizeHistoryRange(list);
+  }
+  return out;
+}
+
+/** 按 Vegas 方向分组统计 */
+export function summarizeHistoryByVegas(
+  trades: SandboxHistoryTrade[],
+): Record<string, SandboxHistoryRangeStats> {
+  const buckets: Record<string, SandboxHistoryTrade[]> = {};
+  for (const t of trades) {
+    const key = String(t.vegas_direction || "NA").toUpperCase() || "NA";
+    if (!buckets[key]) buckets[key] = [];
+    buckets[key].push(t);
+  }
+  const out: Record<string, SandboxHistoryRangeStats> = {};
+  for (const [k, list] of Object.entries(buckets)) {
+    out[k] = summarizeHistoryRange(list);
+  }
+  return out;
 }
 
 export function loadSandboxHistory(): SandboxHistoryTrade[] {

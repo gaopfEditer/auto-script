@@ -157,10 +157,14 @@ export const config = {
   binanceRequestTimeoutMs: Number(process.env.BINANCE_REQUEST_TIMEOUT_MS ?? 15_000),
   /** 币安 API 代理（国内直连常失败；默认 COMMON_PROXY） */
   binanceProxy: envProxy("BINANCE_PROXY", "COMMON_PROXY", "DISCORD_WEBHOOK_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
-  cardPriceMonitorIntervalMs: Number(process.env.CARD_PRICE_MONITOR_INTERVAL_MS ?? 60_000),
-  /** 加密接近推送：每 1h 检查，距关键位 ≤ 1% */
-  cardProximityCryptoCheckMs: Number(process.env.CARD_PROXIMITY_CRYPTO_CHECK_MS ?? 3_600_000),
-  cardProximityCryptoBandPct: Number(process.env.CARD_PROXIMITY_CRYPTO_BAND_PCT ?? 1.0),
+  cardPriceMonitorIntervalMs: Number(process.env.CARD_PRICE_MONITOR_INTERVAL_MS ?? 300_000),
+  /** 加密接近推送：每 5min 检查，距入场 ±5% */
+  cardProximityCryptoCheckMs: Number(process.env.CARD_PROXIMITY_CRYPTO_CHECK_MS ?? 300_000),
+  cardProximityCryptoBandPct: Number(process.env.CARD_PROXIMITY_CRYPTO_BAND_PCT ?? 5.0),
+  /** 是否启用 TP1/2/3 自动评价（默认开） */
+  cardAutoEvalEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_AUTO_EVAL_ENABLED ?? "1").toLowerCase()
+  ),
   /** 股票接近推送：每 1 天检查，剩余落差 ≤ 10%（100→110 则在 109–110 提醒） */
   cardProximityStockCheckMs: Number(process.env.CARD_PROXIMITY_STOCK_CHECK_MS ?? 86_400_000),
   cardProximityStockGapPct: Number(process.env.CARD_PROXIMITY_STOCK_GAP_PCT ?? 0.1),

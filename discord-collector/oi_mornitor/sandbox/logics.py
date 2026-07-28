@@ -35,6 +35,7 @@ from oi_mornitor.config import (
     SANDBOX_TREND_SL_PAD,
     SANDBOX_TREND_SLOPE_MIN,
     SANDBOX_TREND_TRAIL_PCT,
+    SANDBOX_VEGAS_DIRECTION_GATE,
 )
 from oi_mornitor.strategy.indicators import (
     detect_inverted_hammer,
@@ -348,6 +349,72 @@ def trend_status(df: pd.DataFrame) -> str:
     return "RANGE"
 
 
+def vegas_direction(df: pd.DataFrame) -> str:
+    """
+    Vegas 通道相对位置（图表蓝 vs 红）：
+    - UP：快通道中轨(EMA144/169) > 慢通道中轨(EMA576/676) → 偏多
+    - DOWN：快 < 慢 → 偏空
+    - FLAT：纠缠或数据不足
+    """
+    if len(df) < 30:
+        return "FLAT"
+    last = df.iloc[-1]
+    if pd.isna(last.get("vegas_fast_mid")) or pd.isna(last.get("vegas_slow_mid")):
+        return "FLAT"
+    fast = float(last["vegas_fast_mid"])
+    slow = float(last["vegas_slow_mid"])
+    close = float(last["close"])
+    if fast <= 0 or slow <= 0 or close <= 0:
+        return "FLAT"
+    tol = close * 1e-4
+    if fast > slow + tol:
+        return "UP"
+    if fast < slow - tol:
+        return "DOWN"
+    return "FLAT"
+
+
+def annotate_entry_trend_meta(
+    sig: SandboxSignal | None,
+    *,
+    status: str,
+    direction: str,
+) -> SandboxSignal | None:
+    if not sig:
+        return None
+    meta = dict(sig.meta or {})
+    meta["trend_status"] = status
+    meta["vegas_direction"] = direction
+    meta["vegas_direction_label"] = {
+        "UP": "蓝>红↑",
+        "DOWN": "红>蓝↓",
+        "FLAT": "纠缠",
+    }.get(direction, direction)
+    sig.meta = meta
+    return sig
+
+
+def gate_entry_by_vegas(
+    sig: SandboxSignal | None,
+    direction: str,
+    *,
+    enabled: bool | None = None,
+) -> SandboxSignal | None:
+    """
+    顺 Vegas：底部信号仅在 UP 做多，顶部信号仅在 DOWN 做空。
+    FLAT 时不开自动仓，避免纠缠区乱做。
+    """
+    use = SANDBOX_VEGAS_DIRECTION_GATE if enabled is None else enabled
+    if not use or not sig or sig.action != "enter":
+        return sig
+    side = str(sig.side or "").upper()
+    if direction == "UP" and side == "LONG":
+        return sig
+    if direction == "DOWN" and side == "SHORT":
+        return sig
+    return None
+
+
 def hunter_sl(side: str, signal_high: float, signal_low: float) -> float:
     """信号 K 极值 + 0.1% 安全垫，击穿即走。"""
     pad = SANDBOX_HUNTER_SL_PAD
@@ -561,17 +628,25 @@ def evaluate_entry(
     structure: dict[str, Any] | None = None,
     interval: str | None = None,
 ) -> SandboxSignal | None:
-    """Trend_Status 分流：RANGE→S，BULL/BEAR→T。"""
+    """Trend_Status 分流：RANGE→S，BULL/BEAR→T；再经 Vegas 蓝红方向门控。"""
     if len(df) < 60:
         return None
     iv = normalize_sandbox_interval(interval)
     structure = structure or {}
     status = trend_status(df)
-    structure = {**structure, "trend_status": status, "symbol": symbol.upper()}
+    direction = vegas_direction(df)
+    structure = {
+        **structure,
+        "trend_status": status,
+        "vegas_direction": direction,
+        "symbol": symbol.upper(),
+    }
     if status == "RANGE":
         sig = evaluate_hunter_entry(df, structure=structure, interval=iv)
     else:
         sig = evaluate_trend_entry(df, status=status, structure=structure, interval=iv)
+    sig = annotate_entry_trend_meta(sig, status=status, direction=direction)
+    sig = gate_entry_by_vegas(sig, direction)
     return apply_entry_sl_cap(symbol, sig) if sig else None
 
 
@@ -611,6 +686,7 @@ def build_manual_entry_signal(
     hl = float(structure.get("hl") or 0)
     lh = float(structure.get("lh_price") or structure.get("lh") or 0)
     status = trend_status(df)
+    direction = vegas_direction(df)
 
     if logic == "S":
         sl = hunter_sl(side, high, low)
@@ -634,8 +710,7 @@ def build_manual_entry_signal(
             "stage": 0,
             "trend_status": status,
         }
-        return apply_entry_sl_cap(
-            symbol,
+        sig = annotate_entry_trend_meta(
             SandboxSignal(
                 action="enter",
                 side=side,
@@ -646,7 +721,10 @@ def build_manual_entry_signal(
                 message=msg,
                 meta=meta,
             ),
+            status=status,
+            direction=direction,
         )
+        return apply_entry_sl_cap(symbol, sig)
 
     # logic T
     if side == "LONG":
@@ -672,8 +750,7 @@ def build_manual_entry_signal(
         "trail_pct": SANDBOX_TREND_TRAIL_PCT,
         "trend_status": status,
     }
-    return apply_entry_sl_cap(
-        symbol,
+    sig = annotate_entry_trend_meta(
         SandboxSignal(
             action="enter",
             side=side,
@@ -683,7 +760,10 @@ def build_manual_entry_signal(
             message=msg,
             meta=meta,
         ),
+        status=status,
+        direction=direction,
     )
+    return apply_entry_sl_cap(symbol, sig)
 
 
 def _bars_held(entry_time: int, bar_time: int, interval_sec: int) -> int:
@@ -715,6 +795,7 @@ EXIT_REASON_LABELS: dict[str, str] = {
     "card_sl": "卡片止损",
     "card_tp": "卡片止盈",
     "card_tp_partial": "卡片分批止盈",
+    "card_tp1_be": "卡片TP1后保本",
     "manual": "手动平仓",
     "manual_partial": "手动减仓",
 }
@@ -735,6 +816,7 @@ def evaluate_card_exit(
     卡片仓出场：严格按卡片 SL / 多级 TP。
     - 触及 SL → 全平
     - 多级 TP：依次减仓（等分），最后一级全平
+    - **第一止盈（TP1）触发后**：剩余仓止损移至开仓价（保本），防回吐
     - 不做阶梯/维加斯移损
     """
     if df is None or df.empty:
@@ -745,6 +827,7 @@ def evaluate_card_exit(
     close = float(last["close"])
     side_u = side.upper()
     meta = dict(meta or {})
+    entry = float(entry_price) if entry_price and float(entry_price) > 0 else 0.0
     levels: list[float] = []
     for x in tps or meta.get("card_tps") or []:
         try:
@@ -827,23 +910,30 @@ def evaluate_card_exit(
         )
         return out
 
-    # 分批：按剩余档数等分当前仓
+    # 分批：按剩余档数等分当前仓；TP1 后把止损移到开仓价保本
     left_levels = len(levels) - done
     frac = 1.0 / max(left_levels, 1)
+    is_first_tp = done == 0
+    be_sl = entry if is_first_tp and entry > 0 else (float(sl) if sl else None)
+    msg = f"卡片分批止盈 TP={tp:.6g} · {frac:.0%}"
+    if is_first_tp and be_sl:
+        msg = f"{msg} · SL→开仓价 {be_sl:.6g}"
     out.append(
         SandboxSignal(
             action="partial",
             side=side_u,
             logic="C",
             price=float(tp),
-            sl=float(sl) if sl else None,
-            message=f"卡片分批止盈 TP={tp:.6g} · {frac:.0%}",
+            sl=float(be_sl) if be_sl else (float(sl) if sl else None),
+            message=msg,
             meta={
                 "exit_code": "card_tp_partial",
                 "exit_label": exit_reason_label("card_tp_partial"),
                 "card_id": meta.get("card_id"),
                 "card_tp_done": next_done,
                 "partial_frac": frac,
+                "move_sl_to_entry": bool(is_first_tp and be_sl),
+                "breakeven_sl": float(be_sl) if be_sl else None,
             },
         )
     )

@@ -293,6 +293,11 @@ async def handle_sandbox_enter(request: web.Request) -> web.Response:
     return _json_response(result, status=status)
 
 
+async def handle_tv_alert(_request: web.Request) -> web.Response:
+    """TradingView BB-Wicks 信号监听同步状态。"""
+    return _json_response({"ok": True, **get_service().tv_alert_sync.get_payload()})
+
+
 async def handle_stream(request: web.Request) -> web.StreamResponse:
 
     """SSE：推送最新雷达快照。"""
@@ -393,6 +398,8 @@ def create_app() -> web.Application:
 
     app.router.add_post("/api/sandbox/reshuffle", handle_sandbox_reshuffle)
     app.router.add_post("/api/sandbox/enter", handle_sandbox_enter)
+
+    app.router.add_get("/api/tv-alert", handle_tv_alert)
 
     app.router.add_get("/api/stream", handle_stream)
 

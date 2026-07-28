@@ -88,6 +88,14 @@ export async function fetchPasteFileResult(name) {
   return /** @type {{ data: Record<string, unknown> }} */ (data);
 }
 
+/** @param {string} name */
+export async function fetchPasteFileRaw(name) {
+  const res = await fetch(`/api/youtube-fetch/paste-files/${encodeURIComponent(name)}/raw`);
+  const data = await parseJsonResponse(res);
+  if (!data.ok) throw new Error(data.error || "加载原文失败");
+  return /** @type {{ name: string, text: string }} */ (data);
+}
+
 /** @param {{ force?: boolean }} [opts] */
 export async function triggerPasteFileScan(opts = {}) {
   const res = await fetch("/api/youtube-fetch/paste-files/scan", {
@@ -113,7 +121,7 @@ export async function parsePasteFileByName(name, opts = {}) {
 }
 
 /**
- * 注册 coin-action 入场价位监听（±3% / 每 1h，Telegram 同卡片接近推送）
+ * 注册 coin-action 入场价位监听（±5% / 每 5min）
  * @param {{ sourceRef: string, title?: string, rawContent?: string, coinActions?: unknown[], bandPct?: number }} payload
  */
 export async function registerCoinActionWatches(payload) {

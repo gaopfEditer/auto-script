@@ -806,7 +806,7 @@ export async function openStore(cfg, log) {
        FROM discord_signal_cards sc
        ${SIGNAL_CARD_JOIN}
        ${whereSql}
-       ORDER BY sc.id DESC
+       ORDER BY COALESCE(sc.signal_at, sc.created_at) DESC, sc.id DESC
        LIMIT ${lim}`,
       params
     );
@@ -975,6 +975,14 @@ export async function openStore(cfg, log) {
     if (patch.cardsByStyle != null) {
       sets.push("cards_by_style = ?");
       params.push(JSON.stringify(patch.cardsByStyle));
+    }
+    if (patch.rawContent != null) {
+      sets.push("raw_content = ?");
+      params.push(String(patch.rawContent));
+    }
+    if (patch.symbol != null) {
+      sets.push("symbol = ?");
+      params.push(String(patch.symbol).trim() || null);
     }
     if (patch.note !== undefined) {
       sets.push("note = ?");

@@ -29,6 +29,40 @@ export function formatCardTime(card) {
   return Number.isNaN(d.getTime()) ? String(raw) : d.toLocaleString("zh-CN");
 }
 
+/**
+ * 卡片时间戳（ms）：优先 signalAt，其次 createdAt，再退回 id。
+ * @param {Record<string, unknown> | null | undefined} card
+ */
+export function cardTimeMs(card) {
+  const raw = card?.signalAt ?? card?.createdAt;
+  if (raw) {
+    const t = Date.parse(String(raw));
+    if (Number.isFinite(t)) return t;
+  }
+  const id = Number(card?.id);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+}
+
+/**
+ * 严格按时间倒序（新→旧）；同毫秒再按 id。
+ * @param {import("./discordSignalApi.js").SignalCard | Record<string, unknown>} a
+ * @param {import("./discordSignalApi.js").SignalCard | Record<string, unknown>} b
+ */
+export function compareCardsByTimeDesc(a, b) {
+  const dt = cardTimeMs(b) - cardTimeMs(a);
+  if (dt !== 0) return dt;
+  return Number(b?.id ?? 0) - Number(a?.id ?? 0);
+}
+
+/**
+ * 严格按时间正序（旧→新）；同毫秒再按 id。
+ * @param {import("./discordSignalApi.js").SignalCard | Record<string, unknown>} a
+ * @param {import("./discordSignalApi.js").SignalCard | Record<string, unknown>} b
+ */
+export function compareCardsByTimeAsc(a, b) {
+  return -compareCardsByTimeDesc(a, b);
+}
+
 let cachedConfig = /** @type {{ channelIds: string[], styles: Record<string, { label: string }>, channels: Record<string, unknown>, evalLeverage?: { major: number, altcoin: number }, cardNotifications?: { desktop: boolean, position: string } } | null} */ (
   null
 );
