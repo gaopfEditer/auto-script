@@ -43,6 +43,20 @@
       "path": "C:\\Users\\eason\\Desktop\\script\\pull_code.bat",
       "args": "",
       "delay": 500
+    },
+    "music": {
+      "enabled": true,
+      "label": "打开酷狗",
+      "path": "C:\\Program Files (x86)\\KuGou\\KGMusic\\KuGou.exe",
+      "args": "",
+      "delay": 300
+    },
+    "md-log": {
+      "enabled": true,
+      "label": "打开日志",
+      "path": "C:\\Users\\eason\\Desktop\\---2025年度计划.md.lnk",
+      "args": "",
+      "delay": 300
     }
   }
 }
