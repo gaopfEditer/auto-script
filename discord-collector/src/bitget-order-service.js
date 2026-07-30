@@ -28,6 +28,8 @@ import {
 
   executeStagedTpslUpdate,
 
+  executeBitgetMoveSlToEntry,
+
   hasBitgetSymbolExposure,
 
 } from "./bitget-staged-order.js";
@@ -842,11 +844,55 @@ export function createBitgetOrderService(store, log) {
 
 
 
+  /**
+   * TP1 触达 → 止损移至开仓价（保本）。
+   * @param {{ cardId: number; parsed: Record<string, unknown>; dryRun?: boolean }} input
+   */
+  async function onTp1Breakeven(input) {
+    const prev =
+      input.parsed?.bitgetOrder && typeof input.parsed.bitgetOrder === "object"
+        ? /** @type {Record<string, unknown>} */ (input.parsed.bitgetOrder)
+        : null;
+    if (!prev) return { skipped: "no_bitget_order" };
+
+    const creds = credentials();
+    if (!creds) return { skipped: "credentials_missing" };
+
+    const dryRun =
+      input.dryRun === true ||
+      String(prev.status) === "dry_run" ||
+      loadBitgetTradeConfig().dryRun === true;
+
+    const client = createBitgetClient(creds);
+    const result = await executeBitgetMoveSlToEntry(client, {
+      prevOrder: prev,
+      parsed: input.parsed,
+      cardId: input.cardId,
+      dryRun,
+    });
+
+    if (result.record) {
+      await persistOrderResult(input.cardId, input.parsed, result.record);
+    }
+    if (result.ok && !result.skipped) {
+      log.info(
+        `Bitget TP1保本 card=#${input.cardId} ${result.record?.symbol ?? ""} SL→${result.record?.breakevenEntryPrice ?? ""}`
+      );
+    } else if (!result.ok) {
+      log.warn(
+        `Bitget TP1保本失败 card=#${input.cardId}: ${result.error ?? result.reason}`
+      );
+    }
+    return result;
+  }
+
   return {
 
     onSignalCardCreated,
 
     onTpslUpdate,
+
+    onTp1Breakeven,
 
     reloadConfig,
 

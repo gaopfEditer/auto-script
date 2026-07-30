@@ -1,5 +1,5 @@
 /**
- * 卡片价格接近推送 + TP1/2/3 自动评价。
+ * 卡片价格接近推送 + TP1/2/3 自动评价 + Bitget/WEEX TP1 保本移损。
  */
 import { archiveCardToClient } from "./card-archive-service.js";
 import { runCardTpSettlement, isBacktestDue } from "./card-backtest-engine.js";
@@ -16,6 +16,11 @@ import {
 import { getCardVerifyPlan } from "./card-verify-policy.js";
 import { hasEvaluatedYield, normalizeExecution } from "./discord-signal-execution.js";
 import { resolveCardSignalAt } from "./discord-signal-card-service.js";
+import {
+  isTp1Reached,
+  needsTp1Breakeven,
+  resolveStagedTp1Price,
+} from "./discord-signal-staged-trade.js";
 import { config } from "./config.js";
 
 /**
@@ -23,9 +28,16 @@ import { config } from "./config.js";
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {ReturnType<typeof import("./discord-system-telegram.js").createSystemTelegramAlert>} systemTelegram
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
+ * @param {{
+ *   bitgetOrder?: ReturnType<typeof import("./bitget-order-service.js").createBitgetOrderService> | null;
+ *   weexOrder?: ReturnType<typeof import("./weex-order-service.js").createWeexOrderService> | null;
+ * }} [deps]
  */
-export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
+export function createCardPriceMonitor(store, log, systemTelegram, broadcast, deps = {}) {
   let timer = null;
+  let beTimer = null;
+  /** @type {Set<number>} */
+  const beInFlight = new Set();
 
   /** @param {string} msg */
   function logCardPullDetail(msg) {
@@ -233,6 +245,98 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
     }
   }
 
+  /**
+   * 卡片挂的 Bitget/WEEX 单：现价触及 TP1 → 止损移到开仓价。
+   */
+  async function runTp1Breakeven() {
+    if (!config.cardTp1BreakevenEnabled) return;
+    const bitgetOrder = deps.bitgetOrder ?? null;
+    const weexOrder = deps.weexOrder ?? null;
+    if (!bitgetOrder?.onTp1Breakeven && !weexOrder?.onTp1Breakeven) return;
+    if (!store.listActiveCardsForProximity) return;
+
+    const rows = await store.listActiveCardsForProximity({ limit: 200 });
+    /** @type {Map<string, number>} */
+    const priceCache = new Map();
+
+    for (const row of rows) {
+      const card = archiveCardToClient(row);
+      const cardId = Number(card.id);
+      if (!Number.isFinite(cardId) || beInFlight.has(cardId)) continue;
+
+      const parsed =
+        card.parsedJson && typeof card.parsedJson === "object"
+          ? /** @type {Record<string, unknown>} */ (card.parsedJson)
+          : null;
+      if (!parsed) continue;
+
+      const bitget =
+        parsed.bitgetOrder && typeof parsed.bitgetOrder === "object"
+          ? /** @type {Record<string, unknown>} */ (parsed.bitgetOrder)
+          : null;
+      const weex =
+        parsed.weexOrder && typeof parsed.weexOrder === "object"
+          ? /** @type {Record<string, unknown>} */ (parsed.weexOrder)
+          : null;
+
+      /** @type {Array<{ exchange: "bitget"|"weex"; order: Record<string, unknown> }>} */
+      const targets = [];
+      if (bitget && needsTp1Breakeven(bitget) && bitgetOrder?.onTp1Breakeven) {
+        targets.push({ exchange: "bitget", order: bitget });
+      }
+      if (weex && needsTp1Breakeven(weex) && weexOrder?.onTp1Breakeven) {
+        targets.push({ exchange: "weex", order: weex });
+      }
+      if (!targets.length) continue;
+
+      const sym = String(card.symbol || targets[0].order.symbol || "").toUpperCase();
+      if (!sym) continue;
+
+      let price = priceCache.get(sym);
+      if (price == null) {
+        try {
+          const tick = await fetchFuturesPrice(sym);
+          price = tick.price;
+          priceCache.set(sym, price);
+        } catch (e) {
+          log.debug(`TP1保本取价失败 ${sym}: ${/** @type {Error} */ (e).message}`);
+          continue;
+        }
+      }
+
+      beInFlight.add(cardId);
+      try {
+        for (const t of targets) {
+          const tp1 = resolveStagedTp1Price(t.order, parsed);
+          if (!tp1) continue;
+          const holdSide = String(t.order.holdSide ?? (t.order.side === "buy" ? "long" : "short"));
+          if (!isTp1Reached(price, tp1, holdSide)) continue;
+
+          const svc = t.exchange === "bitget" ? bitgetOrder : weexOrder;
+          const result = await svc.onTp1Breakeven({ cardId, parsed });
+          if (result?.ok && !result.skipped) {
+            broadcast?.("meta", {
+              kind: "card_tp1_breakeven",
+              cardId,
+              symbol: sym,
+              exchange: t.exchange,
+              tp1,
+              price,
+              entry: result.record?.breakevenEntryPrice ?? null,
+            });
+            log.info(
+              `TP1保本移损 #${cardId} ${sym} ${t.exchange} tp1=${tp1} price=${price} SL→${result.record?.breakevenEntryPrice ?? ""}`
+            );
+          }
+        }
+      } catch (e) {
+        log.warn(`TP1保本异常 #${cardId}: ${/** @type {Error} */ (e).message}`);
+      } finally {
+        beInFlight.delete(cardId);
+      }
+    }
+  }
+
   async function tick() {
     await runProximityCheck();
     await runAutoEval();
@@ -245,10 +349,26 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
       void tick().catch((e) => log.warn(`价格监控 tick: ${/** @type {Error} */ (e).message}`));
     }, ms);
     void tick().catch((e) => log.warn(`价格监控首次: ${/** @type {Error} */ (e).message}`));
+
+    if (config.cardTp1BreakevenEnabled && (deps.bitgetOrder || deps.weexOrder)) {
+      const beMs = Math.max(10_000, Number(config.cardTp1BreakevenIntervalMs) || 30_000);
+      beTimer = setInterval(() => {
+        void runTp1Breakeven().catch((e) =>
+          log.warn(`TP1保本 tick: ${/** @type {Error} */ (e).message}`)
+        );
+      }, beMs);
+      void runTp1Breakeven().catch((e) =>
+        log.warn(`TP1保本首次: ${/** @type {Error} */ (e).message}`)
+      );
+    }
+
     log.info(
       `卡片监控已启动 tick=${config.cardPriceMonitorIntervalMs}ms | ` +
         `接近 每${Math.round(config.cardProximityCryptoCheckMs / 60000)}min±${config.cardProximityCryptoBandPct}% | ` +
         `自动评价=${config.cardAutoEvalEnabled ? "on" : "off"}` +
+        (config.cardTp1BreakevenEnabled
+          ? ` | TP1保本=${Math.round((config.cardTp1BreakevenIntervalMs || 30000) / 1000)}s`
+          : " | TP1保本=off") +
         (config.binanceProxy ? ` | Binance 代理 ${config.binanceProxy}` : "")
     );
   }
@@ -258,7 +378,11 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast) {
       clearInterval(timer);
       timer = null;
     }
+    if (beTimer) {
+      clearInterval(beTimer);
+      beTimer = null;
+    }
   }
 
-  return { start, stop, tick, runProximityCheck, runAutoEval };
+  return { start, stop, tick, runProximityCheck, runAutoEval, runTp1Breakeven };
 }

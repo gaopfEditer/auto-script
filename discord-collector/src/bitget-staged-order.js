@@ -5,6 +5,7 @@ import {
   STAGED_INITIAL_SL_PCT,
   STAGED_TP_PARTIAL_RATIOS,
   calcInitialStopLoss,
+  resolveStagedEntryPrice,
 } from "./discord-signal-staged-trade.js";
 import { parseEntryPriceForOrder, resolveOrderLeverage, resolveBitgetOrderSize, directionToSide, parseBitgetContractMeta, formatOrderSize } from "./bitget-order-from-signal.js";
 import { normalizeSymbol } from "./card-fields.js";
@@ -602,4 +603,109 @@ export async function executeStagedReverse(client, input) {
   record.status = "reversed";
   record.open = openResult.record;
   return { ok: true, record };
+}
+
+/**
+ * TP1 触达后：把止损改到开仓价（保本），防止大力回踩超额止损。
+ * @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client
+ * @param {{
+ *   prevOrder: Record<string, unknown>;
+ *   parsed?: Record<string, unknown> | null;
+ *   cardId: number;
+ *   dryRun?: boolean;
+ * }} input
+ */
+export async function executeBitgetMoveSlToEntry(client, input) {
+  const prev = input.prevOrder;
+  if (prev.breakevenArmed === true || prev.slMovedToEntry === true) {
+    return { ok: true, skipped: true, reason: "already_armed", record: prev };
+  }
+
+  const symbol = String(prev.symbol ?? "").toUpperCase();
+  const holdSide = String(prev.holdSide ?? (prev.side === "buy" ? "long" : "short"));
+  const productType = String(prev.productType ?? "USDT-FUTURES");
+  const marginCoin = "USDT";
+  const entry = resolveStagedEntryPrice(prev, input.parsed ?? null);
+  if (!symbol || !entry) {
+    return { ok: false, reason: "missing_entry", record: prev };
+  }
+
+  const entryStr = priceStr(entry);
+  /** @type {Record<string, unknown>} */
+  const record = {
+    ...prev,
+    stopLossPrice: entryStr,
+    breakevenArmed: true,
+    slMovedToEntry: true,
+    breakevenAt: new Date().toISOString(),
+    breakevenEntryPrice: entry,
+  };
+
+  if (input.dryRun || String(prev.status) === "dry_run") {
+    record.status = prev.status === "dry_run" ? "dry_run" : record.status;
+    record.breakevenDryRun = true;
+    return { ok: true, record, dryRun: true };
+  }
+
+  // 校验相对现价方向仍有效（已回撤穿开仓价则无法挂保本 SL）
+  try {
+    const mark = (await fetchMarkPrice(client, symbol, productType)) ?? entry;
+    const hs = /** @type {"long"|"short"} */ (holdSide === "short" || holdSide === "sell" ? "short" : "long");
+    if (!isValidStopLoss(mark, entry, hs)) {
+      record.breakevenArmed = false;
+      record.slMovedToEntry = false;
+      record.breakevenError = `entry SL ${entry} invalid vs mark ${mark}`;
+      return { ok: false, reason: "sl_invalid_vs_mark", record, error: record.breakevenError };
+    }
+  } catch {
+    /* 查价失败仍尝试挂单 */
+  }
+
+  try {
+    const slResp = await client.withHoldSideFallback(
+      (hs) =>
+        client.placePosTpsl({
+          symbol,
+          productType,
+          marginCoin,
+          holdSide: hs,
+          stopLossTriggerPrice: entryStr,
+          stopLossClientOid: `dc-sl-be-${input.cardId}-${Date.now()}`,
+        }),
+      holdSide
+    );
+    record.breakevenSlResponse = slResp;
+    record.slOrderId = slResp?.data?.orderId ?? record.slOrderId;
+    record.slPlan = { planType: "pos_loss", triggerPrice: entryStr, reason: "tp1_breakeven" };
+    return { ok: true, record };
+  } catch (e) {
+    const err1 = String(/** @type {Error} */ (e).message ?? e);
+    try {
+      const size = String(prev.size ?? "");
+      const slResp = await client.withHoldSideFallback(
+        (hs) =>
+          client.placeTpslOrder({
+            symbol,
+            productType,
+            marginCoin,
+            planType: "loss_plan",
+            triggerPrice: entryStr,
+            holdSide: hs,
+            size: size || "0",
+            clientOid: `dc-sl-be-${input.cardId}-${Date.now()}`,
+          }),
+        holdSide
+      );
+      record.breakevenSlResponse = slResp;
+      record.slOrderId = slResp?.data?.orderId ?? slResp?.data?.planId ?? record.slOrderId;
+      record.slPlan = { planType: "loss_plan", triggerPrice: entryStr, reason: "tp1_breakeven" };
+      record.breakevenFallback = true;
+      return { ok: true, record };
+    } catch (e2) {
+      record.breakevenArmed = false;
+      record.slMovedToEntry = false;
+      record.breakevenError = `${err1} | ${String(/** @type {Error} */ (e2).message ?? e2)}`;
+      return { ok: false, reason: "move_sl_failed", record, error: record.breakevenError };
+    }
+  }
 }

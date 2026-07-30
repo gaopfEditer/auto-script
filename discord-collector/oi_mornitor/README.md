@@ -111,6 +111,7 @@ cd discord-collector/oi_mornitor && python run.py --dev
 |------|------|
 | `python run.py` / `pnpm run oi:start` | 一键启动（自动 build 前端 + 后端）→ http://127.0.0.1:8765 |
 | `python run.py --dev` / `pnpm run oi:dev` | 开发模式：Vite :5173 + API :8765 |
+| `pnpm run collect:ui` | 采集 UI；**默认自动拉起并守护** oi_mornitor（`OI_AUTO_START=1`） |
 | `python run.py --rebuild` | 强制重新构建前端 |
 | `python run.py daemon` | 仅终端扫描守护进程 |
 | `python run.py once` | 单次扫描 |

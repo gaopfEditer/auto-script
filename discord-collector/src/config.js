@@ -165,6 +165,13 @@ export const config = {
   cardAutoEvalEnabled: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_AUTO_EVAL_ENABLED ?? "1").toLowerCase()
   ),
+  /**
+   * 卡片挂 Bitget/WEEX 单后：TP1 触达则把止损移到开仓价（默认开，每 30s 扫一次）。
+   */
+  cardTp1BreakevenEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_TP1_BREAKEVEN_ENABLED ?? "1").toLowerCase()
+  ),
+  cardTp1BreakevenIntervalMs: Number(process.env.CARD_TP1_BREAKEVEN_INTERVAL_MS ?? 30_000),
   /** 股票接近推送：每 1 天检查，剩余落差 ≤ 10%（100→110 则在 109–110 提醒） */
   cardProximityStockCheckMs: Number(process.env.CARD_PROXIMITY_STOCK_CHECK_MS ?? 86_400_000),
   cardProximityStockGapPct: Number(process.env.CARD_PROXIMITY_STOCK_GAP_PCT ?? 0.1),
@@ -203,6 +210,11 @@ export const config = {
     ""
   ).replace(/\/$/, ""),
   oiHealthTimeoutMs: Number(process.env.OI_HEALTH_TIMEOUT_MS ?? 3_000),
+  /** collect:ui 启动时自动拉起并守护 oi_mornitor（默认开） */
+  oiAutoStart: !["0", "false", "no", "off"].includes(
+    String(process.env.OI_AUTO_START ?? "1").toLowerCase()
+  ),
+  oiSupervisorIntervalMs: Number(process.env.OI_SUPERVISOR_INTERVAL_MS ?? 15_000),
   /** 源频道 → Webhook 转发映射 JSON（见 config/channel-webhook-forwards.json） */
   webhookForwardsFile: (process.env.DISCORD_WEBHOOK_FORWARDS_FILE ?? "").trim()
     ? path.resolve(process.env.DISCORD_WEBHOOK_FORWARDS_FILE.trim())

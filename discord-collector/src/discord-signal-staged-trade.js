@@ -162,3 +162,84 @@ export function isStagedDuplicateContent(prevExecution, nextExecution, prevConte
   if (prevContent && nextContent && prevContent.trim() === nextContent.trim()) return true;
   return shouldSkipNumericDuplicate(prevExecution, nextExecution);
 }
+
+/** @param {unknown} raw */
+function parsePriceNum(raw) {
+  const n = Number(String(raw ?? "").replace(/[^\d.]/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * 取 TP1 价格（优先订单 tpPlans / takeProfits，再看 parsed）。
+ * @param {Record<string, unknown> | null | undefined} order
+ * @param {Record<string, unknown> | null | undefined} [parsed]
+ */
+export function resolveStagedTp1Price(order, parsed) {
+  const plans = order && Array.isArray(order.tpPlans) ? order.tpPlans : [];
+  if (plans.length) {
+    const p = parsePriceNum(/** @type {Record<string, unknown>} */ (plans[0]).price);
+    if (p) return p;
+  }
+  const tps = order && Array.isArray(order.takeProfits) ? order.takeProfits : [];
+  if (tps.length) {
+    const p = parsePriceNum(tps[0]);
+    if (p) return p;
+  }
+  const fromParsed = parsed && Array.isArray(parsed.takeProfits) ? parsed.takeProfits : [];
+  if (fromParsed.length) {
+    const p = parsePriceNum(fromParsed[0]);
+    if (p) return p;
+  }
+  return null;
+}
+
+/**
+ * 开仓价：优先成交价 fillPrice，其次 initial / entry。
+ * @param {Record<string, unknown> | null | undefined} order
+ * @param {Record<string, unknown> | null | undefined} [parsed]
+ */
+export function resolveStagedEntryPrice(order, parsed) {
+  for (const raw of [order?.fillPrice, order?.entryPrice, parsed?.entry]) {
+    const p = parsePriceNum(raw);
+    if (p) return p;
+  }
+  // entry 可能是区间 "1.2-1.3"
+  const entryStr = String(parsed?.entry ?? "").trim();
+  if (entryStr.includes("-") || entryStr.includes("~") || entryStr.includes("/")) {
+    const parts = entryStr.split(/[-~/]/).map((x) => parsePriceNum(x)).filter(Boolean);
+    if (parts.length) {
+      return /** @type {number[]} */ (parts).reduce((a, b) => a + b, 0) / parts.length;
+    }
+  }
+  return parsePriceNum(entryStr);
+}
+
+/**
+ * @param {number} price
+ * @param {number} tp1
+ * @param {"long"|"short"|string} holdSide
+ */
+export function isTp1Reached(price, tp1, holdSide) {
+  if (!Number.isFinite(price) || !Number.isFinite(tp1) || price <= 0 || tp1 <= 0) return false;
+  const hs = String(holdSide ?? "").toLowerCase();
+  if (hs === "long" || hs === "buy") return price >= tp1;
+  if (hs === "short" || hs === "sell") return price <= tp1;
+  return false;
+}
+
+/**
+ * 卡片是否挂了需 TP1 保本的 Bitget/WEEX 分阶段单。
+ * @param {Record<string, unknown> | null | undefined} order
+ */
+export function needsTp1Breakeven(order) {
+  if (!order || typeof order !== "object") return false;
+  if (order.breakevenArmed === true || order.slMovedToEntry === true) return false;
+  const status = String(order.status ?? "");
+  if (status === "failed" || status === "closed" || status === "reversed") return false;
+  // 已挂上完整 TP/SL，或至少有 TP1 计划
+  const phase = String(order.phase ?? "");
+  if (phase === "full" || status === "tpsl_set" || status === "tpsl_partial" || status === "dry_run") {
+    return Boolean(resolveStagedTp1Price(order) || (Array.isArray(order.takeProfits) && order.takeProfits.length));
+  }
+  return false;
+}

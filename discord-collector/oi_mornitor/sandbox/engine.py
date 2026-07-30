@@ -72,8 +72,8 @@ class SandboxEngine:
         self.tracker = SandboxTracker()
         self._last_alerts: list[dict[str, Any]] = []
         self._last_scan_ts: float = 0.0
-        # key: "SYMBOL|15m" — 同币同周期同已收盘 K 只评估一次
-        self._last_eval_bar: dict[str, int] = {}
+        # key: "SYMBOL|15m" 或 card-live fingerprint — 去重用
+        self._last_eval_bar: dict[str, Any] = {}
         self._last_entry_bar: dict[str, int] = {}
         self._last_exit_bar: dict[str, int] = {}
         # key: position id
@@ -659,7 +659,7 @@ class SandboxEngine:
                     order["payload"] = {**card.to_dict(), "fill_price": fill_px}
                     self.tracker.upsert_card_order(order)
 
-        # —— 已开卡片仓：按评估周期 K 线 TP/SL ——
+        # —— 已开卡片仓：用含未收盘 K 的实时高低点评估 TP/SL（每轮雷达/快扫都跑）——
         card_positions = [p for p in self.tracker.list_positions() if p.logic == "C"]
         if not card_positions:
             return
@@ -677,80 +677,262 @@ class SandboxEngine:
             km.update(extra)
 
         for pos in card_positions:
-            klines = km.get(pos.symbol) or []
-            if len(klines) < 3:
-                continue
-            try:
-                df = enrich_sandbox_df(klines_to_df(klines))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("卡片仓指标失败 %s: %s", pos.symbol, exc)
-                continue
-            if len(df) < 3:
-                continue
-            closed = df.iloc[:-1].copy()
-            t = bar_time_sec(closed)
-            slot_pos = f"{self._slot_key(pos.symbol, CARD_INTERVAL)}|{pos.id}"
-            if self._last_eval_bar.get(slot_pos) == t:
-                continue
-            try:
-                pos_meta = json.loads(pos.meta_json or "{}")
-            except json.JSONDecodeError:
-                pos_meta = {}
-            signals = evaluate_card_exit(
-                closed,
-                side=pos.side,
-                entry_price=pos.entry_price,
-                sl=pos.sl,
-                tps=list(pos_meta.get("card_tps") or []),
-                tp1=pos.tp1,
-                tp2=pos.tp2,
-                meta=pos_meta,
+            await self._eval_card_position_live(
+                pos, km.get(pos.symbol) or [], alerts=alerts
             )
-            current = pos
-            for sig in signals:
-                alert = self._apply_signal(pos.symbol, sig, t, pos=current)
-                if alert:
-                    alerts.append(alert)
-                    if sig.action == "exit":
-                        # 同步卡片订单状态 + 回写 collector 自动评价
-                        cid = pos_meta.get("card_id")
-                        if cid:
-                            co = self.tracker.get_card_order(str(cid))
-                            if co:
-                                co["status"] = "closed"
-                                self.tracker.upsert_card_order(co)
-                        exit_code = str((sig.meta or {}).get("exit_code") or "")
-                        best_tp = None
-                        if exit_code == "card_tp":
-                            done = int((sig.meta or {}).get("card_tp_done") or 0)
-                            best_tp = f"TP{done}" if done > 0 else "TP1"
-                        elif exit_code == "card_sl":
-                            best_tp = "SL"
-                        self._schedule_settlement_callback(
-                            {
-                                "card_id": cid or pos_meta.get("card_id"),
-                                "symbol": pos.symbol,
-                                "side": pos.side,
-                                "outcome": (
-                                    "take_profit"
-                                    if exit_code == "card_tp"
-                                    else "stop_loss"
-                                    if exit_code == "card_sl"
-                                    else "manual_close"
-                                ),
-                                "best_tp": best_tp,
-                                "settlement_price": float(sig.price),
-                                "entry_price": float(pos.entry_price),
-                                "exit_code": exit_code,
-                                "exit_label": (sig.meta or {}).get("exit_label"),
-                                "source": "oi_mornitor",
-                            }
-                        )
-                        break
-                    current = self.tracker.get_position_by_id(pos.id)
-                    if current is None:
-                        break
-            self._last_eval_bar[slot_pos] = t
+
+    async def _eval_card_position_live(
+        self,
+        pos: PaperPosition,
+        klines: list,
+        *,
+        alerts: list[dict[str, Any]],
+    ) -> None:
+        """含未收盘 K：价格一到就更新分批止盈 / 保本 / 全平并回写评价。"""
+        if len(klines) < 3:
+            return
+        try:
+            df = enrich_sandbox_df(klines_to_df(klines))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("卡片仓指标失败 %s: %s", pos.symbol, exc)
+            return
+        if len(df) < 3:
+            return
+        # 含最后一根未完成 K，尽快反映盘中触价
+        live = df
+        t = int(time.time())
+        try:
+            pos_meta = json.loads(pos.meta_json or "{}")
+        except json.JSONDecodeError:
+            pos_meta = {}
+        # 指纹：避免同状态重复刷 partial；SL/TP 档位变化后仍会再跑
+        fingerprint = (
+            f"{pos.id}|{float(pos.sl or 0):.8g}|{int(pos_meta.get('card_tp_done') or 0)}|"
+            f"{float(live.iloc[-1]['high']):.8g}|{float(live.iloc[-1]['low']):.8g}"
+        )
+        slot_pos = f"card-live|{pos.id}"
+        if self._last_eval_bar.get(slot_pos) == fingerprint:
+            return
+        signals = evaluate_card_exit(
+            live,
+            side=pos.side,
+            entry_price=pos.entry_price,
+            sl=pos.sl,
+            tps=list(pos_meta.get("card_tps") or []),
+            tp1=pos.tp1,
+            tp2=pos.tp2,
+            meta=pos_meta,
+        )
+        if not signals:
+            self._last_eval_bar[slot_pos] = fingerprint
+            return
+        current = pos
+        for sig in signals:
+            alert = self._apply_signal(pos.symbol, sig, t, pos=current)
+            if alert:
+                alerts.append(alert)
+                if sig.action == "partial":
+                    # 分批/TP1 保本：进度回写（不完结评价）
+                    cid = pos_meta.get("card_id") or (sig.meta or {}).get("card_id")
+                    done = int((sig.meta or {}).get("card_tp_done") or 0)
+                    self._schedule_settlement_callback(
+                        {
+                            "card_id": cid,
+                            "symbol": pos.symbol,
+                            "side": pos.side,
+                            "outcome": "pending",
+                            "best_tp": f"TP{done}" if done > 0 else "TP1",
+                            "settlement_price": float(sig.price),
+                            "entry_price": float(pos.entry_price),
+                            "exit_code": (sig.meta or {}).get("exit_code") or "card_tp_partial",
+                            "exit_label": (sig.meta or {}).get("exit_label"),
+                            "progress": True,
+                            "source": "oi_mornitor",
+                        }
+                    )
+                if sig.action == "exit":
+                    cid = pos_meta.get("card_id")
+                    if cid:
+                        co = self.tracker.get_card_order(str(cid))
+                        if co:
+                            co["status"] = "closed"
+                            self.tracker.upsert_card_order(co)
+                    exit_code = str((sig.meta or {}).get("exit_code") or "")
+                    best_tp = None
+                    if exit_code == "card_tp":
+                        done = int((sig.meta or {}).get("card_tp_done") or 0)
+                        best_tp = f"TP{done}" if done > 0 else "TP1"
+                    elif exit_code == "card_sl":
+                        best_tp = "SL"
+                    self._schedule_settlement_callback(
+                        {
+                            "card_id": cid or pos_meta.get("card_id"),
+                            "symbol": pos.symbol,
+                            "side": pos.side,
+                            "outcome": (
+                                "take_profit"
+                                if exit_code == "card_tp"
+                                else "stop_loss"
+                                if exit_code == "card_sl"
+                                else "manual_close"
+                            ),
+                            "best_tp": best_tp,
+                            "settlement_price": float(sig.price),
+                            "entry_price": float(pos.entry_price),
+                            "exit_code": exit_code,
+                            "exit_label": (sig.meta or {}).get("exit_label"),
+                            "source": "oi_mornitor",
+                        }
+                    )
+                    break
+                current = self.tracker.get_position_by_id(pos.id)
+                if current is None:
+                    break
+                try:
+                    pos_meta = json.loads(current.meta_json or "{}")
+                except json.JSONDecodeError:
+                    pos_meta = {}
+        # 更新指纹为最新仓状态
+        try:
+            latest = self.tracker.get_position_by_id(pos.id)
+            if latest:
+                meta2 = json.loads(latest.meta_json or "{}")
+                fingerprint = (
+                    f"{latest.id}|{float(latest.sl or 0):.8g}|"
+                    f"{int(meta2.get('card_tp_done') or 0)}|"
+                    f"{float(live.iloc[-1]['high']):.8g}|{float(live.iloc[-1]['low']):.8g}"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        self._last_eval_bar[slot_pos] = fingerprint
+
+    async def scan_open_trades(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        base_url: str = FAPI_BASE_URL,
+        pool_rows: list[dict[str, Any]] | None = None,
+        pattern_states: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        快扫：只处理「已开仓 + 卡片挂单/近场」。
+        用含未收盘 K 的高低点尽快触价更新交易逻辑与评价回写。
+        """
+        if not SANDBOX_ENABLED:
+            return []
+        alerts: list[dict[str, Any]] = []
+        open_positions = self.tracker.list_positions()
+        card_watching = [
+            o
+            for o in self.tracker.list_active_card_orders()
+            if o.get("status") != "filled"
+        ]
+        if not open_positions and not card_watching:
+            return []
+
+        intervals = list(sandbox_intervals())
+        card_iv = CARD_EVAL_INTERVAL
+        symbols = sorted(
+            {p.symbol for p in open_positions}
+            | {str(o.get("symbol") or "").upper() for o in card_watching if o.get("symbol")}
+        )
+        if not symbols:
+            return []
+
+        # 拉各周期 + 卡片评估周期 K 线
+        need_ivs = sorted(set(intervals) | {card_iv})
+        fetched = await asyncio.gather(
+            *[
+                fetch_pattern_klines_batch(
+                    session,
+                    base_url=base_url,
+                    symbols=symbols,
+                    interval=iv,
+                    limit=min(80, self._kline_limit(iv)),
+                )
+                for iv in need_ivs
+            ]
+        )
+        klines_by_iv: dict[str, dict[str, list]] = {}
+        for iv, km in zip(need_ivs, fetched):
+            klines_by_iv[iv] = km
+
+        state_by_sym = {
+            str(s.get("symbol") or "").upper(): s for s in (pattern_states or [])
+        }
+
+        # S/T 已开仓：用 live K 更新止损/减仓/平仓（不开新仓）
+        for iv in intervals:
+            iv_sec = _INTERVAL_SEC.get(iv, 900)
+            klines_map = klines_by_iv.get(iv) or {}
+            for pos in open_positions:
+                if pos.logic == "C" or self._pos_interval(pos) != iv:
+                    continue
+                klines = klines_map.get(pos.symbol) or []
+                if len(klines) < 60:
+                    continue
+                try:
+                    df = enrich_sandbox_df(klines_to_df(klines))
+                except Exception:  # noqa: BLE001
+                    continue
+                if len(df) < 61:
+                    continue
+                live = df
+                t = int(time.time())
+                if iv == "15m":
+                    structure = {**(state_by_sym.get(pos.symbol) or {}), "symbol": pos.symbol}
+                else:
+                    structure = {"symbol": pos.symbol, "hl": 0.0, "lh_price": 0.0, "lh": 0.0}
+                try:
+                    pos_meta = json.loads(pos.meta_json or "{}")
+                except json.JSONDecodeError:
+                    pos_meta = {}
+                signals = evaluate_exit_and_trail(
+                    live,
+                    side=pos.side,
+                    logic=pos.logic,
+                    entry_price=pos.entry_price,
+                    sl=pos.sl,
+                    tp1=pos.tp1,
+                    tp2=pos.tp2,
+                    breakeven_armed=pos.breakeven_armed,
+                    structure=structure,
+                    entry_time=pos.entry_time,
+                    bar_time=t,
+                    interval_sec=iv_sec,
+                    meta=pos_meta,
+                )
+                current = pos
+                for sig in signals:
+                    # 快扫只跟交易逻辑，跳过纯 silent 极值同步的噪音弹窗
+                    if sig.action == "trail" and (sig.meta or {}).get("silent"):
+                        self._apply_signal(pos.symbol, sig, t, pos=current)
+                        current = self.tracker.get_position_by_id(pos.id)
+                        if current is None:
+                            break
+                        continue
+                    alert = self._apply_signal(pos.symbol, sig, t, pos=current)
+                    if alert:
+                        alerts.append(alert)
+                        if sig.action == "exit":
+                            break
+                        current = self.tracker.get_position_by_id(pos.id)
+                        if current is None:
+                            break
+
+        # 卡片：挂单近场 + 已开仓 TP/SL
+        await self._scan_card_orders(
+            session,
+            base_url=base_url,
+            pool_rows=pool_rows,
+            klines_15m=klines_by_iv.get(card_iv) or klines_by_iv.get("15m"),
+            alerts=alerts,
+        )
+        if alerts:
+            # 合并到最近告警，供 SSE 推送
+            self._last_alerts = (self._last_alerts or [])[-20:] + alerts
+            self._last_scan_ts = time.time()
+        return alerts
 
     async def manual_enter(
         self,
@@ -1040,31 +1222,29 @@ class SandboxEngine:
                 if len(df) < 61:
                     continue
                 closed = df.iloc[:-1].copy()
+                live = df
                 # 形态 LH/HL 目前按 15m 口径；其它周期不用，避免错位
                 if iv == "15m":
                     structure = {**(state_by_sym.get(sym) or {}), "symbol": sym}
                 else:
                     structure = {"symbol": sym, "hl": 0.0, "lh_price": 0.0, "lh": 0.0}
-                t = bar_time_sec(closed)
+                t_closed = bar_time_sec(closed)
+                t_live = int(time.time())
                 slot = self._slot_key(sym, iv)
-                # 同一根已收盘 K 只跑一轮
-                if self._last_eval_bar.get(slot) == t:
-                    continue
 
-                # 只管理本周期开的仓（卡片仓 logic=C 另走卡片 TP/SL）
+                # 已开仓：每轮用含未收盘 K 更新出场/移损（尽快触价）
                 open_positions = [
                     p
                     for p in self.tracker.list_positions_for_symbol(sym)
                     if self._pos_interval(p) == iv and p.logic != "C"
                 ]
-
                 for pos in open_positions:
                     try:
                         pos_meta = json.loads(pos.meta_json or "{}")
                     except json.JSONDecodeError:
                         pos_meta = {}
                     signals = evaluate_exit_and_trail(
-                        closed,
+                        live,
                         side=pos.side,
                         logic=pos.logic,
                         entry_price=pos.entry_price,
@@ -1074,13 +1254,13 @@ class SandboxEngine:
                         breakeven_armed=pos.breakeven_armed,
                         structure=structure,
                         entry_time=pos.entry_time,
-                        bar_time=t,
+                        bar_time=t_live,
                         interval_sec=iv_sec,
                         meta=pos_meta,
                     )
                     current = pos
                     for sig in signals:
-                        alert = self._apply_signal(sym, sig, t, pos=current)
+                        alert = self._apply_signal(sym, sig, t_live, pos=current)
                         if alert:
                             alerts.append(alert)
                             if sig.action == "exit":
@@ -1089,21 +1269,24 @@ class SandboxEngine:
                             if current is None:
                                 break
 
-                # 自动：同币同周期无持仓才开；15m/1h 可并行各开一笔
+                # 开新仓：同一根已收盘 K 只评估一次
+                if self._last_eval_bar.get(slot) == t_closed:
+                    continue
+
                 if (
                     not self._has_position_on_interval(sym, iv)
                     and sym in pool
                     and len(self.tracker.list_positions()) < SANDBOX_MAX_CONCURRENT
-                    and self._can_reenter(sym, t, iv)
+                    and self._can_reenter(sym, t_closed, iv)
                 ):
                     sig = evaluate_entry(
                         closed, symbol=sym, structure=structure, interval=iv
                     )
                     if sig:
-                        alert = self._apply_signal(sym, sig, t, pos=None)
+                        alert = self._apply_signal(sym, sig, t_closed, pos=None)
                         if alert:
                             alerts.append(alert)
-                self._last_eval_bar[slot] = t
+                self._last_eval_bar[slot] = t_closed
 
         # 卡片订单：近场提醒 / 挂单 / 入场 / 卡片止盈止损（不影响 S/T）
         await self._scan_card_orders(

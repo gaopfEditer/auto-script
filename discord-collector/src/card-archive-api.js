@@ -161,23 +161,40 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
       const entry = Number(body.entry_price ?? body.entryPrice ?? ex.planned?.entryPrice);
       const bestTp = body.best_tp ?? body.bestTp ?? null;
       const isShort = /空|short|sell/i.test(String(ex.direction ?? body.side ?? ""));
+      const isProgress = body.progress === true || outcome === "pending";
 
       /** @type {Record<string, unknown>} */
       const patch = {
         backtestJson: {
           ...(card.backtest && typeof card.backtest === "object" ? card.backtest : {}),
-          mode: "oi_settlement",
-          outcome,
+          mode: isProgress ? "oi_progress" : "oi_settlement",
+          outcome: isProgress ? (ex.outcome || "pending") : outcome,
           bestTp,
           settlementPrice: Number.isFinite(settlement) ? settlement : null,
           entry: Number.isFinite(entry) ? entry : null,
           source: body.source ?? "oi_mornitor",
           exitCode: body.exit_code ?? body.exitCode ?? null,
+          progress: isProgress,
           settledAt: new Date().toISOString(),
         },
       };
 
-      if (
+      if (isProgress) {
+        // 分批/TP1 进度：更新 autoEval，不完结 outcome
+        patch.executionJson = {
+          ...ex,
+          outcome: ex.outcome && ex.outcome !== "pending" ? ex.outcome : "pending",
+          autoEval: {
+            ...(ex.autoEval && typeof ex.autoEval === "object" ? ex.autoEval : {}),
+            bestTp,
+            settlementPrice: Number.isFinite(settlement) ? settlement : null,
+            progress: true,
+            exitCode: body.exit_code ?? body.exitCode ?? null,
+            at: new Date().toISOString(),
+            source: body.source ?? "oi_mornitor",
+          },
+        };
+      } else if (
         (outcome === "take_profit" || outcome === "stop_loss") &&
         Number.isFinite(settlement) &&
         settlement > 0 &&
@@ -197,6 +214,7 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
           autoEval: {
             bestTp,
             settlementPrice: settlement,
+            at: new Date().toISOString(),
             source: body.source ?? "oi_mornitor",
           },
         };

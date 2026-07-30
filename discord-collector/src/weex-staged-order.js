@@ -5,6 +5,7 @@ import {
   STAGED_INITIAL_SL_PCT,
   STAGED_TP_PARTIAL_RATIOS,
   calcInitialStopLoss,
+  resolveStagedEntryPrice,
 } from "./discord-signal-staged-trade.js";
 import {
   parseEntryPriceForOrder,
@@ -321,4 +322,105 @@ export async function executeWeexStagedReverse(client, input) {
   record.status = "reversed";
   record.open = openResult.record;
   return { ok: true, record };
+}
+
+/**
+ * TP1 触达后：把止损改到开仓价（保本）。
+ * @param {ReturnType<typeof import("./weex-api.js").createWeexClient>} client
+ * @param {{
+ *   prevOrder: Record<string, unknown>;
+ *   parsed?: Record<string, unknown> | null;
+ *   cardId: number;
+ *   dryRun?: boolean;
+ * }} input
+ */
+export async function executeWeexMoveSlToEntry(client, input) {
+  const prev = input.prevOrder;
+  if (prev.breakevenArmed === true || prev.slMovedToEntry === true) {
+    return { ok: true, skipped: true, reason: "already_armed", record: prev };
+  }
+
+  const symbol = String(prev.symbol ?? "").toUpperCase();
+  const holdSide = /** @type {"long"|"short"} */ (
+    String(prev.holdSide ?? (prev.side === "buy" ? "long" : "short"))
+  );
+  const entry = resolveStagedEntryPrice(prev, input.parsed ?? null);
+  if (!symbol || !entry) {
+    return { ok: false, reason: "missing_entry", record: prev };
+  }
+
+  const volumePlace = Number(prev.volumePlace);
+  const contractMeta =
+    Number.isFinite(volumePlace) && volumePlace > 0
+      ? {
+          minTradeNum: 0,
+          minTradeUsdt: 0,
+          volumePlace,
+          sizeMultiplier: Number(prev.sizeMultiplier) || 0,
+          pricePrecision: Number(prev.pricePrecision) || 2,
+          priceStep: Number(prev.priceStep) || 0.01,
+        }
+      : await fetchContractMeta(client, symbol);
+
+  const entryStr = formatWeexPrice(entry, contractMeta);
+  if (!entryStr) return { ok: false, reason: "invalid_entry_price", record: prev };
+
+  // TP1 分批后剩余仓：用总仓 − 已挂 TP1 数量；失败则用原仓
+  let remainingSize = String(prev.size ?? "");
+  const tpPlans = Array.isArray(prev.tpPlans) ? prev.tpPlans : [];
+  if (tpPlans.length && remainingSize) {
+    const total = Number(remainingSize);
+    const tp1Size = Number(/** @type {Record<string, unknown>} */ (tpPlans[0]).size ?? 0);
+    if (Number.isFinite(total) && total > 0 && Number.isFinite(tp1Size) && tp1Size > 0) {
+      const rem = formatOrderSize(Math.max(0, total - tp1Size), contractMeta, { mode: "floor" });
+      if (rem) remainingSize = rem;
+    }
+  }
+
+  /** @type {Record<string, unknown>} */
+  const record = {
+    ...prev,
+    stopLossPrice: entryStr,
+    breakevenArmed: true,
+    slMovedToEntry: true,
+    breakevenAt: new Date().toISOString(),
+    breakevenEntryPrice: entry,
+  };
+
+  if (input.dryRun || String(prev.status) === "dry_run") {
+    record.breakevenDryRun = true;
+    return { ok: true, record, dryRun: true };
+  }
+
+  try {
+    const mark = (await fetchMarkPrice(client, symbol)) ?? entry;
+    if (!isValidStopLoss(mark, Number(entryStr), holdSide)) {
+      record.breakevenArmed = false;
+      record.slMovedToEntry = false;
+      record.breakevenError = `entry SL ${entryStr} invalid vs mark ${mark}`;
+      return { ok: false, reason: "sl_invalid_vs_mark", record, error: record.breakevenError };
+    }
+  } catch {
+    /* continue */
+  }
+
+  try {
+    const slResp = await client.placeTpSlOrder({
+      symbol,
+      holdSide,
+      planType: "STOP_LOSS",
+      triggerPrice: entryStr,
+      quantity: remainingSize || "0",
+      clientOid: `wx-sl-be-${input.cardId}-${Date.now()}`,
+    });
+    record.breakevenSlResponse = slResp;
+    record.slOrderId = slResp?.orderId ?? record.slOrderId;
+    record.slPlan = { planType: "STOP_LOSS", triggerPrice: entryStr, reason: "tp1_breakeven" };
+    return { ok: true, record };
+  } catch (e) {
+    record.breakevenArmed = false;
+    record.slMovedToEntry = false;
+    record.breakevenError = String(/** @type {Error} */ (e).message ?? e);
+    return { ok: false, reason: "move_sl_failed", record, error: record.breakevenError };
+  }
 }

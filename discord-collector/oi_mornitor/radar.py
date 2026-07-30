@@ -35,6 +35,7 @@ from oi_mornitor.config import (
     OI_ZSCORE_HISTORY_LEN,
     OI_ZSCORE_MIN_SAMPLES,
     OI_ZSCORE_THRESHOLD,
+    OPEN_TRADE_SCAN_SEC,
     POLL_15M_SEC,
     POLL_5M_SEC,
     RATE_LIMIT_COOLDOWN_SEC,
@@ -1225,6 +1226,7 @@ class RadarService:
         self._session: aiohttp.ClientSession | None = None
         self._session_trust_env: bool | None = None
         self._task: asyncio.Task[None] | None = None
+        self._open_trade_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
         self._running = False
 
@@ -1310,6 +1312,32 @@ class RadarService:
         except Exception as exc:  # noqa: BLE001
             logger.warning("TV 信号监听 tick 失败: %s", exc)
 
+    async def _open_trade_loop(self) -> None:
+        """已开仓 / 卡片挂单快扫：尽快触价更新交易逻辑与评价。"""
+        interval = max(5.0, float(OPEN_TRADE_SCAN_SEC or 15))
+        while self._running:
+            try:
+                session = await self._ensure_session()
+                alerts = await self.sandbox_engine.scan_open_trades(
+                    session,
+                    base_url=self.radar.base_url,
+                    pool_rows=self.radar.last_all_rows,
+                    pattern_states=self.pattern_engine.last_states,
+                )
+                if alerts:
+                    logger.info(
+                        "持仓快扫更新 %d 条: %s",
+                        len(alerts),
+                        ",".join(
+                            f"{a.get('type')}:{a.get('symbol')}" for a in alerts[:8]
+                        ),
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("持仓快扫异常: %s", exc)
+            await asyncio.sleep(interval)
+
     async def _loop(self, interval_sec: int) -> None:
         while self._running:
             try:
@@ -1336,17 +1364,26 @@ class RadarService:
                 "若超时请在 .env 添加 HTTPS_PROXY=http://127.0.0.1:7890"
             )
         self._task = asyncio.create_task(self._loop(interval_sec), name="oi-radar-loop")
-        logger.info("雷达后台循环已启动，间隔 %ds", interval_sec)
+        self._open_trade_task = asyncio.create_task(
+            self._open_trade_loop(), name="oi-open-trade-loop"
+        )
+        logger.info(
+            "雷达后台循环已启动，间隔 %ds；持仓快扫 %.0fs",
+            interval_sec,
+            max(5.0, float(OPEN_TRADE_SCAN_SEC or 15)),
+        )
 
     async def stop(self) -> None:
         self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        for attr in ("_task", "_open_trade_task"):
+            task = getattr(self, attr, None)
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                setattr(self, attr, None)
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None

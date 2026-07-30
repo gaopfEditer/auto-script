@@ -249,6 +249,8 @@ CARD_NEAR_ENTRY_MAJOR_LEV = float(os.getenv("OI_CARD_NEAR_ENTRY_MAJOR_LEV", "80"
 # 卡片仓位执行评估周期（触 TP/SL；默认 5m 刷新）
 CARD_EVAL_INTERVAL = os.getenv("OI_CARD_EVAL_INTERVAL", "5m").strip() or "5m"
 CARD_DEFAULT_LEVERAGE = float(os.getenv("OI_CARD_DEFAULT_LEVERAGE", "10"))
+# 已开仓 / 卡片挂单：独立快扫间隔（秒），尽快触价更新评价与交易逻辑
+OPEN_TRADE_SCAN_SEC = float(os.getenv("OI_OPEN_TRADE_SCAN_SEC", "15"))
 # 平仓后回写 discord-collector 自动评价
 CARD_SETTLEMENT_URL = (
     os.getenv("OI_CARD_SETTLEMENT_URL", "http://127.0.0.1:3851/api/cards/settlement").strip()

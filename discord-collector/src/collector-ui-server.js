@@ -27,6 +27,7 @@ import { isBlockedWsPayload, isForwardableFramePayload } from "./ws-noise-filter
 import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, tryOpenStore } from "./store.js";
 import { killListenersOnPort } from "../scripts/kill-port.mjs";
+import { startOiSupervisor } from "../scripts/oi-supervisor.mjs";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
 import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
@@ -103,7 +104,8 @@ async function main() {
     store,
     createLogger("card-price"),
     systemTelegram,
-    broadcast
+    broadcast,
+    { bitgetOrder, weexOrder }
   );
   const discordIngest = createDiscordMessageIngest(
     store,
@@ -195,7 +197,7 @@ async function main() {
       apiBase,
       embedUrl: publicEmbed,
       publicEmbedUrl: publicEmbed,
-      hint: "另开终端：pnpm run oi:start（完整 OI）或 oi:dev；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8765",
+      hint: "oi_mornitor 由 collect:ui 自动守护；也可手动：pnpm run oi:start；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8765",
     };
 
     /** @param {string} url */
@@ -636,6 +638,16 @@ async function main() {
         .catch((e) => log.warn(`coin-action 迁移: ${/** @type {Error} */ (e).message}`));
     }
   }
+
+  const oiSupervisor = startOiSupervisor({
+    log: createLogger("oi-supervisor"),
+    apiBase: config.oiWebBaseUrl,
+    enabled: config.oiAutoStart,
+    checkIntervalMs: config.oiSupervisorIntervalMs,
+  });
+  process.once("SIGINT", () => oiSupervisor.stop());
+  process.once("SIGTERM", () => oiSupervisor.stop());
+
   log.info(
     `[api] /api/cards /api/v1/cards /api/discord/signal-cards（debugMode=${isDebugMode()}）`
   );
