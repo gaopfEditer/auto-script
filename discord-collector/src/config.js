@@ -66,7 +66,25 @@ export const config = {
   startUrl: collectStart.url,
   collectStartUsedTargetFallback: collectStart.usedTargetFallback,
   cdpConnectUrl: (process.env.CDP_CONNECT_URL ?? "").trim(),
-  pageReloadIntervalMs: Number(process.env.COLLECTOR_PAGE_RELOAD_INTERVAL_MS ?? 0),
+  /**
+   * CDP 附加后自动打开 startUrl（Discord 频道）并定时刷新保活。
+   * 默认开；COLLECTOR_CDP_AUTO_GOTO=0 关闭。
+   */
+  cdpAutoGoto: !["0", "false", "no", "off"].includes(
+    String(process.env.COLLECTOR_CDP_AUTO_GOTO ?? "1").toLowerCase()
+  ),
+  /**
+   * Discord 页定时刷新间隔（ms）。0=不刷新。
+   * 未配置且 startUrl 为 /channels/… 时默认 5 分钟，避免 Gateway 假死。
+   */
+  pageReloadIntervalMs: (() => {
+    const raw = process.env.COLLECTOR_PAGE_RELOAD_INTERVAL_MS;
+    if (raw != null && String(raw).trim() !== "") {
+      return Math.max(0, Number(raw) || 0);
+    }
+    if (/discord\.com\/channels\//i.test(collectStart.url)) return 5 * 60_000;
+    return 0;
+  })(),
   collectNetworkTrace: ["1", "true", "yes", "on"].includes(
     String(process.env.COLLECTOR_NETWORK_TRACE ?? "0").toLowerCase()
   ),

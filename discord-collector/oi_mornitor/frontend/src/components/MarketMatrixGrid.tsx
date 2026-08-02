@@ -1,7 +1,9 @@
 import { memo, useCallback, useState, type CSSProperties } from "react";
+import { useNavigate } from "react-router-dom";
 import type { OiTimeframe } from "../types";
 import type { MatrixRow } from "../types";
 import { fmtMk, fmtPct } from "../utils/format";
+import { patternsPathForSymbol } from "../utils/patternNav";
 import { coinInitial, displaySymbol } from "../utils/symbol";
 import { MercuTimeframes } from "./MercuTimeframes";
 
@@ -17,6 +19,7 @@ interface RankListProps {
   emptyText?: string;
   hoveredSymbol?: string | null;
   onHoverSymbol?: (symbol: string | null) => void;
+  onSelectSymbol?: (symbol: string) => void;
 }
 
 function barValue(row: MatrixRow): number {
@@ -37,6 +40,7 @@ const RankList = memo(function RankList({
   emptyText = "暂无数据",
   hoveredSymbol = null,
   onHoverSymbol,
+  onSelectSymbol,
 }: RankListProps) {
   const maxBar = Math.max(...rows.map((r) => barValue(r)), 1);
 
@@ -64,10 +68,13 @@ const RankList = memo(function RankList({
               <li
                 key={`${title}-${subtitle}-${row.symbol}`}
                 data-symbol={sym}
-                className={`rank-item rank-item-bg ${tone}${crossHover ? " is-cross-hover" : ""}`}
+                className={`rank-item rank-item-bg ${tone}${crossHover ? " is-cross-hover" : ""}${onSelectSymbol ? " rank-item-clickable" : ""}`}
                 style={{ "--bar-pct": `${Math.max(barPct, 6)}%` } as CSSProperties}
                 onPointerEnter={() => onHoverSymbol?.(sym)}
                 onPointerLeave={() => onHoverSymbol?.(null)}
+                onClick={() => onSelectSymbol?.(sym)}
+                title={onSelectSymbol ? `查看 ${displaySymbol(sym)} 形态 K 线` : undefined}
+                role={onSelectSymbol ? "button" : undefined}
               >
                 <span className="rank-badge">{row.matrix_rank}</span>
                 <span className="rank-coin-avatar">{coinInitial(row.symbol)}</span>
@@ -125,10 +132,17 @@ export const MarketMatrixGrid = memo(function MarketMatrixGrid({
   spot,
   takerFlowStatus,
 }: Props) {
+  const navigate = useNavigate();
   const [hoveredSymbol, setHoveredSymbol] = useState<string | null>(null);
   const onHoverSymbol = useCallback((symbol: string | null) => {
     setHoveredSymbol(symbol);
   }, []);
+  const onSelectSymbol = useCallback(
+    (symbol: string) => {
+      navigate(patternsPathForSymbol(symbol));
+    },
+    [navigate],
+  );
 
   const flowEmptyHint =
     takerFlowStatus === "unavailable"
@@ -139,7 +153,7 @@ export const MarketMatrixGrid = memo(function MarketMatrixGrid({
   const contractEmpty = contract.inMagnitude.length === 0 && contract.outMagnitude.length === 0;
   const spotEmpty = spot.inMagnitude.length === 0 && spot.outMagnitude.length === 0;
 
-  const listProps = { hoveredSymbol, onHoverSymbol };
+  const listProps = { hoveredSymbol, onHoverSymbol, onSelectSymbol };
 
   return (
     <main className="panel matrix-center">

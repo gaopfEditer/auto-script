@@ -15,6 +15,7 @@ interface Props {
 }
 
 const TOAST_TTL_MS = 22000;
+const MAX_TOASTS = 12;
 
 const TYPE_LABEL: Record<string, string> = {
   entry: "沙盒入场",
@@ -47,16 +48,21 @@ export const SandboxToastStack = memo(function SandboxToastStack({
     });
     if (!fresh.length) return;
 
+    // 防止 seen 无限增长
+    if (seenRef.current.size > 400) {
+      seenRef.current = new Set([...seenRef.current].slice(-200));
+    }
+
     const now = Date.now();
     setToasts((prev) =>
       [
-        ...fresh.map((alert) => ({
-          id: `${alert.type}-${alert.symbol}-${alert.kline_close_time}-${now}`,
+        ...fresh.map((alert, i) => ({
+          id: `${alert.type}-${alert.symbol}-${alert.kline_close_time}-${now}-${i}`,
           alert,
           createdAt: now,
         })),
         ...prev,
-      ].slice(0, 8),
+      ].slice(0, MAX_TOASTS),
     );
   }, [alerts, scanTs]);
 
@@ -70,49 +76,58 @@ export const SandboxToastStack = memo(function SandboxToastStack({
   }, [toasts.length]);
 
   const dismiss = (id: string) => setToasts((prev) => prev.filter((t) => t.id !== id));
+  const dismissAll = () => setToasts([]);
 
   if (!toasts.length) return null;
 
   return (
-    <div className="pattern-toast-stack sandbox-toast-stack">
-      {toasts.map(({ id, alert }) => (
-        <div
-          key={id}
-          className={`toast-card sandbox-${alert.type === "exit" ? (Number(alert.pnl_usd) >= 0 ? "win" : "loss") : "signal"}`}
-        >
-          <button type="button" className="toast-close" onClick={() => dismiss(id)} aria-label="关闭">
-            ×
-          </button>
-          <div className="toast-head">
-            <span className="coin-avatar">{coinInitial(alert.symbol)}</span>
-            <div>
-              <div className="toast-title">
-                ${displaySymbol(alert.symbol)} · {TYPE_LABEL[alert.type] ?? alert.status_label}
-              </div>
-              <div className="toast-sub">
-                逻辑{alert.logic ?? "—"} · {alert.side ?? "—"} · {alert.interval}
-              </div>
-              <div className="toast-sub">{alert.message}</div>
-              {alert.pnl_usd != null && (
-                <div className="toast-sub">
-                  PnL {alert.pnl_usd >= 0 ? "+" : ""}
-                  {alert.pnl_usd.toFixed(2)}U ({alert.pnl_pct?.toFixed(2)}%)
-                </div>
-              )}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="toast-action"
-            onClick={() => {
-              onOpen?.(alert.symbol);
-              dismiss(id);
-            }}
+    <div className="pattern-toast-stack sandbox-toast-stack" role="region" aria-label="沙盒信号通知">
+      <div className="sandbox-toast-toolbar">
+        <span className="sandbox-toast-count">沙盒信号 · {toasts.length}</span>
+        <button type="button" className="sandbox-toast-clear" onClick={dismissAll}>
+          关闭全部
+        </button>
+      </div>
+      <div className="sandbox-toast-list">
+        {toasts.map(({ id, alert }) => (
+          <div
+            key={id}
+            className={`toast-card sandbox-${alert.type === "exit" ? (Number(alert.pnl_usd) >= 0 ? "win" : "loss") : "signal"}`}
           >
-            查看 K 线
-          </button>
-        </div>
-      ))}
+            <button type="button" className="toast-close" onClick={() => dismiss(id)} aria-label="关闭">
+              ×
+            </button>
+            <div className="toast-head">
+              <span className="coin-avatar">{coinInitial(alert.symbol)}</span>
+              <div>
+                <div className="toast-title">
+                  ${displaySymbol(alert.symbol)} · {TYPE_LABEL[alert.type] ?? alert.status_label}
+                </div>
+                <div className="toast-sub">
+                  逻辑{alert.logic ?? "—"} · {alert.side ?? "—"} · {alert.interval}
+                </div>
+                <div className="toast-sub">{alert.message}</div>
+                {alert.pnl_usd != null && (
+                  <div className="toast-sub">
+                    PnL {alert.pnl_usd >= 0 ? "+" : ""}
+                    {alert.pnl_usd.toFixed(2)}U ({alert.pnl_pct?.toFixed(2)}%)
+                  </div>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => {
+                onOpen?.(alert.symbol);
+                dismiss(id);
+              }}
+            >
+              查看 K 线
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 });

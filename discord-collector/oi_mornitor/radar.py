@@ -1269,6 +1269,7 @@ class RadarService:
             pool_rows=self.radar.last_all_rows,
             fallback_symbols=self.radar.heavyweight_symbol_list,
             protect_symbols=sandbox_open,
+            hot_tickers=self.radar.last_hot_tickers,
         )
         for row in self.radar.last_all_rows:
             sym = str(row.get("symbol") or "")

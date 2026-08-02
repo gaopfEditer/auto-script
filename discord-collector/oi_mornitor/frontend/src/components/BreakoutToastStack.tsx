@@ -1,5 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { BreakoutAlert } from "../types";
+import { patternsPathForSymbol } from "../utils/patternNav";
 import { coinInitial, displaySymbol } from "../utils/symbol";
 
 interface ToastItem {
@@ -16,6 +18,7 @@ interface Props {
 const TOAST_TTL_MS = 15000;
 
 export const BreakoutToastStack = memo(function BreakoutToastStack({ alerts, scanTs }: Props) {
+  const navigate = useNavigate();
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const seenRef = useRef<Set<string>>(new Set());
   const scanRef = useRef(0);
@@ -33,14 +36,16 @@ export const BreakoutToastStack = memo(function BreakoutToastStack({ alerts, sca
     if (!fresh.length) return;
 
     const now = Date.now();
-    setToasts((prev) => [
-      ...fresh.map((alert) => ({
-        id: `${alert.symbol}-${alert.kline_close_time}`,
-        alert,
-        createdAt: now,
-      })),
-      ...prev,
-    ].slice(0, 5));
+    setToasts((prev) =>
+      [
+        ...fresh.map((alert) => ({
+          id: `${alert.symbol}-${alert.kline_close_time}`,
+          alert,
+          createdAt: now,
+        })),
+        ...prev,
+      ].slice(0, 5),
+    );
   }, [alerts, scanTs]);
 
   useEffect(() => {
@@ -79,7 +84,13 @@ export const BreakoutToastStack = memo(function BreakoutToastStack({ alerts, sca
                 <div className="toast-sub">{alert.message}</div>
               </div>
             </div>
-            <button type="button" className="toast-action">关注入场</button>
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => navigate(patternsPathForSymbol(alert.symbol))}
+            >
+              关注入场
+            </button>
           </div>
         );
       })}

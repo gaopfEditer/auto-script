@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import type { PatternAlert, PatternPayload, PatternState, PatternWatchItem } from "../types";
 import { coinInitial, displaySymbol } from "../utils/symbol";
 import { MercuHeader } from "../components/MercuHeader";
@@ -8,6 +9,7 @@ import { SandboxToastStack } from "../components/SandboxToastStack";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useSandboxTradeHistory } from "../hooks/useSandboxTradeHistory";
 import { fmtMetaPrice, fmtTs } from "../utils/format";
+import { resolveSandboxCardAuthor } from "../utils/cardAuthor";
 import {
   filterHistoryByRange,
   SANDBOX_HISTORY_RANGE_OPTIONS,
@@ -57,6 +59,7 @@ const STATUS_CLASS: Record<string, string> = {
 
 export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const { snapshot, online, patchPattern } = useRadarSSE();
+  const [searchParams, setSearchParams] = useSearchParams();
   const pattern = snapshot.pattern;
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,6 +71,10 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const watchlist: PatternWatchItem[] = pattern?.watchlist ?? [];
   const states: PatternState[] = pattern?.states ?? [];
   const alerts: PatternAlert[] = pattern?.pattern_alerts ?? [];
+  const watchSet = useMemo(
+    () => new Set(watchlist.map((w) => w.symbol.toUpperCase())),
+    [watchlist],
+  );
   const sandboxAlerts: PatternAlert[] = pattern?.sandbox_alerts ?? [];
   const sandboxPool = pattern?.sandbox_pool ?? [];
   const sandboxPositions = pattern?.sandbox_positions ?? [];
@@ -86,7 +93,8 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     [states],
   );
   const sandboxOn = pattern?.sandbox_enabled !== false;
-  const sandboxMaxConcurrent = pattern?.sandbox_max_concurrent ?? 10;
+  const sandboxMaxConcurrent = pattern?.sandbox_max_concurrent ?? 20;
+  const maxWatchSymbols = pattern?.max_watch_symbols ?? 50;
   const enteredSymbols = useMemo(() => {
     const set = new Set<string>();
     for (const p of sandboxPositions) {
@@ -172,8 +180,13 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     } else if (sandboxLogicFilter === "S" || sandboxLogicFilter === "T") {
       rows = rows.filter((p) => String(p.logic || "").toUpperCase() === sandboxLogicFilter);
     }
+    if (sandboxVegasFilter === "UP" || sandboxVegasFilter === "DOWN") {
+      rows = rows.filter(
+        (p) => String(p.vegas_direction || "").toUpperCase() === sandboxVegasFilter,
+      );
+    }
     return rows;
-  }, [sandboxPositions, sandboxLogicFilter]);
+  }, [sandboxPositions, sandboxLogicFilter, sandboxVegasFilter]);
   const cardOrders = pattern?.sandbox_card_orders ?? [];
   const filteredCardOrders = useMemo(() => {
     if (sandboxLogicFilter === "S" || sandboxLogicFilter === "T") return [];
@@ -286,32 +299,59 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     [patchPattern],
   );
 
-  const addSymbol = useCallback(async () => {
-    const sym = input.trim().toUpperCase();
-    if (!sym) return;
-    setBusy(true);
-    setErr("");
-    try {
-      const res = await fetch("/api/patterns/watch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: sym }),
-      });
-      const data = await res.json();
-      if (!data.ok) setErr(data.error || "添加失败");
-      else {
-        setInput("");
+  const addSymbol = useCallback(
+    async (symbolOverride?: string) => {
+      const sym = (symbolOverride ?? input).trim().toUpperCase();
+      if (!sym) return false;
+      setBusy(true);
+      setErr("");
+      try {
+        const res = await fetch("/api/patterns/watch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol: sym }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          setErr(data.error || "添加失败");
+          return false;
+        }
+        if (!symbolOverride) setInput("");
         setSelectedSymbol(sym);
+        setMainTab("pattern");
         if (Array.isArray(data.watchlist)) {
           patchPattern({ watchlist: data.watchlist });
         }
+        return true;
+      } catch {
+        setErr("网络错误");
+        return false;
+      } finally {
+        setBusy(false);
       }
-    } catch {
-      setErr("网络错误");
-    } finally {
-      setBusy(false);
+    },
+    [input, patchPattern],
+  );
+
+  // 雷达榜单 / Toast → /patterns?symbol=XXX[&add=1]
+  useEffect(() => {
+    const raw = searchParams.get("symbol");
+    if (!raw) return;
+    const sym = raw.trim().toUpperCase();
+    if (!sym) return;
+    setSelectedSymbol(sym);
+    setMainTab("pattern");
+    const wantAdd = searchParams.get("add") === "1";
+    const next = new URLSearchParams(searchParams);
+    next.delete("symbol");
+    next.delete("add");
+    setSearchParams(next, { replace: true });
+    if (wantAdd && !watchSet.has(sym)) {
+      void addSymbol(sym);
     }
-  }, [input, patchPattern]);
+    // 仅响应 URL 变化；勿把 watchSet/addSymbol 放进 deps 以免重复加
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const removeSymbol = useCallback(async (symbol: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -413,7 +453,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     }
   }, []);
 
-  const autoPickCount = pattern?.auto_pick_count ?? 20;
+  const autoPickCount = pattern?.auto_pick_count ?? 50;
   const heavyPool = pattern?.heavyweight_pool_size ?? 0;
   const selectedState = states.find((s) => s.symbol === selectedSymbol);
   const selectedTicker = selectedSymbol
@@ -433,8 +473,9 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         <aside className="pattern-sidebar panel">
           <h2>形态追踪</h2>
           <p className="pattern-desc">
-            每 {Math.round((pattern?.watchlist_refresh_sec ?? 7200) / 3600)} 小时用合约流入 + OI
-            爆发刷新 {autoPickCount} 个；雷达「涨幅∩持仓」即时入池；已进场与沙盒持仓保留 ·
+            上限 {maxWatchSymbols} · 每{" "}
+            {Math.round((pattern?.watchlist_refresh_sec ?? 7200) / 3600)} 小时热钱刷新{" "}
+            {autoPickCount} 个；雷达「涨幅∩持仓」「OI 异动∩多榜」即时入池；已进场与沙盒持仓保留 ·
             点击查看 K 线
           </p>
 
@@ -460,7 +501,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
           </div>
           {err && <p className="pattern-err">{err}</p>}
           <p className="pattern-meta">
-            已监听 {watchlist.length} / 30（排序：置顶 → 持仓 → 其他）
+            已监听 {watchlist.length} / {maxWatchSymbols}（排序：置顶 → 持仓 → 其他）
           </p>
 
           <ul className="pattern-watchlist">
@@ -595,6 +636,9 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               liveTicker={selectedTicker}
               onClose={() => setSelectedSymbol(null)}
               onTitleContextMenu={openWatchCtxMenu}
+              inWatchlist={watchSet.has(selectedSymbol.toUpperCase())}
+              addWatchBusy={busy}
+              onAddToWatchlist={(sym) => void addSymbol(sym)}
               sandboxEnabled={sandboxOn}
               manualEnterBusy={busy}
               onManualEnter={(args) => void manualSandboxEnter(args)}
@@ -944,7 +988,9 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredCardOrders.map((o) => (
+                          {filteredCardOrders.map((o) => {
+                            const author = resolveSandboxCardAuthor(o);
+                            return (
                             <tr
                               key={o.card_id}
                               className="clickable"
@@ -952,12 +998,8 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                             >
                               <td>
                                 {o.card_id}
-                                {o.source_label || o.channel_name || o.guild_name ? (
-                                  <span className="sandbox-pnl-sub">
-                                    {[o.guild_name, o.channel_name || o.source_label]
-                                      .filter(Boolean)
-                                      .join(" · ")}
-                                  </span>
+                                {author ? (
+                                  <span className="sandbox-pnl-sub">{author}</span>
                                 ) : null}
                               </td>
                               <td>
@@ -965,7 +1007,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                                   o.signal_at || o.created_at || 0
                                 )}
                               </td>
-                              <td>{o.author_name || "—"}</td>
+                              <td>{author || "—"}</td>
                               <td>${displaySymbol(o.symbol)}</td>
                               <td>
                                 {o.status === "watching"
@@ -996,7 +1038,8 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                               <td>{o.sl != null ? fmtMetaPrice(o.sl) : "—"}</td>
                               <td>{o.leverage != null ? `${o.leverage}x` : "—"}</td>
                             </tr>
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     )}
@@ -1006,6 +1049,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                         <thead>
                           <tr>
                             <th>币种</th>
+                            <th>作者</th>
                             <th>来源</th>
                             <th>周期</th>
                             <th>模块</th>
@@ -1026,6 +1070,14 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                               onClick={() => setSelectedSymbol(p.symbol)}
                             >
                               <td>${displaySymbol(p.symbol)}</td>
+                              <td>
+                                {resolveSandboxCardAuthor({
+                                  author_name: p.author_name,
+                                  channel_id: p.channel_id,
+                                  channel_name: p.channel_name,
+                                  source_label: p.card_source || p.source_label,
+                                }) || "—"}
+                              </td>
                               <td>
                                 <span
                                   className={`sandbox-src${
@@ -1149,6 +1201,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                         <tr>
                           <th>日期</th>
                           <th>币种</th>
+                          <th>作者</th>
                           <th>来源</th>
                           <th>周期</th>
                           <th>逻辑</th>
@@ -1166,7 +1219,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                       <tbody>
                         {filteredHistory.length === 0 ? (
                           <tr>
-                            <td colSpan={14} className="pattern-empty">
+                            <td colSpan={15} className="pattern-empty">
                               该时间范围内暂无平仓记录（本地保留近 {SANDBOX_HISTORY_RETAIN_DAYS} 天）
                             </td>
                           </tr>
@@ -1182,6 +1235,13 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                                 : t.source === "manual" || t.source === "手动"
                                   ? "手动"
                                   : "自动");
+                            const author =
+                              resolveSandboxCardAuthor({
+                                author_name: t.author_name,
+                                channel_id: t.channel_id,
+                                channel_name: t.channel_name,
+                                source_label: t.card_source || t.source_label,
+                              }) || "—";
                             const exitLabel =
                               t.exit_label ||
                               (t.reason?.includes("|")
@@ -1203,6 +1263,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                             >
                               <td>{t.day.slice(5)}</td>
                               <td>${displaySymbol(t.symbol)}</td>
+                              <td>{author}</td>
                               <td>
                                 <span
                                   className={`sandbox-src${
@@ -1271,11 +1332,21 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         </main>
       </div>
 
-      <PatternToastStack alerts={alerts} scanTs={scanTs} />
+      <PatternToastStack
+        alerts={alerts}
+        scanTs={scanTs}
+        onOpen={(sym) => {
+          setSelectedSymbol(sym);
+          setMainTab("pattern");
+        }}
+      />
       <SandboxToastStack
         alerts={sandboxAlerts}
         scanTs={sandboxScanTs}
-        onOpen={setSelectedSymbol}
+        onOpen={(sym) => {
+          setSelectedSymbol(sym);
+          setMainTab("pattern");
+        }}
       />
 
       {ctxMenu && (

@@ -1,7 +1,9 @@
 import { memo, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import type { TickerRow } from "../types";
 import { deriveOiAlerts, type OiAlertItem } from "../utils/deriveOiAlerts";
 import { fmtDelta, fmtPct } from "../utils/format";
+import { patternsPathForSymbol } from "../utils/patternNav";
 import { coinInitial, displaySymbol } from "../utils/symbol";
 
 interface Props {
@@ -27,15 +29,20 @@ function windowLabel(window: OiAlertItem["window"]): string {
 const AlertCard = memo(function AlertCard({
   item,
   timeLabel,
+  onSelect,
 }: {
   item: OiAlertItem;
   timeLabel: string;
+  onSelect?: (symbol: string) => void;
 }) {
   const { row, window, deltaUsd, pct, isPump, isSuppressed } = item;
 
   return (
     <article
-      className={`alert-card ${isPump ? "pump" : "dump"} ${isSuppressed ? "suppressed" : ""}`}
+      className={`alert-card ${isPump ? "pump" : "dump"} ${isSuppressed ? "suppressed" : ""}${onSelect ? " alert-card-clickable" : ""}`}
+      onClick={() => onSelect?.(row.symbol)}
+      title={onSelect ? `查看 ${displaySymbol(row.symbol)} 形态 K 线` : undefined}
+      role={onSelect ? "button" : undefined}
     >
       <div className="alert-card-row">
         <time className="alert-ts">{timeLabel}</time>
@@ -76,11 +83,13 @@ export const AlertFeed = memo(function AlertFeed({
   poolSize,
   thresholds,
 }: Props) {
+  const navigate = useNavigate();
   const alerts = useMemo(
     () => deriveOiAlerts(rows, thresholds),
     [rows, thresholds],
   );
   const timeLabel = formatClock(scanTs);
+  const openPattern = (symbol: string) => navigate(patternsPathForSymbol(symbol));
 
   return (
     <aside className="panel alert-feed">
@@ -104,7 +113,12 @@ export const AlertFeed = memo(function AlertFeed({
           <div className="panel-empty">暂无异动 · 持续扫描中</div>
         ) : (
           alerts.map((item) => (
-            <AlertCard key={item.id} item={item} timeLabel={timeLabel} />
+            <AlertCard
+              key={item.id}
+              item={item}
+              timeLabel={timeLabel}
+              onSelect={openPattern}
+            />
           ))
         )}
       </div>

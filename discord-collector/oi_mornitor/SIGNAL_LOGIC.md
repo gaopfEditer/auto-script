@@ -221,7 +221,7 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 |----|------|------|
 | K 线周期 | **15m + 1h** 已收盘 K（同等扫描） | `OI_SANDBOX_INTERVALS`（默认 `15m,1h`）；单周期可设 `15m` |
 | 日扫描池 | 随机 **12** 币 | `OI_SANDBOX_DAILY_COUNT`；可「重抽」 |
-| 最大同时持仓 | **10** | `OI_SANDBOX_MAX_CONCURRENT`；先触发先开（跨周期合计） |
+| 最大同时持仓 | **20** | `OI_SANDBOX_MAX_CONCURRENT`；先触发先开（跨周期合计） |
 | 单笔保证金 | **1U** | `OI_SANDBOX_NOTIONAL_USD`；名义 = 保证金 × 杠杆 |
 | 杠杆 | BTC/ETH **100x**，其余 **30x** | `OI_SANDBOX_LEVERAGE_*` |
 | 手续费 | 单边 **0.04%** 名义 | 开+平各一次，从 PnL 扣除（`OI_SANDBOX_FEE_PCT`） |
@@ -374,7 +374,7 @@ if low <= trail_sl:
 | `OI_SANDBOX_KLINE_LIMIT` | 200 | 15m 等周期拉取根数 |
 | `OI_SANDBOX_KLINE_LIMIT_1H` | 720 | 1h 拉取根数（够 Vegas EMA676） |
 | `OI_SANDBOX_DAILY_COUNT` | 12 | 日池币数 |
-| `OI_SANDBOX_MAX_CONCURRENT` | 10 | 最大同时持仓 |
+| `OI_SANDBOX_MAX_CONCURRENT` | 20 | 最大同时持仓 |
 | `OI_SANDBOX_NOTIONAL_USD` | 1 | 单笔保证金 U |
 | `OI_SANDBOX_LEVERAGE_MAJOR` / `_ALT` | 100 / 30 | BTC·ETH / 山寨杠杆 |
 | `OI_SANDBOX_FEE_PCT` | 0.04 | 单边手续费 %（名义） |
@@ -426,4 +426,4 @@ SQLite `trades` + 持仓 `meta_json.events` + 前端 localStorage：
 2. **止损先紧后活**：结构位 + 硬上限 → 开仓风险可控；盈利后再阶梯上移 / 保本 / 跟踪。  
 3. **短线防抖**：中轨用收盘判定 + 最短持仓 + 最小有利波动，减少影线假平仓。  
 4. **长线分阶段**：先保本 → 减仓 30% 落袋 → 尾仓才给 1% 回撤空间。  
-5. **多币并发**：日池 12、上限 10，先触发先开；平仓后冷却防反复扫损。
+5. **多币并发**：日池 12、上限 20，先触发先开；平仓后冷却防反复扫损。

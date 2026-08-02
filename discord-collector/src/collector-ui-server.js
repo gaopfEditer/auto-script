@@ -26,7 +26,7 @@ import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
 import { isBlockedWsPayload, isForwardableFramePayload } from "./ws-noise-filter.js";
 import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, tryOpenStore } from "./store.js";
-import { killListenersOnPort } from "../scripts/kill-port.mjs";
+import { findFreePortNear, killListenersOnPort } from "../scripts/kill-port.mjs";
 import { startOiSupervisor } from "../scripts/oi-supervisor.mjs";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
@@ -34,6 +34,7 @@ import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
 import { registerYoutubePasteBatchRoutes, startPasteBatchService } from "./youtube-paste-batch.js";
 import { createCardArchiveService } from "./card-archive-service.js";
 import { registerCardArchiveRoutes } from "./card-archive-api.js";
+import { registerCommunityRoutes } from "./community-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
 import { createCardExternalSink } from "./card-external-sink.js";
 import { createBitgetOrderService } from "./bitget-order-service.js";
@@ -51,7 +52,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public", "collector-ui");
-const PORT = Number.isFinite(config.collectUiPort) ? config.collectUiPort : 3851;
+let PORT = Number.isFinite(config.collectUiPort) ? config.collectUiPort : 3851;
 
 async function main() {
   setLogLevel(config.logLevel);
@@ -61,6 +62,16 @@ async function main() {
   const app = express();
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
+  // 避免 listen EADDRINUSE 时 WSS 再抛未捕获 error 直接把进程打崩（导致端口回退逻辑跑不到）
+  wss.on("error", (err) => {
+    log.warn(`WebSocketServer: ${err?.message ?? err}`);
+  });
+  server.on("error", (err) => {
+    // listen() Promise 会自行 reject；这里只防未监听阶段的冒泡
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "EADDRINUSE") {
+      log.warn(`HTTP server: ${err?.message ?? err}`);
+    }
+  });
 
   /** @param {string} channel @param {Record<string, unknown>} payload */
   function broadcast(channel, payload) {
@@ -127,6 +138,7 @@ async function main() {
   registerBitgetRoutes(app, bitgetOrder, bitgetManual);
   registerWeexRoutes(app, weexOrder);
   registerCardArchiveRoutes(app, store, cardArchive);
+  registerCommunityRoutes(app, store, createLogger("community"));
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")
     .then(({ rebuildArchivesIndex, warmArchivesParsedCache }) => {
@@ -593,7 +605,7 @@ async function main() {
   await killListenersOnPort(PORT, "collect:ui");
 
   let listenError = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await new Promise((resolve, reject) => {
         const onError = (err) => {
@@ -612,12 +624,17 @@ async function main() {
       break;
     } catch (e) {
       listenError = e;
-      if (/** @type {NodeJS.ErrnoException} */ (e).code === "EADDRINUSE" && attempt === 0) {
-        log.warn(`端口 ${PORT} 仍被占用，再次尝试释放…`);
-        await killListenersOnPort(PORT, "collect:ui");
-        continue;
+      if (/** @type {NodeJS.ErrnoException} */ (e).code !== "EADDRINUSE") throw e;
+      log.warn(`端口 ${PORT} 仍被占用，再次尝试释放…`);
+      await killListenersOnPort(PORT, "collect:ui");
+      if (attempt === 1) {
+        const alt = await findFreePortNear(PORT + 1, 20);
+        if (alt != null) {
+          log.warn(`改用空闲端口 ${alt}（原 ${PORT} 可能为僵死占用）`);
+          PORT = alt;
+          continue;
+        }
       }
-      throw e;
     }
   }
   if (listenError) throw listenError;
@@ -662,10 +679,12 @@ async function main() {
           startUrl: config.startUrl,
           cdpConnectUrl: config.cdpConnectUrl,
           pageReloadIntervalMs: config.pageReloadIntervalMs,
+          cdpAutoGoto: config.cdpAutoGoto,
           networkTrace: config.collectNetworkTrace,
           wsFrameTrace: config.collectWsFrameTrace,
           diagnosticSink,
           onConnectionLost: (info) => systemTelegram.notifyCdpDisconnected(info),
+          onReconnected: (info) => systemTelegram.notifyCdpReconnected?.(info),
           onData(buf, meta) {
             frameSeq += 1;
             const { payload, proc } = buildFrameChannelPayload(

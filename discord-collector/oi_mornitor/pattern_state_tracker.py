@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from oi_mornitor.config import PATTERN_PIN_TTL_SEC, PATTERN_STATE_DB, PATTERN_WATCH_MAX_SEC
+from oi_mornitor.config import (
+    PATTERN_PIN_TTL_SEC,
+    PATTERN_STATE_DB,
+    PATTERN_WATCH_MAX,
+    PATTERN_WATCH_MAX_SEC,
+)
 from oi_mornitor.pattern_detector import (
     STATUS_EXPIRED,
     STATUS_LH,
@@ -16,7 +21,7 @@ from oi_mornitor.pattern_detector import (
     STATUS_WAITING,
 )
 
-MAX_WATCH_SYMBOLS = 30
+MAX_WATCH_SYMBOLS = max(1, int(PATTERN_WATCH_MAX))
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:

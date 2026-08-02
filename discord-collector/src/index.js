@@ -50,6 +50,7 @@ async function collect() {
       startUrl: config.startUrl,
       cdpConnectUrl: config.cdpConnectUrl,
       pageReloadIntervalMs: config.pageReloadIntervalMs,
+      cdpAutoGoto: config.cdpAutoGoto,
       networkTrace: config.collectNetworkTrace,
       wsFrameTrace: config.collectWsFrameTrace,
       diagnosticSink: (evt) => {
@@ -58,6 +59,7 @@ async function collect() {
         });
       },
       onConnectionLost: (info) => systemTelegram.notifyCdpDisconnected(info),
+      onReconnected: (info) => systemTelegram.notifyCdpReconnected?.(info),
       onData(buf, meta) {
         frameCount += 1;
         const { payload, proc } = buildFrameChannelPayload(

@@ -30,7 +30,11 @@ from oi_mornitor.config import (
 )
 from oi_mornitor.market_snapshot import TIER_HEAVY
 from oi_mornitor.pattern_monitor import fetch_pattern_klines, fetch_pattern_klines_batch
-from oi_mornitor.sandbox.card_parser import ParsedCard, parse_card_message
+from oi_mornitor.sandbox.card_parser import (
+    ParsedCard,
+    parse_card_message,
+    resolve_signal_channel_author,
+)
 from oi_mornitor.sandbox.logics import (
     SandboxSignal,
     apply_entry_sl_cap,
@@ -175,9 +179,25 @@ class SandboxEngine:
                     "card_id": meta.get("card_id"),
                     "card_tps": meta.get("card_tps"),
                     "tp3": meta.get("tp3"),
+                    "author_name": meta.get("author_name") or "",
+                    "channel_id": meta.get("channel_id") or "",
+                    "channel_name": meta.get("channel_name") or "",
+                    "card_source": meta.get("card_source") or "",
                 }
             )
-        card_orders = self.tracker.list_card_orders(limit=200)
+        card_orders = []
+        for o in self.tracker.list_card_orders(limit=200):
+            author = resolve_signal_channel_author(
+                str(o.get("channel_id") or ""),
+                channel_name=str(o.get("channel_name") or ""),
+                source_label=str(o.get("source_label") or ""),
+                author_name=str(o.get("author_name") or ""),
+            )
+            if author:
+                o = {**o, "author_name": author}
+                if not o.get("channel_name") or str(o.get("channel_name")).isdigit():
+                    o["channel_name"] = author
+            card_orders.append(o)
         return {
             "sandbox_enabled": SANDBOX_ENABLED,
             "sandbox_scan_ts": self._last_scan_ts,
@@ -481,6 +501,9 @@ class SandboxEngine:
             "leverage": lev,
             "card_title": card.title,
             "card_source": src,
+            "author_name": card.author_name or "",
+            "channel_id": card.channel_id or "",
+            "channel_name": card.channel_name or "",
             "skip_sl_cap": True,
             "card_tp_done": 0,
         }
@@ -1416,6 +1439,10 @@ class SandboxEngine:
                     "interval": iv,
                     "ref_intervals": meta.get("ref_intervals"),
                     "card_id": meta.get("card_id"),
+                    "author_name": meta.get("author_name") or "",
+                    "channel_id": meta.get("channel_id") or "",
+                    "channel_name": meta.get("channel_name") or "",
+                    "card_source": meta.get("card_source") or "",
                     "trend_status": meta.get("trend_status"),
                     "vegas_direction": meta.get("vegas_direction"),
                     "vegas_direction_label": meta.get("vegas_direction_label"),

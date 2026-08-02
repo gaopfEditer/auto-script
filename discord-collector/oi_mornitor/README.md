@@ -40,9 +40,10 @@
    - React 动态雷达 Web UI（SSE 实时推送）
 
 7. **形态追踪页 `/patterns`**
-   - 启动后监听列表为空时，优先从**合约流入榜 + OI 爆发榜**挑选 20 个（`OI_PATTERN_AUTO_PICK=20`），不足再补大象池
+   - 启动后监听列表为空时，优先从**合约流入榜 + OI 爆发榜**挑选最多 50 个（`OI_PATTERN_AUTO_PICK=50`，总上限 `OI_PATTERN_WATCH_MAX=50`），不足再补大象池
    - 每隔 2 小时自动刷新（`OI_PATTERN_WATCHLIST_REFRESH_SEC=7200`）；已进场（LH / 等待 HL / 扳机）与沙盒持仓保留，其余可被替换
-   - **雷达联动**：同周期同时上「涨幅榜」与「持仓正榜」（量级或强度）的币，每轮扫描自动加入形态追踪（满员时替换未进场币）
+   - **雷达联动**：同周期同时上「涨幅榜」与「持仓正榜」的币，每轮扫描自动加入形态追踪
+   - **OI 异动 ∩ 多榜**：雷达 OI 告警 / 持仓榜上榜，且同时出现在 ≥2 个矩阵榜单（`OI_PATTERN_MULTI_BOARD_MIN`）的币，**每轮立即**加入并置顶形态监听（满员时替换未进场币）
    - 支持手动追加 / 移除；右键**置顶**至少 1 天（`OI_PATTERN_PIN_TTL_SEC=86400`，可手动取消）；**热钱重选** 清空并按流入/OI 重新挑选
    - 阶段 1：次高点 LH + BB-Wicks 上轨插针 / MACD 高位走弱 → `STAGE_1_LH_DETECTED`（不弹窗）
    - 阶段 2：更高低点 HL + 带量突破夹角高点 + MACD 金叉 → `TRIGGER_SIGNAL`（右下角预警）
@@ -62,7 +63,7 @@
    | **通用** | 峰值每满 2.2% 阶梯上移 SL（每档锁 +1%）；硬止损击穿立即全平；入场当根不平仓 | 同左 |
 
    - 执行周期默认 **15m + 1h** 同等扫描（`OI_SANDBOX_INTERVALS`）；同币同周期自动单仓，两周期可并存
-   - 日池随机 12 币 / 最多同时 10 仓；保证金 1U；杠杆 100x（BTC·ETH）/ 30x（山寨）；双边手续费默认各 0.04%
+   - 日池随机 12 币 / 最多同时 20 仓；保证金 1U；杠杆 100x（BTC·ETH）/ 30x（山寨）；双边手续费默认各 0.04%
    - **手动市价进场**（选 S/T + 多/空 + 15m/1h）→ `POST /api/sandbox/enter`；自动同币同周期单仓，手动可叠仓
    - **卡片信号**：WS `/ws/cards` 或 `POST /api/cards`；沙盒可筛「卡片」；止盈止损按卡片，S/T 逻辑不变
 
@@ -196,9 +197,13 @@ asyncio.run(audit())
 | `OI_CARD_WS_PATH` | /ws/cards | 卡片 WS 路径 |
 | `OI_CARD_NEAR_ENTRY_PCT` | 1.0 | 山寨限价卡近场阈值 %（约 20x/30x） |
 | `OI_CARD_NEAR_ENTRY_PCT_MAJOR` | 0.2 | 主流限价卡近场阈值 %（约 100x） |
-| `OI_SANDBOX_MAX_CONCURRENT` | 10 | 沙盒最大同时持仓 |
+| `OI_SANDBOX_MAX_CONCURRENT` | 20 | 沙盒最大同时持仓 |
 | `OI_SANDBOX_SL_ATR_MULT` | 2.5 | 沙盒初始止损距离上限 = 倍数 × ATR(14) |
 | `OI_SANDBOX_FEE_PCT` | 0.04 | 沙盒单边手续费 %（名义） |
+| `OI_PATTERN_WATCH_MAX` | 50 | 形态监听列表总上限 |
+| `OI_PATTERN_AUTO_PICK` | 50 | 热钱自动挑选数量 |
+| `OI_PATTERN_CARD_RESERVED` | 10 | 为卡片预留的监听槽 |
+| `OI_PATTERN_MULTI_BOARD_MIN` | 2 | OI 异动入池所需最少矩阵榜单数 |
 
 ## 网络 / 代理
 

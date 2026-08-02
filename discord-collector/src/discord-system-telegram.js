@@ -53,10 +53,30 @@ export function createSystemTelegramAlert(log, opts = {}) {
       `CDP: ${connectUrl}`,
       `时间: ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
       "",
-      "请检查 Chrome 是否休眠/已关闭，并重新启动带 --remote-debugging-port 的 Chrome。",
+      "将自动重连 9222 并刷新 Discord 频道；若持续失败请检查 Chrome 是否仍开着调试端口。",
     ].join("\n");
     return notify(text, { kind: "cdp_disconnected" });
   }
 
-  return { notify, notifyCdpDisconnected, enabled: telegram.enabled };
+  /**
+   * @param {{ connectUrl?: string, attempt?: number }} info
+   */
+  async function notifyCdpReconnected(info) {
+    const connectUrl = String(info.connectUrl ?? "").trim() || "—";
+    const attempt = Number(info.attempt) || 0;
+    const text = [
+      "✅ Discord Collector CDP 已恢复",
+      "",
+      `CDP: ${connectUrl}`,
+      attempt > 0 ? `重连次数: ${attempt}` : null,
+      `时间: ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+      "",
+      "已重新附加并刷新 Discord 保活频道。",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return notify(text, { kind: "cdp_reconnected" });
+  }
+
+  return { notify, notifyCdpDisconnected, notifyCdpReconnected, enabled: telegram.enabled };
 }

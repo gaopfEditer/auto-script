@@ -11,11 +11,16 @@ interface ToastItem {
 interface Props {
   alerts: PatternAlert[];
   scanTs: number;
+  onOpen?: (symbol: string) => void;
 }
 
 const TOAST_TTL_MS = 20000;
 
-export const PatternToastStack = memo(function PatternToastStack({ alerts, scanTs }: Props) {
+export const PatternToastStack = memo(function PatternToastStack({
+  alerts,
+  scanTs,
+  onOpen,
+}: Props) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const seenRef = useRef<Set<string>>(new Set());
   const scanRef = useRef(0);
@@ -33,14 +38,16 @@ export const PatternToastStack = memo(function PatternToastStack({ alerts, scanT
     if (!fresh.length) return;
 
     const now = Date.now();
-    setToasts((prev) => [
-      ...fresh.map((alert) => ({
-        id: `${alert.symbol}-${alert.kline_close_time}`,
-        alert,
-        createdAt: now,
-      })),
-      ...prev,
-    ].slice(0, 6));
+    setToasts((prev) =>
+      [
+        ...fresh.map((alert) => ({
+          id: `${alert.symbol}-${alert.kline_close_time}`,
+          alert,
+          createdAt: now,
+        })),
+        ...prev,
+      ].slice(0, 6),
+    );
   }, [alerts, scanTs]);
 
   useEffect(() => {
@@ -71,11 +78,19 @@ export const PatternToastStack = memo(function PatternToastStack({ alerts, scanT
               <div className="toast-title">
                 ${displaySymbol(alert.symbol)} · 形态多头爆发
               </div>
-              <div className="toast-sub">{alert.status_label} · {alert.interval}</div>
+              <div className="toast-sub">
+                {alert.status_label} · {alert.interval}
+              </div>
               <div className="toast-sub">{alert.message}</div>
             </div>
           </div>
-          <button type="button" className="toast-action">查看形态</button>
+          <button
+            type="button"
+            className="toast-action"
+            onClick={() => onOpen?.(alert.symbol)}
+          >
+            查看形态
+          </button>
         </div>
       ))}
     </div>

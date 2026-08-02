@@ -1,7 +1,8 @@
 /**
- * 确保 oi_mornitor 后台常驻：探测 :8765，挂了则拉起，挂了再重启。
+ * 确保本仓库 oi_mornitor 后台常驻：探测 :8765，
+ * 若被旁路/旧实例占用则接管并拉起本目录进程。
  */
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { existsSync, mkdirSync, createWriteStream } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dir, "..");
 const OI_DIR = resolve(ROOT, "oi_mornitor");
 const DEFAULT_BASE = "http://127.0.0.1:8765";
+const EXPECTED_PACKAGE_ROOT = OI_DIR;
 
 /**
  * @param {string} base
@@ -27,6 +29,77 @@ async function probeOi(base, timeoutMs = 3000) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * @param {string} base
+ * @param {number} timeoutMs
+ * @returns {Promise<{ ok: boolean; packageRoot: string | null; sandboxMax: number | null; maxWatch: number | null }>}
+ */
+async function probeOiIdentity(base, timeoutMs = 4000) {
+  const url = `${String(base).replace(/\/$/, "")}/api/patterns`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    if (!r.ok) return { ok: false, packageRoot: null, sandboxMax: null, maxWatch: null };
+    const j = await r.json();
+    const packageRoot = typeof j.package_root === "string" ? j.package_root : null;
+    const sandboxMax =
+      typeof j.sandbox_max_concurrent === "number" ? j.sandbox_max_concurrent : null;
+    const maxWatch = typeof j.max_watch_symbols === "number" ? j.max_watch_symbols : null;
+    return { ok: true, packageRoot, sandboxMax, maxWatch };
+  } catch {
+    return { ok: false, packageRoot: null, sandboxMax: null, maxWatch: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function resolvePythonBin(preferred) {
+  if (preferred) return preferred;
+  if (process.env.OI_PYTHON) return process.env.OI_PYTHON;
+  if (process.env.PYTHON) return process.env.PYTHON;
+  const venvPy =
+    process.platform === "win32"
+      ? resolve(OI_DIR, "venv", "Scripts", "python.exe")
+      : resolve(OI_DIR, "venv", "bin", "python");
+  if (existsSync(venvPy)) return venvPy;
+  return process.platform === "win32" ? "python" : "python3";
+}
+
+function killListenerOnPort(port, log) {
+  try {
+    if (process.platform === "win32") return false;
+    const out = execSync(`lsof -tiTCP:${port} -sTCP:LISTEN`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!out) return false;
+    const pids = out.split(/\s+/).filter(Boolean);
+    for (const pid of pids) {
+      try {
+        process.kill(Number(pid), "SIGTERM");
+        log.warn?.(`[oi-supervisor] 已 SIGTERM 占用 :${port} 的进程 pid=${pid}`);
+      } catch (e) {
+        log.warn?.(
+          `[oi-supervisor] 结束 pid=${pid} 失败: ${/** @type {Error} */ (e).message}`
+        );
+      }
+    }
+    return pids.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function samePath(a, b) {
+  if (!a || !b) return false;
+  const norm = (p) =>
+    String(p)
+      .replace(/\/+$/, "")
+      .toLowerCase();
+  return norm(a) === norm(b);
 }
 
 /**
@@ -56,11 +129,11 @@ export function startOiSupervisor(opts = {}) {
     5_000,
     Number(opts.checkIntervalMs ?? process.env.OI_SUPERVISOR_INTERVAL_MS ?? 15_000) || 15_000
   );
-  const pythonBin =
-    opts.pythonBin ||
-    process.env.OI_PYTHON ||
-    process.env.PYTHON ||
-    (process.platform === "win32" ? "python" : "python3");
+  const pythonBin = resolvePythonBin(opts.pythonBin);
+  const takeover =
+    !["0", "false", "no", "off"].includes(
+      String(process.env.OI_TAKEOVER_PORT ?? "1").toLowerCase()
+    );
 
   /** @type {import("node:child_process").ChildProcess | null} */
   let child = null;
@@ -83,11 +156,26 @@ export function startOiSupervisor(opts = {}) {
 
     const out = createWriteStream(logPath, { flags: "a" });
     out.write(`\n---- spawn ${new Date().toISOString()} ----\n`);
+    out.write(`python=${pythonBin}\npackage_root=${EXPECTED_PACKAGE_ROOT}\n`);
 
     const args = [resolve(OI_DIR, "run.py"), "--backend-only", "--skip-build"];
+    const childEnv = {
+      ...process.env,
+      PYTHONUNBUFFERED: "1",
+      // 与 OI_WEB_BASE_URL 对齐，避免仍监听被旁路占用的 8765
+      OI_WEB_PORT:
+        process.env.OI_WEB_PORT ||
+        (() => {
+          try {
+            return new URL(apiBase).port || "8765";
+          } catch {
+            return "8765";
+          }
+        })(),
+    };
     child = spawn(pythonBin, args, {
       cwd: ROOT,
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+      env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
       detached: false,
     });
@@ -114,15 +202,52 @@ export function startOiSupervisor(opts = {}) {
     starting = false;
   }
 
+  /**
+   * @returns {Promise<boolean>}
+   */
+  async function isOurInstance() {
+    const id = await probeOiIdentity(apiBase);
+    if (!id.ok) return false;
+    if (id.packageRoot) return samePath(id.packageRoot, EXPECTED_PACKAGE_ROOT);
+    // 旧实例无 package_root：视为旁路，需接管
+    log.warn?.(
+      `[oi-supervisor] :8765 响应但无 package_root（旁路/旧代码） sandbox_max=${id.sandboxMax} max_watch=${id.maxWatch}`
+    );
+    return false;
+  }
+
   async function ensureOnce() {
     if (stopping) return false;
-    const ok = await probeOi(apiBase, Number(process.env.OI_HEALTH_TIMEOUT_MS ?? 3000));
-    if (ok) return true;
-    log.warn?.(`[oi-supervisor] ${apiBase} 未响应，正在拉起…`);
+    const up = await probeOi(apiBase, Number(process.env.OI_HEALTH_TIMEOUT_MS ?? 3000));
+    if (up) {
+      const ours = await isOurInstance();
+      if (ours) return true;
+      if (!takeover) {
+        log.warn?.(
+          `[oi-supervisor] 检测到非本仓库 oi（${EXPECTED_PACKAGE_ROOT}），已设 OI_TAKEOVER_PORT=0，跳过接管`
+        );
+        return false;
+      }
+      log.warn?.(
+        `[oi-supervisor] 检测到非本仓库 oi 占用 ${apiBase}，正在接管 → ${EXPECTED_PACKAGE_ROOT}`
+      );
+      const port = Number(new URL(apiBase).port || 8765);
+      killListenerOnPort(port, log);
+      await new Promise((r) => setTimeout(r, 1200));
+    } else {
+      log.warn?.(`[oi-supervisor] ${apiBase} 未响应，正在拉起…`);
+    }
     spawnOi();
-    // 等几秒再探
-    await new Promise((r) => setTimeout(r, 2500));
-    return probeOi(apiBase, 4000);
+    await new Promise((r) => setTimeout(r, 3500));
+    const ok = (await probeOi(apiBase, 4000)) && (await isOurInstance());
+    if (ok) {
+      log.info?.(`[oi-supervisor] 本仓库 oi_mornitor 已在线 ${apiBase}`);
+    } else {
+      log.warn?.(
+        `[oi-supervisor] 拉起后仍未确认为本仓库实例；请检查 ${logPath} 与 python=${pythonBin}`
+      );
+    }
+    return ok;
   }
 
   void ensureOnce().then((ok) => {
@@ -155,5 +280,11 @@ export function startOiSupervisor(opts = {}) {
     }
   }
 
-  return { stop, ensureOnce, get child() { return child; } };
+  return {
+    stop,
+    ensureOnce,
+    get child() {
+      return child;
+    },
+  };
 }

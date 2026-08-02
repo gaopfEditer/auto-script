@@ -14,6 +14,7 @@
 - [WebSocket 推送架构](docs/websocket-push-architecture.md)
 - **[信号卡片模板（对外评估）](docs/card-templates.md)** — 风格 / 排版骨架 / Embed；机读样本 [`card-template-catalog.json`](docs/card-template-catalog.json)
 - **[OI Monitor（计价 / 沙盒 / 卡片结算）](oi_mornitor/README.md)** — 币安永续行情与持仓雷达；接收 `CARD_SINK_*` 推送的卡片
+- **社区** — 顶栏「社区」：会员头衔、动态广场（发帖/评论/点赞）、每日签到、打赏专区（需 MySQL）
 
 ## OI Monitor（同仓子项目 · 可切换模块）
 

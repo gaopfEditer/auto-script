@@ -44,6 +44,11 @@ interface Props {
   onClose: () => void;
   /** 右键标题：打开与左侧列表相同的操作菜单 */
   onTitleContextMenu?: (e: React.MouseEvent, symbol: string) => void;
+  /** 当前币是否已在形态监听列表 */
+  inWatchlist?: boolean;
+  /** 加入形态监听 */
+  onAddToWatchlist?: (symbol: string) => void;
+  addWatchBusy?: boolean;
   /** 沙盒手动市价进场（当前图表币种） */
   sandboxEnabled?: boolean;
   manualEnterBusy?: boolean;
@@ -272,6 +277,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   liveTicker,
   onClose,
   onTitleContextMenu,
+  inWatchlist = false,
+  onAddToWatchlist,
+  addWatchBusy = false,
   sandboxEnabled = false,
   manualEnterBusy = false,
   onManualEnter,
@@ -1028,6 +1036,21 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 </button>
               ))}
             </div>
+            {!inWatchlist && onAddToWatchlist ? (
+              <button
+                type="button"
+                className="pattern-chart-add-watch"
+                disabled={addWatchBusy}
+                onClick={() => onAddToWatchlist(symbol)}
+              >
+                添加到形态列表
+              </button>
+            ) : null}
+            {inWatchlist ? (
+              <span className="pattern-chart-in-watch" title="已在形态监听列表">
+                已在列表
+              </span>
+            ) : null}
             <button type="button" className="pattern-chart-close" onClick={onClose}>
               返回列表
             </button>

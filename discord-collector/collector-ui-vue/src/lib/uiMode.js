@@ -25,6 +25,7 @@ export const ALL_UI_PAGES = [
   { path: "/fetch", name: "fetch", label: "拉取", nav: true, module: "discord" },
   { path: "/archives", name: "archives", label: "文稿", nav: true, module: "discord" },
   { path: "/trade", name: "trade", label: "下单", nav: true, module: "discord" },
+  { path: "/community", name: "community", label: "社区", nav: true, module: "discord" },
   { path: "/signals", name: "signals", label: "信号", nav: false, module: "discord" },
   { path: "/debug", name: "debug", label: "Debug", nav: true, module: "discord" },
   { path: "/oi", name: "oi", label: "OI", nav: false, module: "oi" },

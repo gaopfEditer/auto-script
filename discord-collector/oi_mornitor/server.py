@@ -23,6 +23,7 @@ from aiohttp import web
 from oi_mornitor.config import SCAN_INTERVAL_SEC, WEB_HOST, WEB_PORT
 
 from oi_mornitor.radar import get_service
+from oi_mornitor.sandbox.card_ws import register_card_routes
 
 
 
@@ -402,6 +403,9 @@ def create_app() -> web.Application:
     app.router.add_get("/api/tv-alert", handle_tv_alert)
 
     app.router.add_get("/api/stream", handle_stream)
+
+    # Discord 卡片外送：WS /ws/cards · POST /api/cards
+    register_card_routes(app)
 
     if STATIC_DIST.exists():
 

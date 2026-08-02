@@ -1,6 +1,8 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { TickerRow } from "../types";
 import { fmtDelta, fmtPct } from "../utils/format";
+import { patternsPathForSymbol } from "../utils/patternNav";
 import { coinInitial, displaySymbol } from "../utils/symbol";
 
 interface ToastItem {
@@ -17,6 +19,7 @@ interface Props {
 const TOAST_TTL_MS = 12000;
 
 export const ToastStack = memo(function ToastStack({ hot, scanTs }: Props) {
+  const navigate = useNavigate();
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const seenRef = useRef<Set<string>>(new Set());
   const scanRef = useRef(0);
@@ -31,14 +34,16 @@ export const ToastStack = memo(function ToastStack({ hot, scanTs }: Props) {
 
     fresh.forEach((r) => seenRef.current.add(r.symbol));
     const now = Date.now();
-    setToasts((prev) => [
-      ...fresh.map((row) => ({
-        id: `${row.symbol}-${now}`,
-        row,
-        createdAt: now,
-      })),
-      ...prev,
-    ].slice(0, 5));
+    setToasts((prev) =>
+      [
+        ...fresh.map((row) => ({
+          id: `${row.symbol}-${now}`,
+          row,
+          createdAt: now,
+        })),
+        ...prev,
+      ].slice(0, 5),
+    );
   }, [hot, scanTs]);
 
   useEffect(() => {
@@ -52,6 +57,10 @@ export const ToastStack = memo(function ToastStack({ hot, scanTs }: Props) {
 
   const dismiss = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const openPattern = (symbol: string) => {
+    navigate(patternsPathForSymbol(symbol));
   };
 
   if (!toasts.length) return null;
@@ -76,7 +85,9 @@ export const ToastStack = memo(function ToastStack({ hot, scanTs }: Props) {
                 </div>
               </div>
             </div>
-            <button type="button" className="toast-action">看详情</button>
+            <button type="button" className="toast-action" onClick={() => openPattern(row.symbol)}>
+              看形态 K 线
+            </button>
           </div>
         );
       })}

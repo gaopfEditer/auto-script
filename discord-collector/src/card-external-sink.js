@@ -6,6 +6,7 @@
 import WebSocket from "ws";
 import { config } from "./config.js";
 import { formatCardUid } from "./card-uid.js";
+import { signalChannelDisplayName } from "./discord-signal-config.js";
 
 /**
  * @param {unknown} v
@@ -121,9 +122,14 @@ export function buildCardSinkPayload(input) {
   const channelId = String(
     input.channelId ?? card.channelId ?? message.channelId ?? message.channel_id ?? ""
   ).trim();
-  const channelName = String(
+  const channelNameRaw = String(
     input.channelName ?? card.channelName ?? message.channelName ?? message.channel_name ?? ""
   ).trim();
+  // 1444963506431463474 → 山寨之王 等；避免 source_label 落成 discord · 雪花 ID
+  const mappedChannel = channelId ? signalChannelDisplayName(channelId) : "";
+  const channelAuthor =
+    mappedChannel && mappedChannel !== channelId ? mappedChannel : channelNameRaw;
+  const channelName = channelAuthor || channelNameRaw || channelId;
   const guildId = String(
     input.guildId ?? card.guildId ?? message.guildId ?? message.guild_id ?? ""
   ).trim();
@@ -142,7 +148,7 @@ export function buildCardSinkPayload(input) {
   const messageId = String(card.messageId ?? message.messageId ?? message.message_id ?? "").trim();
   const sourceType = String(card.sourceType ?? card.source ?? message.sourceType ?? "discord").trim();
   const sourceLabel =
-    [sourceType, channelName || channelId].filter(Boolean).join(" · ") || sourceType;
+    [sourceType, channelName].filter(Boolean).join(" · ") || sourceType;
 
   const parsed =
     (input.parsed && typeof input.parsed === "object" ? input.parsed : null) ||
@@ -176,7 +182,8 @@ export function buildCardSinkPayload(input) {
     author_id: author.authorId,
     author_username: author.username,
     author_global_name: author.globalName,
-    author_display: author.display,
+    author_display: channelAuthor || author.display,
+    author_name: channelAuthor || author.display,
     signal_at: signalAt,
     created_at: createdAt,
     message_id: messageId,
@@ -203,11 +210,12 @@ export function buildCardSinkPayload(input) {
     created_at: createdAt || undefined,
     updated_at: updatedAt || undefined,
     signal_at_local: signalAt ? formatLocalTime(signalAt) : undefined,
-    // —— 作者 ——
+    // —— 作者（信号频道品牌优先，如山寨之王）——
     author_id: author.authorId || undefined,
     author_username: author.username || undefined,
     author_global_name: author.globalName || undefined,
-    author_display: author.display || undefined,
+    author_display: channelAuthor || author.display || undefined,
+    author_name: channelAuthor || author.display || undefined,
     // —— 频道 / 服务器 ——
     channel_id: channelId || undefined,
     channel_name: channelName || undefined,
@@ -245,6 +253,8 @@ export function createCardExternalSink(log) {
   /** @type {ReturnType<typeof setTimeout> | null} */
   let reconnectTimer = null;
   let stopped = false;
+  let failStreak = 0;
+  let lastErrLogAt = 0;
 
   function clearReconnect() {
     if (reconnectTimer) {
@@ -253,12 +263,25 @@ export function createCardExternalSink(log) {
     }
   }
 
-  function scheduleReconnect() {
+  function scheduleReconnect(reason = "") {
     if (stopped || !wsUrl || reconnectTimer) return;
+    failStreak += 1;
+    // 404 / 拒连时退避，避免刷屏淹没 CDP 日志
+    const delay = Math.min(
+      60_000,
+      reconnectMs * Math.min(failStreak, 10)
+    );
+    const now = Date.now();
+    if (now - lastErrLogAt > 15_000) {
+      lastErrLogAt = now;
+      log.warn(
+        `卡片外送 WebSocket 将在 ${delay}ms 后重连${reason ? `（${reason}）` : ""} → ${wsUrl}`
+      );
+    }
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect();
-    }, reconnectMs);
+    }, delay);
   }
 
   function connect() {
@@ -273,24 +296,26 @@ export function createCardExternalSink(log) {
       socket = ws;
       ws.on("open", () => {
         connecting = false;
+        failStreak = 0;
         log.info(`卡片外送 WebSocket 已连接 ${wsUrl}`);
       });
       ws.on("close", () => {
         connecting = false;
         if (socket === ws) socket = null;
-        if (!stopped) {
-          log.warn(`卡片外送 WebSocket 断开，${reconnectMs}ms 后重连`);
-          scheduleReconnect();
-        }
+        if (!stopped) scheduleReconnect("断开");
       });
       ws.on("error", (err) => {
-        log.warn(`卡片外送 WebSocket 错误: ${/** @type {Error} */ (err).message}`);
+        const msg = String(/** @type {Error} */ (err).message ?? err);
+        const now = Date.now();
+        if (now - lastErrLogAt > 15_000) {
+          lastErrLogAt = now;
+          log.warn(`卡片外送 WebSocket 错误: ${msg}`);
+        }
       });
     } catch (e) {
       connecting = false;
       socket = null;
-      log.warn(`卡片外送 WebSocket 连接失败: ${/** @type {Error} */ (e).message}`);
-      scheduleReconnect();
+      scheduleReconnect(String(/** @type {Error} */ (e).message ?? e));
     }
   }
 

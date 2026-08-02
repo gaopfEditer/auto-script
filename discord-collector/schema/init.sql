@@ -108,6 +108,73 @@ CREATE TABLE IF NOT EXISTS discord_channel_message_dedup (
   updated_at DATETIME(3) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS community_members (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  token CHAR(48) NOT NULL,
+  handle VARCHAR(32) NOT NULL,
+  display_name VARCHAR(64) NOT NULL,
+  avatar_url VARCHAR(512) NOT NULL DEFAULT '',
+  bio VARCHAR(255) NOT NULL DEFAULT '',
+  points INT NOT NULL DEFAULT 0,
+  tip_balance INT NOT NULL DEFAULT 0,
+  checkin_streak INT NOT NULL DEFAULT 0,
+  last_checkin_day CHAR(10) NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_community_token (token),
+  UNIQUE KEY uk_community_handle (handle),
+  KEY idx_community_points (points DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS community_posts (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_id BIGINT NOT NULL,
+  content TEXT NOT NULL,
+  like_count INT NOT NULL DEFAULT 0,
+  comment_count INT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL,
+  KEY idx_community_posts_time (id DESC),
+  KEY idx_community_posts_member (member_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS community_comments (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  post_id BIGINT NOT NULL,
+  member_id BIGINT NOT NULL,
+  content TEXT NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  KEY idx_community_comments_post (post_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS community_likes (
+  post_id BIGINT NOT NULL,
+  member_id BIGINT NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (post_id, member_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS community_checkins (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_id BIGINT NOT NULL,
+  day CHAR(10) NOT NULL,
+  points_earned INT NOT NULL DEFAULT 0,
+  streak INT NOT NULL DEFAULT 1,
+  created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uk_community_checkin (member_id, day),
+  KEY idx_community_checkin_day (day)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS community_tips (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  from_member_id BIGINT NOT NULL,
+  to_member_id BIGINT NOT NULL,
+  amount INT NOT NULL,
+  message VARCHAR(255) NOT NULL DEFAULT '',
+  zone VARCHAR(32) NOT NULL DEFAULT 'plaza',
+  created_at DATETIME(3) NOT NULL,
+  KEY idx_community_tips_time (id DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS discord_guilds (
   guild_id VARCHAR(32) NOT NULL PRIMARY KEY,
   name VARCHAR(256) NOT NULL DEFAULT '',

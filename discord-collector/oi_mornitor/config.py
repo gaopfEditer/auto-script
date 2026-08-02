@@ -101,12 +101,23 @@ PATTERN_PIVOT_WINDOW = int(os.getenv("OI_PATTERN_PIVOT_WINDOW", "11"))
 PATTERN_WICK_RATIO = float(os.getenv("OI_PATTERN_WICK_RATIO", "0.3"))
 PATTERN_STAGE2_VOL_MULT = float(os.getenv("OI_PATTERN_STAGE2_VOL_MULT", "1.5"))
 PATTERN_WATCH_MAX_SEC = int(os.getenv("OI_PATTERN_WATCH_MAX_SEC", "14400"))
-PATTERN_AUTO_PICK_COUNT = int(os.getenv("OI_PATTERN_AUTO_PICK", "10"))
-# 形态 watchlist 总上限 30；为卡片预留槽位（热榜最多占剩余）
-PATTERN_CARD_RESERVED = int(os.getenv("OI_PATTERN_CARD_RESERVED", "20"))
+# 形态监听列表总上限（默认 50）
+PATTERN_WATCH_MAX = int(os.getenv("OI_PATTERN_WATCH_MAX", "50"))
+# 热钱自动挑选数量（默认与上限对齐）
+PATTERN_AUTO_PICK_COUNT = int(os.getenv("OI_PATTERN_AUTO_PICK", "50"))
+# 为卡片预留槽位；热榜最多占 总上限 − 预留
+PATTERN_CARD_RESERVED = int(os.getenv("OI_PATTERN_CARD_RESERVED", "10"))
 # 形态 watchlist：每隔 N 秒用合约流入榜 + OI 爆发榜刷新（未进场币可替换）
 PATTERN_WATCHLIST_REFRESH_SEC = int(os.getenv("OI_PATTERN_WATCHLIST_REFRESH_SEC", "7200"))
 PATTERN_WATCHLIST_REFRESH_TF = os.getenv("OI_PATTERN_WATCHLIST_REFRESH_TF", "15m").strip() or "15m"
+# OI 异动 + 多榜共振 → 立即入形态池（≥ 该榜单数）
+PATTERN_MULTI_BOARD_MIN = int(os.getenv("OI_PATTERN_MULTI_BOARD_MIN", "2"))
+# EXPIRED 超过该秒数移出形态列表（默认立即清）
+PATTERN_INACTIVE_PURGE_SEC = int(os.getenv("OI_PATTERN_INACTIVE_PURGE_SEC", "0"))
+# 纯 SEARCHING 无进展超过该秒数也视为不活跃（默认 2h）
+PATTERN_SEARCHING_STALE_SEC = int(os.getenv("OI_PATTERN_SEARCHING_STALE_SEC", "7200"))
+# OI 放大入池：|pct_5m| 或 |pct_15m| 达到该阈值（%）也立即加入（与 is_alert 叠加）
+PATTERN_OI_AMPLIFY_PCT = float(os.getenv("OI_PATTERN_OI_AMPLIFY_PCT", "3.0"))
 # 手动置顶维持时长（秒），到期自动取消；也可手动取消
 PATTERN_PIN_TTL_SEC = int(os.getenv("OI_PATTERN_PIN_TTL_SEC", "86400"))
 # 卡片接入后置顶时长（默认 7 天，保证占住预留槽）
@@ -181,7 +192,7 @@ SANDBOX_REF_INTERVALS_TREND = tuple(
 SANDBOX_NOTIONAL_USD = float(os.getenv("OI_SANDBOX_NOTIONAL_USD", "1"))
 SANDBOX_INITIAL_BALANCE = float(os.getenv("OI_SANDBOX_INITIAL_BALANCE", "1000"))
 # 最大同时持仓币数
-SANDBOX_MAX_CONCURRENT = int(os.getenv("OI_SANDBOX_MAX_CONCURRENT", "30"))
+SANDBOX_MAX_CONCURRENT = int(os.getenv("OI_SANDBOX_MAX_CONCURRENT", "20"))
 # —— 短线猎手 S ——
 SANDBOX_HUNTER_SL_PAD = float(os.getenv("OI_SANDBOX_HUNTER_SL_PAD", "0.001"))  # 0.1%
 SANDBOX_HUNTER_ATR_MULT = float(os.getenv("OI_SANDBOX_HUNTER_ATR_MULT", "2"))

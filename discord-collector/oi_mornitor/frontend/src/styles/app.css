@@ -289,6 +289,12 @@ button {
 .alert-card.pump { border-left: 3px solid var(--green); }
 .alert-card.dump { border-left: 3px solid var(--red); }
 .alert-card.suppressed { opacity: 0.72; }
+.alert-card.alert-card-clickable {
+  cursor: pointer;
+}
+.alert-card.alert-card-clickable:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
 
 .alert-card-row {
   display: grid;
@@ -588,6 +594,10 @@ button {
   font-size: 0.72rem;
   cursor: default;
   transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.rank-item.rank-item-clickable {
+  cursor: pointer;
 }
 
 .rank-item:hover {
@@ -1653,6 +1663,35 @@ button {
   white-space: nowrap;
 }
 
+.pattern-chart-add-watch {
+  font-size: 0.72rem;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 230, 118, 0.45);
+  background: rgba(0, 230, 118, 0.12);
+  color: #00e676;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pattern-chart-add-watch:hover:not(:disabled) {
+  background: rgba(0, 230, 118, 0.22);
+}
+
+.pattern-chart-add-watch:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.pattern-chart-in-watch {
+  font-size: 0.68rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(100, 181, 246, 0.15);
+  color: #90caf9;
+  white-space: nowrap;
+}
+
 .pattern-chart-head-actions {
   display: flex;
   flex-direction: column;
@@ -2201,16 +2240,88 @@ button {
   color: #ff5252;
 }
 
+.sandbox-toast-stack {
+  z-index: 103;
+  width: 360px;
+  max-height: min(70vh, 640px);
+  gap: 8px;
+  flex-direction: column;
+}
+
+.sandbox-toast-toolbar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(18, 28, 42, 0.92);
+  border: 1px solid rgba(100, 181, 246, 0.35);
+  backdrop-filter: blur(12px);
+}
+
+.sandbox-toast-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #90caf9;
+}
+
+.sandbox-toast-clear {
+  font-size: 0.68rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sandbox-toast-clear:hover {
+  background: rgba(255, 82, 82, 0.18);
+  border-color: rgba(255, 82, 82, 0.4);
+  color: #ff8a80;
+}
+
+.sandbox-toast-list {
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: min(62vh, 560px);
+  padding-right: 2px;
+}
+
+.sandbox-toast-list .toast-card {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  background: rgba(12, 22, 36, 0.94);
+  border-color: rgba(100, 181, 246, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
 .toast-card.sandbox-signal {
   border-left: 3px solid #64b5f6;
 }
 
 .toast-card.sandbox-win {
   border-left: 3px solid #00e676;
+  background: rgba(0, 40, 22, 0.94);
 }
 
 .toast-card.sandbox-loss {
   border-left: 3px solid #ff5252;
+  background: rgba(45, 12, 16, 0.94);
+}
+
+@media (max-width: 900px) {
+  .sandbox-toast-stack {
+    width: calc(100% - 32px);
+    right: 16px;
+    left: 16px;
+  }
 }
 
 /* ── Scrollbars ── */

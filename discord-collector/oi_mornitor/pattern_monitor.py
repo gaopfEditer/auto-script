@@ -5,11 +5,13 @@ import asyncio
 import logging
 import random
 import time
+from pathlib import Path
 from typing import Any
 
 import aiohttp
 
 from oi_mornitor.config import (
+    BREAKOUT_MATRIX_TF,
     FAPI_BASE_URL,
     MATRIX_TOP_N,
     OI_OI_BATCH_CONCURRENCY,
@@ -17,13 +19,18 @@ from oi_mornitor.config import (
     PATTERN_CARD_RESERVED,
     PATTERN_CHART_DEFAULT_LIMIT,
     PATTERN_CHART_MAX_LIMIT,
+    PATTERN_INACTIVE_PURGE_SEC,
     PATTERN_KLINE_INTERVAL,
     PATTERN_KLINE_LIMIT,
+    PATTERN_MULTI_BOARD_MIN,
+    PATTERN_OI_AMPLIFY_PCT,
+    PATTERN_SEARCHING_STALE_SEC,
     PATTERN_WATCHLIST_REFRESH_SEC,
     PATTERN_WATCHLIST_REFRESH_TF,
 )
 from oi_mornitor.exchange_sources import fetch_klines_with_fallback
 from oi_mornitor.market_snapshot import TIER_HEAVY
+from oi_mornitor.matrix_breakout import collect_matrix_leaderboard
 from oi_mornitor.pattern_detector import (
     STATUS_EXPIRED,
     STATUS_LABELS,
@@ -36,6 +43,7 @@ from oi_mornitor.pattern_detector import (
 )
 from oi_mornitor.pattern_state_tracker import MAX_WATCH_SYMBOLS, PatternStateTracker
 from oi_mornitor.rank_metrics import TF_LABELS
+from oi_mornitor.tv_alert_sync import symbols_on_n_boards
 
 logger = logging.getLogger("OI_Radar")
 
@@ -283,6 +291,103 @@ def find_gainers_oi_intersection(
     return hits
 
 
+_OI_BOARD_CATS = frozenset(
+    {"oi_pumps", "oi_dumps", "oi_pump_strength", "oi_dump_strength"}
+)
+
+
+def find_oi_amplified_symbols(
+    pool_rows: list[dict[str, Any]],
+    *,
+    hot_tickers: list[dict[str, Any]] | None = None,
+    min_pct: float = PATTERN_OI_AMPLIFY_PCT,
+) -> list[str]:
+    """
+    雷达 OI 放大币：is_alert / is_hot，或 |pct_5m|/|pct_15m| ≥ 阈值。
+    用于及时补进形态监听（不要求多榜）。
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    threshold = abs(float(min_pct))
+
+    def _push(sym: str) -> None:
+        s = str(sym or "").upper()
+        if not s or s in seen:
+            return
+        seen.add(s)
+        out.append(s)
+
+    for r in hot_tickers or []:
+        _push(str(r.get("symbol") or ""))
+
+    for r in pool_rows:
+        if r.get("status") == "warming":
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        if not sym:
+            continue
+        if r.get("is_alert") or r.get("is_hot"):
+            _push(sym)
+            continue
+        try:
+            p5 = abs(float(r.get("pct_5m") or 0.0))
+            p15 = abs(float(r.get("pct_15m") or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if p5 >= threshold or p15 >= threshold:
+            _push(sym)
+    return out
+
+
+def find_oi_anomaly_multiboard(
+    pool_rows: list[dict[str, Any]],
+    *,
+    hot_tickers: list[dict[str, Any]] | None = None,
+    min_boards: int = PATTERN_MULTI_BOARD_MIN,
+    top_n: int = MATRIX_TOP_N,
+) -> list[str]:
+    """
+    OI 异动 ∩ 多榜共振 → 应及时进入形态监听。
+
+    OI 异动：雷达告警 / is_hot，或当前矩阵任一持仓榜上榜。
+    多榜：同时出现在 ≥ min_boards 个矩阵榜单。
+    """
+    hot: set[str] = set()
+    for r in hot_tickers or []:
+        sym = str(r.get("symbol") or "").upper()
+        if sym:
+            hot.add(sym)
+    eligible = [r for r in pool_rows if r.get("status") != "warming"]
+    for r in eligible:
+        sym = str(r.get("symbol") or "").upper()
+        if not sym:
+            continue
+        if r.get("is_alert") or r.get("is_hot"):
+            hot.add(sym)
+    for tf in TF_LABELS:
+        hot.update(_top_board_symbols(eligible, tf, "oi", mode="mag", top_n=top_n))
+        hot.update(_top_board_symbols(eligible, tf, "oi", mode="intensity", top_n=top_n))
+
+    if not hot:
+        return []
+
+    leaderboard = collect_matrix_leaderboard(
+        eligible, tf=BREAKOUT_MATRIX_TF, top_n=top_n
+    )
+    multi = symbols_on_n_boards(leaderboard, min_boards=max(2, int(min_boards)))
+    out: list[str] = []
+    for c in multi:
+        sym = str(c["symbol"]).upper()
+        if sym not in hot:
+            continue
+        cats = list(c.get("categories") or [])
+        # 至少沾一条持仓榜，或已在 OI 异动集合（告警 / hot / 持仓榜）
+        has_oi_board = any(str(x) in _OI_BOARD_CATS for x in cats)
+        if has_oi_board or sym in hot:
+            out.append(sym)
+    return out
+
+
 class PatternMonitorEngine:
     def __init__(self) -> None:
         self.tracker = PatternStateTracker()
@@ -359,6 +464,41 @@ class PatternMonitorEngine:
             ", ".join(picked[:8]) + ("…" if len(picked) > 8 else ""),
         )
         return picked
+
+    def fill_watchlist_to_capacity(
+        self,
+        pool_rows: list[dict[str, Any]],
+        *,
+        fallback_symbols: list[str] | None = None,
+    ) -> list[str]:
+        """列表未满时立即用热钱补到 MAX_WATCH_SYMBOLS（升级上限后无需等 2h 刷新）。"""
+        current = {w.symbol.upper() for w in self.tracker.list_watchlist()}
+        if len(current) >= MAX_WATCH_SYMBOLS:
+            return []
+        need = MAX_WATCH_SYMBOLS - len(current)
+        picked = pick_hot_flow_and_oi(
+            pool_rows,
+            count=max(need * 2, need),
+            fallback_symbols=fallback_symbols,
+        )
+        added: list[str] = []
+        for sym in picked:
+            if len(current) >= MAX_WATCH_SYMBOLS:
+                break
+            sym_u = str(sym).upper()
+            if not sym_u or sym_u in current:
+                continue
+            if self.tracker.add_watch(sym_u):
+                current.add(sym_u)
+                added.append(sym_u)
+        if added:
+            logger.info(
+                "📈 形态池补齐到 %d：+%d → %s",
+                MAX_WATCH_SYMBOLS,
+                len(added),
+                ", ".join(added[:8]) + ("…" if len(added) > 8 else ""),
+            )
+        return added
 
     def random_pick_heavyweight(
         self,
@@ -516,13 +656,120 @@ class PatternMonitorEngine:
         列表已满时踢掉未进场币腾位；新币置顶便于看到。
         """
         hits = find_gainers_oi_intersection(pool_rows)
+        return self._ingest_symbols_to_watch(
+            hits, protect_extra=protect_extra, log_tag="涨幅∩持仓"
+        )
+
+    def ingest_oi_anomaly_multiboard(
+        self,
+        pool_rows: list[dict[str, Any]],
+        *,
+        hot_tickers: list[dict[str, Any]] | None = None,
+        protect_extra: set[str] | None = None,
+        min_boards: int | None = None,
+    ) -> list[str]:
+        """OI 异动且多榜共振 → 立即加入 / 顶到形态监听列表。"""
+        hits = find_oi_anomaly_multiboard(
+            pool_rows,
+            hot_tickers=hot_tickers,
+            min_boards=min_boards if min_boards is not None else PATTERN_MULTI_BOARD_MIN,
+        )
+        return self._ingest_symbols_to_watch(
+            hits,
+            protect_extra=protect_extra,
+            log_tag=f"OI异动∩≥{min_boards if min_boards is not None else PATTERN_MULTI_BOARD_MIN}榜",
+            bump_existing=True,
+        )
+
+    def ingest_oi_amplified(
+        self,
+        pool_rows: list[dict[str, Any]],
+        *,
+        hot_tickers: list[dict[str, Any]] | None = None,
+        protect_extra: set[str] | None = None,
+    ) -> list[str]:
+        """雷达 OI 放大（告警 / 高变动率）→ 立即加入形态监听。"""
+        hits = find_oi_amplified_symbols(
+            pool_rows,
+            hot_tickers=hot_tickers,
+            min_pct=PATTERN_OI_AMPLIFY_PCT,
+        )
+        return self._ingest_symbols_to_watch(
+            hits,
+            protect_extra=protect_extra,
+            log_tag=f"OI放大(≥{PATTERN_OI_AMPLIFY_PCT:g}%)",
+            bump_existing=True,
+        )
+
+    def prune_inactive_watch(
+        self,
+        *,
+        protect_extra: set[str] | None = None,
+        expired_age_sec: float | None = None,
+        searching_age_sec: float | None = None,
+    ) -> list[str]:
+        """
+        移除历史不活跃币：EXPIRED 超过 expired_age_sec，
+        或长期 SEARCHING 无进展超过 searching_age_sec。
+        置顶 / LH / WAITING / TRIGGER / 沙盒持仓保留。
+        """
+        now = time.time()
+        expired_age = float(
+            expired_age_sec if expired_age_sec is not None else PATTERN_INACTIVE_PURGE_SEC
+        )
+        searching_age = float(
+            searching_age_sec
+            if searching_age_sec is not None
+            else PATTERN_SEARCHING_STALE_SEC
+        )
+        protected = self._protected_symbols(protect_extra)
+        states = {s.symbol.upper(): s for s in self.tracker.list_states()}
+        removed: list[str] = []
+        for w in self.tracker.list_watchlist():
+            sym = w.symbol.upper()
+            if sym in protected:
+                continue
+            st = states.get(sym)
+            status = st.status if st else STATUS_SEARCHING
+            updated = float(st.updated_at if st else w.added_at)
+            age = now - updated
+            drop = False
+            if status == STATUS_EXPIRED and age >= expired_age:
+                drop = True
+            elif status == STATUS_SEARCHING and age >= searching_age:
+                drop = True
+            if drop and self.tracker.remove_watch(sym):
+                removed.append(sym)
+        if removed:
+            logger.info(
+                "🧹 形态池清理不活跃 %d：%s",
+                len(removed),
+                ", ".join(removed[:10]) + ("…" if len(removed) > 10 else ""),
+            )
+        return removed
+
+    def _ingest_symbols_to_watch(
+        self,
+        hits: list[str],
+        *,
+        protect_extra: set[str] | None = None,
+        log_tag: str = "雷达",
+        bump_existing: bool = False,
+    ) -> list[str]:
         if not hits:
             return []
 
         current = {w.symbol.upper() for w in self.tracker.list_watchlist()}
         added: list[str] = []
+        bumped: list[str] = []
         for sym in hits:
-            if sym in current:
+            sym_u = str(sym).upper()
+            if not sym_u:
+                continue
+            if sym_u in current:
+                if bump_existing:
+                    self.tracker.bump_watch_to_top(sym_u)
+                    bumped.append(sym_u)
                 continue
             while len(current) >= MAX_WATCH_SYMBOLS:
                 victim = self._evict_one_replaceable(protect_extra)
@@ -531,20 +778,30 @@ class PatternMonitorEngine:
                 current.discard(victim)
             if len(current) >= MAX_WATCH_SYMBOLS:
                 logger.info(
-                    "涨幅∩持仓 %s 未能入池：形态列表已满且无可替换币",
-                    sym,
+                    "%s %s 未能入池：形态列表已满(%d)且无可替换币",
+                    log_tag,
+                    sym_u,
+                    MAX_WATCH_SYMBOLS,
                 )
                 break
-            if self.tracker.add_watch(sym):
-                current.add(sym)
-                self.tracker.bump_watch_to_top(sym)
-                added.append(sym)
+            if self.tracker.add_watch(sym_u):
+                current.add(sym_u)
+                self.tracker.bump_watch_to_top(sym_u)
+                added.append(sym_u)
 
         if added:
             logger.info(
-                "📈 涨幅∩持仓 → 形态追踪 +%d：%s",
+                "📈 %s → 形态追踪 +%d：%s",
+                log_tag,
                 len(added),
                 ", ".join(added),
+            )
+        elif bumped:
+            logger.debug(
+                "%s 已在池内置顶 %d：%s",
+                log_tag,
+                len(bumped),
+                ", ".join(bumped[:8]),
             )
         return added
 
@@ -584,9 +841,12 @@ class PatternMonitorEngine:
             "auto_pick_count": PATTERN_AUTO_PICK_COUNT,
             "card_reserved_slots": PATTERN_CARD_RESERVED,
             "max_watch_symbols": MAX_WATCH_SYMBOLS,
+            "multi_board_min": PATTERN_MULTI_BOARD_MIN,
             "watchlist_refresh_sec": PATTERN_WATCHLIST_REFRESH_SEC,
             "watchlist_refresh_tf": PATTERN_WATCHLIST_REFRESH_TF,
             "last_watchlist_refresh_ts": self._last_watchlist_refresh_ts,
+            # 供 collect:ui 守护进程识别是否为本仓库实例（避免占用同端口的旧/旁路进程）
+            "package_root": str(Path(__file__).resolve().parent),
         }
 
     async def scan(
@@ -598,19 +858,39 @@ class PatternMonitorEngine:
         pool_rows: list[dict[str, Any]] | None = None,
         fallback_symbols: list[str] | None = None,
         protect_symbols: set[str] | None = None,
+        hot_tickers: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         if pool_rows:
             self._last_pool_rows = pool_rows
             self.tracker.expire_pins()
+            self.tracker.expire_stale()
+            # 先清不活跃，再热钱/OI 入池
+            self.prune_inactive_watch(protect_extra=protect_symbols)
             self.ensure_auto_watchlist(pool_rows, fallback_symbols=fallback_symbols)
             self.refresh_watchlist_from_hot(
                 pool_rows,
                 fallback_symbols=fallback_symbols,
                 protect_extra=protect_symbols,
             )
+            # 上限调大后：未满则每轮补齐（不依赖 2h 热钱刷新）
+            self.fill_watchlist_to_capacity(
+                pool_rows, fallback_symbols=fallback_symbols
+            )
             # 每轮扫描：涨幅榜 ∩ 持仓正榜 → 立即加入形态追踪
             self.ingest_gainers_oi_intersection(
                 pool_rows,
+                protect_extra=protect_symbols,
+            )
+            # 每轮扫描：OI 异动 ∩ 多榜共振 → 及时更新形态监听
+            self.ingest_oi_anomaly_multiboard(
+                pool_rows,
+                hot_tickers=hot_tickers,
+                protect_extra=protect_symbols,
+            )
+            # 雷达 OI 放大（告警 / 高变动率）→ 及时入池
+            self.ingest_oi_amplified(
+                pool_rows,
+                hot_tickers=hot_tickers,
                 protect_extra=protect_symbols,
             )
 
@@ -622,6 +902,9 @@ class PatternMonitorEngine:
             return []
 
         self.tracker.expire_stale()
+        # 扫描后再次清理刚标为 EXPIRED 的币（下一轮也会清；此处加速腾位给 OI 放大）
+        self.prune_inactive_watch(protect_extra=protect_symbols)
+        watchlist = self.tracker.list_watchlist()
         symbols = [w.symbol for w in watchlist]
         klines_map = await fetch_pattern_klines_batch(
             session, base_url=base_url, symbols=symbols

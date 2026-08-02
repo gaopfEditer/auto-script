@@ -51,6 +51,10 @@ export interface SandboxHistoryTrade {
   trend_status?: string;
   /** 合并后的阶段事件文案（; 分隔） */
   stage_events?: string;
+  author_name?: string;
+  channel_id?: string;
+  channel_name?: string;
+  card_source?: string;
 }
 
 export type SandboxTradeInput = {
@@ -84,6 +88,10 @@ export type SandboxTradeInput = {
   vegas_direction?: string;
   vegas_direction_label?: string;
   trend_status?: string;
+  author_name?: string;
+  channel_id?: string;
+  channel_name?: string;
+  card_source?: string;
 };
 
 function pad2(n: number): string {
@@ -226,11 +234,19 @@ export function normalizeTrade(
   }
   let source = String(raw.source || "").toLowerCase();
   let sourceLabel = String(raw.source_label || "");
+  let authorName = String(raw.author_name || "");
+  let channelId = String(raw.channel_id || "");
+  let channelName = String(raw.channel_name || "");
+  let cardSource = String(raw.card_source || "");
   if (!source && Array.isArray(events)) {
     const ent = events.find((e) => e?.type === "entry");
     if (ent) {
       source = String(ent.source || "").toLowerCase();
       if (!sourceLabel) sourceLabel = String(ent.source_label || "");
+      if (!authorName) authorName = String(ent.author_name || "");
+      if (!channelId) channelId = String(ent.channel_id || "");
+      if (!channelName) channelName = String(ent.channel_name || "");
+      if (!cardSource) cardSource = String(ent.card_source || "");
     }
   }
   if (!source) {
@@ -310,6 +326,10 @@ export function normalizeTrade(
     vegas_direction_label: vegasLabel || undefined,
     trend_status: trendStatus || undefined,
     stage_events: stage,
+    author_name: authorName || undefined,
+    channel_id: channelId || undefined,
+    channel_name: channelName || undefined,
+    card_source: cardSource || undefined,
   };
 }
 

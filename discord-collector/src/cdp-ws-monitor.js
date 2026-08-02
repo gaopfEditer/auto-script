@@ -21,6 +21,87 @@ function shortenUrl(u, max = 180) {
   return s.length <= max ? s : `${s.slice(0, max)}…`;
 }
 
+const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+];
+
+/**
+ * Playwright connectOverCDP 会读进程代理环境；对本机 CDP 临时摘掉代理。
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+async function withLocalhostNoProxy(fn) {
+  /** @type {Record<string, string | undefined>} */
+  const saved = {};
+  for (const k of PROXY_ENV_KEYS) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
+  const prevNo = process.env.NO_PROXY;
+  const prevNoL = process.env.no_proxy;
+  process.env.NO_PROXY = "127.0.0.1,localhost,::1";
+  process.env.no_proxy = process.env.NO_PROXY;
+  try {
+    return await fn();
+  } finally {
+    for (const k of PROXY_ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    if (prevNo === undefined) delete process.env.NO_PROXY;
+    else process.env.NO_PROXY = prevNo;
+    if (prevNoL === undefined) delete process.env.no_proxy;
+    else process.env.no_proxy = prevNoL;
+  }
+}
+
+/**
+ * http(s)://host:9222 → 直连拉取 webSocketDebuggerUrl；已是 ws:// 则原样返回。
+ * @param {string} connectUrl
+ * @param {Logger} log
+ */
+async function resolveCdpEndpoint(connectUrl, log) {
+  const raw = String(connectUrl || "").trim();
+  if (!raw) return raw;
+  if (/^wss?:\/\//i.test(raw)) return raw;
+
+  let base = raw.replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(base)) base = `http://${base}`;
+
+  const versionUrl = `${base}/json/version`;
+  try {
+    const res = await withLocalhostNoProxy(async () => {
+      // 强制不走全局代理（undici/fetch 在 Node 也可能读代理）
+      return fetch(versionUrl, {
+        signal: AbortSignal.timeout(5_000),
+        // @ts-expect-error Node 18+ undici dispatcher 可选；无则忽略
+        dispatcher: undefined,
+      });
+    });
+    if (!res.ok) {
+      log.warn(`CDP ${versionUrl} → HTTP ${res.status}，回退用 ${base}`);
+      return base;
+    }
+    const j = /** @type {{ webSocketDebuggerUrl?: string }} */ (await res.json());
+    const ws = String(j.webSocketDebuggerUrl || "").trim();
+    if (ws) {
+      log.info(`CDP 已解析浏览器端点 ${shortenUrl(ws, 120)}`);
+      return ws;
+    }
+  } catch (e) {
+    log.warn(
+      `CDP 解析 ${versionUrl} 失败: ${/** @type {Error} */ (e).message}，回退 ${base}`
+    );
+  }
+  return base;
+}
+
 /**
  * Discord 网页版频道直链：`/channels/{guildId}/{channelId}`（DM 时 guild 可为 @me）。
  * @param {string} g
@@ -28,6 +109,29 @@ function shortenUrl(u, max = 180) {
  */
 function discordChannelUrl(g, c) {
   return `https://discord.com/channels/${encodeURIComponent(g)}/${encodeURIComponent(c)}`;
+}
+
+/**
+ * @param {string} url
+ * @returns {{ guildId: string, channelId: string } | null}
+ */
+function parseDiscordChannelUrl(url) {
+  const m = String(url ?? "").match(
+    /discord\.com\/channels\/([^/?#]+)\/([^/?#]+)/i
+  );
+  if (!m) return null;
+  return { guildId: decodeURIComponent(m[1]), channelId: decodeURIComponent(m[2]) };
+}
+
+/**
+ * @param {string} pageUrl
+ * @param {string} targetUrl
+ */
+function isAlreadyOnDiscordChannel(pageUrl, targetUrl) {
+  const a = parseDiscordChannelUrl(pageUrl);
+  const b = parseDiscordChannelUrl(targetUrl);
+  if (!a || !b) return false;
+  return a.guildId === b.guildId && a.channelId === b.channelId;
 }
 
 /**
@@ -730,10 +834,12 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *   startUrl: string,
  *   cdpConnectUrl?: string,
  *   pageReloadIntervalMs?: number,
+ *   cdpAutoGoto?: boolean,
  *   networkTrace?: boolean,
  *   wsFrameTrace?: boolean,
  *   diagnosticSink?: (evt: Record<string, unknown>) => void,
  *   onConnectionLost?: (info: { reason: string, connectUrl: string, message: string }) => void | Promise<void>,
+ *   onReconnected?: (info: { connectUrl: string, attempt: number }) => void | Promise<void>,
  *   onData: (buf: Buffer, meta: { requestId: string, opcode: number, isBinaryHint: boolean, pageUrl?: string }) => void
  * }} opts — diagnosticSink：实时诊断（collect UI），与 networkTrace 独立；仅 sink 时也会挂 CDP 监听
  * @param {Logger} log
@@ -746,6 +852,8 @@ export async function startCdpWebSocketMonitor(opts, log) {
   const mounted = [];
   /** @type {WeakSet<import('playwright').Page>} */
   const attached = new WeakSet();
+  /** 会话是否已主动 close（阻止自动重连） */
+  let sessionClosed = false;
 
   /**
    * @param {import('playwright').Page} page
@@ -777,6 +885,88 @@ export async function startCdpWebSocketMonitor(opts, log) {
     log.info(`已挂载 Network.webSocketFrameReceived: ${page.url() || "(about:blank)"}`);
   }
 
+  /**
+   * 附加模式下打开/刷新保活频道。
+   * @param {import('playwright').Browser} br
+   * @param {string} targetUrl
+   * @param {{ forceReload?: boolean }} [navOpts]
+   */
+  async function openOrRefreshDiscordUrl(br, targetUrl, navOpts = {}) {
+    if (!br?.isConnected?.()) throw new Error("browser disconnected");
+    const url = String(targetUrl || "").trim();
+    if (!url) throw new Error("empty target url");
+
+    /** @type {import('playwright').BrowserContext} */
+    let ctx = br.contexts()[0];
+    if (!ctx) ctx = await br.newContext();
+
+    /** @type {import('playwright').Page | null} */
+    let page = null;
+    let bestScore = -1;
+    for (const c of br.contexts()) {
+      for (const p of c.pages()) {
+        let u = "";
+        try {
+          u = p.url();
+        } catch {
+          continue;
+        }
+        if (isAlreadyOnDiscordChannel(u, url)) {
+          page = p;
+          ctx = c;
+          bestScore = 1000;
+          break;
+        }
+        const parsed = parseDiscordChannelUrl(url);
+        const sc = parsed
+          ? scoreDiscordPageForChannelNav(u, parsed.guildId, parsed.channelId)
+          : /discord\.com/i.test(u)
+            ? 10
+            : 0;
+        if (sc > bestScore) {
+          bestScore = sc;
+          page = p;
+          ctx = c;
+        }
+      }
+      if (bestScore >= 1000) break;
+    }
+
+    if (!page) {
+      page = await ctx.newPage();
+      log.info(`CDP 新建标签 → ${shortenUrl(url, 160)}`);
+    }
+
+    await attachToPage(page);
+
+    const cur = (() => {
+      try {
+        return page.url();
+      } catch {
+        return "";
+      }
+    })();
+    const already = isAlreadyOnDiscordChannel(cur, url);
+    opts.diagnosticSink?.({
+      kind: "cdp_keepalive",
+      phase: navOpts.forceReload ? "reload" : already ? "already_on_channel" : "goto",
+      targetUrl: url,
+      currentUrl: cur,
+    });
+
+    if (navOpts.forceReload && already) {
+      log.info(`CDP 保活刷新 ${shortenUrl(url, 160)}`);
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 });
+    } else if (!already || navOpts.forceReload) {
+      log.info(`CDP 打开频道 ${shortenUrl(url, 160)}`);
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
+    } else {
+      log.info(`CDP 已在目标频道 ${shortenUrl(cur, 160)}`);
+    }
+    return page;
+  }
+
+  /** @type {import('playwright').Browser | undefined} */
   let browser;
   /** @type {boolean} */
   let ownedBrowser;
@@ -786,25 +976,194 @@ export async function startCdpWebSocketMonitor(opts, log) {
   let headlessPage = null;
   /** @type {ReturnType<typeof setInterval> | null} */
   let reloadTimer = null;
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let attachRescanTimer = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let reconnectTimer = null;
+  let reconnectAttempt = 0;
+  let reconnectInFlight = false;
 
-  /** @param {import('playwright').Browser} b */
-  function wireBrowserDisconnect(b) {
-    b.on("disconnected", () => {
-      const message = connectUrl
-        ? `CDP 与 Chrome 调试连接已断开: ${connectUrl}`
-        : "CDP 浏览器连接已断开";
-      log.error(
-        `[CDP] ${message} — 请检查 Chrome 是否休眠/关闭，或重新启动带 --remote-debugging-port 的 Chrome`
-      );
+  function clearAttachTimers() {
+    if (reloadTimer) {
+      clearInterval(reloadTimer);
+      reloadTimer = null;
+    }
+    if (attachRescanTimer) {
+      clearInterval(attachRescanTimer);
+      attachRescanTimer = null;
+    }
+  }
+
+  async function detachMountedSessions() {
+    for (const { cdp } of mounted) {
+      await cdp.detach().catch(() => {});
+    }
+    mounted.length = 0;
+  }
+
+  /**
+   * 附加模式：挂载上下文 / 保活刷新 / 断线自动重连。
+   * @param {import('playwright').Browser} br
+   * @param {{ isReconnect?: boolean, attempt?: number }} [bindOpts]
+   */
+  async function bindAttachBrowser(br, bindOpts = {}) {
+    const isReconnect = Boolean(bindOpts.isReconnect);
+    const attempt = Number(bindOpts.attempt) || 0;
+    browser = br;
+
+    /** 挂载已有/新建页签；Discord 刷新会换 page 对象时靠 page 事件 + 定时补挂 */
+    const wireContext = (/** @type {import('playwright').BrowserContext} */ ctx) => {
+      ctx.on("page", (page) => {
+        void attachToPage(page).catch((e) => log.warn(`新标签页挂载 CDP 失败: ${e.message}`));
+      });
+      for (const page of ctx.pages()) {
+        void attachToPage(page).catch((e) => log.warn(`标签页挂载 CDP 失败: ${e.message}`));
+      }
+    };
+    for (const ctx of br.contexts()) {
+      wireContext(ctx);
+    }
+    br.on("context", (ctx) => {
+      wireContext(ctx);
+    });
+
+    attachRescanTimer = setInterval(() => {
+      try {
+        if (!browser?.isConnected?.()) return;
+        for (const ctx of browser.contexts()) {
+          for (const page of ctx.pages()) {
+            if (attached.has(page)) continue;
+            void attachToPage(page).catch((e) =>
+              log.warn(`补挂 CDP 失败: ${/** @type {Error} */ (e).message}`)
+            );
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 15_000);
+
+    log.info(
+      `已在 ${mounted.length} 个标签页上启用监听${isReconnect ? "（重连）" : ""}。保活频道: ${opts.startUrl || "（未配置）"}`
+    );
+    opts.diagnosticSink?.({
+      kind: isReconnect ? "cdp_reconnected" : "cdp_attached",
+      mode: "connectOverCDP",
+      connectUrl,
+      tabCount: mounted.length,
+      hintStartUrl: opts.startUrl,
+      attempt: isReconnect ? attempt : 0,
+    });
+
+    const autoGoto = opts.cdpAutoGoto !== false;
+    const keepUrl = String(opts.startUrl || "").trim();
+    if (autoGoto && keepUrl && /discord\.com\//i.test(keepUrl)) {
+      try {
+        // 重连时强制刷新，重建 Discord Gateway；首次仅确保在目标频道
+        await openOrRefreshDiscordUrl(br, keepUrl, { forceReload: isReconnect });
+      } catch (e) {
+        log.warn(
+          `CDP ${isReconnect ? "重连后刷新" : "自动打开"}频道失败: ${/** @type {Error} */ (e).message} — 请确认 Chrome 已登录 Discord`
+        );
+      }
+      const reloadMs = Number(opts.pageReloadIntervalMs ?? 0);
+      if (reloadMs > 0) {
+        if (!isReconnect) {
+          log.info(
+            `CDP 保活刷新已启用：每 ${Math.round(reloadMs / 1000)}s 打开/刷新 ${shortenUrl(keepUrl, 120)}`
+          );
+        }
+        reloadTimer = setInterval(() => {
+          void openOrRefreshDiscordUrl(browser, keepUrl, { forceReload: true }).catch((e) =>
+            log.warn(`CDP 保活刷新失败: ${/** @type {Error} */ (e).message}`)
+          );
+        }, reloadMs);
+      }
+    }
+
+    br.on("disconnected", () => {
+      if (sessionClosed) return;
+      const message = `CDP 与 Chrome 调试连接已断开: ${connectUrl}`;
+      log.error(`[CDP] ${message} — 将自动重连并刷新 Discord`);
+      clearAttachTimers();
+      void detachMountedSessions();
       opts.diagnosticSink?.({
         kind: "cdp_disconnected",
         connectUrl: connectUrl || null,
         reason: "browser_disconnected",
         message,
+        willReconnect: true,
       });
       void opts.onConnectionLost?.({
         reason: "browser_disconnected",
         connectUrl,
+        message,
+      });
+      scheduleAttachReconnect();
+    });
+
+    if (isReconnect) {
+      reconnectAttempt = 0;
+      void opts.onReconnected?.({ connectUrl, attempt });
+    }
+  }
+
+  async function connectAttachOnce() {
+    const endpoint = await resolveCdpEndpoint(connectUrl, log);
+    return withLocalhostNoProxy(() => chromium.connectOverCDP(endpoint));
+  }
+
+  function scheduleAttachReconnect() {
+    if (sessionClosed || !connectUrl || reconnectInFlight) return;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    reconnectAttempt += 1;
+    const attempt = reconnectAttempt;
+    const delay = Math.min(30_000, 1500 * 2 ** Math.min(attempt - 1, 4));
+    log.warn(
+      `[CDP] ${delay}ms 后尝试重连 #${attempt} → ${connectUrl}（Chrome 调试口通常仍在，将刷新 Discord）`
+    );
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      void (async () => {
+        if (sessionClosed || reconnectInFlight) return;
+        reconnectInFlight = true;
+        try {
+          const br = await connectAttachOnce();
+          if (sessionClosed) {
+            await br.close().catch(() => {});
+            return;
+          }
+          await bindAttachBrowser(br, { isReconnect: true, attempt });
+          log.info(`[CDP] 重连成功 #${attempt}，已刷新 Discord 保活页`);
+        } catch (e) {
+          log.warn(`[CDP] 重连失败 #${attempt}: ${/** @type {Error} */ (e).message}`);
+          reconnectInFlight = false;
+          scheduleAttachReconnect();
+          return;
+        }
+        reconnectInFlight = false;
+      })();
+    }, delay);
+  }
+
+  /** @param {import('playwright').Browser} b */
+  function wireBrowserDisconnect(b) {
+    b.on("disconnected", () => {
+      if (sessionClosed) return;
+      const message = "CDP 浏览器连接已断开";
+      log.error(`[CDP] ${message}`);
+      opts.diagnosticSink?.({
+        kind: "cdp_disconnected",
+        connectUrl: null,
+        reason: "browser_disconnected",
+        message,
+      });
+      void opts.onConnectionLost?.({
+        reason: "browser_disconnected",
+        connectUrl: "",
         message,
       });
     });
@@ -812,29 +1171,9 @@ export async function startCdpWebSocketMonitor(opts, log) {
 
   if (connectUrl) {
     ownedBrowser = false;
-    log.info(`connectOverCDP: ${connectUrl}（监听你在该 Chrome 里打开/刷新的页面上的 WS）`);
-    browser = await chromium.connectOverCDP(connectUrl);
-    wireBrowserDisconnect(browser);
-
-    for (const ctx of browser.contexts()) {
-      for (const page of ctx.pages()) {
-        await attachToPage(page);
-      }
-      ctx.on("page", (page) => {
-        void attachToPage(page).catch((e) => log.warn(`新标签页挂载 CDP 失败: ${e.message}`));
-      });
-    }
-
-    log.info(
-      `已在 ${mounted.length} 个标签页上启用监听。请在同一 Chrome 窗口中打开并刷新: ${opts.startUrl}（或你的目标页）`
-    );
-    opts.diagnosticSink?.({
-      kind: "cdp_attached",
-      mode: "connectOverCDP",
-      connectUrl,
-      tabCount: mounted.length,
-      hintStartUrl: opts.startUrl,
-    });
+    log.info(`connectOverCDP: ${connectUrl}（监听你在该 Chrome 里打开/刷新的页面上的 WS；断线自动重连）`);
+    browser = await connectAttachOnce();
+    await bindAttachBrowser(browser, { isReconnect: false });
   } else {
     ownedBrowser = true;
     log.info("启动 Chromium (headless) …");
@@ -915,7 +1254,9 @@ export async function startCdpWebSocketMonitor(opts, log) {
   }
 
   return {
-    browser,
+    get browser() {
+      return browser;
+    },
     get mounted() {
       return mounted;
     },
@@ -1054,18 +1395,17 @@ export async function startCdpWebSocketMonitor(opts, log) {
     },
     async close() {
       log.info("正在卸载 CDP 监听 …");
-      if (reloadTimer) {
-        clearInterval(reloadTimer);
-        reloadTimer = null;
+      sessionClosed = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
       }
-      for (const { cdp } of mounted) {
-        await cdp.detach().catch(() => {});
-      }
-      mounted.length = 0;
+      clearAttachTimers();
+      await detachMountedSessions();
 
       if (ownedBrowser && headlessContext) {
         await headlessContext.close().catch(() => {});
-        await browser.close().catch(() => {});
+        await browser?.close().catch(() => {});
         log.info("无头浏览器已关闭");
       } else if (!ownedBrowser) {
         log.info("connectOverCDP 模式：未关闭你的 Chrome，仅已 detach CDP 会话");

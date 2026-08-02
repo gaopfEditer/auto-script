@@ -6,6 +6,18 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
+# Discord 信号频道 ID → 卡片作者（与 collector discord-signal-config 对齐）
+SIGNAL_CHANNEL_AUTHORS: dict[str, str] = {
+    "1444963372134301827": "seven",
+    "1444963929393729686": "峰哥",
+    "1444963689194192947": "颜驰",
+    "1444967547169669160": "币安杀手",
+    "1459861535815110810": "unknown-trader",
+    "1444963506431463474": "山寨之王",
+    "1444963405185159238": "币圈所长",
+}
+
+
 @dataclass
 class ParsedCard:
     card_id: str
@@ -27,6 +39,7 @@ class ParsedCard:
     signal_at: float | None = None  # unix 秒
     created_at: float | None = None
     updated_at: float | None = None
+    channel_id: str = ""
     channel_name: str = ""
     guild_name: str = ""
     message_id: str = ""
@@ -36,6 +49,41 @@ class ParsedCard:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def resolve_signal_channel_author(
+    channel_id: str = "",
+    *,
+    channel_name: str = "",
+    source_label: str = "",
+    author_name: str = "",
+) -> str:
+    """已知频道映射优先；否则用可读 channel_name / author_name。"""
+    cid = str(channel_id or "").strip()
+    if not cid:
+        for blob in (channel_name, source_label):
+            m = re.search(r"(\d{15,22})", str(blob or ""))
+            if m:
+                cid = m.group(1)
+                break
+    if cid and cid in SIGNAL_CHANNEL_AUTHORS:
+        return SIGNAL_CHANNEL_AUTHORS[cid]
+    for raw in (author_name, channel_name):
+        name = str(raw or "").strip()
+        if not name or re.fullmatch(r"\d{15,22}", name):
+            continue
+        if name.lower() == "discord":
+            continue
+        return name
+    src = str(source_label or "").strip()
+    if src:
+        parts = re.split(r"\s*[·|]\s*", src)
+        tail = parts[-1].strip() if parts else src
+        if tail in SIGNAL_CHANNEL_AUTHORS:
+            return SIGNAL_CHANNEL_AUTHORS[tail]
+        if tail and not re.fullmatch(r"\d{15,22}", tail) and tail.lower() != "discord":
+            return tail
+    return ""
 
 
 _ID_RE = re.compile(
@@ -354,6 +402,9 @@ def _author_display(payload: dict[str, Any]) -> tuple[str, str]:
     if not name:
         name = str(
             payload.get("author_name")
+            or payload.get("author_display")
+            or payload.get("author_global_name")
+            or payload.get("author_username")
             or payload.get("display")
             or payload.get("global_name")
             or payload.get("username")
@@ -362,6 +413,17 @@ def _author_display(payload: dict[str, Any]) -> tuple[str, str]:
     if not aid:
         aid = str(payload.get("author_id") or "").strip()
     return name, aid
+
+
+def _channel_id(payload: dict[str, Any]) -> str:
+    ch = payload.get("channel")
+    if isinstance(ch, dict):
+        cid = str(ch.get("id") or ch.get("channel_id") or "").strip()
+        if cid:
+            return cid
+    return str(
+        payload.get("channel_id") or payload.get("channelId") or ""
+    ).strip()
 
 
 def _channel_guild_names(payload: dict[str, Any]) -> tuple[str, str]:
@@ -398,11 +460,27 @@ def _apply_envelope_meta(card: ParsedCard, payload: dict[str, Any]) -> ParsedCar
         card.author_name = author_name
     if author_id:
         card.author_id = author_id
+    cid = _channel_id(payload)
+    if cid:
+        card.channel_id = cid
     ch, gu = _channel_guild_names(payload)
     if ch:
         card.channel_name = ch
     if gu:
         card.guild_name = gu
+
+    # 频道 ID → 品牌作者（如 1444963506431463474 → 山寨之王）
+    mapped = resolve_signal_channel_author(
+        card.channel_id,
+        channel_name=card.channel_name,
+        source_label=str(payload.get("source_label") or card.source_label or ""),
+        author_name=card.author_name,
+    )
+    if mapped:
+        card.author_name = mapped
+        if not card.channel_name or re.fullmatch(r"\d{15,22}", card.channel_name):
+            card.channel_name = mapped
+
     card.message_id = str(payload.get("message_id") or card.message_id or "").strip()
     card.event = str(payload.get("event") or card.event or "").strip()
     card.signal_phase = str(
@@ -429,9 +507,16 @@ def _apply_envelope_meta(card: ParsedCard, payload: dict[str, Any]) -> ParsedCar
     src = str(
         payload.get("source_label")
         or payload.get("source")
-        or (f"{gu} · {ch}" if gu or ch else "")
+        or (
+            f"{gu} · {card.channel_name or ch}"
+            if gu or card.channel_name or ch
+            else ""
+        )
         or card.source_label
     ).strip()
+    # 把 "discord · 雪花ID" 规范成 "discord · 山寨之王"
+    if card.author_name and re.search(r"\d{15,22}", src):
+        src = re.sub(r"\d{15,22}", card.author_name, src, count=1)
     if src:
         card.source_label = src
     return card
@@ -643,6 +728,7 @@ def parse_card_message(payload: dict[str, Any] | str) -> ParsedCard | None:
                 signal_at=_parse_ts(payload.get("signal_at")),
                 created_at=_parse_ts(payload.get("created_at")),
                 updated_at=_parse_ts(payload.get("updated_at")),
+                channel_id=str(payload.get("channel_id") or ""),
                 channel_name=str(payload.get("channel_name") or ""),
                 guild_name=str(payload.get("guild_name") or ""),
                 message_id=str(payload.get("message_id") or ""),

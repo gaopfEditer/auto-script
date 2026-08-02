@@ -280,6 +280,11 @@ export interface SandboxPosition {
   card_id?: string;
   card_tps?: number[];
   tp3?: number | null;
+  /** 卡片作者（频道品牌，如山寨之王） */
+  author_name?: string;
+  channel_id?: string;
+  channel_name?: string;
+  card_source?: string;
 }
 
 export interface SandboxCardOrder {
@@ -294,6 +299,7 @@ export interface SandboxCardOrder {
   signal_at?: number | null;
   author_name?: string;
   author_id?: string;
+  channel_id?: string;
   channel_name?: string;
   guild_name?: string;
   message_id?: string;
@@ -319,9 +325,13 @@ export interface PatternPayload {
   pattern_alerts: PatternAlert[];
   heavyweight_pool_size?: number;
   auto_pick_count?: number;
+  max_watch_symbols?: number;
+  multi_board_min?: number;
+  card_reserved_slots?: number;
   watchlist_refresh_sec?: number;
   watchlist_refresh_tf?: string;
   last_watchlist_refresh_ts?: number;
+  package_root?: string;
   sandbox_enabled?: boolean;
   sandbox_day?: string;
   sandbox_pool?: string[];

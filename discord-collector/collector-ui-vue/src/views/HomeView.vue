@@ -16,6 +16,7 @@ import { RouterLink } from "vue-router";
       <RouterLink class="btn" to="/fetch">提交 YouTube URL 拉取文稿</RouterLink>
       <RouterLink class="btn" to="/archives">YouTube 文稿归档预览</RouterLink>
       <RouterLink class="btn" to="/trade">Bitget 手动下单</RouterLink>
+      <RouterLink class="btn primary" to="/community">社区（广场 / 签到 / 打赏 / 头衔）</RouterLink>
       <RouterLink class="btn primary" to="/oi">OI Monitor（行情 / 形态 / 沙盒）</RouterLink>
       <RouterLink class="btn" to="/debug">Debug（网络 / WS 帧）</RouterLink>
     </div>

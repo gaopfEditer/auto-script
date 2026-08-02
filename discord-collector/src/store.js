@@ -207,8 +207,87 @@ export async function openStore(cfg, log) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_members (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      token CHAR(48) NOT NULL,
+      handle VARCHAR(32) NOT NULL,
+      display_name VARCHAR(64) NOT NULL,
+      avatar_url VARCHAR(512) NOT NULL DEFAULT '',
+      bio VARCHAR(255) NOT NULL DEFAULT '',
+      points INT NOT NULL DEFAULT 0,
+      tip_balance INT NOT NULL DEFAULT 0,
+      checkin_streak INT NOT NULL DEFAULT 0,
+      last_checkin_day CHAR(10) NULL,
+      created_at DATETIME(3) NOT NULL,
+      updated_at DATETIME(3) NOT NULL,
+      UNIQUE KEY uk_community_token (token),
+      UNIQUE KEY uk_community_handle (handle),
+      KEY idx_community_points (points DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_posts (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      member_id BIGINT NOT NULL,
+      content TEXT NOT NULL,
+      like_count INT NOT NULL DEFAULT 0,
+      comment_count INT NOT NULL DEFAULT 0,
+      created_at DATETIME(3) NOT NULL,
+      KEY idx_community_posts_time (id DESC),
+      KEY idx_community_posts_member (member_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_comments (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      post_id BIGINT NOT NULL,
+      member_id BIGINT NOT NULL,
+      content TEXT NOT NULL,
+      created_at DATETIME(3) NOT NULL,
+      KEY idx_community_comments_post (post_id, id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_likes (
+      post_id BIGINT NOT NULL,
+      member_id BIGINT NOT NULL,
+      created_at DATETIME(3) NOT NULL,
+      PRIMARY KEY (post_id, member_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_checkins (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      member_id BIGINT NOT NULL,
+      day CHAR(10) NOT NULL,
+      points_earned INT NOT NULL DEFAULT 0,
+      streak INT NOT NULL DEFAULT 1,
+      created_at DATETIME(3) NOT NULL,
+      UNIQUE KEY uk_community_checkin (member_id, day),
+      KEY idx_community_checkin_day (day)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_tips (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      from_member_id BIGINT NOT NULL,
+      to_member_id BIGINT NOT NULL,
+      amount INT NOT NULL,
+      message VARCHAR(255) NOT NULL DEFAULT '',
+      zone VARCHAR(32) NOT NULL DEFAULT 'plaza',
+      created_at DATETIME(3) NOT NULL,
+      KEY idx_community_tips_time (id DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   log.info(
-    "表 frames / discord_messages / discord_guilds / discord_channels / discord_signal_cards / discord_channel_text_cache / discord_channel_message_dedup 就绪"
+    "表 frames / discord_* / community_* 就绪"
   );
 
   const insertFrameSql = `
@@ -1022,6 +1101,282 @@ export async function openStore(cfg, log) {
     return rows[0] ?? null;
   }
 
+  // —— 社区 ——
+  async function communityEnsureSchema() {
+    /* 表已在 openStore 创建；保留钩子供 service 调用 */
+  }
+
+  async function communityGetMemberByToken(token) {
+    const [rows] = await pool.query(`SELECT * FROM community_members WHERE token = ? LIMIT 1`, [
+      String(token),
+    ]);
+    return rows[0] ?? null;
+  }
+
+  async function communityGetMemberByHandle(handle) {
+    const [rows] = await pool.query(`SELECT * FROM community_members WHERE handle = ? LIMIT 1`, [
+      String(handle).toLowerCase(),
+    ]);
+    return rows[0] ?? null;
+  }
+
+  async function communityGetMemberById(id) {
+    const [rows] = await pool.query(`SELECT * FROM community_members WHERE id = ? LIMIT 1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  async function communityInsertMember(p) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const [r] = await pool.execute(
+      `INSERT INTO community_members (
+        token, handle, display_name, avatar_url, bio, points, tip_balance,
+        checkin_streak, last_checkin_day, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+      [
+        p.token,
+        p.handle,
+        p.displayName,
+        p.avatarUrl || "",
+        p.bio || "",
+        Number(p.points) || 0,
+        Number(p.tipBalance) || 0,
+        now,
+        now,
+      ]
+    );
+    return communityGetMemberById(/** @type {{ insertId: number }} */ (r).insertId);
+  }
+
+  async function communityUpdateMember(id, patch) {
+    /** @type {string[]} */
+    const sets = ["updated_at = ?"];
+    /** @type {unknown[]} */
+    const params = [isoToMysqlDatetime3(new Date().toISOString())];
+    if (patch.displayName != null && String(patch.displayName).trim()) {
+      sets.push("display_name = ?");
+      params.push(String(patch.displayName).trim());
+    }
+    if (patch.avatarUrl != null) {
+      sets.push("avatar_url = ?");
+      params.push(String(patch.avatarUrl));
+    }
+    if (patch.bio != null) {
+      sets.push("bio = ?");
+      params.push(String(patch.bio));
+    }
+    params.push(id);
+    await pool.execute(`UPDATE community_members SET ${sets.join(", ")} WHERE id = ?`, params);
+    return communityGetMemberById(id);
+  }
+
+  async function communityAddPoints(id, delta, extra = {}) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    /** @type {string[]} */
+    const sets = ["points = points + ?", "updated_at = ?"];
+    /** @type {unknown[]} */
+    const params = [Number(delta) || 0, now];
+    if (extra.checkinStreak != null) {
+      sets.push("checkin_streak = ?");
+      params.push(Number(extra.checkinStreak) || 0);
+    }
+    if (extra.lastCheckinDay != null) {
+      sets.push("last_checkin_day = ?");
+      params.push(String(extra.lastCheckinDay));
+    }
+    params.push(id);
+    await pool.execute(`UPDATE community_members SET ${sets.join(", ")} WHERE id = ?`, params);
+    return communityGetMemberById(id);
+  }
+
+  async function communityListMembersByPoints(limit = 20) {
+    const [rows] = await pool.query(
+      `SELECT * FROM community_members ORDER BY points DESC, id ASC LIMIT ?`,
+      [limit]
+    );
+    return rows;
+  }
+
+  async function communityInsertCheckin(p) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    await pool.execute(
+      `INSERT INTO community_checkins (member_id, day, points_earned, streak, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [p.memberId, p.day, p.pointsEarned, p.streak, now]
+    );
+  }
+
+  async function communityListCheckins(memberId, limit = 30) {
+    const [rows] = await pool.query(
+      `SELECT * FROM community_checkins WHERE member_id = ? ORDER BY day DESC LIMIT ?`,
+      [memberId, limit]
+    );
+    return rows;
+  }
+
+  async function communityInsertPost(p) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const [r] = await pool.execute(
+      `INSERT INTO community_posts (member_id, content, like_count, comment_count, created_at)
+       VALUES (?, ?, 0, 0, ?)`,
+      [p.memberId, p.content, now]
+    );
+    return { id: /** @type {{ insertId: number }} */ (r).insertId };
+  }
+
+  async function communityGetPost(id) {
+    const [rows] = await pool.query(`SELECT * FROM community_posts WHERE id = ? LIMIT 1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  async function communityListPosts(opts = {}) {
+    const lim = Math.min(50, Math.max(1, Number(opts.limit) || 30));
+    if (opts.beforeId) {
+      const [rows] = await pool.query(
+        `SELECT * FROM community_posts WHERE id < ? ORDER BY id DESC LIMIT ?`,
+        [opts.beforeId, lim]
+      );
+      return rows;
+    }
+    const [rows] = await pool.query(`SELECT * FROM community_posts ORDER BY id DESC LIMIT ?`, [lim]);
+    return rows;
+  }
+
+  async function communityInsertComment(p) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        `INSERT INTO community_comments (post_id, member_id, content, created_at) VALUES (?, ?, ?, ?)`,
+        [p.postId, p.memberId, p.content, now]
+      );
+      await conn.execute(
+        `UPDATE community_posts SET comment_count = comment_count + 1 WHERE id = ?`,
+        [p.postId]
+      );
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
+  async function communityListComments(postId, limit = 50) {
+    const [rows] = await pool.query(
+      `SELECT * FROM community_comments WHERE post_id = ? ORDER BY id ASC LIMIT ?`,
+      [postId, limit]
+    );
+    return rows;
+  }
+
+  async function communityHasLiked(postId, memberId) {
+    const [rows] = await pool.query(
+      `SELECT 1 FROM community_likes WHERE post_id = ? AND member_id = ? LIMIT 1`,
+      [postId, memberId]
+    );
+    return rows.length > 0;
+  }
+
+  async function communityAddLike(postId, memberId) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        `INSERT IGNORE INTO community_likes (post_id, member_id, created_at) VALUES (?, ?, ?)`,
+        [postId, memberId, now]
+      );
+      await conn.execute(`UPDATE community_posts SET like_count = like_count + 1 WHERE id = ?`, [
+        postId,
+      ]);
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
+  async function communityRemoveLike(postId, memberId) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [r] = await conn.execute(
+        `DELETE FROM community_likes WHERE post_id = ? AND member_id = ?`,
+        [postId, memberId]
+      );
+      if (/** @type {{ affectedRows: number }} */ (r).affectedRows > 0) {
+        await conn.execute(
+          `UPDATE community_posts SET like_count = GREATEST(0, like_count - 1) WHERE id = ?`,
+          [postId]
+        );
+      }
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
+  async function communityTransferTip(p) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [fromRows] = await conn.query(
+        `SELECT tip_balance FROM community_members WHERE id = ? FOR UPDATE`,
+        [p.fromId]
+      );
+      const bal = Number(fromRows[0]?.tip_balance) || 0;
+      if (bal < p.amount) {
+        const err = new Error("打赏币不足");
+        err.code = "INSUFFICIENT";
+        throw err;
+      }
+      await conn.execute(
+        `UPDATE community_members SET tip_balance = tip_balance - ?, updated_at = ? WHERE id = ?`,
+        [p.amount, now, p.fromId]
+      );
+      await conn.execute(
+        `UPDATE community_members SET tip_balance = tip_balance + ?, updated_at = ? WHERE id = ?`,
+        [p.amount, now, p.toId]
+      );
+      await conn.execute(
+        `INSERT INTO community_tips (from_member_id, to_member_id, amount, message, zone, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [p.fromId, p.toId, p.amount, p.message || "", p.zone || "plaza", now]
+      );
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
+  async function communityListTips(limit = 40) {
+    const [rows] = await pool.query(
+      `SELECT * FROM community_tips ORDER BY id DESC LIMIT ?`,
+      [Math.min(100, Math.max(1, limit))]
+    );
+    return rows;
+  }
+
+  async function communityLatestTip(fromId, toId) {
+    const [rows] = await pool.query(
+      `SELECT * FROM community_tips WHERE from_member_id = ? AND to_member_id = ?
+       ORDER BY id DESC LIMIT 1`,
+      [fromId, toId]
+    );
+    return rows[0] ?? null;
+  }
+
   async function close() {
     await pool.end();
   }
@@ -1058,6 +1413,27 @@ export async function openStore(cfg, log) {
     listCardsForBacktest,
     listActiveCardsForProximity,
     updateSignalCard,
+    communityEnsureSchema,
+    communityGetMemberByToken,
+    communityGetMemberByHandle,
+    communityGetMemberById,
+    communityInsertMember,
+    communityUpdateMember,
+    communityAddPoints,
+    communityListMembersByPoints,
+    communityInsertCheckin,
+    communityListCheckins,
+    communityInsertPost,
+    communityGetPost,
+    communityListPosts,
+    communityInsertComment,
+    communityListComments,
+    communityHasLiked,
+    communityAddLike,
+    communityRemoveLike,
+    communityTransferTip,
+    communityListTips,
+    communityLatestTip,
     close,
   };
 }
@@ -1073,7 +1449,7 @@ export function formatMysqlUnavailableHint(cfg, err) {
     `MySQL 不可用（${code || err.message}）— ${addr} 库=${cfg.database}`,
     "collect:ui 将以「无数据库」模式继续运行：",
     "  · 可用：静态 UI、/archives、/debug、WebSocket 实时推送",
-    "  · 不可用：消息/帧入库、Show 历史、信号卡片持久化",
+    "  · 不可用：消息/帧入库、Show 历史、信号卡片持久化、社区",
     "请启动 MySQL，或检查 .env 中 MYSQL_HOST / MYSQL_PORT / MYSQL_DATABASE",
   ].join("\n");
 }
@@ -1110,6 +1486,27 @@ export function createOfflineStore() {
     listCardsForBacktest: async () => [],
     listActiveCardsForProximity: async () => [],
     updateSignalCard: async () => null,
+    communityEnsureSchema: async () => {},
+    communityGetMemberByToken: async () => null,
+    communityGetMemberByHandle: async () => null,
+    communityGetMemberById: async () => null,
+    communityInsertMember: async () => null,
+    communityUpdateMember: async () => null,
+    communityAddPoints: async () => null,
+    communityListMembersByPoints: async () => [],
+    communityInsertCheckin: async () => {},
+    communityListCheckins: async () => [],
+    communityInsertPost: async () => ({ id: 0 }),
+    communityGetPost: async () => null,
+    communityListPosts: async () => [],
+    communityInsertComment: async () => {},
+    communityListComments: async () => [],
+    communityHasLiked: async () => false,
+    communityAddLike: async () => {},
+    communityRemoveLike: async () => {},
+    communityTransferTip: async () => {},
+    communityListTips: async () => [],
+    communityLatestTip: async () => null,
     close: async () => {},
   };
 }
