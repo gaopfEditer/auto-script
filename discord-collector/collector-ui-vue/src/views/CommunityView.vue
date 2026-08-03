@@ -14,8 +14,9 @@ import {
   sendTip,
   toggleLike,
 } from "../lib/communityApi.js";
+import CommunityChatPanel from "../components/CommunityChatPanel.vue";
 
-const tab = ref("plaza"); // plaza | checkin | tip | titles
+const tab = ref("plaza"); // plaza | chat | checkin | tip | titles
 const loading = ref(true);
 const error = ref("");
 const me = ref(null);
@@ -217,10 +218,16 @@ onMounted(() => {
     <header class="hero">
       <div>
         <h1>社区</h1>
-        <p class="sub">信号卡片 · OI 做单 · 会员互动 — 广场动态、签到成长、打赏互助</p>
+        <p class="sub">信号卡片 · OI 做单 · 会员互动 — 广场、实时聊天室、签到成长、打赏互助</p>
       </div>
       <div v-if="me" class="me-chip">
-        <span class="avatar" :style="{ background: me.title?.color || '#5865f2' }">{{
+        <img
+          v-if="me.avatarUrl"
+          class="avatar img"
+          :src="me.avatarUrl"
+          alt=""
+        />
+        <span v-else class="avatar" :style="{ background: me.title?.color || '#5865f2' }">{{
           initialOf(me.displayName)
         }}</span>
         <div class="me-meta">
@@ -250,6 +257,7 @@ onMounted(() => {
 
     <nav class="tabs">
       <button type="button" :class="{ active: tab === 'plaza' }" @click="tab = 'plaza'">动态广场</button>
+      <button type="button" :class="{ active: tab === 'chat' }" @click="tab = 'chat'">聊天室</button>
       <button type="button" :class="{ active: tab === 'checkin' }" @click="tab = 'checkin'">每日签到</button>
       <button type="button" :class="{ active: tab === 'tip' }" @click="tab = 'tip'">打赏专区</button>
       <button type="button" :class="{ active: tab === 'titles' }" @click="tab = 'titles'">会员头衔</button>
@@ -270,9 +278,18 @@ onMounted(() => {
 
           <article v-for="p in posts" :key="p.id" class="post">
             <header class="post-hd">
-              <span class="avatar sm" :style="{ background: p.author?.title?.color || '#5865f2' }">{{
-                initialOf(p.author?.displayName)
-              }}</span>
+              <img
+                v-if="p.author?.avatarUrl"
+                class="avatar sm img"
+                :src="p.author.avatarUrl"
+                alt=""
+              />
+              <span
+                v-else
+                class="avatar sm"
+                :style="{ background: p.author?.title?.color || '#5865f2' }"
+                >{{ initialOf(p.author?.displayName) }}</span
+              >
               <div>
                 <strong>{{ p.author?.displayName || "匿名" }}</strong>
                 <span class="title-badge" :style="{ color: p.author?.title?.color }">{{
@@ -320,6 +337,11 @@ onMounted(() => {
             </div>
           </article>
           <p v-if="!posts.length" class="muted">还没有动态，来发第一条吧。</p>
+        </section>
+
+        <!-- 聊天室 -->
+        <section v-show="tab === 'chat'" class="panel chat-wrap">
+          <CommunityChatPanel :me="me" @update:me="me = $event" />
         </section>
 
         <!-- 签到 -->
@@ -488,6 +510,10 @@ onMounted(() => {
   color: #fff;
   flex-shrink: 0;
 }
+.avatar.img {
+  object-fit: cover;
+  background: #1e1f22;
+}
 .avatar.sm {
   width: 36px;
   height: 36px;
@@ -525,6 +551,12 @@ onMounted(() => {
   border-radius: 12px;
   padding: 1rem 1.1rem;
   margin-bottom: 1rem;
+}
+.panel.chat-wrap {
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  border: none;
 }
 .panel h2,
 .panel h3 {

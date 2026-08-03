@@ -43,6 +43,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
+        "/community-avatars": { target: apiTarget, changeOrigin: true },
         "/ws": {
           target: apiTarget,
           ws: true,

@@ -77,6 +77,17 @@ export function patchCommunityMe(body) {
   return communityFetch("/api/community/me", { method: "PATCH", json: body });
 }
 
+export function updateMyAvatar(avatarUrl) {
+  return communityFetch("/api/community/me/avatar", {
+    method: "PATCH",
+    json: { avatarUrl },
+  });
+}
+
+export function fetchAvatarPacks() {
+  return communityFetch("/api/community/avatar-packs");
+}
+
 export function postCheckin() {
   return communityFetch("/api/community/checkin", { method: "POST", json: {} });
 }
@@ -113,6 +124,41 @@ export function fetchTips(limit = 40) {
  */
 export function sendTip(body) {
   return communityFetch("/api/community/tips", { method: "POST", json: body });
+}
+
+/**
+ * @param {{ limit?: number, before?: number }} [opts]
+ */
+export function fetchChatMessages(opts = {}) {
+  const q = new URLSearchParams();
+  if (opts.limit) q.set("limit", String(opts.limit));
+  if (opts.before) q.set("before", String(opts.before));
+  const qs = q.toString();
+  return communityFetch(`/api/community/chat/messages${qs ? `?${qs}` : ""}`);
+}
+
+/**
+ * @param {{ type: string, content?: string, mediaUrl?: string }} body
+ */
+export function sendChatMessage(body) {
+  return communityFetch("/api/community/chat/messages", { method: "POST", json: body });
+}
+
+/**
+ * @param {File} file
+ */
+export async function uploadChatMedia(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const headers = {};
+  const token = getCommunityToken();
+  if (token) headers["X-Community-Token"] = token;
+  const res = await fetch("/api/community/chat/media", { method: "POST", headers, body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
 }
 
 export function logoutCommunity() {

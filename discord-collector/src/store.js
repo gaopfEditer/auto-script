@@ -286,6 +286,19 @@ export async function openStore(cfg, log) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_chat_messages (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      member_id BIGINT NOT NULL,
+      msg_type VARCHAR(16) NOT NULL DEFAULT 'text',
+      content TEXT NOT NULL,
+      media_url VARCHAR(512) NOT NULL DEFAULT '',
+      created_at DATETIME(3) NOT NULL,
+      KEY idx_community_chat_time (id DESC),
+      KEY idx_community_chat_member (member_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   log.info(
     "表 frames / discord_* / community_* 就绪"
   );
@@ -1223,6 +1236,51 @@ export async function openStore(cfg, log) {
     return { id: /** @type {{ insertId: number }} */ (r).insertId };
   }
 
+  /**
+   * @param {{ memberId: number, msgType: string, content?: string, mediaUrl?: string }} p
+   */
+  async function communityInsertChatMessage(p) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const [r] = await pool.execute(
+      `INSERT INTO community_chat_messages (member_id, msg_type, content, media_url, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        p.memberId,
+        String(p.msgType || "text").slice(0, 16),
+        String(p.content ?? ""),
+        String(p.mediaUrl ?? "").slice(0, 512),
+        now,
+      ]
+    );
+    const id = /** @type {{ insertId: number }} */ (r).insertId;
+    const [rows] = await pool.query(`SELECT * FROM community_chat_messages WHERE id = ? LIMIT 1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  /**
+   * @param {{ limit?: number, beforeId?: number }} [opts]
+   */
+  async function communityListChatMessages(opts = {}) {
+    const limit = Math.min(100, Math.max(1, Number(opts.limit) || 50));
+    const beforeId = opts.beforeId != null ? Number(opts.beforeId) : null;
+    /** @type {unknown[]} */
+    const params = [];
+    let sql = `SELECT * FROM community_chat_messages`;
+    if (Number.isFinite(beforeId) && beforeId > 0) {
+      sql += ` WHERE id < ?`;
+      params.push(beforeId);
+    }
+    sql += ` ORDER BY id DESC LIMIT ?`;
+    params.push(limit);
+    const [rows] = await pool.query(sql, params);
+    return rows;
+  }
+
+  async function communityGetChatMessage(id) {
+    const [rows] = await pool.query(`SELECT * FROM community_chat_messages WHERE id = ? LIMIT 1`, [id]);
+    return rows[0] ?? null;
+  }
+
   async function communityGetPost(id) {
     const [rows] = await pool.query(`SELECT * FROM community_posts WHERE id = ? LIMIT 1`, [id]);
     return rows[0] ?? null;
@@ -1434,6 +1492,9 @@ export async function openStore(cfg, log) {
     communityTransferTip,
     communityListTips,
     communityLatestTip,
+    communityInsertChatMessage,
+    communityListChatMessages,
+    communityGetChatMessage,
     close,
   };
 }
@@ -1507,6 +1568,9 @@ export function createOfflineStore() {
     communityTransferTip: async () => {},
     communityListTips: async () => [],
     communityLatestTip: async () => null,
+    communityInsertChatMessage: async () => null,
+    communityListChatMessages: async () => [],
+    communityGetChatMessage: async () => null,
     close: async () => {},
   };
 }

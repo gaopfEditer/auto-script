@@ -1,5 +1,5 @@
 /**
- * 社区业务：会员 / 动态广场 / 签到 / 打赏。
+ * 社区业务：会员 / 动态广场 / 签到 / 打赏 / 聊天室。
  */
 import { randomBytes } from "node:crypto";
 import {
@@ -12,6 +12,7 @@ import {
   titleForPoints,
   titleProgress,
 } from "./community-titles.js";
+import { allowedAvatarUrls, COMMUNITY_AVATAR_PACKS } from "./community-avatar-packs.js";
 
 /** @param {Date | string} d */
 function toDayKey(d = new Date()) {
@@ -70,8 +71,9 @@ function memberPublic(row) {
 /**
  * @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
+ * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
  */
-export function createCommunityService(store, log) {
+export function createCommunityService(store, log, broadcast) {
   function assertDb() {
     if (store?.offline || !store?.communityEnsureSchema) {
       const err = new Error("community_db_offline");
@@ -465,6 +467,107 @@ export function createCommunityService(store, log) {
     };
   }
 
+  /**
+   * @param {Record<string, unknown>} row
+   * @param {Record<string, unknown> | null} [memberRow]
+   */
+  function chatMessagePublic(row, memberRow) {
+    return {
+      id: Number(row.id),
+      type: String(row.msg_type || "text"),
+      content: String(row.content ?? ""),
+      mediaUrl: String(row.media_url ?? ""),
+      createdAt: row.created_at,
+      author: memberPublic(memberRow || null),
+    };
+  }
+
+  /**
+   * @param {{ limit?: number, beforeId?: number }} [opts]
+   */
+  async function listChatMessages(opts = {}) {
+    await ensureReady();
+    const rows = await store.communityListChatMessages(opts);
+    /** @type {Map<number, Record<string, unknown>>} */
+    const memberCache = new Map();
+    const messages = [];
+    for (const r of rows) {
+      const mid = Number(r.member_id);
+      if (!memberCache.has(mid)) {
+        memberCache.set(mid, (await store.communityGetMemberById(mid)) || null);
+      }
+      messages.push(chatMessagePublic(r, memberCache.get(mid)));
+    }
+    // API 返回时间正序（旧→新），便于前端直接 append
+    messages.reverse();
+    return { messages };
+  }
+
+  /**
+   * @param {string} token
+   * @param {{ type?: string, content?: string, mediaUrl?: string }} body
+   */
+  async function sendChatMessage(token, body) {
+    const row = await requireMember(token);
+    const type = String(body.type ?? "text").trim().toLowerCase();
+    if (!["text", "image", "video"].includes(type)) {
+      const err = new Error("消息类型须为 text / image / video");
+      err.code = "BAD_REQUEST";
+      throw err;
+    }
+    const content = String(body.content ?? "").trim().slice(0, 2000);
+    const mediaUrl = String(body.mediaUrl ?? "").trim().slice(0, 512);
+    if (type === "text") {
+      if (!content) {
+        const err = new Error("请输入文字");
+        err.code = "BAD_REQUEST";
+        throw err;
+      }
+    } else if (!mediaUrl) {
+      const err = new Error("图片/视频消息需要 mediaUrl");
+      err.code = "BAD_REQUEST";
+      throw err;
+    } else if (!mediaUrl.startsWith("/api/community/chat/media/file/")) {
+      const err = new Error("非法媒体地址");
+      err.code = "BAD_REQUEST";
+      throw err;
+    }
+
+    const inserted = await store.communityInsertChatMessage({
+      memberId: Number(row.id),
+      msgType: type,
+      content,
+      mediaUrl: type === "text" ? "" : mediaUrl,
+    });
+    const message = chatMessagePublic(inserted, row);
+    try {
+      broadcast?.("community", { kind: "chat_message", message });
+    } catch (e) {
+      log.warn(`chat broadcast: ${/** @type {Error} */ (e).message}`);
+    }
+    return { message };
+  }
+
+  async function listAvatarPacks() {
+    return { packs: COMMUNITY_AVATAR_PACKS };
+  }
+
+  /**
+   * @param {string} token
+   * @param {{ avatarUrl?: string }} body
+   */
+  async function setAvatar(token, body) {
+    const row = await requireMember(token);
+    const avatarUrl = String(body.avatarUrl ?? "").trim();
+    if (!avatarUrl || !allowedAvatarUrls().has(avatarUrl)) {
+      const err = new Error("请选择头像包中的头像");
+      err.code = "BAD_REQUEST";
+      throw err;
+    }
+    const next = await store.communityUpdateMember(row.id, { avatarUrl });
+    return { member: memberPublic(next) };
+  }
+
   return {
     register,
     me,
@@ -480,5 +583,9 @@ export function createCommunityService(store, log) {
     tip,
     listTips,
     overview,
+    listChatMessages,
+    sendChatMessage,
+    listAvatarPacks,
+    setAvatar,
   };
 }

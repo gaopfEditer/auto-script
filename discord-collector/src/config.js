@@ -274,4 +274,10 @@ export const config = {
   weexAutoTradeChannelIds: parseIdList(
     process.env.WEEX_AUTO_TRADE_CHANNEL_IDS ?? process.env.BITGET_AUTO_TRADE_CHANNEL_IDS ?? ""
   ),
+  /** 社区聊天室媒体上传目录 */
+  communityChatUploadDir: (process.env.COMMUNITY_CHAT_UPLOAD_DIR ?? "").trim()
+    ? path.resolve(process.env.COMMUNITY_CHAT_UPLOAD_DIR.trim())
+    : path.join(_collectorRoot, "uploads", "chat"),
+  communityChatImageMaxBytes: Number(process.env.COMMUNITY_CHAT_IMAGE_MAX_BYTES ?? 5 * 1024 * 1024),
+  communityChatVideoMaxBytes: Number(process.env.COMMUNITY_CHAT_VIDEO_MAX_BYTES ?? 20 * 1024 * 1024),
 };

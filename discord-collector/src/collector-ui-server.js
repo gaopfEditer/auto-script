@@ -138,7 +138,7 @@ async function main() {
   registerBitgetRoutes(app, bitgetOrder, bitgetManual);
   registerWeexRoutes(app, weexOrder);
   registerCardArchiveRoutes(app, store, cardArchive);
-  registerCommunityRoutes(app, store, createLogger("community"));
+  registerCommunityRoutes(app, store, createLogger("community"), broadcast);
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")
     .then(({ rebuildArchivesIndex, warmArchivesParsedCache }) => {
@@ -575,11 +575,15 @@ async function main() {
   /** @type {Awaited<ReturnType<typeof startCdpWebSocketMonitor>> | null} */
   let session = null;
 
+  const avatarsDir = path.join(__dirname, "..", "public", "community-avatars");
+  app.use("/community-avatars", express.static(avatarsDir, { fallthrough: false, index: false }));
+
   app.use(express.static(publicDir));
 
   app.use((req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     if (req.path.startsWith("/api")) return next();
+    if (req.path.startsWith("/community-avatars")) return next();
     if (/\.\w+$/.test(req.path)) return next();
     res.sendFile(path.join(publicDir, "index.html"), (err) => (err ? next(err) : undefined));
   });
