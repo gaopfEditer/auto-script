@@ -166,6 +166,8 @@ export const config = {
     ? path.resolve(process.env.PASTE_PARSE_OUTPUT_DIR.trim())
     : path.join(_collectorRoot, "data", "paste-parse"),
   pasteParseStartupDelayMs: Number(process.env.PASTE_PARSE_STARTUP_DELAY_MS ?? 15_000),
+  /** 输入目录轮询间隔：探测新 .txt 并自动解析（默认 10 分钟） */
+  pasteParseWatchIntervalMs: Number(process.env.PASTE_PARSE_WATCH_INTERVAL_MS ?? 600_000),
   /** 统一卡片开放 API Key（Header: X-Cards-Api-Key 或 Bearer） */
   cardsApiKey: (process.env.CARDS_API_KEY ?? "").trim(),
   /** 统一 HTTP(S) 代理（Bitget / WEEX / Webhook / 币安等默认共用） */

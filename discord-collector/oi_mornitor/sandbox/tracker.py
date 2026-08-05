@@ -454,10 +454,24 @@ class SandboxTracker:
             conn.execute("DELETE FROM positions WHERE id = ?", (int(pos_id),))
 
     def add_trade(self, trade: dict[str, Any]) -> None:
+        from oi_mornitor.sandbox.logics import is_absurd_price_move
+
         day = trade.get("day") or date.today().isoformat()
         lev = float(trade.get("leverage") or sandbox_leverage(str(trade["symbol"])))
         pnl_pct = float(trade["pnl_pct"])
         roe_pct = float(trade.get("roe_pct", pnl_pct * lev))
+        entry_px = float(trade["entry_price"])
+        exit_px = float(trade["exit_price"])
+        if is_absurd_price_move(entry_px, exit_px) or abs(pnl_pct) > 500:
+            logger = __import__("logging").getLogger("OI_Radar")
+            logger.warning(
+                "拒写入离谱成交 %s entry=%s exit=%s pnl_pct=%.2f",
+                trade.get("symbol"),
+                entry_px,
+                exit_px,
+                pnl_pct,
+            )
+            return
         events_json = trade.get("events_json")
         if events_json is None:
             events_json = "[]"
@@ -548,19 +562,44 @@ class SandboxTracker:
         args.append(limit)
         with self._connect() as conn:
             rows = conn.execute(sql, args).fetchall()
-        return [self._normalize_trade(dict(r)) for r in rows]
+        from oi_mornitor.sandbox.logics import is_absurd_price_move
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            t = self._normalize_trade(dict(r))
+            try:
+                entry_px = float(t.get("entry_price") or 0)
+                exit_px = float(t.get("exit_price") or 0)
+                pnl_pct = float(t.get("pnl_pct") or 0)
+            except (TypeError, ValueError):
+                continue
+            if is_absurd_price_move(entry_px, exit_px) or abs(pnl_pct) > 500:
+                continue
+            out.append(t)
+        return out
 
     def stats(self, day: str | None = None) -> dict[str, Any]:
         day = day or date.today().isoformat()
         with self._connect() as conn:
-            trades = [
-                self._normalize_trade(dict(r))
-                for r in conn.execute(
-                    "SELECT * FROM trades WHERE day = ? ORDER BY exit_time DESC",
-                    (day,),
-                ).fetchall()
-            ]
+            raw_rows = conn.execute(
+                "SELECT * FROM trades WHERE day = ? ORDER BY exit_time DESC",
+                (day,),
+            ).fetchall()
             open_n = conn.execute("SELECT COUNT(*) AS n FROM positions").fetchone()["n"]
+        from oi_mornitor.sandbox.logics import is_absurd_price_move
+
+        trades: list[dict[str, Any]] = []
+        for r in raw_rows:
+            t = self._normalize_trade(dict(r))
+            try:
+                entry_px = float(t.get("entry_price") or 0)
+                exit_px = float(t.get("exit_price") or 0)
+                pnl_pct = float(t.get("pnl_pct") or 0)
+            except (TypeError, ValueError):
+                continue
+            if is_absurd_price_move(entry_px, exit_px) or abs(pnl_pct) > 500:
+                continue
+            trades.append(t)
         wins = [t for t in trades if float(t["pnl_usd"]) > 0]
         losses = [t for t in trades if float(t["pnl_usd"]) <= 0]
         by_logic: dict[str, dict[str, Any]] = {}

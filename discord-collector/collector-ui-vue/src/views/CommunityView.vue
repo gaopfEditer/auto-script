@@ -8,36 +8,76 @@ import {
   fetchPosts,
   fetchTips,
   getCommunityToken,
-  logoutCommunity,
-  postCheckin,
-  registerCommunityMember,
   sendTip,
+  SHOW_COMMUNITY_TIPS,
   toggleLike,
 } from "../lib/communityApi.js";
 import CommunityChatPanel from "../components/CommunityChatPanel.vue";
+import CommunityProfileRail from "../components/CommunityProfileRail.vue";
+import CommunityHoverCard from "../components/CommunityHoverCard.vue";
+import CommunityLevelBadges from "../components/CommunityLevelBadges.vue";
+import { badgesCountLabel, levelBadgesFromLevel } from "../lib/communityLevel.js";
 
-const tab = ref("plaza"); // plaza | chat | checkin | tip | titles
+const view = ref("chat"); // chat | plaza | tip | titles
 const loading = ref(true);
 const error = ref("");
 const me = ref(null);
 const titles = ref([]);
+const levelSystem = ref(null);
 const leaderboard = ref([]);
 const posts = ref([]);
 const tips = ref([]);
 const checkinHistory = ref([]);
 const welcomeTip = ref(100);
 
-const joinName = ref("");
-const joinHandle = ref("");
-const joinBusy = ref(false);
+/**
+ * 头衔档位兜底（与 community-titles.js 对齐）。
+ * 旧后端若未返回 minLevel，禁止再掉成「全是一星」。
+ */
+const TITLE_TIER_FALLBACK = [
+  { key: "sprout", label: "新芽", minLevel: 1, minPoints: 0, color: "#95a5a6", desc: "刚加入，从签到与闲聊开始" },
+  { key: "pathfinder", label: "探路者", minLevel: 4, minPoints: 54, color: "#3498db", desc: "开始稳定活跃" },
+  { key: "hunter", label: "信号猎手", minLevel: 9, minPoints: 264, color: "#9b59b6", desc: "常驻聊天与动态" },
+  { key: "gold", label: "金标会员", minLevel: 16, minPoints: 810, color: "#f1c40f", desc: "社区中坚" },
+  { key: "elder", label: "社区元老", minLevel: 32, minPoints: 3162, color: "#e67e22", desc: "长期签到与互助" },
+  { key: "legend", label: "殿堂传说", minLevel: 64, minPoints: 12474, color: "#e74c3c", desc: "顶尖贡献者" },
+];
+
+/** 头衔行：起步图标严格按 minLevel 换算（Lv.4→🌙，Lv.9→🌙🌙⭐ …） */
+const titleRows = computed(() => {
+  const fromSys = Array.isArray(levelSystem.value?.titles) ? levelSystem.value.titles : [];
+  const byKey = new Map(
+    [...TITLE_TIER_FALLBACK, ...titles.value, ...fromSys].map((t) => [t.key, t])
+  );
+  const order = fromSys.length
+    ? fromSys.map((t) => t.key)
+    : titles.value.length
+      ? titles.value.map((t) => t.key)
+      : TITLE_TIER_FALLBACK.map((t) => t.key);
+
+  return order.map((key) => {
+    const fb = TITLE_TIER_FALLBACK.find((x) => x.key === key) || TITLE_TIER_FALLBACK[0];
+    const t = byKey.get(key) || fb;
+    const minLevel = Number(t.minLevel) || Number(fb.minLevel) || 1;
+    // 一律按等级重算，不信任残缺 badges（否则会掉成一星）
+    const badges = levelBadgesFromLevel(minLevel);
+    return {
+      key,
+      label: t.label || fb.label,
+      color: t.color || fb.color,
+      desc: t.desc || fb.desc,
+      minLevel,
+      badges,
+      badgeLabel: badgesCountLabel(badges),
+      minPoints: Number(t.minPoints ?? t.approxPoints ?? fb.minPoints) || 0,
+    };
+  });
+});
 
 const postText = ref("");
 const postBusy = ref(false);
 const commentDrafts = ref({});
 const expandedComments = ref({});
-
-const checkinMsg = ref("");
-const checkinBusy = ref(false);
 
 const tipHandle = ref("");
 const tipAmount = ref(10);
@@ -66,6 +106,7 @@ async function reload() {
     const ov = await fetchCommunityOverview();
     me.value = ov.me ?? null;
     titles.value = ov.titles ?? [];
+    levelSystem.value = ov.levelSystem ?? null;
     leaderboard.value = ov.leaderboard ?? [];
     posts.value = ov.recentPosts ?? [];
     tips.value = ov.recentTips ?? [];
@@ -90,27 +131,7 @@ async function refreshPosts() {
   posts.value = data.posts ?? [];
 }
 
-async function onJoin() {
-  joinBusy.value = true;
-  error.value = "";
-  try {
-    const data = await registerCommunityMember({
-      displayName: joinName.value.trim(),
-      handle: joinHandle.value.trim() || undefined,
-    });
-    me.value = data.member;
-    joinName.value = "";
-    joinHandle.value = "";
-    await reload();
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    joinBusy.value = false;
-  }
-}
-
 function onLogout() {
-  logoutCommunity();
   me.value = null;
   checkinHistory.value = [];
 }
@@ -155,22 +176,6 @@ async function onComment(post) {
   }
 }
 
-async function onCheckin() {
-  checkinBusy.value = true;
-  checkinMsg.value = "";
-  try {
-    const data = await postCheckin();
-    checkinMsg.value = data.message || "签到完成";
-    me.value = data.member ?? me.value;
-    const hist = await fetchCheckinHistory(14);
-    checkinHistory.value = hist.rows ?? [];
-  } catch (e) {
-    checkinMsg.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    checkinBusy.value = false;
-  }
-}
-
 async function onTip() {
   tipBusy.value = true;
   tipMsg.value = "";
@@ -194,11 +199,17 @@ async function onTip() {
 }
 
 function tipQuick(member) {
+  if (!SHOW_COMMUNITY_TIPS) return;
   tipHandle.value = member.handle || "";
-  tab.value = "tip";
+  view.value = "tip";
 }
 
-watch(tab, async (t) => {
+function gotoView(v) {
+  if (v === "tip" && !SHOW_COMMUNITY_TIPS) return;
+  view.value = v;
+}
+
+watch(view, async (t) => {
   if (t === "plaza") {
     try {
       await refreshPosts();
@@ -215,103 +226,80 @@ onMounted(() => {
 
 <template>
   <div class="community">
-    <header class="hero">
+    <header class="top">
       <div>
         <h1>社区</h1>
-        <p class="sub">信号卡片 · OI 做单 · 会员互动 — 广场、实时聊天室、签到成长、打赏互助</p>
+        <p class="sub">聊天大厅 · 资料与成长 · 动态</p>
       </div>
-      <div v-if="me" class="me-chip">
-        <img
-          v-if="me.avatarUrl"
-          class="avatar img"
-          :src="me.avatarUrl"
-          alt=""
-        />
-        <span v-else class="avatar" :style="{ background: me.title?.color || '#5865f2' }">{{
-          initialOf(me.displayName)
-        }}</span>
-        <div class="me-meta">
-          <strong>{{ me.displayName }}</strong>
-          <span class="title-badge" :style="{ color: me.title?.color }">{{ me.title?.label }}</span>
-          <span class="muted">@{{ me.handle }} · {{ me.points }} 分 · 币 {{ me.tipBalance }}</span>
-        </div>
-        <button type="button" class="ghost" @click="onLogout">退出</button>
-      </div>
+      <nav class="seg">
+        <button type="button" :class="{ on: view === 'chat' }" @click="view = 'chat'">聊天</button>
+        <button type="button" :class="{ on: view === 'plaza' }" @click="view = 'plaza'">动态</button>
+        <button
+          v-if="SHOW_COMMUNITY_TIPS"
+          type="button"
+          :class="{ on: view === 'tip' }"
+          @click="view = 'tip'"
+        >
+          打赏
+        </button>
+        <button type="button" :class="{ on: view === 'titles' }" @click="view = 'titles'">头衔</button>
+      </nav>
     </header>
 
     <p v-if="error" class="banner err">{{ error }}</p>
     <p v-if="loading" class="banner">加载中…</p>
 
-    <!-- 加入社区 -->
-    <section v-if="!me && !loading" class="panel join">
-      <h2>加入社区</h2>
-      <p class="muted">本地轻量身份（存于本机 Token），注册即赠 {{ welcomeTip }} 打赏币。</p>
-      <div class="row">
-        <input v-model="joinName" placeholder="昵称（必填）" maxlength="32" @keyup.enter="onJoin" />
-        <input v-model="joinHandle" placeholder="handle（可选，字母数字）" maxlength="24" @keyup.enter="onJoin" />
-        <button type="button" class="primary" :disabled="joinBusy || !joinName.trim()" @click="onJoin">
-          {{ joinBusy ? "加入中…" : "加入" }}
-        </button>
-      </div>
-    </section>
-
-    <nav class="tabs">
-      <button type="button" :class="{ active: tab === 'plaza' }" @click="tab = 'plaza'">动态广场</button>
-      <button type="button" :class="{ active: tab === 'chat' }" @click="tab = 'chat'">聊天室</button>
-      <button type="button" :class="{ active: tab === 'checkin' }" @click="tab = 'checkin'">每日签到</button>
-      <button type="button" :class="{ active: tab === 'tip' }" @click="tab = 'tip'">打赏专区</button>
-      <button type="button" :class="{ active: tab === 'titles' }" @click="tab = 'titles'">会员头衔</button>
-    </nav>
-
-    <div class="layout">
+    <div class="shell">
       <main class="main">
-        <!-- 广场 -->
-        <section v-show="tab === 'plaza'" class="panel">
+        <div v-show="view === 'chat'" class="chat-fill">
+          <CommunityChatPanel :me="me" @update:me="me = $event" @tip-member="tipQuick" />
+        </div>
+
+        <section v-show="view === 'plaza'" class="panel feed">
           <h2>动态广场</h2>
           <div v-if="me" class="composer">
-            <textarea v-model="postText" rows="3" maxlength="2000" placeholder="分享观点、信号复盘、行情随笔…" />
+            <textarea v-model="postText" rows="3" maxlength="2000" placeholder="分享观点、信号复盘…" />
             <button type="button" class="primary" :disabled="postBusy || !postText.trim()" @click="onPost">
-              {{ postBusy ? "发布中…" : "发布动态" }}
+              {{ postBusy ? "发布中…" : "发布" }}
             </button>
           </div>
-          <p v-else class="muted">加入社区后可发动态、评论与点赞。</p>
+          <p v-else class="muted">在右侧创建资料后可发动态。</p>
 
-          <article v-for="p in posts" :key="p.id" class="post">
+          <article v-for="p in posts" :key="p.id" class="post-card">
             <header class="post-hd">
-              <img
-                v-if="p.author?.avatarUrl"
-                class="avatar sm img"
-                :src="p.author.avatarUrl"
-                alt=""
-              />
-              <span
-                v-else
-                class="avatar sm"
-                :style="{ background: p.author?.title?.color || '#5865f2' }"
-                >{{ initialOf(p.author?.displayName) }}</span
-              >
+              <CommunityHoverCard :member="p.author" @tip="tipQuick">
+                <button type="button" class="av-hit">
+                  <img v-if="p.author?.avatarUrl" class="av img" :src="p.author.avatarUrl" alt="" />
+                  <span
+                    v-else
+                    class="av"
+                    :style="{ background: p.author?.title?.color || '#5865f2' }"
+                    >{{ initialOf(p.author?.displayName) }}</span
+                  >
+                </button>
+              </CommunityHoverCard>
               <div>
                 <strong>{{ p.author?.displayName || "匿名" }}</strong>
-                <span class="title-badge" :style="{ color: p.author?.title?.color }">{{
-                  p.author?.title?.label
-                }}</span>
+                <CommunityLevelBadges
+                  v-if="p.author?.badges || p.author?.level"
+                  :badges="p.author?.badges"
+                  :level="p.author?.level"
+                  size="sm"
+                />
+                <span class="tb" :style="{ color: p.author?.title?.color }">{{ p.author?.title?.label }}</span>
                 <div class="muted tiny">@{{ p.author?.handle }} · {{ formatTime(p.createdAt) }}</div>
               </div>
             </header>
             <p class="post-body">{{ p.content }}</p>
             <footer class="post-ft">
               <button type="button" class="ghost" :disabled="!me" @click="onLike(p)">
-                {{ p.liked ? "已赞" : "点赞" }} {{ p.likeCount || 0 }}
+                {{ p.liked ? "已赞" : "赞" }} {{ p.likeCount || 0 }}
+              </button>
+              <button type="button" class="ghost" @click="expandedComments[p.id] = !expandedComments[p.id]">
+                评 {{ p.commentCount || 0 }}
               </button>
               <button
-                type="button"
-                class="ghost"
-                @click="expandedComments[p.id] = !expandedComments[p.id]"
-              >
-                评论 {{ p.commentCount || 0 }}
-              </button>
-              <button
-                v-if="me && p.author?.handle && p.author.handle !== me.handle"
+                v-if="SHOW_COMMUNITY_TIPS && me && p.author?.handle && p.author.handle !== me.handle"
                 type="button"
                 class="ghost"
                 @click="tipQuick(p.author)"
@@ -336,47 +324,17 @@ onMounted(() => {
               </div>
             </div>
           </article>
-          <p v-if="!posts.length" class="muted">还没有动态，来发第一条吧。</p>
+          <p v-if="!posts.length" class="muted">还没有动态。</p>
         </section>
 
-        <!-- 聊天室 -->
-        <section v-show="tab === 'chat'" class="panel chat-wrap">
-          <CommunityChatPanel :me="me" @update:me="me = $event" />
-        </section>
-
-        <!-- 签到 -->
-        <section v-show="tab === 'checkin'" class="panel">
-          <h2>每日签到</h2>
-          <p class="muted">基础 +10 分，连续签到每日额外 +1（最多 +7）。断签重新计。</p>
-          <div v-if="me" class="checkin-box">
-            <div class="streak">
-              连续 <strong>{{ me.checkinStreak || 0 }}</strong> 天 · 今日{{
-                me.lastCheckinDay === new Date().toISOString().slice(0, 10) ? "已签" : "未签"
-              }}
-            </div>
-            <button type="button" class="primary" :disabled="checkinBusy" @click="onCheckin">
-              {{ checkinBusy ? "签到中…" : "立即签到" }}
-            </button>
-            <p v-if="checkinMsg" class="ok">{{ checkinMsg }}</p>
-          </div>
-          <p v-else class="muted">请先加入社区再签到。</p>
-          <ul v-if="checkinHistory.length" class="hist">
-            <li v-for="h in checkinHistory" :key="h.day">
-              <span>{{ h.day }}</span>
-              <span>+{{ h.pointsEarned }} · 连续 {{ h.streak }} 天</span>
-            </li>
-          </ul>
-        </section>
-
-        <!-- 打赏 -->
-        <section v-show="tab === 'tip'" class="panel">
-          <h2>打赏专区</h2>
-          <p class="muted">用打赏币感谢优质分享。新会员赠币；打赏双方都会获得少量积分。</p>
+        <section v-if="SHOW_COMMUNITY_TIPS" v-show="view === 'tip'" class="panel">
+          <h2>打赏</h2>
+          <p class="muted">用打赏币感谢优质分享。新会员有赠币。</p>
           <div v-if="me" class="tip-form">
-            <p>我的余额：<strong>{{ me.tipBalance }}</strong> 币</p>
+            <p>余额 <strong>{{ me.tipBalance }}</strong> 币</p>
             <div class="row">
-              <input v-model="tipHandle" placeholder="对方 handle（不含 @）" />
-              <input v-model.number="tipAmount" type="number" min="1" max="10000" placeholder="数量" />
+              <input v-model="tipHandle" placeholder="对方 handle" />
+              <input v-model.number="tipAmount" type="number" min="1" max="10000" />
             </div>
             <input v-model="tipMessage" placeholder="留言（可选）" maxlength="200" />
             <button type="button" class="primary" :disabled="tipBusy || !tipHandle.trim()" @click="onTip">
@@ -384,41 +342,50 @@ onMounted(() => {
             </button>
             <p v-if="tipMsg" class="ok">{{ tipMsg }}</p>
           </div>
-          <p v-else class="muted">加入社区后可打赏。</p>
-
+          <p v-else class="muted">请先在右侧创建资料。</p>
           <h3 class="subh">最近打赏</h3>
           <ul class="tip-list">
             <li v-for="t in tips" :key="t.id">
-              <span>
-                <strong>{{ t.from?.displayName }}</strong>
-                →
-                <strong>{{ t.to?.displayName }}</strong>
-              </span>
+              <span
+                ><strong>{{ t.from?.displayName }}</strong> → <strong>{{ t.to?.displayName }}</strong></span
+              >
               <span class="amt">+{{ t.amount }}</span>
               <span class="muted tiny">{{ t.message || formatTime(t.createdAt) }}</span>
             </li>
           </ul>
-          <p v-if="!tips.length" class="muted">暂无打赏记录。</p>
+          <p v-if="!tips.length" class="muted">暂无记录。</p>
         </section>
 
-        <!-- 头衔 -->
-        <section v-show="tab === 'titles'" class="panel">
-          <h2>会员头衔</h2>
+        <section v-show="view === 'titles'" class="panel">
+          <h2>等级与头衔</h2>
+          <p class="muted">
+            {{ levelSystem?.rule || "4星=1月，4月=1日，4日=1冠（同 QQ）" }}。{{
+              levelSystem?.costHint || "升级耗分随等级递增"
+            }}。
+          </p>
           <p v-if="me" class="progress">
             当前
-            <span class="title-badge" :style="{ color: me.title?.color }">{{ me.title?.label }}</span>
+            <CommunityLevelBadges :badges="me.badges" :level="me.level" />
+            <span class="tb" :style="{ color: me.title?.color }">{{ me.title?.label }}</span>
             · {{ me.points }} 分
             <template v-if="me.titleProgress?.nextLabel">
-              → 下一档 {{ me.titleProgress.nextLabel }}（{{ me.titleProgress.nextMinPoints }} 分）
+              → {{ me.titleProgress.nextLabel }}（Lv.{{ me.titleProgress.nextMinLevel }} /
+              {{ me.titleProgress.nextMinPoints }} 分）
             </template>
             <span class="bar"><i :style="{ width: (me.titleProgress?.pct || 0) + '%' }" /></span>
           </p>
+          
           <ul class="title-list">
-            <li v-for="t in titles" :key="t.key">
+            <li v-for="t in titleRows" :key="t.key + '-desc'">
               <span class="dot" :style="{ background: t.color }" />
               <div>
                 <strong :style="{ color: t.color }">{{ t.label }}</strong>
-                <span class="muted"> ≥ {{ t.minPoints }} 分</span>
+                <div class="title-req">
+                  <CommunityLevelBadges :badges="t.badges" :level="t.minLevel" size="sm" :show-level="false" />
+                  <span class="muted">
+                    {{ t.badgeLabel }} · Lv.{{ t.minLevel }} 起 · ≥ {{ t.minPoints }} 分
+                  </span>
+                </div>
                 <p class="muted">{{ t.desc }}</p>
               </div>
             </li>
@@ -426,33 +393,16 @@ onMounted(() => {
         </section>
       </main>
 
-      <aside class="side">
-        <section class="panel">
-          <h3>积分榜</h3>
-          <ol class="lb">
-            <li v-for="(m, i) in leaderboard" :key="m.id">
-              <span class="rank">{{ i + 1 }}</span>
-              <span class="avatar xs" :style="{ background: m.title?.color || '#5865f2' }">{{
-                initialOf(m.displayName)
-              }}</span>
-              <div class="lb-meta">
-                <strong>{{ m.displayName }}</strong>
-                <span class="title-badge" :style="{ color: m.title?.color }">{{ m.title?.label }}</span>
-                <div class="muted tiny">{{ m.points }} 分</div>
-              </div>
-              <button
-                v-if="me && m.handle !== me.handle"
-                type="button"
-                class="ghost sm"
-                @click="tipQuick(m)"
-              >
-                赏
-              </button>
-            </li>
-          </ol>
-          <p v-if="!leaderboard.length" class="muted">暂无成员。</p>
-        </section>
-      </aside>
+      <CommunityProfileRail
+        :me="me"
+        :welcome-tip="welcomeTip"
+        :leaderboard="leaderboard"
+        @update:me="me = $event"
+        @refresh="void reload()"
+        @logout="onLogout"
+        @tip-member="tipQuick"
+        @goto="gotoView"
+      />
     </div>
   </div>
 </template>
@@ -461,45 +411,165 @@ onMounted(() => {
 .community {
   height: 100%;
   min-height: 0;
-  overflow: auto;
-  padding: 1rem 1.25rem 2rem;
-  background: var(--bg, #313338);
-  color: var(--text, #dbdee1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0.85rem 1rem 1rem;
+  background: #111214;
+  color: #dbdee1;
 }
-.hero {
+.top {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1rem;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
 }
-.hero h1 {
+.top h1 {
   margin: 0;
-  font-size: 1.45rem;
+  font-size: 1.25rem;
   color: #f2f3f5;
 }
 .sub {
-  margin: 0.35rem 0 0;
-  color: var(--muted, #949ba4);
-  font-size: 0.92rem;
+  margin: 0.2rem 0 0;
+  color: #8b9199;
+  font-size: 0.82rem;
 }
-.me-chip {
+.seg {
   display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  background: var(--bg2, #2b2d31);
-  border: 1px solid #3f4147;
-  border-radius: 12px;
-  padding: 0.55rem 0.75rem;
+  gap: 0.35rem;
+  background: #1a1b1e;
+  border: 1px solid #2c2e33;
+  border-radius: 999px;
+  padding: 0.25rem;
 }
-.me-meta {
+.seg button {
+  border: 0;
+  background: transparent;
+  color: #949ba4;
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.seg button.on {
+  background: #5865f2;
+  color: #fff;
+}
+.banner {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: #1e1f22;
+  margin-bottom: 0.65rem;
+  flex-shrink: 0;
+}
+.banner.err {
+  background: #4a1f22;
+  color: #f2a7ad;
+}
+.shell {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 0.85rem;
+  align-items: stretch;
+}
+@media (max-width: 960px) {
+  .shell {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+  .chat-fill {
+    height: min(65vh, 560px);
+  }
+}
+.main {
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
-  font-size: 0.85rem;
 }
-.avatar {
+.chat-fill {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+.panel {
+  background: #1e1f22;
+  border: 1px solid #2c2e33;
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+.panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+  color: #f2f3f5;
+}
+.muted {
+  color: #8b9199;
+}
+.tiny {
+  font-size: 0.75rem;
+}
+.ok {
+  color: #57f287;
+  margin: 0;
+  font-size: 0.88rem;
+}
+.composer textarea {
+  width: 100%;
+  background: #151618;
+  border: 1px solid #34363c;
+  border-radius: 10px;
+  color: #dbdee1;
+  padding: 0.65rem 0.75rem;
+  font: inherit;
+  resize: vertical;
+  margin-bottom: 0.5rem;
+}
+.primary {
+  background: #5865f2;
+  border: 0;
+  color: #fff;
+  border-radius: 10px;
+  padding: 0.5rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.primary.sm {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.82rem;
+}
+.ghost {
+  background: transparent;
+  border: 1px solid #3a3c43;
+  color: #dbdee1;
+  border-radius: 8px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.post-card {
+  border-top: 1px solid #2c2e33;
+  padding: 0.85rem 0;
+}
+.post-hd {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+}
+.av {
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -510,158 +580,64 @@ onMounted(() => {
   color: #fff;
   flex-shrink: 0;
 }
-.avatar.img {
+.av.img {
   object-fit: cover;
-  background: #1e1f22;
 }
-.avatar.sm {
-  width: 36px;
-  height: 36px;
-  font-size: 0.85rem;
-}
-.avatar.xs {
-  width: 28px;
-  height: 28px;
-  font-size: 0.72rem;
-}
-.title-badge {
-  font-size: 0.78rem;
-  font-weight: 700;
-  margin-left: 0.35rem;
-}
-.muted {
-  color: var(--muted, #949ba4);
-}
-.tiny {
-  font-size: 0.75rem;
-}
-.banner {
-  padding: 0.55rem 0.75rem;
-  border-radius: 8px;
-  background: #1e1f22;
-  margin-bottom: 0.75rem;
-}
-.banner.err {
-  background: #4a1f22;
-  color: #f2a7ad;
-}
-.panel {
-  background: var(--bg2, #2b2d31);
-  border: 1px solid #3f4147;
-  border-radius: 12px;
-  padding: 1rem 1.1rem;
-  margin-bottom: 1rem;
-}
-.panel.chat-wrap {
-  padding: 0;
-  overflow: hidden;
+.av-hit {
+  border: 0;
   background: transparent;
-  border: none;
+  padding: 0;
+  cursor: pointer;
+  line-height: 0;
+  border-radius: 50%;
 }
-.panel h2,
-.panel h3 {
-  margin: 0 0 0.65rem;
-  font-size: 1.05rem;
-  color: #f2f3f5;
+.title-icons {
+  margin: 0.25rem 0;
 }
-.subh {
-  margin-top: 1.25rem !important;
-}
-.tabs {
+.title-req {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 1rem;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin: 0.25rem 0 0.15rem;
+  font-size: 0.85rem;
 }
-.tabs button {
-  border: 1px solid #3f4147;
-  background: #1e1f22;
-  color: #dbdee1;
-  border-radius: 999px;
-  padding: 0.4rem 0.9rem;
-  cursor: pointer;
-  font-weight: 600;
+.title-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0 1rem;
   font-size: 0.88rem;
 }
-.tabs button.active {
-  background: var(--accent, #5865f2);
-  border-color: var(--accent, #5865f2);
-  color: #fff;
+.title-table th,
+.title-table td {
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  vertical-align: middle;
 }
-.layout {
-  display: grid;
-  grid-template-columns: 1fr 280px;
-  gap: 1rem;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .layout {
-    grid-template-columns: 1fr;
-  }
-}
-.row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-}
-input,
-textarea {
-  flex: 1;
-  min-width: 140px;
-  background: #1e1f22;
-  border: 1px solid #3f4147;
-  border-radius: 8px;
-  color: #dbdee1;
-  padding: 0.55rem 0.7rem;
-  font: inherit;
-}
-textarea {
-  width: 100%;
-  resize: vertical;
-  margin-bottom: 0.5rem;
-}
-button.primary {
-  background: var(--accent, #5865f2);
-  border: none;
-  color: #fff;
-  border-radius: 8px;
-  padding: 0.55rem 1rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-button.primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-button.primary.sm {
-  padding: 0.4rem 0.75rem;
-  font-size: 0.85rem;
-}
-button.ghost {
-  background: transparent;
-  border: 1px solid #3f4147;
-  color: #dbdee1;
-  border-radius: 8px;
-  padding: 0.35rem 0.65rem;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-button.ghost.sm {
-  padding: 0.25rem 0.45rem;
+.title-table th {
+  color: #9aa3b5;
+  font-weight: 600;
   font-size: 0.75rem;
 }
-.composer {
-  margin-bottom: 1rem;
+.title-table .dot {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  vertical-align: middle;
 }
-.post {
-  border-top: 1px solid #3f4147;
-  padding: 0.85rem 0;
-}
-.post-hd {
+.title-icons-cell {
   display: flex;
-  gap: 0.65rem;
-  align-items: flex-start;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.tb {
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-left: 0.35rem;
 }
 .post-body {
   margin: 0.55rem 0;
@@ -670,81 +646,75 @@ button.ghost.sm {
 }
 .post-ft {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.45rem;
   flex-wrap: wrap;
 }
 .comments {
   margin-top: 0.65rem;
   padding: 0.65rem;
-  background: #1e1f22;
-  border-radius: 8px;
+  background: #151618;
+  border-radius: 10px;
 }
 .comment {
-  margin-bottom: 0.55rem;
+  margin-bottom: 0.5rem;
 }
 .comment p {
   margin: 0.2rem 0 0;
 }
-.checkin-box {
+.row {
   display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-  align-items: flex-start;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: 0.45rem;
 }
-.streak strong {
-  font-size: 1.4rem;
-  color: #57f287;
-}
-.hist {
-  list-style: none;
-  padding: 0;
-  margin: 1rem 0 0;
-}
-.hist li {
-  display: flex;
-  justify-content: space-between;
-  padding: 0.4rem 0;
-  border-bottom: 1px solid #3f4147;
-  font-size: 0.88rem;
+.row input,
+.tip-form input {
+  flex: 1;
+  min-width: 120px;
+  background: #151618;
+  border: 1px solid #34363c;
+  border-radius: 8px;
+  color: #dbdee1;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
 }
 .tip-form {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  margin-bottom: 0.5rem;
+}
+.subh {
+  margin: 1.1rem 0 0.5rem;
+  font-size: 0.95rem;
+  color: #f2f3f5;
 }
 .tip-list {
   list-style: none;
-  padding: 0;
   margin: 0;
+  padding: 0;
 }
 .tip-list li {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 0.15rem 0.75rem;
   padding: 0.5rem 0;
-  border-bottom: 1px solid #3f4147;
+  border-bottom: 1px solid #2c2e33;
   font-size: 0.88rem;
 }
-.tip-list .amt {
+.amt {
   color: #f1c40f;
   font-weight: 700;
 }
-.ok {
-  color: #57f287;
-  margin: 0;
-  font-size: 0.9rem;
-}
 .title-list {
   list-style: none;
-  padding: 0;
   margin: 0;
+  padding: 0;
 }
 .title-list li {
   display: flex;
   gap: 0.75rem;
   padding: 0.65rem 0;
-  border-bottom: 1px solid #3f4147;
+  border-bottom: 1px solid #2c2e33;
 }
 .dot {
   width: 12px;
@@ -756,7 +726,7 @@ button.ghost.sm {
 .progress .bar {
   display: block;
   height: 6px;
-  background: #1e1f22;
+  background: #151618;
   border-radius: 999px;
   margin-top: 0.55rem;
   overflow: hidden;
@@ -764,29 +734,6 @@ button.ghost.sm {
 .progress .bar i {
   display: block;
   height: 100%;
-  background: var(--accent, #5865f2);
-}
-.lb {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.lb li {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.45rem 0;
-  border-bottom: 1px solid #3f4147;
-}
-.rank {
-  width: 1.2rem;
-  color: #949ba4;
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-}
-.lb-meta {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.85rem;
+  background: #5865f2;
 }
 </style>

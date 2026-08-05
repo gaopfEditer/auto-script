@@ -3,6 +3,9 @@
  */
 const TOKEN_KEY = "dc_community_token";
 
+/** 打赏功能暂隐；改 true 可恢复入口 */
+export const SHOW_COMMUNITY_TIPS = false;
+
 export function getCommunityToken() {
   try {
     return localStorage.getItem(TOKEN_KEY) || "";

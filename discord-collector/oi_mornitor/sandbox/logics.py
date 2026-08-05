@@ -11,6 +11,9 @@ from oi_mornitor.config import (
     CARD_NEAR_ENTRY_MAJOR_LEV,
     CARD_NEAR_ENTRY_PCT,
     CARD_NEAR_ENTRY_PCT_MAJOR,
+    CARD_SL_MAX_DIST_PCT,
+    CARD_TP_MAX_DIST_PCT,
+    SANDBOX_ABSURD_PNL_PCT,
     SANDBOX_FEE_PCT,
     SANDBOX_HUNTER_ATR_MULT,
     SANDBOX_HUNTER_SL_PAD,
@@ -80,6 +83,74 @@ def card_near_entry_pct(symbol: str, leverage: float | None = None) -> float:
     if is_major_symbol(symbol) or lev >= CARD_NEAR_ENTRY_MAJOR_LEV:
         return CARD_NEAR_ENTRY_PCT_MAJOR
     return CARD_NEAR_ENTRY_PCT
+
+
+def price_move_pct(entry: float, level: float) -> float:
+    """|level − entry| / entry × 100。"""
+    e = float(entry or 0)
+    if e <= 0:
+        return float("inf")
+    return abs(float(level) - e) / e * 100.0
+
+
+def is_absurd_price_move(
+    entry: float, exit_px: float, *, max_pct: float | None = None
+) -> bool:
+    """出场价相对入场偏离是否离谱（默认 |ΔP| > SANDBOX_ABSURD_PNL_PCT）。"""
+    cap = float(max_pct if max_pct is not None else SANDBOX_ABSURD_PNL_PCT)
+    if cap <= 0:
+        return False
+    return price_move_pct(entry, exit_px) > cap
+
+
+def validate_card_levels(
+    side: str,
+    entry: float,
+    sl: float | None,
+    tps: list[float] | None = None,
+    *,
+    sl_max_pct: float | None = None,
+    tp_max_pct: float | None = None,
+) -> tuple[bool, str]:
+    """
+    校验卡片 SL/TP 相对入场是否同侧且量级合理。
+    典型坏例：入场 4.97e-5、SL=0.0446（错位小数 → 近 9 万 %）。
+    """
+    side_u = str(side or "").upper()
+    entry_v = float(entry or 0)
+    if entry_v <= 0:
+        return False, "入场价无效"
+    sl_cap = float(sl_max_pct if sl_max_pct is not None else CARD_SL_MAX_DIST_PCT)
+    tp_cap = float(tp_max_pct if tp_max_pct is not None else CARD_TP_MAX_DIST_PCT)
+
+    if sl is not None:
+        sl_v = float(sl)
+        if sl_v <= 0:
+            return False, "止损无效"
+        if side_u == "LONG" and sl_v >= entry_v:
+            return False, f"多单止损须低于入场（SL={sl_v:.6g} ≥ entry={entry_v:.6g}）"
+        if side_u == "SHORT" and sl_v <= entry_v:
+            return False, f"空单止损须高于入场（SL={sl_v:.6g} ≤ entry={entry_v:.6g}）"
+        dist = price_move_pct(entry_v, sl_v)
+        if sl_cap > 0 and dist > sl_cap:
+            return False, f"止损距入场 {dist:.1f}% 超过上限 {sl_cap:g}%（疑小数错位）"
+
+    for i, tp in enumerate(tps or []):
+        try:
+            tp_v = float(tp)
+        except (TypeError, ValueError):
+            continue
+        if tp_v <= 0:
+            continue
+        if side_u == "LONG" and tp_v <= entry_v:
+            return False, f"多单 TP{i + 1}={tp_v:.6g} 须高于入场"
+        if side_u == "SHORT" and tp_v >= entry_v:
+            return False, f"空单 TP{i + 1}={tp_v:.6g} 须低于入场"
+        dist = price_move_pct(entry_v, tp_v)
+        if tp_cap > 0 and dist > tp_cap:
+            return False, f"TP{i + 1} 距入场 {dist:.1f}% 超过上限 {tp_cap:g}%"
+
+    return True, ""
 
 
 def sandbox_sl_max_pct(symbol: str) -> float:
@@ -796,8 +867,10 @@ EXIT_REASON_LABELS: dict[str, str] = {
     "card_tp": "卡片止盈",
     "card_tp_partial": "卡片分批止盈",
     "card_tp1_be": "卡片TP1后保本",
+    "card_invalid": "卡片数据异常作废",
     "manual": "手动平仓",
     "manual_partial": "手动减仓",
+    "absurd_exit": "离谱价差拒记",
 }
 
 
@@ -849,19 +922,42 @@ def evaluate_card_exit(
     done = int(meta.get("card_tp_done") or 0)
     out: list[SandboxSignal] = []
 
-    # 硬止损优先
-    sl_hit = (side_u == "LONG" and low <= float(sl)) or (
-        side_u == "SHORT" and high >= float(sl)
+    # 硬止损优先（先校验 SL 同侧 + 量级，防错位小数立刻「打止损」记神单）
+    sl_v = float(sl) if sl and float(sl) > 0 else 0.0
+    if sl_v > 0 and entry > 0:
+        ok_sl, sl_err = validate_card_levels(side_u, entry, sl_v, None)
+        if not ok_sl:
+            out.append(
+                SandboxSignal(
+                    action="exit",
+                    side=side_u,
+                    logic="C",
+                    price=float(entry),
+                    sl=sl_v,
+                    message=f"卡片数据异常作废 · {sl_err}",
+                    meta={
+                        "exit_code": "card_invalid",
+                        "exit_label": exit_reason_label("card_invalid"),
+                        "card_id": meta.get("card_id"),
+                        "reject_reason": sl_err,
+                        "void_trade": True,
+                    },
+                )
+            )
+            return out
+
+    sl_hit = (side_u == "LONG" and low <= sl_v) or (
+        side_u == "SHORT" and high >= sl_v
     )
-    if sl_hit and sl > 0:
+    if sl_hit and sl_v > 0:
         out.append(
             SandboxSignal(
                 action="exit",
                 side=side_u,
                 logic="C",
-                price=float(sl),
-                sl=float(sl),
-                message=f"卡片止损 SL={sl:.6g}",
+                price=float(sl_v),
+                sl=float(sl_v),
+                message=f"卡片止损 SL={sl_v:.6g}",
                 meta={
                     "exit_code": "card_sl",
                     "exit_label": exit_reason_label("card_sl"),
@@ -872,6 +968,16 @@ def evaluate_card_exit(
         return out
 
     remaining_levels = levels[done:]
+    if not remaining_levels:
+        return out
+
+    # 过滤离谱 TP，避免按错价减仓
+    sane_levels: list[float] = []
+    for tp in remaining_levels:
+        ok_tp, _ = validate_card_levels(side_u, entry, None, [tp])
+        if ok_tp:
+            sane_levels.append(tp)
+    remaining_levels = sane_levels
     if not remaining_levels:
         return out
 

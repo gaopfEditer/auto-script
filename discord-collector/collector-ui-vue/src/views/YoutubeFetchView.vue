@@ -57,6 +57,8 @@ const pasteFiles = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
 const selectedPasteFile = ref("");
 const pasteListError = ref("");
 const scanningPaste = ref(false);
+/** 前端兜底：发现 pending 且后台未在扫时自动触发一次 */
+let autoScanCooldownUntil = 0;
 const showManualPaste = ref(false);
 /** 右侧详情：概要&卡片 | 全文 */
 const pasteDetailTab = ref(/** @type {"cards" | "fulltext"} */ ("cards"));
@@ -411,6 +413,14 @@ async function refreshPasteFiles() {
     pasteScan.value = data.scan && typeof data.scan === "object" ? data.scan : {};
     pasteFiles.value = Array.isArray(data.items) ? data.items : [];
     pasteListError.value = "";
+
+    // 有未解析文件且后台未在扫 → 最长每 10 分钟兜底触发一次（主扫描由后端负责）
+    const pending = pasteFiles.value.filter((f) => f.status === "pending" || !f.hasOutput);
+    const running = Boolean(pasteScan.value?.running);
+    if (pending.length && !running && Date.now() >= autoScanCooldownUntil) {
+      autoScanCooldownUntil = Date.now() + 600_000;
+      void triggerPasteFileScan().catch(() => {});
+    }
   } catch (e) {
     pasteListError.value = String(/** @type {Error} */ (e).message ?? e);
   }
@@ -758,6 +768,7 @@ https://youtu.be/..."
         </div>
         <p class="hint dir-hint" :title="pasteInputDir">
           输入目录：<code>{{ pasteInputDir || "—" }}</code>
+          <span class="paste-auto-hint"> · 新文件自动解析</span>
         </p>
         <p v-if="pasteScanRunning" class="scan-hint">
           正在解析 <strong>{{ pasteScan.currentFile || "…" }}</strong>
@@ -1164,6 +1175,10 @@ https://youtu.be/..."
   padding: 0.15rem 0.45rem;
   border-radius: 999px;
   font-weight: 600;
+}
+.paste-auto-hint {
+  color: #81c784;
+  font-size: 0.72rem;
 }
 .parse-msg {
   margin: 0.65rem 0 0;

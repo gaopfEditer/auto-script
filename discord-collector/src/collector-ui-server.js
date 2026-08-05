@@ -155,7 +155,7 @@ async function main() {
   registerYoutubePasteParseRoutes(app, createLogger("yt-paste-parse"));
   const pasteBatchLog = createLogger("paste-batch");
   registerYoutubePasteBatchRoutes(app, config, pasteBatchLog, { archiveService: cardArchive });
-  startPasteBatchService(config, pasteBatchLog);
+  startPasteBatchService(config, pasteBatchLog, { archiveService: cardArchive });
 
   let frameSeq = 0;
   /** @type {null | ((guildId: string, channelId: string, trace?: { clientTraceId?: string }) => Promise<unknown>)} */

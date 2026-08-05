@@ -109,9 +109,21 @@ export async function parseTxtFileAndSave({ inputDir, outputDir, txtName, log, f
 }
 
 /**
- * @param {{ inputDir: string, outputDir: string, log: ReturnType<typeof import('./logger.js').createLogger>, force?: boolean }} opts
+ * @param {{
+ *   inputDir: string,
+ *   outputDir: string,
+ *   log: ReturnType<typeof import('./logger.js').createLogger>,
+ *   force?: boolean,
+ *   archiveService?: ReturnType<typeof import('./card-archive-service.js').createCardArchiveService>,
+ * }} opts
  */
-export async function scanAndParseTxtFiles({ inputDir, outputDir, log, force = false }) {
+export async function scanAndParseTxtFiles({
+  inputDir,
+  outputDir,
+  log,
+  force = false,
+  archiveService,
+}) {
   if (scanState.running) {
     return { ok: false, error: "扫描正在进行中", state: { ...scanState } };
   }
@@ -122,6 +134,7 @@ export async function scanAndParseTxtFiles({ inputDir, outputDir, log, force = f
 
   try {
     await fs.mkdir(outputDir, { recursive: true });
+    await fs.mkdir(inputDir, { recursive: true }).catch(() => {});
     const files = await listTxtFiles(inputDir);
     stats.total = files.length;
 
@@ -307,7 +320,7 @@ export function registerYoutubePasteBatchRoutes(app, config, log, opts = {}) {
       }
       const force = Boolean(req.body?.force);
       const { inputDir, outputDir } = dirs();
-      void scanAndParseTxtFiles({ inputDir, outputDir, log, force }).catch((e) => {
+      void scanAndParseTxtFiles({ inputDir, outputDir, log, force, archiveService }).catch((e) => {
         log.warn(`paste-batch scan: ${/** @type {Error} */ (e).message}`);
       });
       res.json({ ok: true, started: true, scan: { ...scanState } });
@@ -349,25 +362,82 @@ export function registerYoutubePasteBatchRoutes(app, config, log, opts = {}) {
 }
 
 /**
- * @param {{ pasteParseInputDir: string, pasteParseOutputDir: string, pasteParseStartupDelayMs: number }} config
+ * 启动后延时全量扫描，并持续轮询输入目录：发现尚无 JSON 的新 .txt 自动解析。
+ * @param {{
+ *   pasteParseInputDir: string,
+ *   pasteParseOutputDir: string,
+ *   pasteParseStartupDelayMs: number,
+ *   pasteParseWatchIntervalMs?: number,
+ * }} config
  * @param {ReturnType<typeof import('./logger.js').createLogger>} log
+ * @param {{ archiveService?: ReturnType<typeof import('./card-archive-service.js').createCardArchiveService> }} [opts]
  */
-export function startPasteBatchService(config, log) {
+export function startPasteBatchService(config, log, opts = {}) {
+  const archiveService = opts.archiveService;
+  const inputDir = config.pasteParseInputDir;
+  const outputDir = config.pasteParseOutputDir;
   const delay = Math.max(0, Number(config.pasteParseStartupDelayMs) || 15_000);
-  log.info(
-    `paste-batch: ${Math.round(delay / 1000)}s 后扫描 ${config.pasteParseInputDir} → ${config.pasteParseOutputDir}`
-  );
-  setTimeout(() => {
-    void scanAndParseTxtFiles({
-      inputDir: config.pasteParseInputDir,
-      outputDir: config.pasteParseOutputDir,
-      log,
-    }).then((r) => {
-      if (r.ok && r.stats) {
+  const watchMs = Math.max(60_000, Number(config.pasteParseWatchIntervalMs) || 600_000);
+
+  /** @param {string} reason */
+  async function runScan(reason) {
+    if (scanState.running) return;
+    try {
+      const r = await scanAndParseTxtFiles({
+        inputDir,
+        outputDir,
+        log,
+        archiveService,
+      });
+      if (!r.ok) return;
+      const s = r.stats;
+      if (!s) return;
+      if (s.parsed > 0 || s.failed > 0 || reason === "startup") {
         log.info(
-          `paste-batch: 启动扫描完成 共 ${r.stats.total} · 新解析 ${r.stats.parsed} · 跳过 ${r.stats.skipped} · 失败 ${r.stats.failed}`
+          `paste-batch[${reason}]: 共 ${s.total} · 新解析 ${s.parsed} · 跳过 ${s.skipped} · 失败 ${s.failed}`
         );
       }
-    });
+    } catch (e) {
+      log.warn(`paste-batch[${reason}]: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  log.info(
+    `paste-batch: ${Math.round(delay / 1000)}s 后首次扫描，之后每 ${Math.round(watchMs / 1000)}s 探测新文件 · ${inputDir} → ${outputDir}`
+  );
+
+  setTimeout(() => {
+    void runScan("startup");
   }, delay);
+
+  setInterval(() => {
+    void runScan("watch");
+  }, watchMs);
+
+  // 目录事件：落盘完成后再扫（debounce），与轮询互补
+  let watchTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+  void fs
+    .mkdir(inputDir, { recursive: true })
+    .then(async () => {
+      const { watch } = await import("node:fs");
+      try {
+        watch(inputDir, { persistent: true }, (eventType, filename) => {
+          const name = String(filename || "");
+          if (name && !name.toLowerCase().endsWith(".txt")) return;
+          if (watchTimer) clearTimeout(watchTimer);
+          watchTimer = setTimeout(() => {
+            watchTimer = null;
+            void runScan(`fs:${eventType || "change"}`);
+          }, 1500);
+        });
+        log.info(`paste-batch: 已监听目录变更 ${inputDir}`);
+      } catch (e) {
+        log.warn(
+          `paste-batch: fs.watch 不可用（仍靠轮询）: ${/** @type {Error} */ (e).message}`
+        );
+      }
+    })
+    .catch((e) => {
+      log.warn(`paste-batch: 无法创建输入目录 ${inputDir}: ${/** @type {Error} */ (e).message}`);
+    });
 }

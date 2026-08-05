@@ -4,13 +4,15 @@
 import { randomBytes } from "node:crypto";
 import {
   COMMENT_POINTS,
-  COMMUNITY_TITLES,
   LIKE_POINTS,
   POST_POINTS,
   WELCOME_TIP_BALANCE,
   checkinPointsForStreak,
+  levelSystemMeta,
+  pointsRequiredForLevel,
   titleForPoints,
   titleProgress,
+  titlesWithBadges,
 } from "./community-titles.js";
 import { allowedAvatarUrls, COMMUNITY_AVATAR_PACKS } from "./community-avatar-packs.js";
 
@@ -53,16 +55,23 @@ function memberPublic(row) {
     tipBalance: Number(row.tip_balance) || 0,
     checkinStreak: Number(row.checkin_streak) || 0,
     lastCheckinDay: row.last_checkin_day || null,
+    level: progress.level,
+    badges: progress.badges,
+    pointsToNextLevel: progress.pointsToNextLevel,
+    levelProgressPct: progress.levelProgressPct,
+    nextLevel: progress.nextLevel,
     title: {
       key: title.key,
       label: title.label,
       color: title.color,
       desc: title.desc,
+      minLevel: title.minLevel,
     },
     titleProgress: {
       pct: progress.progressPct,
       nextLabel: progress.next?.label ?? null,
-      nextMinPoints: progress.next?.minPoints ?? null,
+      nextMinPoints: progress.next ? pointsRequiredForLevel(progress.next.minLevel) : null,
+      nextMinLevel: progress.next?.minLevel ?? null,
     },
     createdAt: row.created_at,
   };
@@ -166,7 +175,7 @@ export function createCommunityService(store, log, broadcast) {
   }
 
   async function listTitles() {
-    return { titles: COMMUNITY_TITLES };
+    return { titles: titlesWithBadges(), levelSystem: levelSystemMeta() };
   }
 
   async function leaderboard(limit = 20) {
@@ -458,7 +467,8 @@ export function createCommunityService(store, log, broadcast) {
       }
     }
     return {
-      titles: COMMUNITY_TITLES,
+      titles: titlesWithBadges(),
+      levelSystem: levelSystemMeta(),
       leaderboard: lb.members,
       recentTips: tips.tips,
       recentPosts: posts.posts,

@@ -2,6 +2,8 @@
 
 export const SANDBOX_HISTORY_KEY = "oi_sandbox_trade_history_v1";
 export const SANDBOX_HISTORY_RETAIN_DAYS = 90;
+/** 价变 |pnl_pct| 或 |exit−entry|/entry×100 超过该值视为离谱数据，不展示 */
+export const SANDBOX_ABSURD_PNL_PCT = 80;
 
 export type SandboxHistoryRange = "1d" | "2d" | "7d" | "30d" | "90d";
 
@@ -201,6 +203,15 @@ export function normalizeTrade(
 ): SandboxHistoryTrade | null {
   const symbol = String(raw.symbol || "").toUpperCase();
   if (!symbol || raw.entry_price == null || raw.exit_price == null) return null;
+  const entry_price = Number(raw.entry_price);
+  const exit_price = Number(raw.exit_price);
+  const pnl_pct = Number(raw.pnl_pct) || 0;
+  if (entry_price > 0) {
+    const movePct = (Math.abs(exit_price - entry_price) / entry_price) * 100;
+    if (movePct > SANDBOX_ABSURD_PNL_PCT || Math.abs(pnl_pct) > 500) {
+      return null;
+    }
+  }
   const entry_time = Number(raw.entry_time || 0);
   const exit_time = Number(raw.exit_time || 0);
   const day =
@@ -299,13 +310,13 @@ export function normalizeTrade(
     symbol,
     side: String(raw.side || ""),
     logic: String(raw.logic || ""),
-    entry_price: Number(raw.entry_price),
-    exit_price: Number(raw.exit_price),
+    entry_price,
+    exit_price,
     entry_time,
     exit_time,
     leverage: raw.leverage != null ? Number(raw.leverage) : undefined,
     pnl_usd: Number(raw.pnl_usd) || 0,
-    pnl_pct: Number(raw.pnl_pct) || 0,
+    pnl_pct,
     roe_pct: raw.roe_pct != null ? Number(raw.roe_pct) : undefined,
     reason: String(raw.reason || ""),
     day,

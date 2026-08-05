@@ -18,6 +18,7 @@ from oi_mornitor.config import (
     CARD_NEAR_ENTRY_PCT,
     CARD_NEAR_ENTRY_PCT_MAJOR,
     FAPI_BASE_URL,
+    SANDBOX_ABSURD_PNL_PCT,
     SANDBOX_DAILY_COUNT,
     SANDBOX_ENABLED,
     SANDBOX_FEE_PCT,
@@ -48,11 +49,13 @@ from oi_mornitor.sandbox.logics import (
     evaluate_entry,
     evaluate_exit_and_trail,
     exit_reason_label,
+    is_absurd_price_move,
     normalize_sandbox_interval,
     ref_intervals_for_logic,
     resolve_entry_source,
     sandbox_intervals,
     sandbox_leverage,
+    validate_card_levels,
 )
 from oi_mornitor.sandbox.tracker import PaperPosition, SandboxTracker
 
@@ -384,6 +387,14 @@ class SandboxEngine:
             return {"ok": False, "error": "无法解析卡片（需 ID/币种/方向/止损）"}
         if card.sl is None or card.sl <= 0:
             return {"ok": False, "error": "卡片缺少有效止损"}
+        # 限价：用入场区中点预检 SL/TP；市价等成交价再检
+        if card.entry_type != "market" and card.entry_low is not None:
+            hi = card.entry_high if card.entry_high is not None else card.entry_low
+            mid = (float(card.entry_low) + float(hi)) / 2.0
+            ok_lv, lv_err = validate_card_levels(card.side, mid, card.sl, list(card.tps or []))
+            if not ok_lv:
+                logger.warning("卡片拒收 %s：%s", card.card_id, lv_err)
+                return {"ok": False, "error": f"卡片价位异常：{lv_err}"}
         existing = self.tracker.get_card_order(card.card_id)
         if existing and existing.get("status") in ("filled", "closed"):
             return {
@@ -471,6 +482,23 @@ class SandboxEngine:
         self, card: ParsedCard, price: float
     ) -> SandboxSignal | None:
         if price <= 0 or not card.sl:
+            return None
+        ok_lv, lv_err = validate_card_levels(
+            card.side, float(price), float(card.sl), list(card.tps or [])
+        )
+        if not ok_lv:
+            logger.warning(
+                "卡片入场拒绝 %s %s @%s：%s",
+                card.card_id,
+                card.symbol,
+                price,
+                lv_err,
+            )
+            order = self.tracker.get_card_order(card.card_id)
+            if order:
+                order["status"] = "rejected"
+                order["reject_reason"] = lv_err
+                self.tracker.upsert_card_order(order)
             return None
         tps = list(card.tps or [])
         tp1 = tps[0] if len(tps) > 0 else None
@@ -1597,6 +1625,15 @@ class SandboxEngine:
             rem = float(meta.get("remaining_frac") or 1.0)
             fee_frac = rem * frac  # 相对初始保证金
             exit_px = float(sig.price)
+            if is_absurd_price_move(float(pos.entry_price), exit_px):
+                logger.warning(
+                    "沙盒拒记离谱减仓 #%s %s entry=%.8g exit=%.8g",
+                    pos.id,
+                    sym,
+                    pos.entry_price,
+                    exit_px,
+                )
+                return None
             if pos.side == "LONG":
                 pnl_pct = (exit_px - pos.entry_price) / pos.entry_price * 100.0
             else:
@@ -1724,14 +1761,65 @@ class SandboxEngine:
 
         if sig.action == "exit" and pos:
             exit_px = float(sig.price)
-            if pos.side == "LONG":
-                pnl_pct = (exit_px - pos.entry_price) / pos.entry_price * 100.0
-            else:
-                pnl_pct = (pos.entry_price - exit_px) / pos.entry_price * 100.0
+            sm = dict(sig.meta or {})
             try:
                 meta = json.loads(pos.meta_json or "{}")
             except json.JSONDecodeError:
                 meta = {}
+
+            # 卡片价位异常 / 离谱价差：撤仓不记神单
+            void = bool(sm.get("void_trade")) or str(sm.get("exit_code") or "") == "card_invalid"
+            absurd = is_absurd_price_move(float(pos.entry_price), exit_px)
+            if void or absurd:
+                reason = str(
+                    sm.get("reject_reason")
+                    or sm.get("message")
+                    or sig.message
+                    or f"|ΔP|>{SANDBOX_ABSURD_PNL_PCT:g}%"
+                )
+                if absurd and not void:
+                    reason = (
+                        f"出场价差离谱 entry={pos.entry_price:.6g} exit={exit_px:.6g} "
+                        f"(上限 {SANDBOX_ABSURD_PNL_PCT:g}%)"
+                    )
+                logger.warning(
+                    "沙盒拒记离谱平仓 #%s %s %s entry=%.8g exit=%.8g · %s",
+                    pos.id,
+                    sym,
+                    pos.side,
+                    pos.entry_price,
+                    exit_px,
+                    reason,
+                )
+                cid = str(sm.get("card_id") or meta.get("card_id") or "")
+                if cid:
+                    order = self.tracker.get_card_order(cid)
+                    if order:
+                        order["status"] = "rejected"
+                        order["reject_reason"] = reason
+                        self.tracker.upsert_card_order(order)
+                if pos.id:
+                    self.tracker.delete_position_by_id(pos.id)
+                    self._last_trail_sl.pop(pos.id, None)
+                else:
+                    self.tracker.delete_position(sym)
+                return {
+                    "type": "exit_rejected",
+                    "id": pos.id,
+                    "symbol": sym,
+                    "side": pos.side,
+                    "logic": pos.logic,
+                    "price": exit_px,
+                    "entry_price": pos.entry_price,
+                    "message": f"拒记离谱出场 · {reason}",
+                    "status_label": f"沙盒拒记 · {reason[:48]}",
+                    "kline_close_time": bar_time,
+                }
+
+            if pos.side == "LONG":
+                pnl_pct = (exit_px - pos.entry_price) / pos.entry_price * 100.0
+            else:
+                pnl_pct = (pos.entry_price - exit_px) / pos.entry_price * 100.0
             lev = float(meta.get("leverage") or sandbox_leverage(sym))
             margin = float(meta.get("margin_usd") or SANDBOX_NOTIONAL_USD)
             rem = float(meta.get("remaining_frac") or 1.0)
@@ -1751,7 +1839,6 @@ class SandboxEngine:
             roe_pct = pnl_pct * lev
             bal = self.tracker.get_balance() + pnl_usd
             self.tracker.set_balance(bal)
-            sm = dict(sig.meta or {})
             exit_code = str(sm.get("exit_code") or sm.get("reason") or "exit")
             exit_label = str(sm.get("exit_label") or exit_reason_label(exit_code, sig.message))
             self._append_event(
