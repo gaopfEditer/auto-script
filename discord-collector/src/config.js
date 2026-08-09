@@ -74,6 +74,30 @@ export const config = {
     String(process.env.COLLECTOR_CDP_AUTO_GOTO ?? "1").toLowerCase()
   ),
   /**
+   * CDP 注入脚本：伪造页面始终前台，减轻 Discord 后台节流 Gateway。
+   * 默认开；COLLECTOR_CDP_VISIBILITY_KEEPALIVE=0 关闭。
+   */
+  cdpVisibilityKeepalive: !["0", "false", "no", "off"].includes(
+    String(process.env.COLLECTOR_CDP_VISIBILITY_KEEPALIVE ?? "1").toLowerCase()
+  ),
+  /**
+   * 定时用 CDP 轮询打开信号频道（每次只切 1 个，避免连跳）。
+   * 默认开；COLLECTOR_CDP_CHANNEL_ROTATE=0 关闭。
+   * 间隔默认 10 分钟切下一个。
+   */
+  cdpChannelRotate: !["0", "false", "no", "off"].includes(
+    String(process.env.COLLECTOR_CDP_CHANNEL_ROTATE ?? "1").toLowerCase()
+  ),
+  cdpChannelRotateIntervalMs: Math.max(
+    60_000,
+    Number(process.env.COLLECTOR_CDP_CHANNEL_ROTATE_INTERVAL_MS) || 600_000
+  ),
+  /** @deprecated 已改为每次只切 1 频道，dwell 不再使用；保留以免旧配置报错 */
+  cdpChannelRotateDwellMs: Math.max(
+    3_000,
+    Number(process.env.COLLECTOR_CDP_CHANNEL_ROTATE_DWELL_MS) || 12_000
+  ),
+  /**
    * Discord 页定时刷新间隔（ms）。0=不刷新。
    * 未配置且 startUrl 为 /channels/… 时默认 5 分钟，避免 Gateway 假死。
    */

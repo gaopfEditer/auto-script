@@ -4,7 +4,7 @@
 import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
 import { createChannelTextDedup, normalizeSignalText, signalTextHash } from "./discord-signal-dedup.js";
 import { generateCardsByStyles, extractSignalWithAi } from "./discord-signal-ai.js";
-import { parseSignalText } from "./discord-signal-parsers.js";
+import { JUNZHANG_SL_LINK_MS, parseSignalText } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
 import { executionFromParsed, formatManualRawContent, normalizeExecution } from "./discord-signal-execution.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
@@ -78,7 +78,13 @@ function parseJsonField(raw) {
  * @param {string} channelId
  * @param {Record<string, unknown>} parsed
  */
-async function enrichStagedFromRecentCard(store, channelId, parsed) {
+/**
+ * @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store
+ * @param {string} channelId
+ * @param {Record<string, unknown>} parsed
+ * @param {number} [withinMs]
+ */
+async function enrichStagedFromRecentCard(store, channelId, parsed, withinMs = STAGED_TPSL_LINK_MS) {
   if (parsed.signalPhase !== "tpsl") return parsed;
   const sym = String(parsed.symbol ?? "").trim();
   const dir = String(parsed.direction ?? "").trim();
@@ -90,11 +96,11 @@ async function enrichStagedFromRecentCard(store, channelId, parsed) {
     recent = await store.getRecentSignalCardBySymbolChannel({
       symbol: sym,
       channelId,
-      withinMs: STAGED_TPSL_LINK_MS,
+      withinMs,
     });
   }
   if (!recent || !cardAwaitingTpsl(recent)) {
-    recent = await store.getRecentSignalCardByChannel({ channelId, withinMs: STAGED_TPSL_LINK_MS });
+    recent = await store.getRecentSignalCardByChannel({ channelId, withinMs });
   }
   if (!recent || !cardAwaitingTpsl(recent)) return parsed;
 
@@ -114,17 +120,23 @@ async function enrichStagedFromRecentCard(store, channelId, parsed) {
  * @param {string} channelId
  * @param {string} symbol
  */
-async function findStagedOpenCard(store, channelId, symbol) {
+/**
+ * @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store
+ * @param {string} channelId
+ * @param {string} symbol
+ * @param {number} [withinMs]
+ */
+async function findStagedOpenCard(store, channelId, symbol, withinMs = STAGED_TPSL_LINK_MS) {
   if (symbol && store.getRecentSignalCardBySymbolChannel) {
     const row = await store.getRecentSignalCardBySymbolChannel({
       symbol,
       channelId,
-      withinMs: STAGED_TPSL_LINK_MS,
+      withinMs,
     });
     if (row && cardAwaitingTpsl(row)) return row;
   }
   if (store.getRecentSignalCardByChannel) {
-    const row = await store.getRecentSignalCardByChannel({ channelId, withinMs: STAGED_TPSL_LINK_MS });
+    const row = await store.getRecentSignalCardByChannel({ channelId, withinMs });
     if (row && cardAwaitingTpsl(row)) return row;
   }
   return null;
@@ -314,6 +326,9 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     if (parsed && chCfg.parser === "altcoin_king" && parsed.signalPhase === "tpsl") {
       parsed = await enrichStagedFromRecentCard(store, channelId, parsed);
     }
+    if (parsed && chCfg.parser === "junzhang" && parsed.signalPhase === "tpsl") {
+      parsed = await enrichStagedFromRecentCard(store, channelId, parsed, JUNZHANG_SL_LINK_MS);
+    }
     if (!parsed) {
       log.info(`信号未识别 channel=${channelId} parser=${chCfg.parser} preview=${content.slice(0, 80)}`);
       return { skipped: "parse_failed" };
@@ -325,6 +340,80 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     let weexResult = null;
     const textHash = signalTextHash(content);
     const isStagedChannel = isStagedTradeChannel(channelId);
+    const isJunzhang = chCfg.parser === "junzhang";
+
+    // 军长：约 2 分钟内止损补发 → 合并到待补全开仓卡，再推 Telegram
+    if (isJunzhang && parsed.signalPhase === "tpsl") {
+      const symForLink = extractSymbolFromPayload(parsed, executionFromParsed(parsed));
+      const openCard = await findStagedOpenCard(store, channelId, symForLink, JUNZHANG_SL_LINK_MS);
+      if (openCard) {
+        const openId = extractSignalCardRowId(openCard.id ?? openCard.ID);
+        const prevParsed = cardRowParsed(openCard) ?? {};
+        const mergedParsed = mergeStagedParsed(prevParsed, parsed);
+        const executionJson = executionFromParsed(mergedParsed);
+        const symbol = extractSymbolFromPayload(mergedParsed, executionJson);
+        const cardsByStyle = stampCardsByStyle(
+          await generateCardsByStyles(mergedParsed, chCfg.styles, content, {
+            debug: (s) => log.debug(s),
+            fastFallback: true,
+          }),
+          openId
+        );
+        const cardFieldsJson = stampCardFieldsUid(
+          buildCardFieldsFromExecution(executionJson, mergedParsed, content, {
+            sourceType: "discord",
+            sourceRef: channelId,
+          }),
+          openId
+        );
+        await store.updateSignalCard(openId, {
+          parsedJson: mergedParsed,
+          executionJson,
+          cardsByStyle,
+          cardFieldsJson,
+        });
+        const updated = await store.getSignalCardById?.(openId);
+        const clientCard = signalCardToClient(updated ?? openCard);
+        const mergeText =
+          pickCardSinkText(clientCard, chCfg.telegramStyle) ||
+          cardsByStyle[chCfg.telegramStyle] ||
+          Object.values(cardsByStyle)[0] ||
+          content;
+        if (telegram.enabled && !opts.skipTelegram) {
+          try {
+            await telegram.send(String(mergeText), {
+              channelId,
+              channelName: chCfg.name,
+              cardId: openId,
+            });
+            await store.markSignalCardTelegramSent?.(openId);
+          } catch (e) {
+            log.warn(`军长止损合并后 Telegram 失败: ${/** @type {Error} */ (e).message}`);
+          }
+        }
+        await pushExternalCard({
+          text: String(mergeText),
+          card: clientCard,
+          message: row,
+          channelName: chCfg.name,
+          channelId,
+          guildId,
+          event: "updated",
+          parsed: mergedParsed,
+          execution: executionJson,
+          embed: cardFieldsJson,
+        });
+        broadcast?.("meta", { kind: "signal_card_updated", card: clientCard });
+        log.info(
+          `军长止损合并 → 卡片 #${openId} channel=${channelId} symbol=${symbol} sl=${mergedParsed.stopLoss}`
+        );
+        return { card: clientCard, merged: true, parsed: mergedParsed };
+      }
+      log.warn(
+        `军长止损未找到 2 分钟内开仓卡 channel=${channelId} symbol=${symForLink || "-"} preview=${content.slice(0, 80)}`
+      );
+      return { skipped: "no_open_card_for_junzhang_sl", parsed };
+    }
 
     if (isStagedChannel && parsed.signalPhase === "tpsl") {
       const symForLink = extractSymbolFromPayload(parsed, executionFromParsed(parsed));
@@ -346,7 +435,8 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         const cardsByStyle = stampCardsByStyle(
           await generateCardsByStyles(mergedParsed, chCfg.styles, content, {
             debug: (s) => log.debug(s),
-            fastFallback: opts.debugSimulate,
+            fastFallback:
+              opts.debugSimulate || String(mergedParsed.parser ?? "") === "junzhang",
           }),
           openId
         );
@@ -429,7 +519,8 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
 
     const cardsByStyle = await generateCardsByStyles(parsed, chCfg.styles, content, {
       debug: (s) => log.debug(s),
-      fastFallback: opts.debugSimulate,
+      // 军长 TP/SL 由规则算出，固定简体卡片格式，不走 Ollama（避免 Telegram 收到 JSON）
+      fastFallback: opts.debugSimulate || String(parsed.parser ?? "") === "junzhang",
     });
 
     const executionJson = executionFromParsed(parsed);
@@ -464,7 +555,8 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     }
 
     const skipNumericDedup =
-      isStagedChannel && (parsed.signalPhase === "open" || parsed.awaitingTpsl);
+      (isStagedChannel || isJunzhang) &&
+      (parsed.signalPhase === "open" || parsed.awaitingTpsl);
 
     if (symbol && store.getRecentSignalCardBySymbolChannel && !skipNumericDedup) {
       const prev = await store.getRecentSignalCardBySymbolChannel({
@@ -533,7 +625,11 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     const telegramStyle = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";
     const telegramText = stampedStyles[telegramStyle] ?? Object.values(stampedStyles)[0] ?? content;
 
-    if (telegram.enabled && !opts.skipTelegram) {
+    // 军长无止损时先入库，等约 2 分钟内止损补发再推 Telegram
+    const deferJunzhangTelegram =
+      isJunzhang && (parsed.signalPhase === "open" || parsed.awaitingTpsl === true);
+
+    if (telegram.enabled && !opts.skipTelegram && !deferJunzhangTelegram) {
       try {
         await telegram.send(telegramText, {
           channelId,
@@ -545,6 +641,8 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       } catch (e) {
         log.warn(`Telegram 推送失败: ${/** @type {Error} */ (e).message}`);
       }
+    } else if (deferJunzhangTelegram) {
+      log.info(`军长开仓卡 #${cardId} 待止损（约 2 分钟内）后再推 Telegram symbol=${symbol}`);
     }
 
     await pushExternalCard({

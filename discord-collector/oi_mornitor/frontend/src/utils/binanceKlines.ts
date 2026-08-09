@@ -52,3 +52,68 @@ export async function fetchBinanceFuturesKlines(
     .map((row) => binanceKlineRowToCandle(row as unknown[]));
   return { candles, rawCount: data.length };
 }
+
+function oiPointsToMap(
+  rows: Array<{ time?: number; value?: number; timestamp?: number; sumOpenInterest?: string | number }>,
+): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const row of rows) {
+    if (row.time != null && row.value != null) {
+      const t = Number(row.time);
+      const v = Number(row.value);
+      if (Number.isFinite(t) && Number.isFinite(v) && v > 0) out.set(t, v);
+      continue;
+    }
+    const ts = Number(row.timestamp);
+    const oi = Number(row.sumOpenInterest);
+    if (!Number.isFinite(ts) || !Number.isFinite(oi) || oi <= 0) continue;
+    out.set(Math.floor(ts / 1000), oi);
+  }
+  return out;
+}
+
+/** 币安 U 本位历史持仓量；time 为秒。直连失败则走本机 /api/patterns/oi-hist。 */
+export async function fetchBinanceOpenInterestHist(
+  symbol: string,
+  interval: ChartTimeframe,
+  opts?: { limit?: number },
+): Promise<Map<number, number>> {
+  const sym = symbol.trim().toUpperCase();
+  const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 500);
+  const params = new URLSearchParams({
+    symbol: sym,
+    period: interval,
+    limit: String(limit),
+  });
+  const url = `${binanceFapiBase()}/futures/data/openInterestHist?${params.toString()}`;
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = (await res.json()) as Array<{
+        sumOpenInterest?: string | number;
+        timestamp?: number;
+      }>;
+      if (Array.isArray(data) && data.length) return oiPointsToMap(data);
+    }
+  } catch {
+    /* fall through */
+  }
+
+  try {
+    const proxyParams = new URLSearchParams({
+      symbol: sym,
+      interval,
+      limit: String(limit),
+    });
+    const res = await fetch(`/api/patterns/oi-hist?${proxyParams.toString()}`);
+    if (!res.ok) return new Map();
+    const body = (await res.json()) as {
+      ok?: boolean;
+      points?: Array<{ time: number; value: number }>;
+    };
+    if (!body.ok || !Array.isArray(body.points)) return new Map();
+    return oiPointsToMap(body.points);
+  } catch {
+    return new Map();
+  }
+}

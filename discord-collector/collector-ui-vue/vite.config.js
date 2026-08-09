@@ -12,7 +12,39 @@ export default defineConfig(({ mode }) => {
   const devPort = Number(env.VITE_DEV_PORT || env.COLLECTOR_VUE_DEV_PORT) || 5178;
   const apiTarget = `http://127.0.0.1:${uiPort}`;
 
+  const uiMode = String(env.VITE_UI_MODE ?? "").trim().toLowerCase();
+  const isDeployBuild =
+    mode === "production" &&
+    uiMode !== "local" &&
+    uiMode !== "dev" &&
+    uiMode !== "full";
+  const pagesCsv = String(env.VITE_UI_PAGES ?? "show,fetch,oi").trim() || "show,fetch,oi";
+  const pageSet = new Set(
+    pagesCsv.split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
+  );
+  /** @param {string} name */
+  const pageOn = (name) => !isDeployBuild || pageSet.has(name);
+
+  if (mode === "production") {
+    console.info(
+      `[discord-collector-ui] build mode=${mode} deploy=${isDeployBuild} pages=${[...pageSet].join(",")}`
+    );
+  }
+
   return {
+    define: {
+      __UI_DEPLOY__: JSON.stringify(isDeployBuild),
+      __UI_PAGE_SHOW__: JSON.stringify(pageOn("show")),
+      __UI_PAGE_FETCH__: JSON.stringify(pageOn("fetch")),
+      __UI_PAGE_OI__: JSON.stringify(pageOn("oi")),
+      __UI_PAGE_CARDS__: JSON.stringify(pageOn("cards")),
+      __UI_PAGE_ARCHIVES__: JSON.stringify(pageOn("archives")),
+      __UI_PAGE_TRADE__: JSON.stringify(pageOn("trade")),
+      __UI_PAGE_COMMUNITY__: JSON.stringify(pageOn("community")),
+      __UI_PAGE_SIGNALS__: JSON.stringify(pageOn("signals")),
+      __UI_PAGE_DEBUG__: JSON.stringify(pageOn("debug")),
+      __UI_PAGE_HOME__: JSON.stringify(pageOn("home") || !isDeployBuild),
+    },
     plugins: [
       vue(),
       {

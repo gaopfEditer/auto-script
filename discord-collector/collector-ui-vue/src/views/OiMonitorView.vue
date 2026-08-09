@@ -37,7 +37,22 @@ function pickEmbedUrl(j) {
 async function refreshStatus() {
   try {
     const r = await fetch("/api/oi/status");
-    const j = await r.json();
+    const text = await r.text();
+    if (!text.trim()) {
+      throw new Error(
+        r.status >= 500
+          ? `collect:ui 不可用 (HTTP ${r.status})，请先 pnpm run collect:ui`
+          : `collect:ui 返回空响应 (HTTP ${r.status})`
+      );
+    }
+    let j;
+    try {
+      j = JSON.parse(text);
+    } catch {
+      throw new Error(
+        `collect:ui 未返回 JSON (HTTP ${r.status})：${text.slice(0, 120)}`
+      );
+    }
     embedUrl.value = pickEmbedUrl(j);
     active.value = Boolean(j.active);
     error.value = j.error ? String(j.error) : "";
@@ -46,7 +61,7 @@ async function refreshStatus() {
   } catch (e) {
     active.value = false;
     error.value = String(e?.message ?? e);
-    hint.value = "collect:ui 未响应；请先 pnpm run collect:ui";
+    hint.value = "collect:ui 未响应；请先 pnpm run collect:ui（OI 在 8766 也需其代理 /api/oi/status）";
     if (!embedUrl.value) {
       embedUrl.value = pickEmbedUrl({});
     }

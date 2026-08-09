@@ -16,7 +16,7 @@
 | 模式 | 何时生效 | 导航 / 路由 | 典型用途 |
 |------|----------|-------------|----------|
 | **local** | `pnpm run dev:ui-vue`，或 `VITE_UI_MODE=local` | **全部页面**（Show / 卡片 / 拉取 / 文稿 / 下单 / Debug…） | 本机开发、运维调试 |
-| **deploy** | `pnpm run ui:build`（生产构建默认），或 `VITE_UI_MODE=deploy` | **仅配置的页面**（默认 **Show + 卡片 + OI**） | 服务器静态站点、对外展示 |
+| **deploy** | `pnpm run ui:build`（生产构建默认），或 `VITE_UI_MODE=deploy` | **仅配置的页面**（默认 **Show + 拉取 + OI**） | 服务器静态站点、对外展示 |
 
 默认规则（未手动设 `VITE_UI_MODE` 时）：
 
@@ -28,7 +28,7 @@
 | 文件 | 作用 |
 |------|------|
 | `.env.development` | `VITE_UI_MODE=local` |
-| `.env.production` | `VITE_UI_MODE=deploy` + `VITE_UI_PAGES=show,cards,oi` |
+| `.env.production` | `VITE_UI_MODE=deploy` + `VITE_UI_PAGES=show,fetch,oi` |
 
 ### 1.1 配置项
 
@@ -40,14 +40,14 @@ VITE_UI_MODE=deploy
 
 # 部署版可见页面（逗号分隔，对应路由 name）
 # 可选：show, cards, fetch, archives, trade, signals, debug, home
-VITE_UI_PAGES=show,cards,oi
+VITE_UI_PAGES=show,fetch,oi
 ```
 
-示例：部署版还要开放 Debug：
+示例：部署版还要开放卡片 / Debug：
 
 ```env
 VITE_UI_MODE=deploy
-VITE_UI_PAGES=show,cards,oi,debug
+VITE_UI_PAGES=show,fetch,oi,cards,debug
 ```
 
 > **改 `VITE_UI_*` 后必须重新 `pnpm run ui:build`**，变量在构建期打进 JS，不会读取服务器运行时环境。
@@ -371,7 +371,7 @@ rsync -avz --delete public/collector-ui/ user@your-server:/var/www/discord-colle
 | # | 检查项 | 预期 |
 |---|--------|------|
 | 1 | `ui:build` | 成功；产物存在 |
-| 2 | 部署包导航 | 默认只有 **Show、卡片**（除非改了 `VITE_UI_PAGES`） |
+| 2 | 部署包导航 | 默认只有 **Show、拉取**（OI 走模块切换；除非改了 `VITE_UI_PAGES`） |
 | 3 | 本地 `curl :3851/api/config` | `ok: true` |
 | 4 | 服务器经 frp `curl :13851/api/config` | `ok: true` |
 | 5 | `https://域名/api/config` | `ok: true` |
@@ -435,7 +435,7 @@ curl -s https://ui.example.com/api/config
 | 变量 | 默认（生产） | 说明 |
 |------|--------------|------|
 | `VITE_UI_MODE` | `deploy` | `local` / `deploy` |
-| `VITE_UI_PAGES` | `show,cards` | deploy 白名单 |
+| `VITE_UI_PAGES` | `show,fetch,oi` | deploy 白名单 |
 | `COLLECTOR_UI_PORT` | `3851` | 本地后台端口 |
 | frp `local_port` | `3851` | 对本地 collect:ui |
 | frp `remote_port` | 如 `13851` | 服务器侧，供 Nginx `proxy_pass` |

@@ -18,17 +18,23 @@ const EXPECTED_PACKAGE_ROOT = OI_DIR;
  * @param {number} timeoutMs
  */
 async function probeOi(base, timeoutMs = 3000) {
-  const url = `${String(base).replace(/\/$/, "")}/api/snapshot`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, { signal: ctrl.signal });
-    return r.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
+  const root = String(base).replace(/\/$/, "");
+  // 勿探 /api/snapshot（常 >2MB，超时会截断并干扰 OI）
+  for (const path of ["/api/health", "/api/patterns"]) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(`${root}${path}`, { signal: ctrl.signal });
+      if (!r.ok) continue;
+      const text = await r.text();
+      if (text.trim()) return true;
+    } catch {
+      /* try next */
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return false;
 }
 
 /**

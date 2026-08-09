@@ -21,7 +21,7 @@ from oi_mornitor.config import (
     STRATEGY_VEGAS_FILTER,
     STRATEGY_VEGAS_PERIODS,
 )
-from oi_mornitor.strategy.indicators import detect_inverted_hammer, detect_shooting_star
+from oi_mornitor.strategy.candle_signals import collect_candle_signal_markers
 
 STATUS_SEARCHING = "SEARCHING_TOP"
 STATUS_LH = "STAGE_1_LH_DETECTED"
@@ -291,9 +291,11 @@ def build_pattern_chart_payload(
     klines: list[list],
     *,
     state: dict[str, Any] | None = None,
+    oi_by_time: dict[int, float] | None = None,
 ) -> dict[str, Any]:
     """
     构建 K 线 + 形态拐点标注数据，供前端图表渲染。
+    oi_by_time: open_time 秒 → 持仓量，用于 (oi异动) 标注。
     """
     state = state or {}
     df = klines_to_df(klines)
@@ -309,6 +311,11 @@ def build_pattern_chart_payload(
         }
 
     df = enrich_indicators(df)
+    if oi_by_time:
+        df["oi"] = [
+            oi_by_time.get(_ts_sec(int(ot)), float("nan"))
+            for ot in df["open_time"].tolist()
+        ]
     candles: list[dict[str, float | int]] = []
     bb_upper: list[dict[str, float | int]] = []
     bb_mid: list[dict[str, float | int]] = []
@@ -456,33 +463,8 @@ def build_pattern_chart_payload(
             "kind": "bb_wick",
         })
 
-    # 全量扫描射击之星 / 倒锤子（对齐 BB-Wicks Pine）
-    for _, crow in df.iterrows():
-        if pd.isna(crow.get("bb_basis")):
-            continue
-        below_mid = float(crow["close"]) < float(crow["bb_basis"])
-        shoot = detect_shooting_star(crow)
-        if shoot:
-            markers.append({
-                "time": _ts_sec(int(crow["open_time"])),
-                "position": "aboveBar",
-                "color": "#ff4081",
-                "shape": "arrowDown",
-                "text": "射击之星",
-                "price": float(crow["high"]),
-                "kind": "shooting_star",
-            })
-            continue
-        if below_mid and detect_inverted_hammer(crow):
-            markers.append({
-                "time": _ts_sec(int(crow["open_time"])),
-                "position": "belowBar",
-                "color": "#00bcd4",
-                "shape": "arrowUp",
-                "text": "倒锤子",
-                "price": float(crow["low"]),
-                "kind": "inverted_hammer",
-            })
+    # 全量扫描：射击之星 / 倒锤子 / 连续插针 + V 前缀 + oi异动（对齐 BB-Wicks Pine）
+    markers.extend(collect_candle_signal_markers(df))
 
     price_lines: list[dict[str, Any]] = []
     line_defs = [

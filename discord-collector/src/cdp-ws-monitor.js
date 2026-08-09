@@ -21,6 +21,95 @@ function shortenUrl(u, max = 180) {
   return s.length <= max ? s : `${s.slice(0, max)}…`;
 }
 
+/**
+ * 注入 Discord 页：伪造始终前台，避免标签页后台时 Gateway 被节流。
+ * 在文档脚本阶段执行（导航后仍生效）。
+ */
+const DISCORD_VISIBILITY_KEEPALIVE_SOURCE = `(() => {
+  if (globalThis.__dcVisibilityKeepalive) return;
+  globalThis.__dcVisibilityKeepalive = true;
+  const patch = (target) => {
+    try {
+      Object.defineProperty(target, "hidden", {
+        configurable: true,
+        get: () => false,
+      });
+    } catch (_) {}
+    try {
+      Object.defineProperty(target, "visibilityState", {
+        configurable: true,
+        get: () => "visible",
+      });
+    } catch (_) {}
+    try {
+      Object.defineProperty(target, "webkitHidden", {
+        configurable: true,
+        get: () => false,
+      });
+    } catch (_) {}
+  };
+  try {
+    patch(Document.prototype);
+  } catch (_) {}
+  try {
+    if (typeof document !== "undefined") patch(document);
+  } catch (_) {}
+  try {
+    if (typeof document !== "undefined") {
+      document.hasFocus = () => true;
+    }
+  } catch (_) {}
+  try {
+    window.addEventListener(
+      "visibilitychange",
+      (e) => {
+        try {
+          e.stopImmediatePropagation();
+        } catch (_) {}
+      },
+      true
+    );
+  } catch (_) {}
+  try {
+    document.dispatchEvent(new Event("visibilitychange"));
+  } catch (_) {}
+})();`;
+
+/**
+ * @param {import('playwright').CDPSession} cdp
+ * @param {Logger} log
+ * @param {string} [pageUrl]
+ */
+async function injectDiscordVisibilityKeepalive(cdp, log, pageUrl = "") {
+  try {
+    await cdp.send("Page.enable");
+  } catch {
+    /* already enabled */
+  }
+  try {
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: DISCORD_VISIBILITY_KEEPALIVE_SOURCE,
+    });
+  } catch (e) {
+    log.warn(
+      `CDP Visibility 保活(注册文档脚本)失败: ${/** @type {Error} */ (e).message}`
+    );
+  }
+  try {
+    await cdp.send("Runtime.evaluate", {
+      expression: DISCORD_VISIBILITY_KEEPALIVE_SOURCE,
+      returnByValue: true,
+    });
+    log.info(
+      `CDP Visibility 保活已注入: ${shortenUrl(pageUrl || "(page)", 120)}`
+    );
+  } catch (e) {
+    log.warn(
+      `CDP Visibility 保活(立即执行)失败: ${/** @type {Error} */ (e).message}`
+    );
+  }
+}
+
 const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -107,7 +196,7 @@ async function resolveCdpEndpoint(connectUrl, log) {
  * @param {string} g
  * @param {string} c
  */
-function discordChannelUrl(g, c) {
+export function discordChannelUrl(g, c) {
   return `https://discord.com/channels/${encodeURIComponent(g)}/${encodeURIComponent(c)}`;
 }
 
@@ -115,7 +204,7 @@ function discordChannelUrl(g, c) {
  * @param {string} url
  * @returns {{ guildId: string, channelId: string } | null}
  */
-function parseDiscordChannelUrl(url) {
+export function parseDiscordChannelUrl(url) {
   const m = String(url ?? "").match(
     /discord\.com\/channels\/([^/?#]+)\/([^/?#]+)/i
   );
@@ -835,6 +924,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *   cdpConnectUrl?: string,
  *   pageReloadIntervalMs?: number,
  *   cdpAutoGoto?: boolean,
+ *   cdpVisibilityKeepalive?: boolean,
  *   networkTrace?: boolean,
  *   wsFrameTrace?: boolean,
  *   diagnosticSink?: (evt: Record<string, unknown>) => void,
@@ -863,6 +953,15 @@ export async function startCdpWebSocketMonitor(opts, log) {
     attached.add(page);
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Network.enable");
+    if (opts.cdpVisibilityKeepalive !== false) {
+      let pageUrl = "";
+      try {
+        pageUrl = page.url();
+      } catch {
+        pageUrl = "";
+      }
+      await injectDiscordVisibilityKeepalive(cdp, log, pageUrl);
+    }
     const wsMeta = {
       urlByRequestId: new Map(),
       zlibHub: createDiscordGatewayZlibHub(),
@@ -1324,6 +1423,12 @@ export async function startCdpWebSocketMonitor(opts, log) {
         mountedCount: mounted.length,
         ...trace,
       });
+      if (isAlreadyOnDiscordChannel(pickedPageUrl, targetUrl)) {
+        log.info(
+          `[discord-channel] 已在目标频道，跳过 goto${clientTraceId ? ` trace=${clientTraceId}` : ""}`
+        );
+        return { ok: true, skipped: true, reason: "already_on_channel", finalUrl: pickedPageUrl };
+      }
       try {
         log.info(`[discord-channel] page.goto 开始 …${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
         opts.diagnosticSink?.({

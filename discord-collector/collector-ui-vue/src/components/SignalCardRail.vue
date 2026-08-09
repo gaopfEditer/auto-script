@@ -94,6 +94,14 @@ async function loadConfig() {
   styles.value = cfg.styles ?? {};
 }
 
+/** 默认只拉「昨天 0 点～现在」（含当天与昨天） */
+function railDefaultFromIso() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - 1);
+  return start.toISOString();
+}
+
 async function reload() {
   if (!props.channelId) {
     cards.value = [];
@@ -103,7 +111,10 @@ async function reload() {
   loading.value = true;
   error.value = "";
   try {
-    cards.value = await fetchSignalCards(props.channelId);
+    cards.value = await fetchSignalCards(props.channelId, {
+      from: railDefaultFromIso(),
+      limit: 100,
+    });
     for (const c of cards.value) {
       if (!activeStyleByCard.value[c.id]) {
         const first = Object.keys(c.cardsByStyle ?? {})[0];

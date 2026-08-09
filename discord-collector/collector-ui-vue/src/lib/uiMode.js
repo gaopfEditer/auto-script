@@ -9,7 +9,7 @@
  *
  * 环境变量（discord-collector/.env*）：
  *   VITE_UI_MODE=local|deploy
- *   VITE_UI_PAGES=show,cards,oi       # deploy 模式白名单（路径名，逗号分隔）
+ *   VITE_UI_PAGES=show,fetch,oi       # deploy 模式白名单（路径名，逗号分隔）
  *   VITE_OI_EMBED_URL=http://127.0.0.1:5173  # 可选，oi:dev 时指向 Vite
  *
  * 未设置 VITE_UI_MODE 时：开发 → local，生产构建 → deploy
@@ -37,7 +37,7 @@ export const UI_MODULES = [
   { id: "oi", label: "OI Monitor", to: "/oi" },
 ];
 
-const DEFAULT_DEPLOY_PAGES = ["show", "cards", "oi"];
+const DEFAULT_DEPLOY_PAGES = ["show", "fetch", "oi"];
 
 /**
  * @returns {"local" | "deploy"}
@@ -102,7 +102,8 @@ export function isOiModuleEnabled() {
 export function getDefaultDeployPath() {
   const enabled = getEnabledPageNames();
   if (enabled.has("show")) return "/show";
-  if (enabled.has("cards")) return "/cards";
+  if (enabled.has("fetch")) return "/fetch";
+  if (enabled.has("oi")) return "/oi";
   const first = ALL_UI_PAGES.find(
     (p) => enabled.has(p.name) && p.path !== "/" && (p.module ?? "discord") === "discord"
   );

@@ -1,5 +1,5 @@
 import type { PatternCandle, PatternChartData, PatternState } from "../types";
-import { fetchBinanceFuturesKlines } from "./binanceKlines";
+import { fetchBinanceFuturesKlines, fetchBinanceOpenInterestHist } from "./binanceKlines";
 import { buildChartFromCandles } from "./chartIndicators";
 
 export const CHART_TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h", "1d"] as const;
@@ -161,13 +161,22 @@ async function fetchPatternChartFromClient(
   }
 
   let meta: ChartMetaPayload = {};
+  let oiByTime = new Map<number, number>();
   if (!partial) {
-    meta = await fetchChartMeta(symbol, interval);
+    const [metaRes, oiRes] = await Promise.all([
+      fetchChartMeta(symbol, interval),
+      fetchBinanceOpenInterestHist(symbol, interval, {
+        limit: opts?.limit ?? CHART_DEFAULT_LIMIT,
+      }),
+    ]);
+    meta = metaRes;
+    oiByTime = oiRes;
   }
 
   const built = buildChartFromCandles(
     candles,
     meta.state as unknown as Record<string, unknown> | undefined,
+    { oiByTime },
   );
   const sandboxMarkers = meta.sandbox_markers || [];
   const markers = [...built.markers, ...sandboxMarkers];

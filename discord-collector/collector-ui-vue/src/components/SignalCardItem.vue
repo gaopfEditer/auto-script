@@ -16,6 +16,8 @@ const props = defineProps({
   card: { type: Object, required: true },
   clickable: { type: Boolean, default: false },
   showChannel: { type: Boolean, default: false },
+  /** 隐藏频道/KOL 名称（显示 *****） */
+  hideKolName: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["click"]);
@@ -135,6 +137,16 @@ const active = computed(() => isActive(props.card));
 const evaluated = computed(() => cardHasEvaluation(props.card));
 const profitBadge = computed(() => cardEvalProfitBadge(props.card));
 const sourceLink = computed(() => resolveCardSourceLink(props.card));
+const channelLabel = computed(() => {
+  const name = String(props.card.channelName ?? "").trim();
+  if (!name) return "";
+  return props.hideKolName ? "*****" : name;
+});
+const sourceDisplayName = computed(() => {
+  const name = sourceLink.value?.displayName || "";
+  if (!name) return "";
+  return props.hideKolName ? "*****" : name;
+});
 const exec = computed(() =>
   cardExecution(/** @type {import("../lib/discordSignalApi.js").SignalCard} */ (props.card))
 );
@@ -167,18 +179,18 @@ function onClick() {
         <span class="signal-card-status" :class="active ? 'on' : 'off'">
           {{ active ? "有效" : "已失效" }}
         </span>
-        <span v-if="showChannel && card.channelName" class="signal-card-channel-tag">
-          {{ card.channelName }}
+        <span v-if="showChannel && channelLabel" class="signal-card-channel-tag">
+          {{ channelLabel }}
         </span>
         <RouterLink
           v-if="sourceLink"
           class="signal-card-source-tag"
           :class="sourceLink.kind"
           :to="sourceLink.to"
-          :title="`打开来源：${sourceLink.title}`"
+          :title="hideKolName ? '打开来源' : `打开来源：${sourceLink.title}`"
           @click.stop
         >
-          {{ sourceLink.label }} · {{ sourceLink.displayName }}
+          {{ sourceLink.label }} · {{ sourceDisplayName }}
         </RouterLink>
         <span v-if="card.isManual" class="signal-card-manual-tag">手动</span>
         <span

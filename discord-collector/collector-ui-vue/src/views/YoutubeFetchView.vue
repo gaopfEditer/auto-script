@@ -29,12 +29,41 @@ import {
 const STORAGE_KEY = "yt-fetch-submitted-urls";
 const PASTE_STORAGE_KEY = "yt-fetch-paste-draft";
 const MODE_STORAGE_KEY = "yt-fetch-mode";
+const HIDE_NAME_KEY = "yt-fetch-hide-names";
 
 /** @typedef {'youtube' | 'paste'} FetchMode */
 
 const route = useRoute();
 
 const mode = ref(/** @type {FetchMode} */ ("youtube"));
+const hideNames = ref(false);
+try {
+  hideNames.value = localStorage.getItem(HIDE_NAME_KEY) === "1";
+} catch {
+  /* ignore */
+}
+
+function toggleHideNames() {
+  hideNames.value = !hideNames.value;
+  try {
+    localStorage.setItem(HIDE_NAME_KEY, hideNames.value ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** @param {unknown} name */
+function displayName(name) {
+  const s = String(name ?? "").trim();
+  if (!s) return "";
+  if (!hideNames.value) return s;
+  // yanchi20260803 / yanchi20260803.txt → *****20260803[.txt]
+  const m = s.match(/^(.*?)[-_]?(\d{8})(\.[^.]+)?$/);
+  if (m && m[1]) {
+    return `*****${m[2]}${m[3] || ""}`;
+  }
+  return "*****";
+}
 const urlText = ref("");
 const pasteText = ref("");
 const lang = ref("");
@@ -659,6 +688,15 @@ function onCoinEditEscape(e) {
         </button>
       </nav>
       <div class="topbar-actions">
+        <button
+          type="button"
+          class="hide-name-btn"
+          :class="{ on: hideNames }"
+          :title="hideNames ? '显示文件名 / 标题' : '隐藏文件名 / 标题'"
+          @click="toggleHideNames"
+        >
+          {{ hideNames ? "显示名称" : "隐藏名称" }}
+        </button>
         <RouterLink v-if="mode === 'youtube'" class="link-archives" to="/archives">查看已归档文稿 →</RouterLink>
       </div>
     </header>
@@ -751,7 +789,7 @@ https://youtu.be/..."
                 查看文稿
               </RouterLink>
             </div>
-            <div class="job-title">{{ job.title || job.videoId }}</div>
+            <div class="job-title">{{ displayName(job.title) || job.videoId }}</div>
             <div class="job-url" :title="String(job.url)">{{ job.url }}</div>
             <div v-if="job.error" class="job-err">{{ job.error }}</div>
           </li>
@@ -771,7 +809,7 @@ https://youtu.be/..."
           <span class="paste-auto-hint"> · 新文件自动解析</span>
         </p>
         <p v-if="pasteScanRunning" class="scan-hint">
-          正在解析 <strong>{{ pasteScan.currentFile || "…" }}</strong>
+          正在解析 <strong>{{ displayName(pasteScan.currentFile) || "…" }}</strong>
         </p>
         <div class="actions">
           <button type="button" class="btn primary" :disabled="scanningPaste || pasteScanRunning" @click="runPasteScan">
@@ -792,7 +830,7 @@ https://youtu.be/..."
               <span class="badge" :class="statusClass(file.status)">{{ pasteFileStatusLabel(file.status) }}</span>
               <span v-if="file.coinActionCount" class="pf-count">{{ file.coinActionCount }} 币种</span>
             </div>
-            <div class="pf-name">{{ file.name }}</div>
+            <div class="pf-name">{{ displayName(file.name) }}</div>
             <div v-if="file.title" class="pf-title">{{ file.title }}</div>
           </li>
         </ul>
@@ -812,7 +850,7 @@ https://youtu.be/..."
 
       <main class="panel paste-detail-panel">
         <div class="panel-head">
-          <h2>{{ selectedPasteFile || "解析预览" }}</h2>
+          <h2>{{ selectedPasteFile ? displayName(selectedPasteFile) : "解析预览" }}</h2>
           <div v-if="selectedPasteFile" class="detail-actions">
             <button type="button" class="btn" :disabled="parsing" @click="forceParseFile(selectedPasteFile)">
               重新解析
@@ -899,7 +937,7 @@ https://youtu.be/..."
               <p v-else class="muted">未识别到币种操作。</p>
 
               <div v-if="previewCardFields" class="embed-preview">
-                <h3>{{ String(previewCardFields.title ?? pastePreview.title) }}</h3>
+                <h3>{{ displayName(previewCardFields.title ?? pastePreview.title) || "—" }}</h3>
                 <p v-if="previewCardFields.description" class="embed-desc">{{ previewCardFields.description }}</p>
                 <div v-if="Array.isArray(previewCardFields.fields)" class="embed-fields">
                   <div
@@ -1005,6 +1043,29 @@ https://youtu.be/..."
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-shrink: 0;
+}
+.hide-name-btn {
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0;
+  border: 1px solid #3f4147;
+  background: #2b2d31;
+  color: #dbdee1;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.hide-name-btn:hover {
+  border-color: #5865f2;
+}
+.hide-name-btn.on {
+  background: rgba(88, 101, 242, 0.22);
+  border-color: rgba(88, 101, 242, 0.55);
+  color: #c7ceff;
 }
 .mode-body {
   flex: 1;

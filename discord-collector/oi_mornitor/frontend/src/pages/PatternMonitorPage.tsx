@@ -6,6 +6,7 @@ import { MercuHeader } from "../components/MercuHeader";
 import { PatternChartPanel } from "../components/PatternChartPanel";
 import { PatternToastStack } from "../components/PatternToastStack";
 import { SandboxToastStack } from "../components/SandboxToastStack";
+import { CardLifecyclePanel } from "../components/CardLifecyclePanel";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useSandboxTradeHistory } from "../hooks/useSandboxTradeHistory";
 import { fmtMetaPrice, fmtTs } from "../utils/format";
@@ -128,6 +129,27 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const [historyRange, setHistoryRange] = useState<SandboxHistoryRange>("7d");
   const [sandboxLogicFilter, setSandboxLogicFilter] = useState<SandboxLogicFilter>("all");
   const [sandboxVegasFilter, setSandboxVegasFilter] = useState<SandboxVegasFilter>("all");
+  const [cardLifeOpen, setCardLifeOpen] = useState(false);
+  const [cardPriceBusy, setCardPriceBusy] = useState(false);
+  const [hideSandboxAuthor, setHideSandboxAuthor] = useState(() => {
+    try {
+      return localStorage.getItem("oi_sandbox_hide_author") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleHideSandboxAuthor = useCallback(() => {
+    setHideSandboxAuthor((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("oi_sandbox_hide_author", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
   const sandboxIntervals = useMemo(() => {
     const raw = pattern?.sandbox_intervals;
     if (Array.isArray(raw) && raw.length) {
@@ -194,6 +216,30 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
       ["watching", "near", "ordered", "filled"].includes(o.status),
     );
   }, [cardOrders, sandboxLogicFilter]);
+
+  const refreshCardPrices = useCallback(async () => {
+    setCardPriceBusy(true);
+    setErr("");
+    try {
+      const res = await fetch("/api/sandbox/card-prices", { method: "POST" });
+      const data = await res.json();
+      if (!data.ok && data.error) {
+        setErr(data.error || "卡片市价刷新失败");
+        return;
+      }
+      patchPattern({
+        sandbox_card_orders: data.sandbox_card_orders,
+        sandbox_card_price_ts: data.sandbox_card_price_ts ?? data.ts,
+        sandbox_positions: data.sandbox_positions,
+        sandbox_stats: data.sandbox_stats,
+        sandbox_trade_history: data.sandbox_trade_history,
+      } as Partial<PatternPayload>);
+    } catch {
+      setErr("卡片市价刷新网络错误");
+    } finally {
+      setCardPriceBusy(false);
+    }
+  }, [patchPattern]);
 
   const reshuffleSandbox = useCallback(async () => {
     setBusy(true);
@@ -741,9 +787,18 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                 <div className="pattern-tab-panel sandbox-section">
                     <div className="sandbox-head">
                       <h3>沙盒纸面交易 · {sandboxStats?.day ?? "今日"}</h3>
-                      <button type="button" className="pattern-random-btn" onClick={reshuffleSandbox} disabled={busy}>
-                        重抽今日 12 币
-                      </button>
+                      <div className="sandbox-head-actions">
+                        <button
+                          type="button"
+                          className="pattern-random-btn"
+                          onClick={() => setCardLifeOpen(true)}
+                        >
+                          卡片看板
+                        </button>
+                        <button type="button" className="pattern-random-btn" onClick={reshuffleSandbox} disabled={busy}>
+                          重抽今日 12 币
+                        </button>
+                      </div>
                     </div>
                     <div className="sandbox-manual">
                       <span className="sandbox-manual-label">手动市价进场</span>
@@ -832,16 +887,26 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                         </p>
                       </article>
                     </div>
-                    <p className="pattern-hint-main">
-                      日池 {sandboxPool.length} · 周期 {sandboxIntervals.join(" + ")} · 并发≤
-                      {sandboxMaxConcurrent} · 余额 {sandboxStats?.balance?.toFixed(2) ?? "—"}U · 胜率{" "}
-                      {sandboxStats ? `${(sandboxStats.win_rate * 100).toFixed(0)}%` : "—"} · 今日盈亏{" "}
-                      {sandboxStats
-                        ? `${sandboxStats.pnl_usd >= 0 ? "+" : ""}${sandboxStats.pnl_usd.toFixed(2)}U`
-                        : "—"}
-                      {" · "}
-                      历史本地近 {SANDBOX_HISTORY_RETAIN_DAYS} 天
-                    </p>
+                    <div className="pattern-hint-row">
+                      <p className="pattern-hint-main">
+                        日池 {sandboxPool.length} · 周期 {sandboxIntervals.join(" + ")} · 并发≤
+                        {sandboxMaxConcurrent} · 余额 {sandboxStats?.balance?.toFixed(2) ?? "—"}U · 胜率{" "}
+                        {sandboxStats ? `${(sandboxStats.win_rate * 100).toFixed(0)}%` : "—"} · 今日盈亏{" "}
+                        {sandboxStats
+                          ? `${sandboxStats.pnl_usd >= 0 ? "+" : ""}${sandboxStats.pnl_usd.toFixed(2)}U`
+                          : "—"}
+                        {" · "}
+                        历史本地近 {SANDBOX_HISTORY_RETAIN_DAYS} 天
+                      </p>
+                      <button
+                        type="button"
+                        className={`sandbox-hide-author-btn${hideSandboxAuthor ? " on" : ""}`}
+                        title={hideSandboxAuthor ? "显示作者列" : "隐藏作者列"}
+                        onClick={toggleHideSandboxAuthor}
+                      >
+                        {hideSandboxAuthor ? "显示作者" : "隐藏作者"}
+                      </button>
+                    </div>
                     <div className="sandbox-history-filters">
                       {(
                         [
@@ -977,13 +1042,14 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                           <tr>
                             <th>卡片ID</th>
                             <th>发单时间</th>
-                            <th>作者</th>
+                            {!hideSandboxAuthor ? <th>作者</th> : null}
                             <th>币种</th>
                             <th>状态</th>
                             <th>方向</th>
                             <th>入场</th>
                             <th>止盈</th>
                             <th>止损</th>
+                            <th>现价</th>
                             <th>杠杆</th>
                           </tr>
                         </thead>
@@ -998,7 +1064,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                             >
                               <td>
                                 {o.card_id}
-                                {author ? (
+                                {!hideSandboxAuthor && author ? (
                                   <span className="sandbox-pnl-sub">{author}</span>
                                 ) : null}
                               </td>
@@ -1007,10 +1073,11 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                                   o.signal_at || o.created_at || 0
                                 )}
                               </td>
-                              <td>{author || "—"}</td>
+                              {!hideSandboxAuthor ? <td>{author || "—"}</td> : null}
                               <td>${displaySymbol(o.symbol)}</td>
                               <td>
-                                {o.status === "watching"
+                                {o.phase ||
+                                  (o.status === "watching"
                                   ? "监听"
                                   : o.status === "near"
                                     ? "近场"
@@ -1018,7 +1085,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                                       ? "挂单"
                                       : o.status === "filled"
                                         ? "已入场"
-                                        : o.status}
+                                        : o.status)}
                               </td>
                               <td>{o.side}</td>
                               <td className="sandbox-tf">
@@ -1036,6 +1103,15 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                                   : "—"}
                               </td>
                               <td>{o.sl != null ? fmtMetaPrice(o.sl) : "—"}</td>
+                              <td>
+                                {o.last_price != null ? fmtMetaPrice(o.last_price) : "—"}
+                                {o.dist_next_tp_pct != null ? (
+                                  <span className="sandbox-pnl-sub">
+                                    TP{o.next_tp} {o.dist_next_tp_pct >= 0 ? "+" : ""}
+                                    {o.dist_next_tp_pct.toFixed(2)}%
+                                  </span>
+                                ) : null}
+                              </td>
                               <td>{o.leverage != null ? `${o.leverage}x` : "—"}</td>
                             </tr>
                             );
@@ -1049,7 +1125,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                         <thead>
                           <tr>
                             <th>币种</th>
-                            <th>作者</th>
+                            {!hideSandboxAuthor ? <th>作者</th> : null}
                             <th>来源</th>
                             <th>周期</th>
                             <th>模块</th>
@@ -1070,6 +1146,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                               onClick={() => setSelectedSymbol(p.symbol)}
                             >
                               <td>${displaySymbol(p.symbol)}</td>
+                              {!hideSandboxAuthor ? (
                               <td>
                                 {resolveSandboxCardAuthor({
                                   author_name: p.author_name,
@@ -1078,6 +1155,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                                   source_label: p.card_source || p.source_label,
                                 }) || "—"}
                               </td>
+                              ) : null}
                               <td>
                                 <span
                                   className={`sandbox-src${
@@ -1201,7 +1279,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                         <tr>
                           <th>日期</th>
                           <th>币种</th>
-                          <th>作者</th>
+                          {!hideSandboxAuthor ? <th>作者</th> : null}
                           <th>来源</th>
                           <th>周期</th>
                           <th>逻辑</th>
@@ -1219,7 +1297,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                       <tbody>
                         {filteredHistory.length === 0 ? (
                           <tr>
-                            <td colSpan={15} className="pattern-empty">
+                            <td colSpan={hideSandboxAuthor ? 14 : 15} className="pattern-empty">
                               该时间范围内暂无平仓记录（本地保留近 {SANDBOX_HISTORY_RETAIN_DAYS} 天）
                             </td>
                           </tr>
@@ -1263,7 +1341,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                             >
                               <td>{t.day.slice(5)}</td>
                               <td>${displaySymbol(t.symbol)}</td>
-                              <td>{author}</td>
+                              {!hideSandboxAuthor ? <td>{author}</td> : null}
                               <td>
                                 <span
                                   className={`sandbox-src${
@@ -1331,6 +1409,20 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               )}
         </main>
       </div>
+
+      <CardLifecyclePanel
+        open={cardLifeOpen}
+        orders={cardOrders}
+        priceTs={pattern?.sandbox_card_price_ts}
+        onClose={() => setCardLifeOpen(false)}
+        onSelectSymbol={(sym) => {
+          setSelectedSymbol(sym);
+          setMainTab("pattern");
+          setCardLifeOpen(false);
+        }}
+        onRefreshPrices={() => void refreshCardPrices()}
+        refreshing={cardPriceBusy}
+      />
 
       <PatternToastStack
         alerts={alerts}

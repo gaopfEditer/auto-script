@@ -1,10 +1,14 @@
 <script setup>
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import NewCardToastStack from "./components/NewCardToastStack.vue";
 import "./composables/useNewCardNotifications.js";
 import { useDebugMode } from "./composables/useDebugMode.js";
-import { ensureCollectorSocket, useCollectorSocket } from "./composables/useCollectorSocket.js";
+import {
+  COLLECTOR_WS_REFRESH_EVENT,
+  ensureCollectorSocket,
+  useCollectorSocket,
+} from "./composables/useCollectorSocket.js";
 import {
   getDefaultDeployPath,
   getModuleFromPath,
@@ -21,6 +25,18 @@ const { debugMode, setDebugMode } = useDebugMode();
 
 ensureCollectorSocket();
 const { status: wsStatus, error: wsError, reconnect: reconnectWs } = useCollectorSocket();
+
+/** 静默刷新：重挂载路由视图，避免 location.reload */
+const viewEpoch = ref(0);
+function onWsSilentRefresh() {
+  viewEpoch.value += 1;
+}
+onMounted(() => {
+  window.addEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
+});
+onUnmounted(() => {
+  window.removeEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
+});
 
 const uiMode = getUiMode();
 const navPages = getNavPages();
@@ -96,7 +112,7 @@ async function toggleDebug() {
       </button>
     </header>
     <main class="main-outlet">
-      <RouterView />
+      <RouterView :key="viewEpoch" />
     </main>
     <NewCardToastStack v-if="!isOi" />
   </div>

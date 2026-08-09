@@ -1,5 +1,5 @@
 /**
- * 前端本地计算 BB / Vegas / MACD / 简易形态标记（对齐后端 pattern_detector 主要字段）。
+ * 前端本地计算 BB / Vegas / MACD / 形态标记（对齐后端 pattern_detector 主要字段）。
  * K 线由浏览器直连交易所，指标不再依赖后端代算。
  */
 import type {
@@ -8,6 +8,7 @@ import type {
   PatternChartMarker,
   PatternPriceLine,
 } from "../types";
+import { buildCandleSignalMarkers } from "./candleSignals";
 
 const BB_LEN = 20;
 const BB_MULT = 2;
@@ -65,27 +66,10 @@ function isPivotExtreme(
   return true;
 }
 
-function detectShootingStar(c: PatternCandle): boolean {
-  const body = Math.abs(c.close - c.open);
-  const range = c.high - c.low;
-  if (range <= 0) return false;
-  const upper = c.high - Math.max(c.open, c.close);
-  const lower = Math.min(c.open, c.close) - c.low;
-  return upper >= body * 2 && upper >= range * 0.5 && lower <= body * 0.5;
-}
-
-function detectInvertedHammer(c: PatternCandle): boolean {
-  const body = Math.abs(c.close - c.open);
-  const range = c.high - c.low;
-  if (range <= 0) return false;
-  const upper = c.high - Math.max(c.open, c.close);
-  const lower = Math.min(c.open, c.close) - c.low;
-  return upper >= body * 2 && upper >= range * 0.5 && lower <= body;
-}
-
 export function buildChartFromCandles(
   candles: PatternCandle[],
   state?: Record<string, unknown> | null,
+  opts?: { oiByTime?: Map<number, number> },
 ): {
   bb: { upper: Pt[]; mid: Pt[]; lower: Pt[] };
   vegas: Record<"filter" | "a1" | "a2" | "b1" | "b2", Pt[]>;
@@ -220,33 +204,21 @@ export function buildChartFromCandles(
     }
   }
 
-  const bbByTime = new Map(bb.mid.map((p) => [p.time, p.value]));
-  for (const c of candles) {
-    const mid = bbByTime.get(c.time);
-    if (mid == null) continue;
-    if (detectShootingStar(c) && c.close < mid) {
-      markers.push({
-        time: c.time,
-        position: "aboveBar",
-        color: "#ff4081",
-        shape: "arrowDown",
-        text: "射击之星",
-        price: c.high,
-        kind: "shooting_star",
-      });
-    }
-    if (detectInvertedHammer(c) && c.close > mid) {
-      markers.push({
-        time: c.time,
-        position: "belowBar",
-        color: "#00bcd4",
-        shape: "arrowUp",
-        text: "倒锤子",
-        price: c.low,
-        kind: "inverted_hammer",
-      });
-    }
-  }
+  const bbUpperByTime = new Map(bb.upper.map((p) => [p.time, p.value]));
+  const bbMidByTime = new Map(bb.mid.map((p) => [p.time, p.value]));
+  const bbLowerByTime = new Map(bb.lower.map((p) => [p.time, p.value]));
+  markers.push(
+    ...buildCandleSignalMarkers(candles, {
+      bbUpper: bbUpperByTime,
+      bbMid: bbMidByTime,
+      bbLower: bbLowerByTime,
+      vegasA1: new Map(vegas.a1.map((p) => [p.time, p.value])),
+      vegasA2: new Map(vegas.a2.map((p) => [p.time, p.value])),
+      vegasB1: new Map(vegas.b1.map((p) => [p.time, p.value])),
+      vegasB2: new Map(vegas.b2.map((p) => [p.time, p.value])),
+      oiByTime: opts?.oiByTime,
+    }),
+  );
 
   const price_lines: PatternPriceLine[] = [];
   const lineSpecs: { kind: string; price: number; color: string; title: string }[] = [

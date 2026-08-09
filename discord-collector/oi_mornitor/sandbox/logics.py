@@ -870,6 +870,7 @@ EXIT_REASON_LABELS: dict[str, str] = {
     "card_invalid": "卡片数据异常作废",
     "manual": "手动平仓",
     "manual_partial": "手动减仓",
+    "max_hold": "持仓超期强平",
     "absurd_exit": "离谱价差拒记",
 }
 

@@ -314,8 +314,29 @@ export interface SandboxCardOrder {
   title?: string;
   source_label?: string;
   last_price?: number;
+  last_price_ts?: number;
   near_pct?: number;
   fill_price?: number;
+  /** 生命周期阶段文案 */
+  phase?: string;
+  phase_created?: boolean;
+  phase_watching?: boolean;
+  phase_entered?: boolean;
+  phase_exited?: boolean;
+  phase_sl?: boolean;
+  phase_tp?: boolean;
+  dist_entry_pct?: number;
+  dist_zone_pct?: number;
+  dist_sl_pct?: number;
+  dist_next_tp_pct?: number;
+  next_tp?: number;
+  tp_distances?: Array<{ tp: number; price: number; dist_pct: number; hit: boolean }>;
+  exit_code?: string;
+  exit_label?: string;
+  exit_price?: number;
+  outcome?: string;
+  closed_at?: number;
+  reject_reason?: string;
 }
 
 export interface PatternPayload {
@@ -345,6 +366,7 @@ export interface PatternPayload {
   sandbox_stats?: SandboxStats;
   sandbox_trade_history?: SandboxTrade[];
   sandbox_scan_ts?: number;
+  sandbox_card_price_ts?: number;
   card_near_entry_pct?: number;
 }
 

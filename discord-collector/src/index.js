@@ -51,6 +51,7 @@ async function collect() {
       cdpConnectUrl: config.cdpConnectUrl,
       pageReloadIntervalMs: config.pageReloadIntervalMs,
       cdpAutoGoto: config.cdpAutoGoto,
+      cdpVisibilityKeepalive: config.cdpVisibilityKeepalive,
       networkTrace: config.collectNetworkTrace,
       wsFrameTrace: config.collectWsFrameTrace,
       diagnosticSink: (evt) => {

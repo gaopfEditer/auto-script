@@ -242,6 +242,8 @@ SANDBOX_LEVERAGE_ALT = float(os.getenv("OI_SANDBOX_LEVERAGE_ALT", "30"))
 SANDBOX_FEE_PCT = float(os.getenv("OI_SANDBOX_FEE_PCT", "0.04"))
 # 平仓后至少隔 N 根已收盘 K 才允许同币再入场（防反复触发）
 SANDBOX_REENTRY_COOLDOWN_BARS = int(os.getenv("OI_SANDBOX_REENTRY_COOLDOWN_BARS", "8"))
+# 纸面持仓最长天数；超过则市价强平（默认 2 天）
+SANDBOX_MAX_HOLD_DAYS = float(os.getenv("OI_SANDBOX_MAX_HOLD_DAYS", "2"))
 SANDBOX_STATE_DB = _PKG_ROOT / "data" / "sandbox_state.db"
 
 # —— 卡片信号 WebSocket（外部卡片系统推送 → 沙盒评估）——
@@ -265,6 +267,8 @@ CARD_TP_MAX_DIST_PCT = float(os.getenv("OI_CARD_TP_MAX_DIST_PCT", "200"))
 # 任意出场：价格变动 |pnl_pct| 超过该值则拒记（兜底）
 SANDBOX_ABSURD_PNL_PCT = float(os.getenv("OI_SANDBOX_ABSURD_PNL_PCT", "80"))
 CARD_DEFAULT_LEVERAGE = float(os.getenv("OI_CARD_DEFAULT_LEVERAGE", "10"))
+# 卡片币种市价刷新间隔（秒）：写入 last_price，便于看板看距入场/TP/SL
+CARD_PRICE_REFRESH_SEC = float(os.getenv("OI_CARD_PRICE_REFRESH_SEC", "300"))
 # 已开仓 / 卡片挂单：独立快扫间隔（秒），尽快触价更新评价与交易逻辑
 OPEN_TRADE_SCAN_SEC = float(os.getenv("OI_OPEN_TRADE_SCAN_SEC", "15"))
 # 平仓后回写 discord-collector 自动评价

@@ -76,6 +76,46 @@ async def fetch_pattern_klines(
     return rows
 
 
+async def fetch_open_interest_hist(
+    session: aiohttp.ClientSession,
+    *,
+    base_url: str,
+    symbol: str,
+    interval: str,
+    limit: int = 500,
+) -> dict[int, float]:
+    """币安 openInterestHist → {open_time秒: sumOpenInterest}。失败返回空。"""
+    sym = symbol.strip().upper()
+    cap = min(max(limit, 1), 500)
+    url = (
+        f"{base_url.rstrip('/')}/futures/data/openInterestHist"
+        f"?symbol={sym}&period={interval}&limit={cap}"
+    )
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+            if resp.status != 200:
+                return {}
+            data = await resp.json()
+    except Exception as exc:
+        logger.debug("OI hist 拉取失败 %s %s: %s", sym, interval, exc)
+        return {}
+    if not isinstance(data, list):
+        return {}
+    out: dict[int, float] = {}
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ts = int(row.get("timestamp") or 0)
+            oi = float(row.get("sumOpenInterest") or 0)
+        except (TypeError, ValueError):
+            continue
+        if ts <= 0 or oi <= 0:
+            continue
+        out[ts // 1000] = oi
+    return out
+
+
 async def fetch_pattern_klines_batch(
     session: aiohttp.ClientSession,
     *,
@@ -1053,7 +1093,19 @@ class PatternMonitorEngine:
                 "message": row.message,
             }
 
-        chart = build_pattern_chart_payload(klines, state=state_dict)
+        oi_by_time: dict[int, float] = {}
+        if not partial:
+            oi_by_time = await fetch_open_interest_hist(
+                session,
+                base_url=base_url,
+                symbol=sym,
+                interval=tf,
+                limit=req_limit,
+            )
+
+        chart = build_pattern_chart_payload(
+            klines, state=state_dict, oi_by_time=oi_by_time or None
+        )
 
         if partial:
             return {

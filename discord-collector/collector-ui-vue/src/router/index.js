@@ -1,59 +1,111 @@
 import { createRouter, createWebHistory } from "vue-router";
-import {
-  getDefaultDeployPath,
-  getEnabledPageNames,
-  isDeployUi,
-  isPageEnabled,
-} from "../lib/uiMode.js";
 
-/** @type {import('vue-router').RouteRecordRaw[]} */
-const allRoutes = [
-  { path: "/", name: "home", component: () => import("../views/HomeView.vue") },
-  { path: "/show", name: "show", component: () => import("../views/ShowView.vue") },
-  { path: "/signals", name: "signals", component: () => import("../views/SignalOverviewView.vue") },
-  { path: "/debug", name: "debug", component: () => import("../views/DebugView.vue") },
-  { path: "/cards", name: "cards", component: () => import("../views/CardArchiveView.vue") },
-  { path: "/fetch", name: "fetch", component: () => import("../views/YoutubeFetchView.vue") },
-  { path: "/archives", name: "archives", component: () => import("../views/YoutubeArchivesView.vue") },
-  { path: "/trade", name: "trade", component: () => import("../views/BitgetTradeView.vue") },
-  { path: "/community", name: "community", component: () => import("../views/CommunityView.vue") },
-  { path: "/oi", name: "oi", component: () => import("../views/OiMonitorView.vue") },
-  { path: "/messages", redirect: "/show" },
-];
+/**
+ * 页面开关由 vite.config.js `define` 注入（构建期布尔字面量），
+ * 未启用页面的 `import()` 会被 Rollup DCE，不会打进产物。
+ * 白名单见 discord-collector/.env.production → VITE_UI_PAGES。
+ */
+/* global __UI_DEPLOY__, __UI_PAGE_SHOW__, __UI_PAGE_FETCH__, __UI_PAGE_OI__,
+   __UI_PAGE_CARDS__, __UI_PAGE_ARCHIVES__, __UI_PAGE_TRADE__, __UI_PAGE_COMMUNITY__,
+   __UI_PAGE_SIGNALS__, __UI_PAGE_DEBUG__, __UI_PAGE_HOME__ */
 
+const IS_DEPLOY = __UI_DEPLOY__;
+const DEFAULT_PATH = __UI_PAGE_SHOW__
+  ? "/show"
+  : __UI_PAGE_FETCH__
+    ? "/fetch"
+    : __UI_PAGE_OI__
+      ? "/oi"
+      : "/show";
+
+/**
+ * @returns {import('vue-router').RouteRecordRaw[]}
+ */
 function buildRoutes() {
-  const enabled = getEnabledPageNames();
-  const deploy = isDeployUi();
-  const defaultPath = getDefaultDeployPath();
-
   /** @type {import('vue-router').RouteRecordRaw[]} */
   const routes = [];
 
-  if (deploy) {
-    // 首页跳到部署默认页
-    routes.push({ path: "/", redirect: defaultPath });
+  if (IS_DEPLOY) {
+    routes.push({ path: "/", redirect: DEFAULT_PATH });
+  } else if (__UI_PAGE_HOME__) {
+    routes.push({
+      path: "/",
+      name: "home",
+      component: () => import("../views/HomeView.vue"),
+    });
   }
 
-  for (const r of allRoutes) {
-    if (r.redirect) {
-      if (deploy && r.path === "/messages") {
-        routes.push({ ...r, redirect: enabled.has("show") ? "/show" : defaultPath });
-      } else if (!deploy) {
-        routes.push(r);
-      }
-      continue;
-    }
-    const name = String(r.name ?? "");
-    if (!name || !isPageEnabled(name)) continue;
-    // deploy 下 "/" 已改 redirect，跳过原 home
-    if (deploy && r.path === "/") continue;
-    routes.push(r);
+  if (__UI_PAGE_SHOW__) {
+    routes.push({
+      path: "/show",
+      name: "show",
+      component: () => import("../views/ShowView.vue"),
+    });
+  }
+  if (__UI_PAGE_FETCH__) {
+    routes.push({
+      path: "/fetch",
+      name: "fetch",
+      component: () => import("../views/YoutubeFetchView.vue"),
+    });
+  }
+  if (__UI_PAGE_OI__) {
+    routes.push({
+      path: "/oi",
+      name: "oi",
+      component: () => import("../views/OiMonitorView.vue"),
+    });
+  }
+  if (__UI_PAGE_CARDS__) {
+    routes.push({
+      path: "/cards",
+      name: "cards",
+      component: () => import("../views/CardArchiveView.vue"),
+    });
+  }
+  if (__UI_PAGE_ARCHIVES__) {
+    routes.push({
+      path: "/archives",
+      name: "archives",
+      component: () => import("../views/YoutubeArchivesView.vue"),
+    });
+  }
+  if (__UI_PAGE_TRADE__) {
+    routes.push({
+      path: "/trade",
+      name: "trade",
+      component: () => import("../views/BitgetTradeView.vue"),
+    });
+  }
+  if (__UI_PAGE_COMMUNITY__) {
+    routes.push({
+      path: "/community",
+      name: "community",
+      component: () => import("../views/CommunityView.vue"),
+    });
+  }
+  if (__UI_PAGE_SIGNALS__) {
+    routes.push({
+      path: "/signals",
+      name: "signals",
+      component: () => import("../views/SignalOverviewView.vue"),
+    });
+  }
+  if (__UI_PAGE_DEBUG__) {
+    routes.push({
+      path: "/debug",
+      name: "debug",
+      component: () => import("../views/DebugView.vue"),
+    });
   }
 
-  // 未开放路由落到默认页，避免 空白
+  if (__UI_PAGE_SHOW__) {
+    routes.push({ path: "/messages", redirect: "/show" });
+  }
+
   routes.push({
     path: "/:pathMatch(.*)*",
-    redirect: deploy ? defaultPath : "/",
+    redirect: IS_DEPLOY ? DEFAULT_PATH : "/",
   });
 
   return routes;

@@ -36,6 +36,7 @@ from oi_mornitor.config import (
     OI_ZSCORE_MIN_SAMPLES,
     OI_ZSCORE_THRESHOLD,
     OPEN_TRADE_SCAN_SEC,
+    CARD_PRICE_REFRESH_SEC,
     POLL_15M_SEC,
     POLL_5M_SEC,
     RATE_LIMIT_COOLDOWN_SEC,
@@ -1339,6 +1340,31 @@ class RadarService:
                 logger.warning("持仓快扫异常: %s", exc)
             await asyncio.sleep(interval)
 
+    async def _card_price_loop(self) -> None:
+        """活跃卡片币种市价定时刷新（默认 5 分钟），写回 last_price / 距 TP·SL。"""
+        interval = max(60.0, float(CARD_PRICE_REFRESH_SEC or 300))
+        # 启动后稍等，避免与主扫抢流量
+        await asyncio.sleep(min(20.0, interval / 4))
+        while self._running:
+            try:
+                session = await self._ensure_session()
+                result = await self.sandbox_engine.refresh_card_market_prices(
+                    session,
+                    base_url=self.radar.base_url,
+                    pool_rows=self.radar.last_all_rows,
+                )
+                if result.get("updated"):
+                    logger.info(
+                        "卡片市价定时刷新 %s 个订单 · %s",
+                        result.get("updated"),
+                        ",".join((result.get("symbols") or [])[:8]),
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("卡片市价刷新异常: %s", exc)
+            await asyncio.sleep(interval)
+
     async def _loop(self, interval_sec: int) -> None:
         while self._running:
             try:
@@ -1368,15 +1394,19 @@ class RadarService:
         self._open_trade_task = asyncio.create_task(
             self._open_trade_loop(), name="oi-open-trade-loop"
         )
+        self._card_price_task = asyncio.create_task(
+            self._card_price_loop(), name="oi-card-price-loop"
+        )
         logger.info(
-            "雷达后台循环已启动，间隔 %ds；持仓快扫 %.0fs",
+            "雷达后台循环已启动，间隔 %ds；持仓快扫 %.0fs；卡片市价 %.0fs",
             interval_sec,
             max(5.0, float(OPEN_TRADE_SCAN_SEC or 15)),
+            max(60.0, float(CARD_PRICE_REFRESH_SEC or 300)),
         )
 
     async def stop(self) -> None:
         self._running = False
-        for attr in ("_task", "_open_trade_task"):
+        for attr in ("_task", "_open_trade_task", "_card_price_task"):
             task = getattr(self, attr, None)
             if task:
                 task.cancel()

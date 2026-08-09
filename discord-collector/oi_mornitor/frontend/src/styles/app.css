@@ -1495,6 +1495,44 @@ button {
   margin-bottom: 12px;
 }
 
+.pattern-hint-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.pattern-hint-row .pattern-hint-main {
+  margin-bottom: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sandbox-hide-author-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sandbox-hide-author-btn:hover {
+  border-color: rgba(100, 181, 246, 0.45);
+  color: #90caf9;
+}
+
+.sandbox-hide-author-btn.on {
+  background: rgba(100, 181, 246, 0.16);
+  border-color: rgba(100, 181, 246, 0.45);
+  color: #90caf9;
+}
+
 .strategy-brief-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -1887,6 +1925,171 @@ button {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 8px;
+}
+
+.sandbox-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.card-life-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4vh 16px 16px;
+  overflow: auto;
+}
+
+.card-life-panel {
+  width: min(1200px, 100%);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  background: #12151c;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.card-life-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.card-life-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.card-life-sub {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: #9aa3b5;
+}
+
+.card-life-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.pattern-random-btn.ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.card-life-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.card-life-filters button {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #c5cce0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.card-life-filters button.on {
+  background: rgba(100, 181, 246, 0.18);
+  border-color: rgba(100, 181, 246, 0.45);
+  color: #90caf9;
+}
+
+.card-life-count {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: #8b93a7;
+}
+
+.card-life-table-wrap {
+  overflow: auto;
+  padding: 0 8px 12px;
+}
+
+.card-life-empty {
+  padding: 24px;
+  text-align: center;
+}
+
+.card-phase {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+  color: #cfd6e6;
+}
+
+.card-phase.watch {
+  background: rgba(158, 158, 158, 0.2);
+  color: #bdbdbd;
+}
+.card-phase.near {
+  background: rgba(255, 193, 7, 0.18);
+  color: #ffd54f;
+}
+.card-phase.entered {
+  background: rgba(66, 165, 245, 0.2);
+  color: #64b5f6;
+}
+.card-phase.tp {
+  background: rgba(76, 175, 80, 0.22);
+  color: #81c784;
+}
+.card-phase.sl {
+  background: rgba(239, 83, 80, 0.22);
+  color: #e57373;
+}
+.card-phase.exit {
+  background: rgba(171, 71, 188, 0.2);
+  color: #ce93d8;
+}
+.card-phase.reject {
+  background: rgba(120, 120, 120, 0.25);
+  color: #9e9e9e;
+}
+
+.card-life-steps {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.card-life-steps i {
+  font-style: normal;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  background: rgba(255, 255, 255, 0.06);
+  color: #6b7280;
+}
+
+.card-life-steps i.on {
+  background: rgba(100, 181, 246, 0.28);
+  color: #e3f2fd;
 }
 
 .sandbox-manual {

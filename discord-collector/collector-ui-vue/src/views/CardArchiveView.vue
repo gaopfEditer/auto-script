@@ -70,6 +70,23 @@ const evalError = ref("");
 /** @type {Record<number, ReturnType<typeof setTimeout>>} */
 const saveTimers = {};
 
+const HIDE_KOL_KEY = "dc_archive_hide_kol";
+const hideKolName = ref(false);
+try {
+  hideKolName.value = localStorage.getItem(HIDE_KOL_KEY) === "1";
+} catch {
+  /* ignore */
+}
+
+function toggleHideKol() {
+  hideKolName.value = !hideKolName.value;
+  try {
+    localStorage.setItem(HIDE_KOL_KEY, hideKolName.value ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
 const groupedBySource = computed(() => {
   /** @type {Record<string, number>} */
   const m = {};
@@ -305,6 +322,15 @@ onUnmounted(() => {
     <section class="grid-panel">
       <div class="grid-head">
         <span class="grid-count">{{ loading ? "加载中…" : `共 ${cards.length} 张卡片` }}</span>
+        <button
+          type="button"
+          class="btn hide-kol-btn"
+          :class="{ on: hideKolName }"
+          :title="hideKolName ? '显示 KOL 名称' : '隐藏 KOL 名称'"
+          @click="toggleHideKol"
+        >
+          {{ hideKolName ? "显示 KOL" : "隐藏 KOL" }}
+        </button>
       </div>
       <p v-if="!loading && cards.length === 0" class="muted empty-hint">暂无卡片</p>
       <div v-else class="card-grid">
@@ -313,6 +339,7 @@ onUnmounted(() => {
           :key="c.id"
           :card="c"
           show-channel
+          :hide-kol-name="hideKolName"
           clickable
           @click="openCard(c)"
         />
@@ -336,14 +363,17 @@ onUnmounted(() => {
                 v-if="selectedSourceLink"
                 class="source-article-link"
                 :to="selectedSourceLink.to"
-                :title="selectedSourceLink.title"
+                :title="hideKolName ? '打开来源' : selectedSourceLink.title"
               >
-                {{ selectedSourceLink.label }} · {{ selectedSourceLink.displayName }}
+                {{ selectedSourceLink.label }} ·
+                {{ hideKolName ? "*****" : selectedSourceLink.displayName }}
               </RouterLink>
               <template v-else>{{ selected.sourceType }}</template>
-              <template v-if="selected.channelName"> · 频道 {{ selected.channelName }}</template>
+              <template v-if="selected.channelName">
+                · 频道 {{ hideKolName ? "*****" : selected.channelName }}
+              </template>
               <template v-if="!selectedSourceLink && selected.sourceRef">
-                · {{ selected.sourceRef }}
+                · {{ hideKolName ? "*****" : selected.sourceRef }}
               </template>
               · {{ fmtTime(selected.signalAt || selected.createdAt) }}
             </p>
@@ -501,10 +531,29 @@ h3 {
 }
 .grid-head {
   margin-bottom: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 .grid-count {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.82rem;
   color: #949ba4;
+}
+.hide-kol-btn {
+  flex: 0 0 auto;
+  width: auto;
+  margin-top: 0;
+  font-size: 0.78rem;
+  padding: 0.28rem 0.7rem;
+  white-space: nowrap;
+}
+.hide-kol-btn.on {
+  background: rgba(88, 101, 242, 0.22);
+  border-color: rgba(88, 101, 242, 0.55);
+  color: #c7ceff;
 }
 .empty-hint {
   padding: 2rem 0;

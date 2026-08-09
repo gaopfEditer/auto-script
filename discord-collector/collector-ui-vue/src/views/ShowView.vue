@@ -3,9 +3,22 @@ import { ref, reactive, computed, onMounted, watch, nextTick } from "vue";
 import { RouterLink } from "vue-router";
 import SignalCardRail from "../components/SignalCardRail.vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
-import { fetchGuilds, fetchChannels, fetchChannelMessages, fetchCdpActiveChannel, fetchDiscordContext } from "../lib/discordApi.js";
+import {
+  fetchGuilds,
+  fetchChannels,
+  fetchChannelMessages,
+  fetchCdpActiveChannel,
+  fetchDiscordContext,
+  navigateDiscordChannel,
+} from "../lib/discordApi.js";
 import { fetchSignalConfig, isSignalChannelId } from "../lib/discordSignalApi.js";
-// import { navigateDiscordChannel } from "../lib/discordApi.js";
+import {
+  fetchShowLayoutFromServer,
+  hasRemoteLayoutSeeded,
+  isLocalShowClient,
+  markRemoteLayoutSeeded,
+  putShowLayoutToServer,
+} from "../lib/showLayoutSync.js";
 import {
   channelRowToClient,
   channelDisplayName,
@@ -455,24 +468,98 @@ function sectionItemKey(item) {
   return `x-${Math.random()}`;
 }
 
-/** 布局（置顶 / 分组 / 别名 / 排序）立即写入独立 localStorage，避免消息缓存过大导致保存失败 */
+/** @returns {Record<string, unknown>} */
+function buildLayoutPayload() {
+  return {
+    v: 1,
+    savedAt: Date.now(),
+    channelAliases: { ...channelAliases },
+    pinnedChannelsByGuild: JSON.parse(JSON.stringify(pinnedChannelsByGuild)),
+    channelGroupsByGuild: JSON.parse(JSON.stringify(channelGroupsByGuild)),
+    ungroupedOrderByGuild: { ...ungroupedOrderByGuild },
+    selectedGuildId: selectedGuildId.value,
+    selectedChannel: selectedChannel.value,
+  };
+}
+
+/** 本地客户端才回写后台（域名客户端只改 localStorage） */
+const canWriteShowLayoutServer = isLocalShowClient();
+/** @type {ReturnType<typeof setTimeout> | null} */
+let serverLayoutSaveTimer = null;
+
+function scheduleServerLayoutSave() {
+  if (!canWriteShowLayoutServer) return;
+  if (serverLayoutSaveTimer) clearTimeout(serverLayoutSaveTimer);
+  serverLayoutSaveTimer = setTimeout(() => {
+    serverLayoutSaveTimer = null;
+    const payload = buildLayoutPayload();
+    void putShowLayoutToServer(payload).catch(() => {
+      /* 后台暂不可用时忽略，本地已保存 */
+    });
+  }, 600);
+}
+
+/** 布局（置顶 / 分组 / 别名 / 排序）立即写入独立 localStorage；本机再同步后台 */
 function saveLayoutNow() {
   try {
-    localStorage.setItem(
-      SHOW_LAYOUT_KEY,
-      JSON.stringify({
-        v: 1,
-        savedAt: Date.now(),
-        channelAliases: { ...channelAliases },
-        pinnedChannelsByGuild: JSON.parse(JSON.stringify(pinnedChannelsByGuild)),
-        channelGroupsByGuild: JSON.parse(JSON.stringify(channelGroupsByGuild)),
-        ungroupedOrderByGuild: { ...ungroupedOrderByGuild },
-        selectedGuildId: selectedGuildId.value,
-        selectedChannel: selectedChannel.value,
-      })
-    );
+    localStorage.setItem(SHOW_LAYOUT_KEY, JSON.stringify(buildLayoutPayload()));
   } catch {
     /* quota */
+  }
+  scheduleServerLayoutSave();
+}
+
+/**
+ * 初始化布局：域名首次读后台一次；本机读 localStorage，空则拉后台。
+ */
+async function initShowLayout() {
+  if (!canWriteShowLayoutServer) {
+    // 域名：只在从未 seeded 时拉一次后台，之后只信 localStorage
+    if (!hasRemoteLayoutSeeded()) {
+      try {
+        const remote = await fetchShowLayoutFromServer();
+        if (remote.ok && remote.layout) {
+          applyLayoutFromObject(remote.layout);
+          try {
+            localStorage.setItem(
+              SHOW_LAYOUT_KEY,
+              JSON.stringify({ ...remote.layout, savedAt: Date.now(), v: 1 })
+            );
+          } catch {
+            /* quota */
+          }
+        } else {
+          loadLayoutCache();
+        }
+      } catch {
+        loadLayoutCache();
+      }
+      markRemoteLayoutSeeded();
+      return;
+    }
+    loadLayoutCache();
+    return;
+  }
+
+  // 本机：优先本地；若无置顶布局再拉后台种子
+  const hadLocal = loadLayoutCache();
+  const pinKeys = Object.keys(pinnedChannelsByGuild);
+  if (hadLocal && pinKeys.length) return;
+  try {
+    const remote = await fetchShowLayoutFromServer();
+    if (remote.ok && remote.layout && Object.keys(remote.layout.pinnedChannelsByGuild || {}).length) {
+      applyLayoutFromObject(remote.layout);
+      try {
+        localStorage.setItem(
+          SHOW_LAYOUT_KEY,
+          JSON.stringify({ ...remote.layout, savedAt: Date.now(), v: 1 })
+        );
+      } catch {
+        /* quota */
+      }
+    }
+  } catch {
+    /* ignore */
   }
 }
 
@@ -784,26 +871,72 @@ async function selectGuild(g) {
   await loadChannelsForGuild(g.guildId);
 }
 
+/** 选频道序号：快速连点时丢弃过期的二次拉库 */
+let selectChannelSeq = 0;
+/** 同一频道短时间重复点击：跳过 CDP（部署后尤其重要） */
+const CDP_SAME_CHANNEL_DEBOUNCE_MS = 12_000;
+const DB_RELOAD_SAME_CHANNEL_MS = 2_000;
+let lastSelectChannelId = "";
+let lastDbReloadAt = 0;
+let lastCdpNavChannelId = "";
+let lastCdpNavAt = 0;
+
 /** @param {ChannelItem} ch */
 async function selectChannel(ch) {
   if (renamingChannelId.value && renamingChannelId.value !== ch.channelId) {
     commitRename();
   }
+  const seq = ++selectChannelSeq;
+  const sameChannel = lastSelectChannelId === ch.channelId;
+  lastSelectChannelId = ch.channelId;
   selectedChannel.value = ch;
   clearChannelUnread(ch.channelId);
   const cached = messagesByChannelId[ch.channelId] ?? [];
   if (cached.length) {
     await nextTick();
     scrollMsgsBottom();
-    return;
   }
+  const now = Date.now();
+  const skipDb =
+    sameChannel && cached.length > 0 && now - lastDbReloadAt < DB_RELOAD_SAME_CHANNEL_MS;
+  const skipCdp =
+    sameChannel &&
+    ch.channelId === lastCdpNavChannelId &&
+    now - lastCdpNavAt < CDP_SAME_CHANNEL_DEBOUNCE_MS;
+  if (skipDb && skipCdp) return;
   try {
-    await loadMessagesForChannel(ch);
-    // 暂停：前端点击不驱动 CDP 跳转（CDP → 前端推送仍保留）
-    // const gid = ch.guildId || selectedGuildId.value;
-    // if (gid) await navigateDiscordChannel(gid, ch.channelId);
+    if (!skipDb) {
+      await loadMessagesForChannel(ch);
+      lastDbReloadAt = Date.now();
+    }
+    if (seq !== selectChannelSeq || skipCdp) return;
+    const gid = ch.guildId || selectedGuildId.value;
+    if (!gid) return;
+    lastCdpNavChannelId = ch.channelId;
+    lastCdpNavAt = Date.now();
+    // CDP 打开频道触发 Discord 拉历史，稍后再拉一次库
+    void (async () => {
+      try {
+        await navigateDiscordChannel(gid, ch.channelId);
+      } catch (e) {
+        if (seq === selectChannelSeq) {
+          navError.value = String(/** @type {Error} */ (e).message ?? e);
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+      if (seq !== selectChannelSeq || selectedChannel.value?.channelId !== ch.channelId) return;
+      try {
+        await loadMessagesForChannel(ch);
+        lastDbReloadAt = Date.now();
+      } catch {
+        /* ignore */
+      }
+    })();
   } catch (e) {
-    navError.value = String(/** @type {Error} */ (e).message ?? e);
+    if (seq === selectChannelSeq) {
+      navError.value = String(/** @type {Error} */ (e).message ?? e);
+    }
   }
 }
 
@@ -1180,7 +1313,7 @@ onMounted(async () => {
     signalConfig.value = { channelIds: [] };
   }
   const hadCache = loadCache();
-  loadLayoutCache();
+  await initShowLayout();
   if (!SHOW_GUILD_RAIL) selectedGuildId.value = DEFAULT_SHOW_GUILD_ID;
   await reloadGuilds();
   if (selectedGuildId.value) {

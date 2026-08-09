@@ -26,6 +26,7 @@ from oi_mornitor.config import (
     SANDBOX_KLINE_LIMIT,
     SANDBOX_KLINE_LIMIT_1H,
     SANDBOX_MAX_CONCURRENT,
+    SANDBOX_MAX_HOLD_DAYS,
     SANDBOX_NOTIONAL_USD,
     SANDBOX_REENTRY_COOLDOWN_BARS,
 )
@@ -79,6 +80,7 @@ class SandboxEngine:
         self.tracker = SandboxTracker()
         self._last_alerts: list[dict[str, Any]] = []
         self._last_scan_ts: float = 0.0
+        self._last_card_price_ts: float = 0.0
         # key: "SYMBOL|15m" 或 card-live fingerprint — 去重用
         self._last_eval_bar: dict[str, Any] = {}
         self._last_entry_bar: dict[str, int] = {}
@@ -200,10 +202,11 @@ class SandboxEngine:
                 o = {**o, "author_name": author}
                 if not o.get("channel_name") or str(o.get("channel_name")).isdigit():
                     o["channel_name"] = author
-            card_orders.append(o)
+            card_orders.append(self._enrich_card_order_row(o))
         return {
             "sandbox_enabled": SANDBOX_ENABLED,
             "sandbox_scan_ts": self._last_scan_ts,
+            "sandbox_card_price_ts": self._last_card_price_ts,
             "sandbox_day": day,
             "sandbox_pool": pool,
             "sandbox_pool_count": len(pool),
@@ -561,6 +564,291 @@ class SandboxEngine:
                 out[sym] = px
         return out
 
+    @staticmethod
+    def _card_level_distances(
+        *,
+        side: str,
+        price: float,
+        entry_low: float | None,
+        entry_high: float | None,
+        sl: float | None,
+        tps: list[float] | None,
+        fill_price: float | None = None,
+    ) -> dict[str, Any]:
+        """现价相对入场区 / SL / TP 的距离（%），供看板与近场判断。"""
+        side_u = str(side or "").upper()
+        px = float(price or 0)
+        info: dict[str, Any] = {"last_price": px}
+        if px <= 0:
+            return info
+        # 入场参考：已成交用 fill；否则用区间中点
+        entry_ref = float(fill_price) if fill_price and float(fill_price) > 0 else 0.0
+        if entry_ref <= 0 and entry_low is not None:
+            hi = entry_high if entry_high is not None else entry_low
+            entry_ref = (float(entry_low) + float(hi)) / 2.0
+        if entry_ref > 0:
+            info["entry_ref"] = entry_ref
+            info["dist_entry_pct"] = (px - entry_ref) / entry_ref * 100.0
+        if entry_low is not None:
+            hi = entry_high if entry_high is not None else entry_low
+            lo, hi = min(float(entry_low), float(hi)), max(float(entry_low), float(hi))
+            if lo <= px <= hi:
+                info["dist_zone_pct"] = 0.0
+            elif px < lo:
+                info["dist_zone_pct"] = (lo - px) / px * 100.0
+            else:
+                info["dist_zone_pct"] = (px - hi) / px * 100.0
+        if sl and float(sl) > 0:
+            sl_v = float(sl)
+            info["dist_sl_pct"] = (px - sl_v) / sl_v * 100.0 if side_u == "LONG" else (sl_v - px) / sl_v * 100.0
+            info["sl_hit"] = (side_u == "LONG" and px <= sl_v) or (
+                side_u == "SHORT" and px >= sl_v
+            )
+        tp_dists: list[dict[str, Any]] = []
+        for i, tp in enumerate(tps or []):
+            try:
+                tp_v = float(tp)
+            except (TypeError, ValueError):
+                continue
+            if tp_v <= 0:
+                continue
+            dist = (px - tp_v) / tp_v * 100.0 if side_u == "LONG" else (tp_v - px) / tp_v * 100.0
+            hit = (side_u == "LONG" and px >= tp_v) or (side_u == "SHORT" and px <= tp_v)
+            tp_dists.append({"tp": i + 1, "price": tp_v, "dist_pct": dist, "hit": hit})
+        if tp_dists:
+            info["tp_distances"] = tp_dists
+            pending = [x for x in tp_dists if not x["hit"]]
+            if pending:
+                # LONG：最近上方 TP；SHORT：最近下方 TP
+                nxt = min(pending, key=lambda x: abs(float(x["dist_pct"])))
+                info["next_tp"] = nxt["tp"]
+                info["dist_next_tp_pct"] = nxt["dist_pct"]
+        return info
+
+    def _annotate_card_order_price(
+        self, order: dict[str, Any], price: float, *, ts: float | None = None
+    ) -> dict[str, Any]:
+        """把市价与距入场/TP/SL 写回 card_order.payload。"""
+        px = float(price or 0)
+        if px <= 0:
+            return order
+        now = float(ts if ts is not None else time.time())
+        card = self._card_from_order(order)
+        base = dict(order.get("payload") or {})
+        if card:
+            base = {**card.to_dict(), **base}
+        dists = self._card_level_distances(
+            side=str(order.get("side") or (card.side if card else "")),
+            price=px,
+            entry_low=card.entry_low if card else base.get("entry_low"),
+            entry_high=card.entry_high if card else base.get("entry_high"),
+            sl=card.sl if card else base.get("sl"),
+            tps=list(card.tps if card else (base.get("tps") or [])),
+            fill_price=base.get("fill_price"),
+        )
+        base.update(dists)
+        base["last_price"] = px
+        base["last_price_ts"] = now
+        order["payload"] = base
+        order["last_price"] = px
+        order["last_price_ts"] = now
+        order["dist_entry_pct"] = dists.get("dist_entry_pct")
+        order["dist_zone_pct"] = dists.get("dist_zone_pct")
+        order["dist_sl_pct"] = dists.get("dist_sl_pct")
+        order["dist_next_tp_pct"] = dists.get("dist_next_tp_pct")
+        order["next_tp"] = dists.get("next_tp")
+        order["tp_distances"] = dists.get("tp_distances")
+        return order
+
+    def _mark_card_closed(
+        self,
+        card_id: str | None,
+        *,
+        exit_code: str,
+        exit_label: str = "",
+        exit_price: float | None = None,
+        outcome: str = "",
+    ) -> None:
+        cid = str(card_id or "").strip()
+        if not cid:
+            return
+        co = self.tracker.get_card_order(cid)
+        if not co:
+            return
+        payload = dict(co.get("payload") or {})
+        payload["exit_code"] = exit_code
+        payload["exit_label"] = exit_label or exit_reason_label(exit_code)
+        if exit_price is not None and float(exit_price) > 0:
+            payload["exit_price"] = float(exit_price)
+        payload["outcome"] = outcome or (
+            "take_profit"
+            if exit_code == "card_tp"
+            else "stop_loss"
+            if exit_code == "card_sl"
+            else "manual_close"
+            if "manual" in exit_code
+            else "closed"
+        )
+        payload["closed_at"] = time.time()
+        co["status"] = "closed"
+        co["payload"] = payload
+        co["exit_code"] = payload["exit_code"]
+        co["exit_label"] = payload["exit_label"]
+        co["exit_price"] = payload.get("exit_price")
+        co["outcome"] = payload["outcome"]
+        self.tracker.upsert_card_order(co)
+
+    @staticmethod
+    def _card_lifecycle_phase(order: dict[str, Any]) -> str:
+        """建立 | 监听 | 近场 | 挂单 | 入场 | 止盈 | 止损 | 出场 | 拒收"""
+        st = str(order.get("status") or "")
+        if st == "rejected":
+            return "拒收"
+        if st == "closed":
+            code = str(order.get("exit_code") or (order.get("payload") or {}).get("exit_code") or "")
+            outcome = str(order.get("outcome") or (order.get("payload") or {}).get("outcome") or "")
+            if code == "card_tp" or outcome == "take_profit":
+                return "止盈"
+            if code == "card_sl" or outcome == "stop_loss":
+                return "止损"
+            return "出场"
+        if st == "filled":
+            return "入场"
+        if st == "ordered":
+            return "挂单"
+        if st == "near":
+            return "近场"
+        if st == "watching":
+            return "监听"
+        return st or "建立"
+
+    def _enrich_card_order_row(self, order: dict[str, Any]) -> dict[str, Any]:
+        o = dict(order)
+        payload = dict(o.get("payload") or {})
+        for k in (
+            "last_price",
+            "last_price_ts",
+            "dist_entry_pct",
+            "dist_zone_pct",
+            "dist_sl_pct",
+            "dist_next_tp_pct",
+            "next_tp",
+            "tp_distances",
+            "exit_code",
+            "exit_label",
+            "exit_price",
+            "outcome",
+            "fill_price",
+            "closed_at",
+            "reject_reason",
+        ):
+            if o.get(k) is None and payload.get(k) is not None:
+                o[k] = payload.get(k)
+        o["phase"] = self._card_lifecycle_phase(o)
+        o["phase_created"] = True
+        o["phase_watching"] = o.get("status") in (
+            "watching",
+            "near",
+            "ordered",
+            "filled",
+            "closed",
+        )
+        o["phase_entered"] = o.get("status") in ("filled", "closed") or bool(o.get("fill_price"))
+        o["phase_exited"] = o.get("status") == "closed"
+        o["phase_sl"] = o.get("phase") == "止损"
+        o["phase_tp"] = o.get("phase") == "止盈"
+        return o
+
+    async def refresh_card_market_prices(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        base_url: str = FAPI_BASE_URL,
+        pool_rows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """
+        对活跃卡片币种拉一次市价（默认每 5 分钟由雷达调度），
+        写回 last_price / 距入场·TP·SL，便于看板与近场观察。
+        """
+        if not SANDBOX_ENABLED:
+            return {"ok": False, "updated": 0}
+        orders = [
+            o
+            for o in self.tracker.list_active_card_orders()
+            if o.get("status") in ("watching", "near", "ordered", "filled")
+        ]
+        if not orders:
+            return {"ok": True, "updated": 0, "symbols": []}
+        prices = self._price_map_from_pool(pool_rows)
+        need = sorted(
+            {
+                str(o.get("symbol") or "").upper()
+                for o in orders
+                if o.get("symbol") and str(o.get("symbol")).upper() not in prices
+            }
+        )
+        if need:
+            km = await fetch_pattern_klines_batch(
+                session,
+                base_url=base_url,
+                symbols=need,
+                interval=CARD_EVAL_INTERVAL,
+                limit=3,
+            )
+            for sym in need:
+                kl = km.get(sym) or []
+                if not kl:
+                    continue
+                try:
+                    prices[sym] = float(kl[-1][4])
+                except (TypeError, ValueError, IndexError):
+                    pass
+        # 池子里也可能缺价：对全部活跃币再补一轮（已有价跳过）
+        all_syms = sorted({str(o.get("symbol") or "").upper() for o in orders if o.get("symbol")})
+        missing = [s for s in all_syms if s not in prices or prices[s] <= 0]
+        if missing:
+            km2 = await fetch_pattern_klines_batch(
+                session,
+                base_url=base_url,
+                symbols=missing,
+                interval=CARD_EVAL_INTERVAL,
+                limit=3,
+            )
+            for sym in missing:
+                kl = km2.get(sym) or []
+                if not kl:
+                    continue
+                try:
+                    prices[sym] = float(kl[-1][4])
+                except (TypeError, ValueError, IndexError):
+                    pass
+
+        now = time.time()
+        updated = 0
+        for order in orders:
+            sym = str(order.get("symbol") or "").upper()
+            px = prices.get(sym)
+            if not px:
+                continue
+            annotated = self._annotate_card_order_price(order, px, ts=now)
+            self.tracker.upsert_card_order(annotated)
+            updated += 1
+        self._last_card_price_ts = now
+        logger.info(
+            "卡片市价刷新 %d/%d · 周期 %s · 币种 %s",
+            updated,
+            len(orders),
+            CARD_EVAL_INTERVAL,
+            ",".join(all_syms[:12]) + ("…" if len(all_syms) > 12 else ""),
+        )
+        return {
+            "ok": True,
+            "updated": updated,
+            "symbols": all_syms,
+            "ts": now,
+            "interval": CARD_EVAL_INTERVAL,
+        }
+
     async def _scan_card_orders(
         self,
         session: aiohttp.ClientSession,
@@ -628,6 +916,8 @@ class SandboxEngine:
 
             # 市价：立刻入场
             if card.entry_type == "market":
+                self._annotate_card_order_price(order, px)
+                self.tracker.upsert_card_order(order)
                 sig = self._build_card_enter_signal(card, px)
                 if not sig:
                     continue
@@ -636,14 +926,20 @@ class SandboxEngine:
                     alerts.append(alert)
                     order["status"] = "filled"
                     order["position_id"] = alert.get("id")
-                    order["payload"] = {**card.to_dict(), "fill_price": px}
+                    order["payload"] = {
+                        **(order.get("payload") or card.to_dict()),
+                        "fill_price": px,
+                        "last_price": px,
+                    }
                     self.tracker.upsert_card_order(order)
                 continue
 
-            # 限价：近场阈值按主流/山寨（约 0.2% / 1%）→ 提醒 + 挂单；触价 → 入场
+            # 限价：持续写回市价；近场阈值 → 提醒 + 挂单；触价 → 入场
+            self._annotate_card_order_price(order, px)
             near_pct = card_near_entry_pct(sym, card.leverage)
             dist = self._entry_zone_distance_pct(px, card.entry_low, card.entry_high)
             if dist is None:
+                self.tracker.upsert_card_order(order)
                 continue
             if dist <= near_pct and order.get("status") in (
                 "watching",
@@ -682,10 +978,12 @@ class SandboxEngine:
                     )
                 order["status"] = "ordered"
                 order["payload"] = {
-                    **card.to_dict(),
+                    **(order.get("payload") or card.to_dict()),
                     "last_price": px,
                     "near_pct": dist,
                 }
+                self.tracker.upsert_card_order(order)
+            else:
                 self.tracker.upsert_card_order(order)
 
             if self._price_in_entry_zone(px, card.entry_low, card.entry_high):
@@ -707,7 +1005,11 @@ class SandboxEngine:
                     alerts.append(alert)
                     order["status"] = "filled"
                     order["position_id"] = alert.get("id")
-                    order["payload"] = {**card.to_dict(), "fill_price": fill_px}
+                    order["payload"] = {
+                        **(order.get("payload") or card.to_dict()),
+                        "fill_price": fill_px,
+                        "last_price": px,
+                    }
                     self.tracker.upsert_card_order(order)
 
         # —— 已开卡片仓：用含未收盘 K 的实时高低点评估 TP/SL（每轮雷达/快扫都跑）——
@@ -728,8 +1030,25 @@ class SandboxEngine:
             km.update(extra)
 
         for pos in card_positions:
+            kl = km.get(pos.symbol) or []
+            try:
+                px = float(kl[-1][4]) if kl else 0.0
+            except (TypeError, ValueError, IndexError):
+                px = 0.0
+            if px > 0:
+                try:
+                    meta = json.loads(pos.meta_json or "{}")
+                except json.JSONDecodeError:
+                    meta = {}
+                cid = str(meta.get("card_id") or "")
+                if cid:
+                    co = self.tracker.get_card_order(cid)
+                    if co and co.get("status") == "filled":
+                        self.tracker.upsert_card_order(
+                            self._annotate_card_order_price(co, px)
+                        )
             await self._eval_card_position_live(
-                pos, km.get(pos.symbol) or [], alerts=alerts
+                pos, kl, alerts=alerts
             )
 
     async def _eval_card_position_live(
@@ -803,12 +1122,25 @@ class SandboxEngine:
                     )
                 if sig.action == "exit":
                     cid = pos_meta.get("card_id")
-                    if cid:
-                        co = self.tracker.get_card_order(str(cid))
-                        if co:
-                            co["status"] = "closed"
-                            self.tracker.upsert_card_order(co)
                     exit_code = str((sig.meta or {}).get("exit_code") or "")
+                    exit_label = str(
+                        (sig.meta or {}).get("exit_label")
+                        or exit_reason_label(exit_code)
+                    )
+                    outcome = (
+                        "take_profit"
+                        if exit_code == "card_tp"
+                        else "stop_loss"
+                        if exit_code == "card_sl"
+                        else "closed"
+                    )
+                    self._mark_card_closed(
+                        str(cid) if cid else None,
+                        exit_code=exit_code or "exit",
+                        exit_label=exit_label,
+                        exit_price=float(sig.price),
+                        outcome=outcome,
+                    )
                     best_tp = None
                     if exit_code == "card_tp":
                         done = int((sig.meta or {}).get("card_tp_done") or 0)
@@ -856,6 +1188,115 @@ class SandboxEngine:
         except Exception:  # noqa: BLE001
             pass
         self._last_eval_bar[slot_pos] = fingerprint
+
+    def _max_hold_sec(self) -> float:
+        days = float(SANDBOX_MAX_HOLD_DAYS or 0)
+        if days <= 0:
+            return 0.0
+        return days * 86400.0
+
+    def _live_close_from_klines(
+        self,
+        symbol: str,
+        interval: str,
+        klines_by_iv: dict[str, dict[str, list]] | None,
+    ) -> float:
+        """从已拉取的 K 线取最近收盘价；失败返回 0。"""
+        if not klines_by_iv:
+            return 0.0
+        iv = normalize_sandbox_interval(interval)
+        for key in (iv, SANDBOX_INTERVAL, "15m", "1h"):
+            km = klines_by_iv.get(key) or {}
+            klines = km.get(symbol.upper()) or []
+            if not klines:
+                continue
+            try:
+                px = float(klines[-1][4])
+                if px > 0:
+                    return px
+            except (TypeError, ValueError, IndexError):
+                continue
+        return 0.0
+
+    def _close_stale_open_positions(
+        self,
+        *,
+        klines_by_iv: dict[str, dict[str, list]] | None = None,
+        now: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """持仓超过 SANDBOX_MAX_HOLD_DAYS 的纸面单市价强平。"""
+        max_sec = self._max_hold_sec()
+        if max_sec <= 0:
+            return []
+        ts = float(now if now is not None else time.time())
+        alerts: list[dict[str, Any]] = []
+        for pos in list(self.tracker.list_positions()):
+            try:
+                entry_ts = int(pos.entry_time or 0)
+            except (TypeError, ValueError):
+                entry_ts = 0
+            if entry_ts <= 0:
+                continue
+            held = ts - float(entry_ts)
+            if held < max_sec:
+                continue
+            try:
+                meta = json.loads(pos.meta_json or "{}")
+            except json.JSONDecodeError:
+                meta = {}
+            iv = normalize_sandbox_interval(str(meta.get("interval") or SANDBOX_INTERVAL))
+            price = self._live_close_from_klines(pos.symbol, iv, klines_by_iv)
+            if price <= 0:
+                price = float(pos.entry_price or 0)
+            if price <= 0:
+                logger.warning(
+                    "沙盒超期强平跳过 #%s %s：无有效市价 entry_time=%s",
+                    pos.id,
+                    pos.symbol,
+                    entry_ts,
+                )
+                continue
+            held_days = held / 86400.0
+            code = "max_hold"
+            label = exit_reason_label(code)
+            sig = SandboxSignal(
+                action="exit",
+                side=pos.side,
+                logic=pos.logic,
+                price=price,
+                sl=pos.sl,
+                message=f"持仓 {held_days:.1f} 天超过上限 {SANDBOX_MAX_HOLD_DAYS:g} 天 · 市价强平",
+                meta={
+                    "exit_code": code,
+                    "exit_label": label,
+                    "max_hold_days": SANDBOX_MAX_HOLD_DAYS,
+                    "held_days": held_days,
+                    "card_id": meta.get("card_id"),
+                },
+            )
+            bar_time = int(ts)
+            alert = self._apply_signal(pos.symbol, sig, bar_time, pos=pos, force=True)
+            if not alert:
+                continue
+            cid = str(meta.get("card_id") or "")
+            if cid:
+                self._mark_card_closed(
+                    cid,
+                    exit_code=code,
+                    exit_label=label,
+                    exit_price=float(price),
+                    outcome="closed",
+                )
+            alerts.append(alert)
+            logger.info(
+                "沙盒超期强平 #%s %s %s held=%.2fd @ %s",
+                pos.id,
+                pos.symbol,
+                pos.side,
+                held_days,
+                price,
+            )
+        return alerts
 
     async def scan_open_trades(
         self,
@@ -907,6 +1348,11 @@ class SandboxEngine:
         klines_by_iv: dict[str, dict[str, list]] = {}
         for iv, km in zip(need_ivs, fetched):
             klines_by_iv[iv] = km
+
+        stale_alerts = self._close_stale_open_positions(klines_by_iv=klines_by_iv)
+        if stale_alerts:
+            alerts.extend(stale_alerts)
+            open_positions = self.tracker.list_positions()
 
         state_by_sym = {
             str(s.get("symbol") or "").upper(): s for s in (pattern_states or [])
@@ -1181,10 +1627,13 @@ class SandboxEngine:
         if full:
             cid = str(meta.get("card_id") or "")
             if cid:
-                co = self.tracker.get_card_order(cid)
-                if co and co.get("status") != "closed":
-                    co["status"] = "closed"
-                    self.tracker.upsert_card_order(co)
+                self._mark_card_closed(
+                    cid,
+                    exit_code=str((sig.meta or {}).get("exit_code") or "manual"),
+                    exit_label=str((sig.meta or {}).get("exit_label") or "手动平仓"),
+                    exit_price=float(price),
+                    outcome="manual_close",
+                )
 
         self._last_alerts = [alert] + self._last_alerts[:19]
         self._last_scan_ts = time.time()
@@ -1257,6 +1706,13 @@ class SandboxEngine:
             klines_by_iv[iv] = km
 
         alerts: list[dict[str, Any]] = []
+        stale_alerts = self._close_stale_open_positions(klines_by_iv=klines_by_iv)
+        if stale_alerts:
+            alerts.extend(stale_alerts)
+            # 超期仓已平，后续扫描用最新持仓列表
+            open_syms = [p.symbol for p in self.tracker.list_positions()]
+            symbols = sorted(set(pool) | set(open_syms) | set(card_syms))
+
         for iv in intervals:
             iv_sec = _INTERVAL_SEC.get(iv, 900)
             klines_map = klines_by_iv.get(iv) or {}

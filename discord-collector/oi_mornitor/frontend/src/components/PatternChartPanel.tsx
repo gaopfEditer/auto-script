@@ -78,7 +78,7 @@ const LAYER_TOGGLES: { key: keyof ChartLayers; label: string }[] = [
   { key: "bb", label: "布林" },
   { key: "volume", label: "量能" },
   { key: "macd", label: "MACD" },
-  { key: "candlePattern", label: "射击/倒锤" },
+  { key: "candlePattern", label: "K线形态" },
 ];
 
 const MARKER_LEGEND = [
@@ -90,8 +90,10 @@ const MARKER_LEGEND = [
   { kind: "trigger", label: "扳机线", color: "#64b5f6" },
   { kind: "hh", label: "④ HH 更高高点", color: "#00e676" },
   { kind: "bb_wick", label: "BB-Wicks 插针", color: "#e040fb" },
-  { kind: "shooting_star", label: "射击之星", color: "#ff4081" },
+  { kind: "shooting_star", label: "射击之星 / V+oi异动", color: "#ff4081" },
   { kind: "inverted_hammer", label: "倒锤子", color: "#00bcd4" },
+  { kind: "continuous_upper_wick", label: "连续上插针", color: "#9c27b0" },
+  { kind: "continuous_lower_wick", label: "连续下插针", color: "#9c27b0" },
 ];
 
 const VEGAS_SERIES: { key: VegasKey; title: string; color: string }[] = [
@@ -102,33 +104,77 @@ const VEGAS_SERIES: { key: VegasKey; title: string; color: string }[] = [
   { key: "b2", title: "B组2 EMA676", color: "rgba(239, 83, 80, 0.45)" },
 ];
 
-/** 射击之星 / 倒锤子：半尺寸箭头；字号随图表 layout.fontSize（整体 60%） */
-const COMPACT_MARKER_KINDS = new Set(["shooting_star", "inverted_hammer"]);
+/** K 线形态信号：半尺寸箭头；字号随图表 layout.fontSize（整体 60%） */
+const COMPACT_MARKER_KINDS = new Set([
+  "shooting_star",
+  "inverted_hammer",
+  "continuous_upper_wick",
+  "continuous_lower_wick",
+  "continuous_non_upper_wick",
+  "continuous_non_lower_wick",
+]);
 const COMPACT_MARKER_SIZE = 0.5;
 /** 图表全局字号 = LWC 默认 12 × 60% */
 const CHART_FONT_SIZE = Math.round(12 * 0.6);
 
+/**
+ * 将标记时间对齐到已加载 K 线 open_time。
+ * LWC 对「不在 series 内」的 time 会吸附到端点，缩小时左侧会堆一排入/出标记。
+ */
+function alignMarkerTime(
+  rawTime: number,
+  candleTimeSet: Set<number>,
+  candleTimes: number[],
+): number | null {
+  if (!candleTimes.length) return null;
+  let t = Number(rawTime);
+  if (!Number.isFinite(t) || t <= 0) return null;
+  // 兼容毫秒时间戳
+  if (t > 1e12) t = Math.floor(t / 1000);
+  if (candleTimeSet.has(t)) return t;
+
+  const first = candleTimes[0];
+  const last = candleTimes[candleTimes.length - 1];
+  if (t < first || t > last) return null;
+
+  // 落在两根 K 线之间：对齐到不大于 t 的最近 open
+  let lo = 0;
+  let hi = candleTimes.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (candleTimes[mid] <= t) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  if (hi < 0) return null;
+  return candleTimes[hi];
+}
+
 function toCandleMarkers(
   markers: PatternChartData["markers"],
   showCandlePattern: boolean,
+  candles?: PatternCandle[],
 ): SeriesMarker<UTCTimestamp>[] {
+  const candleTimes = (candles ?? []).map((c) => c.time).sort((a, b) => a - b);
+  const candleTimeSet = new Set(candleTimes);
+
   return [...(markers ?? [])]
     .filter((m) => showCandlePattern || !COMPACT_MARKER_KINDS.has(m.kind ?? ""))
-    .sort((a, b) => a.time - b.time)
     .map((m) => {
+      const aligned = alignMarkerTime(m.time, candleTimeSet, candleTimes);
+      if (aligned == null) return null;
       const kind = m.kind ?? "";
       const compact = COMPACT_MARKER_KINDS.has(kind);
-      const fallback =
-        kind === "shooting_star" ? "射击之星" : kind === "inverted_hammer" ? "倒锤子" : "";
       return {
-        time: m.time as UTCTimestamp,
+        time: aligned as UTCTimestamp,
         position: m.position,
         color: m.color,
         shape: m.shape,
-        text: m.text || fallback || undefined,
+        text: m.text || undefined,
         size: compact ? COMPACT_MARKER_SIZE : 1,
       } as SeriesMarker<UTCTimestamp>;
-    });
+    })
+    .filter((m): m is SeriesMarker<UTCTimestamp> => m != null)
+    .sort((a, b) => (a.time as number) - (b.time as number));
 }
 
 function toCandleData(candles: PatternCandle[]): CandlestickData[] {
@@ -384,10 +430,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
         const showPattern = layersRef.current.candlePattern;
         const rawMarkers = payload.partial ? metaRef.current?.markers : payload.markers;
-        const markers = toCandleMarkers(rawMarkers, showPattern);
+        const markers = toCandleMarkers(rawMarkers, showPattern, sortedCandles);
         if (markers.length) {
           series.setMarkers(markers);
-        } else if (!payload.partial || !showPattern) {
+        } else {
           series.setMarkers([]);
         }
 
@@ -485,6 +531,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     [applyPriceLines, applyPriceAxisFormat],
   );
 
+  const loadMoreHistoryRef = useRef<() => Promise<void>>(async () => {});
+
   const loadMoreHistory = useCallback(async () => {
     if (loadingMoreRef.current || !hasMoreRef.current) return;
     const oldestMs = oldestCandleOpenMs(candlesRef.current);
@@ -492,7 +540,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
     loadingMoreRef.current = true;
     setLoadingMore(true);
+    let shouldChain = false;
     try {
+      const prevLen = candlesRef.current.length;
       const chunk = await fetchPatternChart(symbol, timeframeRef.current, {
         limit: CHART_LOAD_CHUNK,
         endTimeMs: oldestMs - 1,
@@ -502,10 +552,17 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         setHasMore(false);
         return;
       }
+
+      const merged = mergeCandlesByTime(candlesRef.current, chunk.candles);
+      // 无新增 K 线：停止续载，避免同一 endTime 空转
+      if (merged.length <= prevLen) {
+        hasMoreRef.current = false;
+        setHasMore(false);
+        return;
+      }
       hasMoreRef.current = chunk.has_more !== false;
       setHasMore(hasMoreRef.current);
 
-      const merged = mergeCandlesByTime(candlesRef.current, chunk.candles);
       const mergedUpper = mergeBbSeries(metaRef.current?.bb?.upper ?? [], chunk.bb?.upper ?? []);
       const mergedMid = mergeBbSeries(metaRef.current?.bb?.mid ?? [], chunk.bb?.mid ?? []);
       const mergedLower = mergeBbSeries(metaRef.current?.bb?.lower ?? [], chunk.bb?.lower ?? []);
@@ -530,13 +587,24 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         merged,
         { isPrepend: true },
       );
+
+      // 滚轮缩到看全图时 from≈0，只靠一次 range 回调不够；左侧仍紧时继续拉
+      const range = chartApi.current?.timeScale().getVisibleLogicalRange();
+      shouldChain = Boolean(hasMoreRef.current && range && range.from < 80);
     } catch {
       /* 静默 */
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);
+      if (shouldChain) {
+        window.setTimeout(() => {
+          void loadMoreHistoryRef.current();
+        }, 0);
+      }
     }
   }, [symbol, applyChartSeries]);
+
+  loadMoreHistoryRef.current = loadMoreHistory;
 
   const refreshLatestRef = useRef<() => void>(() => {});
 
@@ -641,7 +709,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
     const series = seriesRef.current;
     if (series) {
-      series.setMarkers(toCandleMarkers(metaRef.current?.markers, next.candlePattern));
+      series.setMarkers(
+        toCandleMarkers(metaRef.current?.markers, next.candlePattern, candlesRef.current),
+      );
     }
 
     if (chart) applyPaneMargins(chart, next);
@@ -668,6 +738,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       (update: LiveKlineUpdate) => applyLiveCandle(update.candle, update.closed),
       [applyLiveCandle],
     ),
+    useCallback(() => {
+      refreshLatestRef.current();
+    }, []),
   );
 
   useEffect(() => {
@@ -907,7 +980,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
       const onRange = (range: LogicalRange | null) => {
         if (!range || loadingMoreRef.current || !hasMoreRef.current) return;
-        if (range.from < 40) void loadMoreHistory();
+        // 左缘接近 / 已缩到几乎看全量：续载更早 K 线
+        const span = range.to - range.from;
+        const len = candlesRef.current.length;
+        const nearLeft = range.from < 80;
+        const zoomedOut = len > 0 && range.from < 10 && span >= len * 0.85;
+        if (nearLeft || zoomedOut) void loadMoreHistoryRef.current();
       };
       chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
 

@@ -69,6 +69,12 @@ async def handle_index(_request: web.Request) -> web.FileResponse:
 
 
 
+async def handle_health(_request: web.Request) -> web.Response:
+    """轻量探活（供 collect:ui / supervisor 使用；勿用 /api/snapshot）。"""
+    root = str(Path(__file__).resolve().parent)
+    return _json_response({"ok": True, "service": "oi_mornitor", "package_root": root})
+
+
 async def handle_snapshot(_request: web.Request) -> web.Response:
 
     snap = get_service().get_snapshot()
@@ -223,12 +229,85 @@ async def handle_patterns_chart(request: web.Request) -> web.Response:
     if not data.get("candles"):
         return _json_response({"ok": False, "error": "K线数据为空"}, status=404)
     if not data.get("partial"):
-        trade_markers = svc.sandbox_engine.get_trade_markers(symbol)
+        trade_markers = svc.sandbox_engine.get_trade_markers(symbol, interval)
         if trade_markers:
             merged = list(data.get("markers") or []) + trade_markers
             data["markers"] = merged
             data["sandbox_markers"] = trade_markers
     return _json_response({"ok": True, **data})
+
+
+async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
+    """轻量元数据：形态状态 + 沙盒入出标记（供浏览器直连 K 线时叠加）。"""
+    symbol = request.query.get("symbol", "").strip().upper()
+    if not symbol:
+        return _json_response({"ok": False, "error": "symbol required"}, status=400)
+    interval = request.query.get("interval", "").strip() or "15m"
+    svc = get_service()
+    row = svc.pattern_engine.tracker.get_state(symbol)
+    state: dict[str, Any] = {}
+    if row:
+        from oi_mornitor.pattern_detector import STATUS_LABELS
+
+        state = {
+            "status": row.status,
+            "status_label": STATUS_LABELS.get(row.status, row.status),
+            "h_max": row.h_max,
+            "lh_price": row.lh_price,
+            "l1": row.l1,
+            "hl": row.hl,
+            "trigger_price": row.trigger_price,
+            "hh_price": row.hh_price,
+            "message": row.message,
+        }
+    ticker: dict[str, Any] = {}
+    for r in svc.radar.last_all_rows or []:
+        if str(r.get("symbol") or "").upper() == symbol:
+            ticker = {
+                "last_price": r.get("last_price"),
+                "price_change_pct_24h": r.get("price_change_pct_24h"),
+                "current_oi_usd": r.get("current_oi_usd"),
+                "quote_volume": r.get("quote_volume"),
+                "oi_tier": r.get("oi_tier"),
+            }
+            break
+    trade_markers = svc.sandbox_engine.get_trade_markers(symbol, interval)
+    return _json_response({
+        "ok": True,
+        "symbol": symbol,
+        "interval": interval,
+        "state": state,
+        "ticker": ticker,
+        "sandbox_markers": trade_markers,
+        "price_lines": [],
+    })
+
+
+async def handle_patterns_oi_hist(request: web.Request) -> web.Response:
+    """浏览器 CORS 受限时，由服务端代拉 openInterestHist。"""
+    from oi_mornitor.pattern_monitor import fetch_open_interest_hist
+
+    symbol = request.query.get("symbol", "").strip().upper()
+    if not symbol:
+        return _json_response({"ok": False, "error": "symbol required"}, status=400)
+    interval = request.query.get("interval", "").strip() or "15m"
+    limit_raw = request.query.get("limit", "").strip()
+    limit = int(limit_raw) if limit_raw.isdigit() else 500
+    svc = get_service()
+    session = await svc._ensure_session()
+    try:
+        oi_map = await fetch_open_interest_hist(
+            session,
+            base_url=svc.radar.base_url,
+            symbol=symbol,
+            interval=interval,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.exception("OI hist 代拉失败 %s", symbol)
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    points = [{"time": t, "value": v} for t, v in sorted(oi_map.items())]
+    return _json_response({"ok": True, "symbol": symbol, "interval": interval, "points": points})
 
 
 async def handle_sandbox_stats(_request: web.Request) -> web.Response:
@@ -292,6 +371,18 @@ async def handle_sandbox_enter(request: web.Request) -> web.Response:
     )
     status = 200 if result.get("ok") else 400
     return _json_response(result, status=status)
+
+
+async def handle_sandbox_card_prices(_request: web.Request) -> web.Response:
+    """立即刷新活跃卡片币种市价（写入 last_price / 距 TP·SL）。"""
+    svc = get_service()
+    session = await svc._ensure_session()
+    result = await svc.sandbox_engine.refresh_card_market_prices(
+        session,
+        base_url=svc.radar.base_url,
+        pool_rows=svc.radar.last_all_rows,
+    )
+    return _json_response({**result, **svc.sandbox_engine.get_payload()})
 
 
 async def handle_tv_alert(_request: web.Request) -> web.Response:
@@ -377,6 +468,8 @@ def create_app() -> web.Application:
 
     app.router.add_get("/patterns", handle_index)
 
+    app.router.add_get("/api/health", handle_health)
+
     app.router.add_get("/api/snapshot", handle_snapshot)
 
     app.router.add_get("/api/hot", handle_hot)
@@ -395,10 +488,15 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/patterns/chart", handle_patterns_chart)
 
+    app.router.add_get("/api/patterns/chart-meta", handle_patterns_chart_meta)
+
+    app.router.add_get("/api/patterns/oi-hist", handle_patterns_oi_hist)
+
     app.router.add_get("/api/sandbox", handle_sandbox_stats)
 
     app.router.add_post("/api/sandbox/reshuffle", handle_sandbox_reshuffle)
     app.router.add_post("/api/sandbox/enter", handle_sandbox_enter)
+    app.router.add_post("/api/sandbox/card-prices", handle_sandbox_card_prices)
 
     app.router.add_get("/api/tv-alert", handle_tv_alert)
 

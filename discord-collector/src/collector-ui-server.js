@@ -12,6 +12,8 @@ import { WebSocketServer } from "ws";
 import { buildFrameChannelPayload } from "./collect-ws-decode.js";
 import { config } from "./config.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
+import { startCdpChannelRotate } from "./cdp-channel-rotate.js";
+import { createShowLayoutStore } from "./show-layout-store.js";
 import { createDiscordMessageIngest } from "./discord-message-ingest.js";
 import { createDiscordSignalCardService } from "./discord-signal-card-service.js";
 import { createDiscordTelegramMessagePush } from "./discord-telegram-message-push.js";
@@ -209,7 +211,7 @@ async function main() {
       apiBase,
       embedUrl: publicEmbed,
       publicEmbedUrl: publicEmbed,
-      hint: "oi_mornitor 由 collect:ui 自动守护；也可手动：pnpm run oi:start；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8765",
+      hint: "oi_mornitor 由 collect:ui 自动守护；也可手动：pnpm run oi:start；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8766",
     };
 
     /** @param {string} url */
@@ -218,7 +220,10 @@ async function main() {
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
         const r = await fetch(url, { signal: ctrl.signal });
-        return r.ok;
+        if (!r.ok) return false;
+        // 读一小段即可；避免旧探活拉满 /api/snapshot（数 MB）被超时截断
+        const text = await r.text();
+        return text.trim().length > 0;
       } catch {
         return false;
       } finally {
@@ -228,10 +233,12 @@ async function main() {
 
     const t0 = Date.now();
     try {
-      const snapOk = await probe(`${apiBase}/api/snapshot`);
+      // 优先轻量 /api/health；旧实例无此路由时回退 /api/patterns
+      let up = await probe(`${apiBase}/api/health`);
+      if (!up) up = await probe(`${apiBase}/api/patterns`);
       out.latencyMs = Date.now() - t0;
-      if (!snapOk) {
-        out.error = `无法连接 ${apiBase}`;
+      if (!up) {
+        out.error = `无法连接 ${apiBase}（/api/health 或 /api/patterns）`;
         res.json(out);
         return;
       }
@@ -465,6 +472,46 @@ async function main() {
     }
   });
 
+  const showLayoutStore = createShowLayoutStore();
+
+  /** Show 布局（置顶等）：本地前端可写；域名前端仅首读 */
+  app.get("/api/show/layout", async (_req, res) => {
+    try {
+      const { layout, updatedAt } = await showLayoutStore.read();
+      res.json({ ok: true, layout, updatedAt, file: showLayoutStore.filePath });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
+  app.put("/api/show/layout", async (req, res) => {
+    const allowRemote = ["1", "true", "yes", "on"].includes(
+      String(process.env.SHOW_LAYOUT_ALLOW_REMOTE_WRITE ?? "0").toLowerCase()
+    );
+    const ip = String(req.socket?.remoteAddress ?? "");
+    const isLoopback =
+      ip === "127.0.0.1" ||
+      ip === "::1" ||
+      ip === "::ffff:127.0.0.1" ||
+      ip.endsWith("127.0.0.1");
+    if (!allowRemote && !isLoopback) {
+      res.status(403).json({
+        ok: false,
+        error: "仅本机可写入 Show 布局（域名客户端请用 localStorage）",
+      });
+      return;
+    }
+    try {
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const layoutRaw = body.layout != null ? body.layout : body;
+      const { layout, updatedAt } = await showLayoutStore.write(layoutRaw);
+      log.info(`[show-layout] 已保存置顶/布局 updatedAt=${updatedAt}`);
+      res.json({ ok: true, layout, updatedAt });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
   app.get("/api/discord/context", (_req, res) => {
     res.json({ ok: true, snapshot: discordIngest.context.snapshot() });
   });
@@ -535,6 +582,16 @@ async function main() {
     }
   });
 
+  /** 部署后多人/连点：同一频道短时间合并为一次 CDP 导航 */
+  const CDP_NAV_DEBOUNCE_MS = Math.max(
+    3_000,
+    Number(process.env.COLLECTOR_CDP_NAV_DEBOUNCE_MS) || 10_000
+  );
+  let lastCdpNavKey = "";
+  let lastCdpNavAt = 0;
+  /** @type {Promise<unknown> | null} */
+  let cdpNavInFlight = null;
+
   app.post("/api/cdp/discord-channel", async (req, res) => {
     const guildId = String(req.body?.guildId ?? req.query?.guild_id ?? "").trim();
     const channelId = String(req.body?.channelId ?? req.query?.channel_id ?? "").trim();
@@ -550,6 +607,22 @@ async function main() {
       return;
     }
 
+    const navKey = `${guildId}/${channelId}`;
+    const now = Date.now();
+    if (navKey === lastCdpNavKey && now - lastCdpNavAt < CDP_NAV_DEBOUNCE_MS) {
+      log.info(
+        `[discord-channel] 防抖跳过 guild=${guildId} channel=${channelId}（${CDP_NAV_DEBOUNCE_MS}ms 内）`
+      );
+      res.json({
+        ok: true,
+        skipped: true,
+        reason: "debounce",
+        debounceMs: CDP_NAV_DEBOUNCE_MS,
+        ...tracePayload,
+      });
+      return;
+    }
+
     log.info(`[discord-channel] POST guild=${guildId} channel=${channelId}`);
     diagnosticSink({
       kind: "discord_channel_api_received",
@@ -559,8 +632,30 @@ async function main() {
     });
 
     try {
-      const out = /** @type {{ ok?: boolean, error?: string, finalUrl?: string }} */ (
-        await navigateDiscordImpl(guildId, channelId, clientTraceId ? { clientTraceId } : {})
+      // 串行化：避免并发 goto 互相踩
+      if (cdpNavInFlight) {
+        await cdpNavInFlight.catch(() => {});
+        if (navKey === lastCdpNavKey && Date.now() - lastCdpNavAt < CDP_NAV_DEBOUNCE_MS) {
+          res.json({
+            ok: true,
+            skipped: true,
+            reason: "debounce_after_wait",
+            debounceMs: CDP_NAV_DEBOUNCE_MS,
+            ...tracePayload,
+          });
+          return;
+        }
+      }
+      lastCdpNavKey = navKey;
+      lastCdpNavAt = Date.now();
+      const run = Promise.resolve(
+        navigateDiscordImpl(guildId, channelId, clientTraceId ? { clientTraceId } : {})
+      );
+      cdpNavInFlight = run.finally(() => {
+        if (cdpNavInFlight === run) cdpNavInFlight = null;
+      });
+      const out = /** @type {{ ok?: boolean, error?: string, finalUrl?: string, skipped?: boolean }} */ (
+        await run
       );
       if (out?.ok) {
         res.json({ ok: true, ...out, ...tracePayload });
@@ -574,6 +669,8 @@ async function main() {
 
   /** @type {Awaited<ReturnType<typeof startCdpWebSocketMonitor>> | null} */
   let session = null;
+  /** @type {{ stop: () => void } | null} */
+  let channelRotate = null;
 
   const avatarsDir = path.join(__dirname, "..", "public", "community-avatars");
   app.use("/community-avatars", express.static(avatarsDir, { fallthrough: false, index: false }));
@@ -595,6 +692,8 @@ async function main() {
 
   const shutdown = async (reason = "shutdown") => {
     log.info(`退出 (${reason})`);
+    channelRotate?.stop();
+    channelRotate = null;
     cardPriceMonitor.stop();
     cardSink.stop();
     await telegramPush.flushAll().catch((e) => log.warn(String(e?.message ?? e)));
@@ -684,6 +783,7 @@ async function main() {
           cdpConnectUrl: config.cdpConnectUrl,
           pageReloadIntervalMs: config.pageReloadIntervalMs,
           cdpAutoGoto: config.cdpAutoGoto,
+          cdpVisibilityKeepalive: config.cdpVisibilityKeepalive,
           networkTrace: config.collectNetworkTrace,
           wsFrameTrace: config.collectWsFrameTrace,
           diagnosticSink,
@@ -720,6 +820,15 @@ async function main() {
       );
       navigateDiscordImpl = (g, c, t) => session.navigateDiscordChannel(g, c, t);
       webhookForward.setBrowserPost((url, payload) => session.postWebhookViaBrowser(url, payload));
+      channelRotate?.stop();
+      channelRotate = startCdpChannelRotate({
+        enabled: config.cdpChannelRotate,
+        intervalMs: config.cdpChannelRotateIntervalMs,
+        dwellMs: config.cdpChannelRotateDwellMs,
+        startUrl: config.startUrl,
+        navigate: (g, c) => session.navigateDiscordChannel(g, c),
+        log: createLogger("channel-rotate"),
+      });
     } catch (e) {
       log.error(`CDP 启动失败: ${/** @type {Error} */ (e).message ?? e}`);
     }
