@@ -7,7 +7,7 @@ import { createRouter, createWebHistory } from "vue-router";
  */
 /* global __UI_DEPLOY__, __UI_PAGE_SHOW__, __UI_PAGE_FETCH__, __UI_PAGE_OI__,
    __UI_PAGE_CARDS__, __UI_PAGE_ARCHIVES__, __UI_PAGE_TRADE__, __UI_PAGE_COMMUNITY__,
-   __UI_PAGE_SIGNALS__, __UI_PAGE_DEBUG__, __UI_PAGE_HOME__ */
+   __UI_PAGE_SIGNALS__, __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__ */
 
 const IS_DEPLOY = __UI_DEPLOY__;
 const DEFAULT_PATH = __UI_PAGE_SHOW__
@@ -96,6 +96,13 @@ function buildRoutes() {
       path: "/debug",
       name: "debug",
       component: () => import("../views/DebugView.vue"),
+    });
+  }
+  if (__UI_PAGE_CONTENT__) {
+    routes.push({
+      path: "/content",
+      name: "content",
+      component: () => import("../views/ContentView.vue"),
     });
   }
 

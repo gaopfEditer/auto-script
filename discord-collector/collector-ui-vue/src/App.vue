@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import NewCardToastStack from "./components/NewCardToastStack.vue";
 import "./composables/useNewCardNotifications.js";
@@ -23,21 +23,6 @@ import {
 const route = useRoute();
 const { debugMode, setDebugMode } = useDebugMode();
 
-ensureCollectorSocket();
-const { status: wsStatus, error: wsError, reconnect: reconnectWs } = useCollectorSocket();
-
-/** 静默刷新：重挂载路由视图，避免 location.reload */
-const viewEpoch = ref(0);
-function onWsSilentRefresh() {
-  viewEpoch.value += 1;
-}
-onMounted(() => {
-  window.addEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
-});
-onUnmounted(() => {
-  window.removeEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
-});
-
 const uiMode = getUiMode();
 const navPages = getNavPages();
 const brandTo = isDeployUi() ? getDefaultDeployPath() : "/";
@@ -46,6 +31,31 @@ const showOiModule = isOiModuleEnabled();
 
 const activeModule = computed(() => getModuleFromPath(route.path));
 const isOi = computed(() => activeModule.value === "oi");
+/** /content 独立全屏，不共用 Discord/OI 顶栏 */
+const isContentStandalone = computed(() => activeModule.value === "content");
+
+const { status: wsStatus, error: wsError, reconnect: reconnectWs } = useCollectorSocket();
+
+watch(
+  isContentStandalone,
+  (standalone) => {
+    if (!standalone) ensureCollectorSocket();
+  },
+  { immediate: true },
+);
+
+/** 静默刷新：重挂载路由视图，避免 location.reload */
+const viewEpoch = ref(0);
+function onWsSilentRefresh() {
+  if (isContentStandalone.value) return;
+  viewEpoch.value += 1;
+}
+onMounted(() => {
+  window.addEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
+});
+onUnmounted(() => {
+  window.removeEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
+});
 
 const moduleLinks = computed(() => {
   if (!showOiModule) return UI_MODULES.filter((m) => m.id === "discord");
@@ -74,7 +84,12 @@ async function toggleDebug() {
 </script>
 
 <template>
-  <div class="app-shell" :data-ui-mode="uiMode" :data-module="activeModule">
+  <!-- 内容板：独立页，无 Discord/OI 壳 -->
+  <div v-if="isContentStandalone" class="content-standalone">
+    <RouterView />
+  </div>
+
+  <div v-else class="app-shell" :data-ui-mode="uiMode" :data-module="activeModule">
     <header class="top-nav">
       <RouterLink :to="brandTo" class="brand">discord-collector</RouterLink>
       <nav class="module-switch" aria-label="模块">
@@ -119,6 +134,12 @@ async function toggleDebug() {
 </template>
 
 <style scoped>
+.content-standalone {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  background: #0e0f12;
+}
 .app-shell {
   display: flex;
   flex-direction: column;

@@ -15,7 +15,8 @@
     "dev:collect:ui": "node scripts/pre-collect-ui.mjs",
     "oi:start": "oi_mornitor/venv/bin/python oi_mornitor/run.py",
     "oi:dev": "oi_mornitor/venv/bin/python oi_mornitor/run.py --dev",
-    "oi:rebuild": "oi_mornitor/venv/bin/python oi_mornitor/run.py --rebuild"
+    "oi:rebuild": "oi_mornitor/venv/bin/python oi_mornitor/run.py --rebuild",
+    "content:start": "PYTHONPATH=. oi_mornitor/venv/bin/python -m content_board"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",

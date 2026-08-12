@@ -30,6 +30,8 @@ import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, tryOpenStore } from "./store.js";
 import { findFreePortNear, killListenersOnPort } from "../scripts/kill-port.mjs";
 import { startOiSupervisor } from "../scripts/oi-supervisor.mjs";
+import { startContentSupervisor } from "../scripts/content-supervisor.mjs";
+import { registerContentBoardProxy } from "./content-board-proxy.js";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
 import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
@@ -63,6 +65,13 @@ async function main() {
 
   const app = express();
   const server = http.createServer(app);
+
+  // 必须在 express.json 之前：否则 PUT/POST JSON body 已被读走，反代会空包
+  registerContentBoardProxy(app, {
+    baseUrl: config.contentBoardBaseUrl,
+    log: createLogger("content-proxy"),
+  });
+
   const wss = new WebSocketServer({ server, path: "/ws" });
   // 避免 listen EADDRINUSE 时 WSS 再抛未捕获 error 直接把进程打崩（导致端口回退逻辑跑不到）
   wss.on("error", (err) => {
@@ -765,8 +774,20 @@ async function main() {
     enabled: config.oiAutoStart,
     checkIntervalMs: config.oiSupervisorIntervalMs,
   });
-  process.once("SIGINT", () => oiSupervisor.stop());
-  process.once("SIGTERM", () => oiSupervisor.stop());
+  const contentSupervisor = startContentSupervisor({
+    log: createLogger("content-supervisor"),
+    baseUrl: config.contentBoardBaseUrl,
+    enabled: config.contentBoardAutoStart,
+    checkIntervalMs: config.contentBoardSupervisorIntervalMs,
+  });
+  process.once("SIGINT", () => {
+    oiSupervisor.stop();
+    contentSupervisor.stop();
+  });
+  process.once("SIGTERM", () => {
+    oiSupervisor.stop();
+    contentSupervisor.stop();
+  });
 
   log.info(
     `[api] /api/cards /api/v1/cards /api/discord/signal-cards（debugMode=${isDebugMode()}）`

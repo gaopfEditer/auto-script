@@ -15,7 +15,7 @@
  * 未设置 VITE_UI_MODE 时：开发 → local，生产构建 → deploy
  */
 
-/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" }} UiPageDef */
+/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" | "content" }} UiPageDef */
 
 /** @type {UiPageDef[]} */
 export const ALL_UI_PAGES = [
@@ -28,6 +28,8 @@ export const ALL_UI_PAGES = [
   { path: "/community", name: "community", label: "社区", nav: true, module: "discord" },
   { path: "/signals", name: "signals", label: "信号", nav: false, module: "discord" },
   { path: "/debug", name: "debug", label: "Debug", nav: true, module: "discord" },
+  /** 独立页：不进 Discord/OI 顶栏，全屏自管 */
+  { path: "/content", name: "content", label: "内容", nav: false, module: "content" },
   { path: "/oi", name: "oi", label: "OI", nav: false, module: "oi" },
 ];
 
@@ -85,10 +87,11 @@ export function getNavPages() {
 
 /**
  * @param {string} path
- * @returns {"discord" | "oi"}
+ * @returns {"discord" | "oi" | "content"}
  */
 export function getModuleFromPath(path) {
   const p = String(path ?? "");
+  if (p === "/content" || p.startsWith("/content/")) return "content";
   if (p === "/oi" || p.startsWith("/oi/")) return "oi";
   return "discord";
 }

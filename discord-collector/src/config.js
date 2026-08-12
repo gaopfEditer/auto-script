@@ -259,6 +259,17 @@ export const config = {
     String(process.env.OI_AUTO_START ?? "1").toLowerCase()
   ),
   oiSupervisorIntervalMs: Number(process.env.OI_SUPERVISOR_INTERVAL_MS ?? 15_000),
+  /** 图文内容板（Python SQLite content_board） */
+  contentBoardBaseUrl: (process.env.CONTENT_BOARD_BASE_URL ?? "http://127.0.0.1:8767").replace(
+    /\/$/,
+    ""
+  ),
+  contentBoardAutoStart: !["0", "false", "no", "off"].includes(
+    String(process.env.CONTENT_BOARD_AUTO_START ?? "1").toLowerCase()
+  ),
+  contentBoardSupervisorIntervalMs: Number(
+    process.env.CONTENT_BOARD_SUPERVISOR_INTERVAL_MS ?? 20_000
+  ),
   /** 源频道 → Webhook 转发映射 JSON（见 config/channel-webhook-forwards.json） */
   webhookForwardsFile: (process.env.DISCORD_WEBHOOK_FORWARDS_FILE ?? "").trim()
     ? path.resolve(process.env.DISCORD_WEBHOOK_FORWARDS_FILE.trim())

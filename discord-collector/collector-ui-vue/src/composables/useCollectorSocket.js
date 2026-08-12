@@ -191,8 +191,12 @@ export function connectCollectorSocket() {
   };
 }
 
-/** 应用启动时调用，全局只连一条 WS */
+/** 应用启动时调用，全局只连一条 WS（/content 独立页跳过） */
 export function ensureCollectorSocket() {
+  if (typeof location !== "undefined") {
+    const p = location.pathname || "";
+    if (p === "/content" || p.startsWith("/content/")) return;
+  }
   if (started) return;
   started = true;
   connectCollectorSocket();
