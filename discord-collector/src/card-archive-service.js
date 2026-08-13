@@ -36,6 +36,73 @@ export function resolveCardChannelName(channelId, dbName) {
 export const SOURCE_TYPES = /** @type {const} */ (["discord", "youtube", "api", "manual"]);
 
 /**
+ * 归档卡片来源日志（排查用：频道 / YouTube / API 等）。
+ * @param {ReturnType<typeof archiveCardToClient>} card
+ * @param {{
+ *   sourceType: string,
+ *   channelId: string,
+ *   guildId?: string,
+ *   sourceRef?: string,
+ *   messageId?: string,
+ *   symbol?: string,
+ *   assetClass?: string,
+ *   verifyMode?: string,
+ *   source?: string,
+ *   note?: string,
+ * }} meta
+ */
+export function formatCardSourceLog(card, meta) {
+  const uid = card?.uid || (card?.id != null ? `#${card.id}` : "?");
+  const sourceType = String(meta.sourceType || card?.sourceType || "?").toLowerCase();
+  const channelId = String(meta.channelId || card?.channelId || "").trim();
+  const channelName =
+    String(card?.channelName || "").trim() || resolveCardChannelName(channelId, null) || "";
+  const sourceRef = String(meta.sourceRef || card?.sourceRef || "").trim();
+  const guildId = String(meta.guildId || "").trim();
+  const messageId = String(meta.messageId || card?.messageId || "").trim();
+  const symbol = String(meta.symbol || card?.symbol || "").trim();
+  const assetClass = String(meta.assetClass || card?.assetClass || "").trim();
+  const verifyMode = String(meta.verifyMode || card?.verifyMode || "").trim();
+  const pipeline = String(meta.source || card?.source || "").trim();
+  const note = String(meta.note || card?.note || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+
+  /** @type {string[]} */
+  const parts = [`卡片归档 ${uid}`, `sourceType=${sourceType}`];
+
+  if (sourceType === "discord") {
+    parts.push(
+      channelName ? `discord频道=${channelName}(${channelId || "?"})` : `discord频道Id=${channelId || "?"}`
+    );
+    if (guildId) parts.push(`guildId=${guildId}`);
+  } else if (sourceType === "youtube") {
+    parts.push(`youtube=${sourceRef || channelId || "?"}`);
+    if (channelId && channelId !== "youtube" && channelId !== sourceRef) {
+      parts.push(`channelId=${channelId}${channelName ? `(${channelName})` : ""}`);
+    }
+  } else if (sourceType === "api") {
+    parts.push(`api来源=${sourceRef || channelId || "external"}`);
+    if (channelId) parts.push(`channelId=${channelId}`);
+  } else if (sourceType === "manual") {
+    parts.push(`manual=${sourceRef || channelId || "ui"}`);
+  } else {
+    if (channelId) parts.push(`channelId=${channelId}${channelName ? `(${channelName})` : ""}`);
+    if (sourceRef) parts.push(`sourceRef=${sourceRef}`);
+  }
+
+  if (messageId) parts.push(`messageId=${messageId}`);
+  if (symbol) parts.push(`symbol=${symbol}`);
+  if (assetClass) parts.push(`asset=${assetClass}`);
+  if (verifyMode) parts.push(`verify=${verifyMode}`);
+  if (pipeline) parts.push(`pipeline=${pipeline}`);
+  if (note) parts.push(`note=${note}`);
+
+  return parts.join(" ");
+}
+
+/**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
@@ -156,7 +223,18 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       }
     }
     broadcast?.("meta", { kind: "card_archived", card: clientCard });
-    log.info(`卡片归档 ${clientCard.uid || `#${clientCard.id}`} source=${sourceType} symbol=${symbol}`);
+    log.info(formatCardSourceLog(clientCard, {
+      sourceType,
+      channelId,
+      guildId: String(input.guildId ?? "").trim(),
+      sourceRef: input.sourceRef ? String(input.sourceRef) : "",
+      messageId,
+      symbol,
+      assetClass,
+      verifyMode,
+      source: input.source ?? (sourceType === "manual" ? "manual" : "auto"),
+      note: input.note != null ? String(input.note) : "",
+    }));
     return clientCard;
   }
 
@@ -374,7 +452,21 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
           note,
         });
         const row = await store.getSignalCardById(id);
-        if (row) cards.push(archiveCardToClient(row));
+        if (row) {
+          const client = archiveCardToClient(row);
+          cards.push(client);
+          log.info(
+            formatCardSourceLog(client, {
+              sourceType: "youtube",
+              channelId: COIN_ACTION_SIGNAL_CHANNEL_ID,
+              sourceRef,
+              messageId,
+              symbol: normalizeSymbol(symbol) || symbol,
+              note: `${note} · 更新已有卡片`,
+              source: "coin-action-update",
+            })
+          );
+        }
         sessionSynced.push({ symbol: normalizeSymbol(symbol), entry, execution });
         continue;
       }
@@ -518,11 +610,13 @@ export function archiveCardToClient(row) {
   let verify1m = row.verify_1m_json ?? row.verify1mJson;
   let proximity = row.proximity_json ?? row.proximityJson;
   let backtest = row.backtest_json ?? row.backtestJson;
+  let progress = row.progress_json ?? row.progressJson;
   for (const [key, val] of [
     ["verify3h", verify3h],
     ["verify1m", verify1m],
     ["proximity", proximity],
     ["backtest", backtest],
+    ["progress", progress],
   ]) {
     if (typeof val === "string") {
       try {
@@ -530,6 +624,7 @@ export function archiveCardToClient(row) {
         if (key === "verify1m") verify1m = JSON.parse(val);
         if (key === "proximity") proximity = JSON.parse(val);
         if (key === "backtest") backtest = JSON.parse(val);
+        if (key === "progress") progress = JSON.parse(val);
       } catch {
         /* ignore */
       }
@@ -554,5 +649,6 @@ export function archiveCardToClient(row) {
     verify1m: verify1m && typeof verify1m === "object" ? verify1m : null,
     proximity: proximity && typeof proximity === "object" ? proximity : null,
     backtest: backtest && typeof backtest === "object" ? backtest : null,
+    progress: progress && typeof progress === "object" ? progress : null,
   };
 }

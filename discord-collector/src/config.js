@@ -209,6 +209,11 @@ export const config = {
   cardAutoEvalEnabled: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_AUTO_EVAL_ENABLED ?? "1").toLowerCase()
   ),
+  /** 档位进度状态机：每小时检查入场/TP/SL（1/N 分批） */
+  cardLevelCheckEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_LEVEL_CHECK_ENABLED ?? "1").toLowerCase()
+  ),
+  cardLevelCheckMs: Number(process.env.CARD_LEVEL_CHECK_MS ?? 3_600_000),
   /**
    * 卡片挂 Bitget/WEEX 单后：TP1 触达则把止损移到开仓价（默认开，每 30s 扫一次）。
    */

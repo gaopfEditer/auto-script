@@ -22,6 +22,7 @@ export const ALL_UI_PAGES = [
   { path: "/", name: "home", label: "首页", nav: false, module: "discord" },
   { path: "/show", name: "show", label: "Show", nav: true, module: "discord" },
   { path: "/cards", name: "cards", label: "卡片", nav: true, module: "discord" },
+  { path: "/eval", name: "eval", label: "评估", nav: true, module: "discord" },
   { path: "/fetch", name: "fetch", label: "拉取", nav: true, module: "discord" },
   { path: "/archives", name: "archives", label: "文稿", nav: true, module: "discord" },
   { path: "/trade", name: "trade", label: "下单", nav: true, module: "discord" },

@@ -34,7 +34,9 @@ pnpm run oi:dev      # Vite :5173 + API :8765；嵌入可用 OI_EMBED_URL=http:/
 pnpm run oi:start    # 一体托管 :8765（默认嵌入地址）
 ```
 
-卡片外送默认打到本机 8765。部署版默认页面：`VITE_UI_PAGES=show,fetch,oi`。
+卡片外送默认打到本机 8765。部署版默认页面：`VITE_UI_PAGES=show,fetch,oi`（评估页可加 `eval`）。
+
+**卡片档位进度 / 评估**：监控每小时（`CARD_LEVEL_CHECK_MS`）按 Binance 永续 K 线推进入场与 1/N 分批止盈；前端 `/eval` 按 Discord 频道看胜率与损益（`GET /api/cards/eval/summary`）。
 
 ## 环境准备
 
@@ -123,7 +125,9 @@ pnpm run collect
 | `DISCORD_TELEGRAM_PRIORITY_FORWARD` | `1` | Gateway 消息先转发 Telegram/Webhook，再异步入库（省约 20–150ms） |
 | Umami | — | `collector-ui-vue/index.html` 已嵌入 [`bz.ezcoin.ink/script.js`](https://bz.ezcoin.ink/script.js)（website-id `2a409684-5ffa-4c8c-8b28-68c2b22c21ee`） |
 | `VITE_UI_MODE` | 开发=`local` / 构建=`deploy` | `local` 全页面；`deploy` 仅 `VITE_UI_PAGES` |
-| `VITE_UI_PAGES` | `show,fetch,oi` | 部署版可见路由（逗号分隔） |
+| `VITE_UI_PAGES` | `show,fetch,oi` | 部署版可见路由（逗号分隔；评估页加 `eval`） |
+| `CARD_LEVEL_CHECK_ENABLED` | `1` | 档位进度状态机（入场 / 分批 TP / SL） |
+| `CARD_LEVEL_CHECK_MS` | `3600000` | 档位检查间隔（默认 1h） |
 | `COLLECTOR_NETWORK_TRACE` | `0` | `1` 时终端打印 HTTP 请求 |
 | `COLLECTOR_WS_FRAME_TRACE` | `0` | `1` 时打印 Gateway 帧（仍跳过心跳/Presence） |
 | `DISCORD_GATEWAY_MESSAGE_LOG` | `0` | `1` 时打印 `[gateway MESSAGE_CREATE]` 群聊消息行 |

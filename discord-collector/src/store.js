@@ -172,6 +172,7 @@ export async function openStore(cfg, log) {
     "ADD COLUMN verify_mode VARCHAR(8) NOT NULL DEFAULT '3h' AFTER signal_at",
     "ADD COLUMN asset_class VARCHAR(16) NOT NULL DEFAULT 'crypto' AFTER verify_mode",
     "ADD COLUMN backtest_json JSON NULL AFTER asset_class",
+    "ADD COLUMN progress_json JSON NULL AFTER backtest_json",
   ]) {
     try {
       await pool.query(`ALTER TABLE discord_signal_cards ${col}`);
@@ -1043,8 +1044,64 @@ export async function openStore(cfg, log) {
   }
 
   /**
+   * 待档位进度检查的卡片（未 closed_tp / closed_sl）。
+   * @param {{ limit?: number }} [opts]
+   */
+  async function listCardsForProgressCheck(opts = {}) {
+    const lim = Math.min(300, Math.max(1, Number(opts.limit) || 150));
+    const [rows] = await pool.query(
+      `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       WHERE sc.status = 'active'
+         AND sc.symbol IS NOT NULL AND sc.symbol != ''
+         AND (sc.asset_class = 'crypto' OR sc.asset_class IS NULL OR sc.asset_class = '')
+         AND (
+           sc.progress_json IS NULL
+           OR JSON_UNQUOTE(JSON_EXTRACT(sc.progress_json, '$.status')) IS NULL
+           OR JSON_UNQUOTE(JSON_EXTRACT(sc.progress_json, '$.status')) NOT IN ('closed_tp', 'closed_sl', 'expired')
+         )
+       ORDER BY sc.id DESC
+       LIMIT ${lim}`
+    );
+    return rows;
+  }
+
+  /**
+   * 评估看板：按 signal_at（缺省 created_at）时间窗拉取。
+   * @param {{ fromMs: number, toMs: number, channelId?: string, limit?: number }} opts
+   */
+  async function listCardsForEval(opts) {
+    const fromMs = Number(opts.fromMs);
+    const toMs = Number(opts.toMs);
+    const lim = Math.min(2000, Math.max(1, Number(opts.limit) || 500));
+    const channelId = String(opts.channelId ?? "").trim();
+    /** @type {unknown[]} */
+    const params = [];
+    let sql = `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       WHERE 1=1`;
+    if (Number.isFinite(fromMs) && fromMs > 0) {
+      sql += ` AND COALESCE(sc.signal_at, sc.created_at) >= ?`;
+      params.push(isoToMysqlDatetime3(new Date(fromMs).toISOString()));
+    }
+    if (Number.isFinite(toMs) && toMs > 0) {
+      sql += ` AND COALESCE(sc.signal_at, sc.created_at) <= ?`;
+      params.push(isoToMysqlDatetime3(new Date(toMs).toISOString()));
+    }
+    if (channelId) {
+      sql += ` AND sc.channel_id = ?`;
+      params.push(channelId);
+    }
+    sql += ` ORDER BY COALESCE(sc.signal_at, sc.created_at) DESC LIMIT ${lim}`;
+    const [rows] = await pool.query(sql, params);
+    return rows;
+  }
+
+  /**
    * @param {number} id
-   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, channelId?: string, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown }} patch
+   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, channelId?: string, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown, progressJson?: unknown }} patch
    */
   async function updateSignalCard(id, patch) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
@@ -1107,6 +1164,10 @@ export async function openStore(cfg, log) {
     if (patch.backtestJson !== undefined) {
       sets.push("backtest_json = ?");
       params.push(serializeRawJsonColumnForMysql(patch.backtestJson));
+    }
+    if (patch.progressJson !== undefined) {
+      sets.push("progress_json = ?");
+      params.push(serializeRawJsonColumnForMysql(patch.progressJson));
     }
     params.push(id);
     await pool.execute(`UPDATE discord_signal_cards SET ${sets.join(", ")} WHERE id = ?`, params);
@@ -1470,6 +1531,8 @@ export async function openStore(cfg, log) {
     listCardsForVerification,
     listCardsForBacktest,
     listActiveCardsForProximity,
+    listCardsForProgressCheck,
+    listCardsForEval,
     updateSignalCard,
     communityEnsureSchema,
     communityGetMemberByToken,
@@ -1546,6 +1609,8 @@ export function createOfflineStore() {
     listCardsForVerification: async () => [],
     listCardsForBacktest: async () => [],
     listActiveCardsForProximity: async () => [],
+    listCardsForProgressCheck: async () => [],
+    listCardsForEval: async () => [],
     updateSignalCard: async () => null,
     communityEnsureSchema: async () => {},
     communityGetMemberByToken: async () => null,

@@ -1,9 +1,17 @@
 /**
  * 卡片价格接近推送 + TP1/2/3 自动评价 + Bitget/WEEX TP1 保本移损。
  */
-import { archiveCardToClient } from "./card-archive-service.js";
+import { archiveCardToClient, resolveCardChannelName } from "./card-archive-service.js";
 import { runCardTpSettlement, isBacktestDue } from "./card-backtest-engine.js";
-import { fetchFuturesPrice } from "./card-price-fetch.js";
+import {
+  cardSignalStartMs,
+  evaluateCardProgress,
+  isProgressTerminal,
+  mergeProgress,
+  parseProgressJson,
+  progressChanged,
+} from "./card-level-progress.js";
+import { fetchFuturesKlines, fetchFuturesPrice } from "./card-price-fetch.js";
 import {
   collectProximityLevels,
   getCardProximityPolicy,
@@ -36,6 +44,8 @@ import { config } from "./config.js";
 export function createCardPriceMonitor(store, log, systemTelegram, broadcast, deps = {}) {
   let timer = null;
   let beTimer = null;
+  /** 档位进度上次完整跑批时间 */
+  let lastLevelCheckAt = 0;
   /** @type {Set<number>} */
   const beInFlight = new Set();
 
@@ -337,8 +347,105 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
     }
   }
 
+  /**
+   * 每小时档位进度：入场 / 分批 TP(1/N) / SL。
+   * @param {{ force?: boolean }} [opts]
+   */
+  async function runLevelProgressCheck(opts = {}) {
+    if (!config.cardLevelCheckEnabled) return;
+    if (!store.listCardsForProgressCheck) return;
+    const intervalMs = Math.max(60_000, Number(config.cardLevelCheckMs) || 3_600_000);
+    const now = Date.now();
+    if (!opts.force && lastLevelCheckAt > 0 && now - lastLevelCheckAt < intervalMs) {
+      return;
+    }
+    lastLevelCheckAt = now;
+
+    const rows = await store.listCardsForProgressCheck({ limit: 150 });
+    /** @type {Map<string, number>} */
+    const priceCache = new Map();
+    /** @type {Map<string, Array<{ high: number, low: number, close: number, ts: number }>>} */
+    const klineCache = new Map();
+
+    for (const row of rows) {
+      const card = archiveCardToClient(row);
+      if (isProgressTerminal(card.progress)) continue;
+      const sym = String(card.symbol ?? "").toUpperCase();
+      if (!sym) continue;
+      if (String(card.assetClass ?? "crypto").toLowerCase() === "stock") {
+        const prev = parseProgressJson(card.progress) ?? {};
+        await store.updateSignalCard(card.id, {
+          progressJson: {
+            ...prev,
+            status: prev.status || "watching",
+            lastCheckAt: new Date().toISOString(),
+            note: "price_unavailable",
+          },
+        });
+        continue;
+      }
+
+      const startMs = cardSignalStartMs(card);
+      let price = priceCache.get(sym);
+      if (price == null) {
+        try {
+          const tickPx = await fetchFuturesPrice(sym);
+          price = tickPx.price;
+          priceCache.set(sym, price);
+        } catch (e) {
+          log.debug(`档位检查取价失败 ${sym}: ${/** @type {Error} */ (e).message}`);
+          continue;
+        }
+      }
+
+      const kKey = `${sym}:${startMs}`;
+      let klines = klineCache.get(kKey);
+      if (!klines) {
+        try {
+          klines = await fetchFuturesKlines(sym, startMs, Date.now(), "5m");
+          klineCache.set(kKey, klines);
+        } catch (e) {
+          log.debug(`档位检查 K 线失败 ${sym}: ${/** @type {Error} */ (e).message}`);
+          klines = [];
+        }
+      }
+
+      const prev = parseProgressJson(card.progress);
+      const computed = evaluateCardProgress(card, { price, klines });
+      const merged = mergeProgress(prev, computed);
+      if (!progressChanged(prev, merged) && prev) {
+        // 仅刷新 lastCheckAt / lastPrice
+        await store.updateSignalCard(card.id, {
+          progressJson: { ...merged, lastCheckAt: new Date().toISOString(), lastPrice: price },
+        });
+        continue;
+      }
+
+      await store.updateSignalCard(card.id, { progressJson: merged });
+      const meaningful =
+        merged.status !== "watching" ||
+        Boolean(merged.entryHitAt) ||
+        (merged.tpHits?.length ?? 0) > 0 ||
+        Boolean(merged.slHitAt);
+      if (meaningful) {
+        const channelId = String(card.channelId ?? "").trim();
+        const channelName = resolveCardChannelName(channelId, card.channelName);
+        broadcast?.("meta", {
+          kind: "card_progress",
+          card: { ...card, progress: merged },
+        });
+        log.info(
+          `档位进度 #${card.id} ${sym} channel=${channelName || channelId || "-"} ` +
+            `status=${merged.status} outcome=${merged.outcome} tpHits=${merged.tpHits?.length ?? 0} ` +
+            `pnl=${merged.pnlPct}%`
+        );
+      }
+    }
+  }
+
   async function tick() {
     await runProximityCheck();
+    await runLevelProgressCheck();
     await runAutoEval();
   }
 
@@ -365,6 +472,7 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
     log.info(
       `卡片监控已启动 tick=${config.cardPriceMonitorIntervalMs}ms | ` +
         `接近 每${Math.round(config.cardProximityCryptoCheckMs / 60000)}min±${config.cardProximityCryptoBandPct}% | ` +
+        `档位检查=${config.cardLevelCheckEnabled ? `每${Math.round((config.cardLevelCheckMs || 3600000) / 60000)}min` : "off"} | ` +
         `自动评价=${config.cardAutoEvalEnabled ? "on" : "off"}` +
         (config.cardTp1BreakevenEnabled
           ? ` | TP1保本=${Math.round((config.cardTp1BreakevenIntervalMs || 30000) / 1000)}s`
@@ -384,5 +492,13 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
     }
   }
 
-  return { start, stop, tick, runProximityCheck, runAutoEval, runTp1Breakeven };
+  return {
+    start,
+    stop,
+    tick,
+    runProximityCheck,
+    runLevelProgressCheck,
+    runAutoEval,
+    runTp1Breakeven,
+  };
 }

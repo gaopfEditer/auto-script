@@ -38,6 +38,7 @@ import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
 import { registerYoutubePasteBatchRoutes, startPasteBatchService } from "./youtube-paste-batch.js";
 import { createCardArchiveService } from "./card-archive-service.js";
 import { registerCardArchiveRoutes } from "./card-archive-api.js";
+import { registerCardEvalRoutes } from "./card-eval-api.js";
 import { registerCommunityRoutes } from "./community-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
 import { createCardExternalSink } from "./card-external-sink.js";
@@ -149,6 +150,7 @@ async function main() {
   registerBitgetRoutes(app, bitgetOrder, bitgetManual);
   registerWeexRoutes(app, weexOrder);
   registerCardArchiveRoutes(app, store, cardArchive);
+  registerCardEvalRoutes(app, store);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast);
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")

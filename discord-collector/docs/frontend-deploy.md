@@ -47,7 +47,7 @@ VITE_UI_PAGES=show,fetch,oi
 
 ```env
 VITE_UI_MODE=deploy
-VITE_UI_PAGES=show,fetch,oi,cards,debug
+VITE_UI_PAGES=show,fetch,oi,cards,eval,debug
 ```
 
 > **改 `VITE_UI_*` 后必须重新 `pnpm run ui:build`**，变量在构建期打进 JS，不会读取服务器运行时环境。
