@@ -10,19 +10,19 @@
 
 .show-app {
   display: grid;
-  grid-template-columns: 72px 260px 1fr;
+  grid-template-columns: 72px 390px 1fr;
   height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 .show-app.has-signal-cards {
-  grid-template-columns: 72px 260px 1fr 280px;
+  grid-template-columns: 72px 390px 1fr 280px;
 }
 .show-app.no-guild-rail {
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 390px 1fr;
 }
 .show-app.no-guild-rail.has-signal-cards {
-  grid-template-columns: 260px 1fr 280px;
+  grid-template-columns: 390px 1fr 280px;
 }
 .show-app > .guild-rail,
 .show-app > .channel-panel,
@@ -124,6 +124,31 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.85rem;
+  gap: 0.12rem;
+}
+.channel-strip-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.55rem;
+  padding: 0.05rem 0 0 1.05rem;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  color: #8b919a;
+}
+.channel-strip-today {
+  color: #b5bac1;
+  font-variant-numeric: tabular-nums;
+}
+.channel-strip-week {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.channel-strip-week.pos {
+  color: #3ba55d;
+}
+.channel-strip-week.neg {
+  color: #ed4245;
 }
 .channel-row:hover {
   background: #35373c;

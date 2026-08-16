@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted, watch, nextTick } from "vue";
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { RouterLink } from "vue-router";
 import SignalCardRail from "../components/SignalCardRail.vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
@@ -9,9 +9,9 @@ import {
   fetchChannelMessages,
   fetchCdpActiveChannel,
   fetchDiscordContext,
-  navigateDiscordChannel,
 } from "../lib/discordApi.js";
 import { fetchSignalConfig, isSignalChannelId } from "../lib/discordSignalApi.js";
+import { fetchChannelStripStats } from "../lib/cardEvalApi.js";
 import {
   fetchShowLayoutFromServer,
   hasRemoteLayoutSeeded,
@@ -98,6 +98,11 @@ const signalCardRailRef = ref(/** @type {InstanceType<typeof SignalCardRail> | n
 const highlightMessageId = ref("");
 /** @type {import('vue').Ref<{ channelIds: string[] } | null>} */
 const signalConfig = ref(null);
+
+/** @type {import('vue').Ref<Record<string, import('../lib/cardEvalApi.js').ChannelStripRow>>} */
+const channelStripById = ref({});
+/** @type {ReturnType<typeof setInterval> | null} */
+let channelStripTimer = null;
 let saveTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
 
 const selectedGuild = computed(() => guilds.value.find((g) => g.guildId === selectedGuildId.value) ?? null);
@@ -188,6 +193,46 @@ function formatUnreadBadge(channelId) {
   const n = channelUnreadCount(channelId);
   if (n <= 0) return "";
   return n > 99 ? "99+" : String(n);
+}
+
+/** @param {string} channelId */
+function channelStrip(channelId) {
+  return channelStripById.value[String(channelId ?? "").trim()] ?? null;
+}
+
+/** @param {string} channelId */
+function channelStripVisible(channelId) {
+  const s = channelStrip(channelId);
+  if (!s?.hasTpStrategy) return false;
+  return (s.today?.tpCount ?? 0) > 0 || (s.today?.slCount ?? 0) > 0 || Boolean(s.lastWeek);
+}
+
+/** @param {import('../lib/cardEvalApi.js').ChannelStripRow | null | undefined} s */
+function formatStripToday(s) {
+  if (!s) return "";
+  const tp = s.today?.tpCount ?? 0;
+  const sl = s.today?.slCount ?? 0;
+  if (tp <= 0 && sl <= 0) return "";
+  const parts = [];
+  if (tp > 0) parts.push(`止盈${tp}`);
+  if (sl > 0) parts.push(`止损${sl}`);
+  return `今 ${parts.join(" · ")}`;
+}
+
+/** @param {import('../lib/cardEvalApi.js').ChannelStripRow | null | undefined} s */
+function formatStripWeek(s) {
+  const w = s?.lastWeek;
+  if (!w || !(w.decided > 0) || w.winRate == null || !Number.isFinite(Number(w.winRate))) return "";
+  return `上周 ${Number(w.winRate).toFixed(0)}%`;
+}
+
+async function loadChannelStripStats() {
+  try {
+    const j = await fetchChannelStripStats();
+    channelStripById.value = j.byId ?? {};
+  } catch {
+    /* 评估服务未就绪时静默 */
+  }
 }
 
 function createChannelGroup() {
@@ -873,15 +918,16 @@ async function selectGuild(g) {
 
 /** 选频道序号：快速连点时丢弃过期的二次拉库 */
 let selectChannelSeq = 0;
-/** 同一频道短时间重复点击：跳过 CDP（部署后尤其重要） */
-const CDP_SAME_CHANNEL_DEBOUNCE_MS = 12_000;
+/** 同一频道短时间重复点击：跳过再拉库 */
 const DB_RELOAD_SAME_CHANNEL_MS = 2_000;
 let lastSelectChannelId = "";
 let lastDbReloadAt = 0;
-let lastCdpNavChannelId = "";
-let lastCdpNavAt = 0;
 
-/** @param {ChannelItem} ch */
+/**
+ * 切换前端查看频道：只切本地视图 + 必要时从库拉历史。
+ * 不触发 CDP——实时消息靠 WS；CDP 由服务端每 15 分钟轮询信号频道。
+ * @param {ChannelItem} ch
+ */
 async function selectChannel(ch) {
   if (renamingChannelId.value && renamingChannelId.value !== ch.channelId) {
     commitRename();
@@ -891,6 +937,8 @@ async function selectChannel(ch) {
   lastSelectChannelId = ch.channelId;
   selectedChannel.value = ch;
   clearChannelUnread(ch.channelId);
+  navError.value = "";
+  navPending.value = false;
   const cached = messagesByChannelId[ch.channelId] ?? [];
   if (cached.length) {
     await nextTick();
@@ -899,40 +947,10 @@ async function selectChannel(ch) {
   const now = Date.now();
   const skipDb =
     sameChannel && cached.length > 0 && now - lastDbReloadAt < DB_RELOAD_SAME_CHANNEL_MS;
-  const skipCdp =
-    sameChannel &&
-    ch.channelId === lastCdpNavChannelId &&
-    now - lastCdpNavAt < CDP_SAME_CHANNEL_DEBOUNCE_MS;
-  if (skipDb && skipCdp) return;
+  if (skipDb) return;
   try {
-    if (!skipDb) {
-      await loadMessagesForChannel(ch);
-      lastDbReloadAt = Date.now();
-    }
-    if (seq !== selectChannelSeq || skipCdp) return;
-    const gid = ch.guildId || selectedGuildId.value;
-    if (!gid) return;
-    lastCdpNavChannelId = ch.channelId;
-    lastCdpNavAt = Date.now();
-    // CDP 打开频道触发 Discord 拉历史，稍后再拉一次库
-    void (async () => {
-      try {
-        await navigateDiscordChannel(gid, ch.channelId);
-      } catch (e) {
-        if (seq === selectChannelSeq) {
-          navError.value = String(/** @type {Error} */ (e).message ?? e);
-        }
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 2500));
-      if (seq !== selectChannelSeq || selectedChannel.value?.channelId !== ch.channelId) return;
-      try {
-        await loadMessagesForChannel(ch);
-        lastDbReloadAt = Date.now();
-      } catch {
-        /* ignore */
-      }
-    })();
+    await loadMessagesForChannel(ch);
+    lastDbReloadAt = Date.now();
   } catch (e) {
     if (seq === selectChannelSeq) {
       navError.value = String(/** @type {Error} */ (e).message ?? e);
@@ -1344,6 +1362,15 @@ onMounted(async () => {
       }
     }
   }
+  void loadChannelStripStats();
+  channelStripTimer = setInterval(() => void loadChannelStripStats(), 60_000);
+});
+
+onUnmounted(() => {
+  if (channelStripTimer) {
+    clearInterval(channelStripTimer);
+    channelStripTimer = null;
+  }
 });
 </script>
 
@@ -1512,6 +1539,25 @@ onMounted(async () => {
               v-if="item.ch.lastMessagePreview && renamingChannelId !== item.ch.channelId"
               class="preview"
             >{{ item.ch.lastMessagePreview }}</span>
+            <span
+              v-if="channelStripVisible(item.ch.channelId) && renamingChannelId !== item.ch.channelId"
+              class="channel-strip-stats"
+            >
+              <span
+                v-if="formatStripToday(channelStrip(item.ch.channelId))"
+                class="channel-strip-today"
+                :title="'当日已结算：止盈 / 止损（策略含止盈的卡片）'"
+              >{{ formatStripToday(channelStrip(item.ch.channelId)) }}</span>
+              <span
+                v-if="formatStripWeek(channelStrip(item.ch.channelId))"
+                class="channel-strip-week"
+                :class="{
+                  pos: (channelStrip(item.ch.channelId)?.lastWeek?.winRate ?? 0) >= 50,
+                  neg: (channelStrip(item.ch.channelId)?.lastWeek?.winRate ?? 0) < 50,
+                }"
+                :title="'上周胜率（任意止盈=赢 · 先止损=输）'"
+              >{{ formatStripWeek(channelStrip(item.ch.channelId)) }}</span>
+            </span>
           </button>
         </template>
       </div>
@@ -1569,7 +1615,6 @@ onMounted(async () => {
       </header>
 
       <div v-if="navError" class="kook-nav-alert err">{{ navError }}</div>
-      <div v-else-if="navPending" class="kook-nav-alert pending">正在驱动 CDP 浏览器跳转…</div>
 
       <div ref="msgsScrollEl" class="msg-scroll">
         <template v-if="selectedChannel">

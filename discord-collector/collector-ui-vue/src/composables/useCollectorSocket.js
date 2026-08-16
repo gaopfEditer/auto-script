@@ -3,11 +3,15 @@ import { ref, onMounted, onUnmounted } from "vue";
 const status = ref("idle");
 const error = ref("");
 const lastMessageAt = ref(0);
+/** 掉线起始时间戳；0 表示当前已连接 */
+const disconnectedSince = ref(0);
 
 /** 未连上超过此时长 → 首次静默刷新 */
 const SILENT_REFRESH_FIRST_MS = 30_000;
 /** 首次之后仍未连上 → 每隔此时长再静默刷新 */
 const SILENT_REFRESH_EVERY_MS = 5 * 60_000;
+/** 断线超过此时长 → UI 明显提示 */
+export const WS_DISCONNECT_WARN_MS = 5 * 60_000;
 
 /** App 监听此事件做 RouterView 软挂载（非整页 reload） */
 export const COLLECTOR_WS_REFRESH_EVENT = "collector-ws-silent-refresh";
@@ -66,12 +70,16 @@ function clearRefreshWatch() {
 
 function markConnected() {
   downSince = 0;
+  disconnectedSince.value = 0;
   didFirstSilentRefresh = false;
   clearRefreshWatch();
 }
 
 function markDisconnected() {
-  if (!downSince) downSince = Date.now();
+  if (!downSince) {
+    downSince = Date.now();
+    disconnectedSince.value = downSince;
+  }
   armSilentRefreshWatch();
 }
 
@@ -81,7 +89,10 @@ function armSilentRefreshWatch() {
     markConnected();
     return;
   }
-  if (!downSince) downSince = Date.now();
+  if (!downSince) {
+    downSince = Date.now();
+    disconnectedSince.value = downSince;
+  }
 
   const elapsed = Date.now() - downSince;
   const delay = !didFirstSilentRefresh
@@ -233,6 +244,7 @@ export function useCollectorSocket(onMessage) {
     status,
     error,
     lastMessageAt,
+    disconnectedSince,
     reconnect: connectCollectorSocket,
     silentRefresh: silentRefreshCollectorSocket,
   };

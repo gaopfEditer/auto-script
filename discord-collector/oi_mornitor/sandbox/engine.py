@@ -23,8 +23,10 @@ from oi_mornitor.config import (
     SANDBOX_ENABLED,
     SANDBOX_FEE_PCT,
     SANDBOX_INTERVAL,
+    SANDBOX_KLINE_FETCH_TIMEOUT_SEC,
     SANDBOX_KLINE_LIMIT,
     SANDBOX_KLINE_LIMIT_1H,
+    SANDBOX_MAJOR_SYMBOLS,
     SANDBOX_MAX_CONCURRENT,
     SANDBOX_MAX_HOLD_DAYS,
     SANDBOX_NOTIONAL_USD,
@@ -211,6 +213,7 @@ class SandboxEngine:
             "sandbox_pool": pool,
             "sandbox_pool_count": len(pool),
             "sandbox_max_concurrent": SANDBOX_MAX_CONCURRENT,
+            "sandbox_strategy_open": self.strategy_open_count(),
             "sandbox_intervals": list(sandbox_intervals()),
             "sandbox_positions": positions,
             "sandbox_card_orders": card_orders,
@@ -295,6 +298,36 @@ class SandboxEngine:
             uniq.append(m)
         return uniq
 
+    @staticmethod
+    def resolve_pool_candidates(
+        pool_rows: list[dict[str, Any]] | None = None,
+        fallback_symbols: list[str] | None = None,
+    ) -> list[str]:
+        """日池候选：大象 → fallback → 全池 → 主流兜底。"""
+        rows = pool_rows or []
+        seen: set[str] = set()
+        out: list[str] = []
+
+        def _add(sym: str) -> None:
+            s = str(sym or "").strip().upper()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+
+        for r in rows:
+            if r.get("oi_tier") == TIER_HEAVY:
+                _add(str(r.get("symbol") or ""))
+        if not out:
+            for s in fallback_symbols or []:
+                _add(s)
+        if not out:
+            for r in rows:
+                _add(str(r.get("symbol") or ""))
+        if not out:
+            for s in SANDBOX_MAJOR_SYMBOLS or ("BTCUSDT", "ETHUSDT"):
+                _add(s)
+        return out
+
     def ensure_daily_pool(
         self,
         candidates: list[str],
@@ -309,7 +342,17 @@ class SandboxEngine:
             return existing
         pool_src = [s.upper() for s in candidates if s]
         if not pool_src:
-            return existing or []
+            # 无候选时保留已有；若今日尚无池，用主流兜底，避免 UI 永久「等待日池」
+            if existing:
+                return existing
+            pool_src = [
+                s.upper()
+                for s in (SANDBOX_MAJOR_SYMBOLS or ("BTCUSDT", "ETHUSDT"))
+                if s
+            ]
+            if not pool_src:
+                return []
+            logger.warning("沙盒日池候选为空，回退主流币: %s", ",".join(pool_src))
         rng = random.Random(f"sandbox-{day}")
         if len(pool_src) <= count:
             picked = list(pool_src)
@@ -318,6 +361,23 @@ class SandboxEngine:
         self.tracker.set_daily_pool(picked, day)
         logger.info("沙盒日池 %s · %d 币: %s", day, len(picked), ",".join(picked))
         return picked
+
+    def ensure_daily_pool_from_rows(
+        self,
+        pool_rows: list[dict[str, Any]] | None = None,
+        fallback_symbols: list[str] | None = None,
+        *,
+        force: bool = False,
+    ) -> list[str]:
+        """雷达扫完后立刻建日池（不依赖完整沙盒 K 线扫描）。"""
+        if not SANDBOX_ENABLED:
+            return self.tracker.get_daily_pool(date.today().isoformat()) or []
+        candidates = self.resolve_pool_candidates(pool_rows, fallback_symbols)
+        return self.ensure_daily_pool(candidates, force=force)
+
+    def strategy_open_count(self) -> int:
+        """S/T 纸面持仓数（不含卡片 logic=C）。"""
+        return sum(1 for p in self.tracker.list_positions() if p.logic != "C")
 
     def card_symbols(self) -> list[str]:
         return sorted(
@@ -1459,8 +1519,8 @@ class SandboxEngine:
             return {"ok": False, "error": "logic 须为 S 或 T"}
         if side_u not in ("LONG", "SHORT"):
             return {"ok": False, "error": "side 须为 LONG 或 SHORT"}
-        if len(self.tracker.list_positions()) >= SANDBOX_MAX_CONCURRENT:
-            return {"ok": False, "error": f"已达最大并发 {SANDBOX_MAX_CONCURRENT}"}
+        if self.strategy_open_count() >= SANDBOX_MAX_CONCURRENT:
+            return {"ok": False, "error": f"S/T 已达最大并发 {SANDBOX_MAX_CONCURRENT}"}
 
         klines = await fetch_pattern_klines(
             session,
@@ -1663,55 +1723,60 @@ class SandboxEngine:
             self._last_scan_ts = scan_ts or time.time()
             return []
 
-        candidates: list[str] = []
-        if pool_rows:
-            for r in pool_rows:
-                sym = str(r.get("symbol") or "")
-                if sym and r.get("oi_tier") == TIER_HEAVY:
-                    candidates.append(sym)
-        if not candidates and fallback_symbols:
-            candidates = list(fallback_symbols)
-        if not candidates and pool_rows:
-            candidates = [str(r.get("symbol")) for r in pool_rows if r.get("symbol")]
+        pool = self.ensure_daily_pool_from_rows(pool_rows, fallback_symbols)
+        # 用墙钟打点，便于判断沙盒循环是否真正在跑（勿复用雷达 scan_ts）
+        self._last_scan_ts = time.time()
 
-        pool = self.ensure_daily_pool(candidates)
-        open_syms = [p.symbol for p in self.tracker.list_positions()]
-        card_syms = self.card_symbols()
-        symbols = sorted(set(pool) | set(open_syms) | set(card_syms))
+        # S/T 扫描只拉日池 + 非卡片持仓；卡片由持仓快扫 / 市价刷新处理
+        st_open = [p.symbol for p in self.tracker.list_positions() if p.logic != "C"]
+        symbols = sorted(set(pool) | set(st_open))
         if not symbols:
             self._last_alerts = []
-            self._last_scan_ts = scan_ts or time.time()
             return []
 
         state_by_sym = {
             str(s.get("symbol") or "").upper(): s for s in (pattern_states or [])
         }
         intervals = list(sandbox_intervals())
+        timeout = max(15.0, float(SANDBOX_KLINE_FETCH_TIMEOUT_SEC or 45))
 
         # 各执行周期并行拉 K（15m / 1h 同等处理）
         klines_by_iv: dict[str, dict[str, list]] = {}
-        fetched = await asyncio.gather(
-            *[
-                fetch_pattern_klines_batch(
-                    session,
-                    base_url=base_url,
-                    symbols=symbols,
-                    interval=iv,
-                    limit=self._kline_limit(iv),
-                )
-                for iv in intervals
-            ]
-        )
-        for iv, km in zip(intervals, fetched):
-            klines_by_iv[iv] = km
+        try:
+            fetched = await asyncio.wait_for(
+                asyncio.gather(
+                    *[
+                        fetch_pattern_klines_batch(
+                            session,
+                            base_url=base_url,
+                            symbols=symbols,
+                            interval=iv,
+                            limit=self._kline_limit(iv),
+                        )
+                        for iv in intervals
+                    ]
+                ),
+                timeout=timeout,
+            )
+            for iv, km in zip(intervals, fetched):
+                klines_by_iv[iv] = km
+        except asyncio.TimeoutError:
+            logger.warning(
+                "沙盒拉 K 超时 %.0fs（%d 币 × %s），跳过本轮 S/T 评估",
+                timeout,
+                len(symbols),
+                ",".join(intervals),
+            )
+            self._last_alerts = []
+            self._last_scan_ts = time.time()
+            return []
 
         alerts: list[dict[str, Any]] = []
         stale_alerts = self._close_stale_open_positions(klines_by_iv=klines_by_iv)
         if stale_alerts:
             alerts.extend(stale_alerts)
-            # 超期仓已平，后续扫描用最新持仓列表
-            open_syms = [p.symbol for p in self.tracker.list_positions()]
-            symbols = sorted(set(pool) | set(open_syms) | set(card_syms))
+            st_open = [p.symbol for p in self.tracker.list_positions() if p.logic != "C"]
+            symbols = sorted(set(pool) | set(st_open))
 
         for iv in intervals:
             iv_sec = _INTERVAL_SEC.get(iv, 900)
@@ -1783,7 +1848,7 @@ class SandboxEngine:
                 if (
                     not self._has_position_on_interval(sym, iv)
                     and sym in pool
-                    and len(self.tracker.list_positions()) < SANDBOX_MAX_CONCURRENT
+                    and self.strategy_open_count() < SANDBOX_MAX_CONCURRENT
                     and self._can_reenter(sym, t_closed, iv)
                 ):
                     sig = evaluate_entry(
@@ -1795,18 +1860,9 @@ class SandboxEngine:
                             alerts.append(alert)
                 self._last_eval_bar[slot] = t_closed
 
-        # 卡片订单：近场提醒 / 挂单 / 入场 / 卡片止盈止损（不影响 S/T）
-        await self._scan_card_orders(
-            session,
-            base_url=base_url,
-            pool_rows=pool_rows,
-            klines_15m=klines_by_iv.get(CARD_EVAL_INTERVAL)
-            or klines_by_iv.get("15m"),
-            alerts=alerts,
-        )
-
+        # 卡片挂单/持仓由 _open_trade_loop 快扫，避免与 S/T 抢限流把日扫拖死
         self._last_alerts = alerts
-        self._last_scan_ts = scan_ts or time.time()
+        self._last_scan_ts = time.time()
         return alerts
 
     def _append_event(self, meta: dict[str, Any], event: dict[str, Any]) -> None:
@@ -1854,10 +1910,14 @@ class SandboxEngine:
     ) -> dict[str, Any] | None:
         sym = symbol.upper()
         if sig.action == "enter" and pos is None and sig.sl:
-            if len(self.tracker.list_positions()) >= SANDBOX_MAX_CONCURRENT:
-                return None
             meta_pre = dict(sig.meta or {})
             is_card = sig.logic == "C" or str(meta_pre.get("source") or "") == "card"
+            # 卡片与 S/T 分计：卡片仓不占用 S/T 纸面并发名额
+            if is_card:
+                if len(self.tracker.list_positions()) >= SANDBOX_MAX_CONCURRENT * 3:
+                    return None
+            elif self.strategy_open_count() >= SANDBOX_MAX_CONCURRENT:
+                return None
             iv = (
                 CARD_INTERVAL
                 if is_card

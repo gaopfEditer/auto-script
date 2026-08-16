@@ -126,6 +126,17 @@ PATTERN_STATE_DB = _PKG_ROOT / "data" / "pattern_state.db"
 PATTERN_CHART_DEFAULT_LIMIT = int(os.getenv("OI_PATTERN_CHART_LIMIT", "500"))
 PATTERN_CHART_MAX_LIMIT = int(os.getenv("OI_PATTERN_CHART_MAX_LIMIT", "1500"))
 PATTERN_CHART_LOAD_CHUNK = int(os.getenv("OI_PATTERN_CHART_LOAD_CHUNK", "300"))
+# 形态+OI 同现 → Toast + Telegram 推荐短线（默认开）
+PATTERN_OI_COMBO_TELEGRAM = os.getenv(
+    "OI_PATTERN_OI_COMBO_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# Telegram：优先 HTTP 网关，否则 Bot API
+TELEGRAM_SEND_URL = os.getenv("TELEGRAM_SEND_URL", "").strip()
+TELEGRAM_PUSH_CHAT_ID = (
+    os.getenv("TELEGRAM_PUSH_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or ""
+).strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 PATTERN_CHART_INTERVALS = tuple(
     x.strip()
     for x in os.getenv("OI_PATTERN_CHART_INTERVALS", "5m,15m,30m,1h,4h,1d").split(",")
@@ -271,6 +282,12 @@ CARD_DEFAULT_LEVERAGE = float(os.getenv("OI_CARD_DEFAULT_LEVERAGE", "10"))
 CARD_PRICE_REFRESH_SEC = float(os.getenv("OI_CARD_PRICE_REFRESH_SEC", "300"))
 # 已开仓 / 卡片挂单：独立快扫间隔（秒），尽快触价更新评价与交易逻辑
 OPEN_TRADE_SCAN_SEC = float(os.getenv("OI_OPEN_TRADE_SCAN_SEC", "15"))
+# S/T 纸面扫描独立循环间隔（秒）；与主雷达解耦，避免形态扫拖死日池/自动入场
+SANDBOX_SCAN_SEC = float(os.getenv("OI_SANDBOX_SCAN_SEC", "60"))
+# 单轮沙盒拉 K 总超时（秒）；超时则跳过本轮入场评估，下轮重试
+SANDBOX_KLINE_FETCH_TIMEOUT_SEC = float(
+    os.getenv("OI_SANDBOX_KLINE_FETCH_TIMEOUT_SEC", "45")
+)
 # 平仓后回写 discord-collector 自动评价
 CARD_SETTLEMENT_URL = (
     os.getenv("OI_CARD_SETTLEMENT_URL", "http://127.0.0.1:3851/api/cards/settlement").strip()

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
-import { fetchEvalChannel, fetchEvalSummary } from "../lib/cardEvalApi.js";
+import { emptyEvalMetrics, fetchEvalChannel, fetchEvalSummary } from "../lib/cardEvalApi.js";
 
 const RANGE_OPTIONS = [
   { value: "1d", label: "当日" },
@@ -67,9 +67,9 @@ async function loadSummary() {
   error.value = "";
   try {
     const j = await fetchEvalSummary(queryOpts.value);
-    overall.value = j.overall;
-    channels.value = j.channels ?? [];
-    note.value = j.note ?? "";
+    overall.value = j?.overall ?? emptyEvalMetrics();
+    channels.value = Array.isArray(j?.channels) ? j.channels.filter((c) => (c?.cardCount ?? 0) > 0) : [];
+    note.value = j?.note ?? "";
     if (selectedChannelId.value != null) {
       const still = channels.value.some((c) => c.channelId === selectedChannelId.value);
       if (!still) {
@@ -80,6 +80,8 @@ async function loadSummary() {
       }
     }
   } catch (e) {
+    overall.value = null;
+    channels.value = [];
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {
     loading.value = false;

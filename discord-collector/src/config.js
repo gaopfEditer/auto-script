@@ -83,14 +83,14 @@ export const config = {
   /**
    * 定时用 CDP 轮询打开信号频道（每次只切 1 个，避免连跳）。
    * 默认开；COLLECTOR_CDP_CHANNEL_ROTATE=0 关闭。
-   * 间隔默认 10 分钟切下一个。
+   * 间隔默认 15 分钟切下一个（勿依赖前端点频道触发）。
    */
   cdpChannelRotate: !["0", "false", "no", "off"].includes(
     String(process.env.COLLECTOR_CDP_CHANNEL_ROTATE ?? "1").toLowerCase()
   ),
   cdpChannelRotateIntervalMs: Math.max(
     60_000,
-    Number(process.env.COLLECTOR_CDP_CHANNEL_ROTATE_INTERVAL_MS) || 600_000
+    Number(process.env.COLLECTOR_CDP_CHANNEL_ROTATE_INTERVAL_MS) || 900_000
   ),
   /** @deprecated 已改为每次只切 1 频道，dwell 不再使用；保留以免旧配置报错 */
   cdpChannelRotateDwellMs: Math.max(

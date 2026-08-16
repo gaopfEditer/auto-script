@@ -138,6 +138,79 @@ function aggregateMetrics(cards) {
 }
 
 /**
+ * @param {ReturnType<typeof archiveCardToClient>} card
+ */
+export function cardHasTpStrategy(card) {
+  const ex = card.execution && typeof card.execution === "object" ? card.execution : null;
+  const planned = ex?.planned && typeof ex.planned === "object" ? ex.planned : null;
+  const tps = planned?.takeProfitPrices;
+  if (Array.isArray(tps) && tps.some((p) => String(p ?? "").trim())) return true;
+  const parsed = card.parsedJson && typeof card.parsedJson === "object" ? card.parsedJson : null;
+  const fromParsed = parsed?.takeProfits ?? parsed?.targets ?? parsed?.takeProfit;
+  if (Array.isArray(fromParsed) && fromParsed.some((p) => String(p ?? "").trim())) return true;
+  if (typeof fromParsed === "string" && fromParsed.trim()) return true;
+  return false;
+}
+
+/**
+ * 上一自然周（周一 00:00 → 本周一 00:00，本地时区）。
+ * @returns {{ fromMs: number, toMs: number }}
+ */
+export function resolveLastWeekMs() {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const day = startOfToday.getDay(); // 0=Sun
+  const daysSinceMonday = day === 0 ? 6 : day - 1;
+  const thisMonday = new Date(startOfToday);
+  thisMonday.setDate(thisMonday.getDate() - daysSinceMonday);
+  const lastMonday = new Date(thisMonday);
+  lastMonday.setDate(lastMonday.getDate() - 7);
+  return { fromMs: lastMonday.getTime(), toMs: thisMonday.getTime() };
+}
+
+/**
+ * @param {Array<ReturnType<typeof archiveCardToClient>} cards
+ */
+function aggregateTpStrategyMetrics(cards) {
+  const withTp = cards.filter(cardHasTpStrategy);
+  return {
+    ...aggregateMetrics(withTp),
+    hasTpStrategy: withTp.length > 0,
+    strategyCardCount: withTp.length,
+  };
+}
+
+/**
+ * @param {unknown[]} rows
+ */
+function rowsToCards(rows) {
+  /** @type {ReturnType<typeof archiveCardToClient>[]} */
+  const cards = [];
+  for (const r of rows) {
+    try {
+      cards.push(archiveCardToClient(/** @type {Record<string, unknown>} */ (r)));
+    } catch {
+      /* ignore */
+    }
+  }
+  return cards;
+}
+
+/**
+ * @param {ReturnType<typeof archiveCardToClient>[]} cards
+ */
+function groupByChannel(cards) {
+  /** @type {Map<string, typeof cards>} */
+  const byChannel = new Map();
+  for (const card of cards) {
+    const cid = String(card.channelId ?? "").trim() || "_unknown";
+    if (!byChannel.has(cid)) byChannel.set(cid, []);
+    byChannel.get(cid)?.push(card);
+  }
+  return byChannel;
+}
+
+/**
  * @param {import("express").Express} app
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  */
@@ -150,15 +223,9 @@ export function registerCardEvalRoutes(app, store) {
         req.query.to != null ? String(req.query.to) : undefined
       );
       const rows = await store.listCardsForEval({ fromMs, toMs, limit: 2000 });
-      const cards = rows.map((r) => archiveCardToClient(r));
+      const cards = rowsToCards(rows);
 
-      /** @type {Map<string, typeof cards>} */
-      const byChannel = new Map();
-      for (const card of cards) {
-        const cid = String(card.channelId ?? "").trim() || "_unknown";
-        if (!byChannel.has(cid)) byChannel.set(cid, []);
-        byChannel.get(cid).push(card);
-      }
+      const byChannel = groupByChannel(cards);
 
       const channels = [...byChannel.entries()]
         .map(([channelId, list]) => {
@@ -172,6 +239,7 @@ export function registerCardEvalRoutes(app, store) {
             ...aggregateMetrics(list),
           };
         })
+        .filter((ch) => (ch.cardCount || 0) > 0)
         .sort((a, b) => (b.cardCount || 0) - (a.cardCount || 0));
 
       res.json({
@@ -181,6 +249,68 @@ export function registerCardEvalRoutes(app, store) {
         toMs,
         note: "PnL 按 1/N 分批止盈累加（杠杆口径与回测一致）；胜率：任意 TP=赢，先 SL=输，未入场不计",
         overall: aggregateMetrics(cards),
+        channels,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
+    }
+  });
+
+  /**
+   * Show 频道列表条：当日止盈/止损笔数 + 上周胜率（仅统计策略含止盈的卡片）。
+   */
+  app.get("/api/cards/eval/channel-strip", async (_req, res) => {
+    try {
+      const today = resolveEvalRangeMs("1d");
+      const lastWeek = resolveLastWeekMs();
+      const [todayRows, weekRows] = await Promise.all([
+        store.listCardsForEval({ fromMs: today.fromMs, toMs: today.toMs, limit: 2000 }),
+        store.listCardsForEval({ fromMs: lastWeek.fromMs, toMs: lastWeek.toMs, limit: 2000 }),
+      ]);
+      const todayBy = groupByChannel(rowsToCards(todayRows));
+      const weekBy = groupByChannel(rowsToCards(weekRows));
+      const channelIds = new Set([...todayBy.keys(), ...weekBy.keys()]);
+
+      /** @type {Array<Record<string, unknown>>} */
+      const channels = [];
+      for (const channelId of channelIds) {
+        if (channelId === "_unknown") continue;
+        const todayList = todayBy.get(channelId) || [];
+        const weekList = weekBy.get(channelId) || [];
+        const todayM = aggregateTpStrategyMetrics(todayList);
+        const weekM = aggregateTpStrategyMetrics(weekList);
+        if (!todayM.hasTpStrategy && !weekM.hasTpStrategy) continue;
+        const decided = (weekM.winCount || 0) + (weekM.lossCount || 0);
+        channels.push({
+          channelId,
+          channelName: resolveCardChannelName(
+            channelId,
+            todayList[0]?.channelName ?? weekList[0]?.channelName
+          ),
+          hasTpStrategy: true,
+          today: {
+            tpCount: todayM.winCount || 0,
+            slCount: todayM.lossCount || 0,
+            pendingCount: todayM.pendingCount || 0,
+            enteredCount: todayM.cardCount || 0,
+          },
+          lastWeek:
+            decided > 0
+              ? {
+                  winRate: weekM.winRate,
+                  winCount: weekM.winCount || 0,
+                  lossCount: weekM.lossCount || 0,
+                  decided,
+                }
+              : null,
+        });
+      }
+      channels.sort((a, b) => String(a.channelName).localeCompare(String(b.channelName), "zh"));
+
+      res.json({
+        ok: true,
+        today: { fromMs: today.fromMs, toMs: today.toMs },
+        lastWeek: { fromMs: lastWeek.fromMs, toMs: lastWeek.toMs },
         channels,
       });
     } catch (e) {
@@ -203,7 +333,7 @@ export function registerCardEvalRoutes(app, store) {
         channelId: channelId || undefined,
         limit: 1000,
       });
-      let cards = rows.map((r) => archiveCardToClient(r));
+      let cards = rowsToCards(rows);
       if (!channelId) {
         cards = cards.filter((c) => !String(c.channelId ?? "").trim());
       }

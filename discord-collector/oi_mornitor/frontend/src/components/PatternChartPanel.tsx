@@ -37,6 +37,26 @@ import {
 } from "../utils/chartTimeframe";
 import { chartLocalization, chartTimeScaleOptions, formatCandleLocalTime } from "../utils/chartLocale";
 
+/** 视口左缘距数据起点少于此根数时触发续载 */
+const LEFT_HISTORY_PAD = 120;
+/** 可见跨度覆盖已加载数据达到该比例，视为「滚轮缩到看全图」 */
+const ZOOM_OUT_COVER_RATIO = 0.72;
+/** 自动向左续载的上限，避免一次缩放过载 */
+const CHART_HISTORY_MAX = 5000;
+
+function isZoomedOutFullView(range: LogicalRange, len: number): boolean {
+  if (len <= 0) return false;
+  const span = range.to - range.from;
+  return (range.from < 10 || range.from < 0) && span >= len * ZOOM_OUT_COVER_RATIO;
+}
+
+/** 左滑接近尽头，或滚轮横轴收缩看全图时，需要继续拉更早 K 线 */
+function needsLeftHistory(range: LogicalRange, len: number): boolean {
+  if (len <= 0 || len >= CHART_HISTORY_MAX) return false;
+  if (range.from < LEFT_HISTORY_PAD || range.from < 0) return true;
+  return isZoomedOutFullView(range, len);
+}
+
 interface Props {
   symbol: string;
   state?: PatternState;
@@ -94,6 +114,7 @@ const MARKER_LEGEND = [
   { kind: "inverted_hammer", label: "倒锤子", color: "#00bcd4" },
   { kind: "continuous_upper_wick", label: "连续上插针", color: "#9c27b0" },
   { kind: "continuous_lower_wick", label: "连续下插针", color: "#9c27b0" },
+  { kind: "oi_anomaly", label: "OI异动（无形态）", color: "#ff9800" },
 ];
 
 const VEGAS_SERIES: { key: VegasKey; title: string; color: string }[] = [
@@ -112,6 +133,7 @@ const COMPACT_MARKER_KINDS = new Set([
   "continuous_lower_wick",
   "continuous_non_upper_wick",
   "continuous_non_lower_wick",
+  "oi_anomaly",
 ]);
 const COMPACT_MARKER_SIZE = 0.5;
 /** 图表全局字号 = LWC 默认 12 × 60% */
@@ -515,10 +537,19 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         if (close != null) applyPriceAxisFormat(close);
 
         if (prevRange && prepended > 0) {
-          chart.timeScale().setVisibleLogicalRange({
-            from: prevRange.from + prepended,
-            to: prevRange.to + prepended,
-          });
+          const shiftedTo = prevRange.to + prepended;
+          // 滚轮缩到看全图时：左侧新数据直接露出来（不要只平移视口），才能继续触发续载
+          if (isZoomedOutFullView(prevRange, prevLen)) {
+            chart.timeScale().setVisibleLogicalRange({
+              from: 0,
+              to: shiftedTo,
+            });
+          } else {
+            chart.timeScale().setVisibleLogicalRange({
+              from: prevRange.from + prepended,
+              to: shiftedTo,
+            });
+          }
         } else if (!prevRange || prevLen === 0) {
           const to = sortedCandles.length;
           const from = Math.max(0, to - CHART_VISIBLE_BARS);
@@ -535,6 +566,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
   const loadMoreHistory = useCallback(async () => {
     if (loadingMoreRef.current || !hasMoreRef.current) return;
+    if (candlesRef.current.length >= CHART_HISTORY_MAX) {
+      hasMoreRef.current = false;
+      setHasMore(false);
+      return;
+    }
     const oldestMs = oldestCandleOpenMs(candlesRef.current);
     if (oldestMs == null) return;
 
@@ -560,7 +596,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         setHasMore(false);
         return;
       }
-      hasMoreRef.current = chunk.has_more !== false;
+      hasMoreRef.current = chunk.has_more !== false && merged.length < CHART_HISTORY_MAX;
       setHasMore(hasMoreRef.current);
 
       const mergedUpper = mergeBbSeries(metaRef.current?.bb?.upper ?? [], chunk.bb?.upper ?? []);
@@ -588,9 +624,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         { isPrepend: true },
       );
 
-      // 滚轮缩到看全图时 from≈0，只靠一次 range 回调不够；左侧仍紧时继续拉
+      // 加载期间 range 回调被挡住；缩全图/左缘仍紧时在 finally 里接着拉
       const range = chartApi.current?.timeScale().getVisibleLogicalRange();
-      shouldChain = Boolean(hasMoreRef.current && range && range.from < 80);
+      const len = candlesRef.current.length;
+      shouldChain = Boolean(hasMoreRef.current && range && needsLeftHistory(range, len));
     } catch {
       /* 静默 */
     } finally {
@@ -980,12 +1017,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
       const onRange = (range: LogicalRange | null) => {
         if (!range || loadingMoreRef.current || !hasMoreRef.current) return;
-        // 左缘接近 / 已缩到几乎看全量：续载更早 K 线
-        const span = range.to - range.from;
         const len = candlesRef.current.length;
-        const nearLeft = range.from < 80;
-        const zoomedOut = len > 0 && range.from < 10 && span >= len * 0.85;
-        if (nearLeft || zoomedOut) void loadMoreHistoryRef.current();
+        if (needsLeftHistory(range, len)) void loadMoreHistoryRef.current();
       };
       chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
 
@@ -1234,6 +1267,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 {analysis?.bb_wick_top && <span className="sig bb">BB-Wicks 顶部</span>}
                 {analysis?.macd_top_weak && <span className="sig macd-weak">MACD 走弱</span>}
                 {analysis?.macd_bull && <span className="sig macd-bull">MACD 金叉放大</span>}
+                {analysis?.oi_anomaly_only && <span className="sig oi">OI异动</span>}
+                {analysis?.oi_anomaly && !analysis?.oi_anomaly_only && (
+                  <span className="sig oi-combo">形态+OI异动</span>
+                )}
               </div>
               <p className="pattern-interval-tag">
                 {timeframe} · 已加载 {candleCount} 根

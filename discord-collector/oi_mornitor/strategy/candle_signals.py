@@ -1,6 +1,7 @@
 """K 线形态信号 — 对齐 tradingview-bollinger-wicks.pine。"""
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pandas as pd
@@ -100,14 +101,25 @@ def _trimmed_mean_abs_prev(
     return sum(arr[:keep]) / keep
 
 
-def compute_oi_anomaly_flags(df: pd.DataFrame) -> list[bool]:
+PATTERN_MARKER_KINDS = frozenset({
+    "shooting_star",
+    "inverted_hammer",
+    "continuous_upper_wick",
+    "continuous_lower_wick",
+    "continuous_non_upper_wick",
+    "continuous_non_lower_wick",
+})
+
+
+def compute_oi_anomaly_flags(df: pd.DataFrame) -> tuple[list[bool], list[float | None]]:
+    """返回 (异动 flags, 当根 ΔOI；无则为 None)。"""
     n = len(df)
     flags = [False] * n
+    delta_signed: list[float | None] = [None] * n
     if n == 0 or "oi" not in df.columns:
-        return flags
+        return flags, delta_signed
 
     delta_abs: list[float | None] = [None] * n
-    delta_signed: list[float | None] = [None] * n
     oi_vals = df["oi"].tolist()
     vols = df["volume"].astype(float).tolist()
 
@@ -143,16 +155,54 @@ def compute_oi_anomaly_flags(df: pd.DataFrame) -> list[bool]:
         vol_huge_z = OI_VOL_Z <= 0 or vol > vol_sma + OI_VOL_Z * vol_std
         if vol_huge_mult and vol_huge_z:
             flags[i] = True
-    return flags
+    return flags, delta_signed
+
+
+def _oi_only_label(delta: float | None) -> str:
+    if delta is None:
+        return "OI异动"
+    if delta > 0:
+        return "OI异动↑"
+    if delta < 0:
+        return "OI异动↓"
+    return "OI异动"
+
+
+def _append_marker(
+    markers: list[dict[str, Any]],
+    *,
+    time: int,
+    position: str,
+    color: str,
+    shape: str,
+    text: str,
+    price: float,
+    kind: str,
+    oi_anomaly: bool = False,
+) -> None:
+    markers.append({
+        "time": time,
+        "position": position,
+        "color": color,
+        "shape": shape,
+        "text": text,
+        "price": price,
+        "kind": kind,
+        "oi_anomaly": bool(oi_anomaly),
+    })
 
 
 def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """扫描 DataFrame（需含 bb_* / vegas_e*，可选 oi）产出 markers。"""
+    """扫描 DataFrame（需含 bb_* / vegas_e*，可选 oi）产出 markers。
+
+    - 形态命中且柱级 OI 异动：text 带 (oi异动)
+    - 仅有 OI 异动、无形态：单独打「OI异动」标签
+    """
     markers: list[dict[str, Any]] = []
     if df.empty or "bb_basis" not in df.columns:
         return markers
 
-    oi_flags = compute_oi_anomaly_flags(df)
+    oi_flags, oi_deltas = compute_oi_anomaly_flags(df)
     cont_upper = 0
     cont_lower = 0
     non_zone_upper: list[int] = []
@@ -168,6 +218,7 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
 
         near_v = near_vegas_channel(row)
         oi_on = bool(oi_flags[i]) if i < len(oi_flags) else False
+        oi_delta = oi_deltas[i] if i < len(oi_deltas) else None
         t = _ts_sec(int(row["open_time"]))
         h = float(row["high"])
         l = float(row["low"])
@@ -179,6 +230,8 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
         basis = float(row["bb_basis"])
         upper = float(row["bb_upper"])
         lower = float(row["bb_lower"])
+        pattern_hit = False
+        before_n = len(markers)
 
         mid_to_upper = upper - basis
         upper_zone = basis + mid_to_upper * 0.85
@@ -187,15 +240,17 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
         if valid_upper:
             cont_upper += 1
             if cont_upper == CONT_WICK_COUNT:
-                markers.append({
-                    "time": t,
-                    "position": "aboveBar",
-                    "color": "#9c27b0",
-                    "shape": "arrowDown",
-                    "text": sig_prefix("连续上插针", near_vegas=near_v, oi_anomaly=oi_on),
-                    "price": h,
-                    "kind": "continuous_upper_wick",
-                })
+                _append_marker(
+                    markers,
+                    time=t,
+                    position="aboveBar",
+                    color="#9c27b0",
+                    shape="arrowDown",
+                    text=sig_prefix("连续上插针", near_vegas=near_v, oi_anomaly=oi_on),
+                    price=h,
+                    kind="continuous_upper_wick",
+                    oi_anomaly=oi_on,
+                )
         else:
             cont_upper = 0
 
@@ -206,15 +261,17 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
         if valid_lower:
             cont_lower += 1
             if cont_lower == CONT_WICK_COUNT:
-                markers.append({
-                    "time": t,
-                    "position": "belowBar",
-                    "color": "#9c27b0",
-                    "shape": "arrowUp",
-                    "text": sig_prefix("连续下插针", near_vegas=near_v, oi_anomaly=oi_on),
-                    "price": l,
-                    "kind": "continuous_lower_wick",
-                })
+                _append_marker(
+                    markers,
+                    time=t,
+                    position="belowBar",
+                    color="#9c27b0",
+                    shape="arrowUp",
+                    text=sig_prefix("连续下插针", near_vegas=near_v, oi_anomaly=oi_on),
+                    price=l,
+                    kind="continuous_lower_wick",
+                    oi_anomaly=oi_on,
+                )
         else:
             cont_lower = 0
 
@@ -235,17 +292,19 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
                     else:
                         break
                 if recent >= 3:
-                    markers.append({
-                        "time": t,
-                        "position": "aboveBar",
-                        "color": "#7b1fa2",
-                        "shape": "arrowDown",
-                        "text": sig_prefix(
+                    _append_marker(
+                        markers,
+                        time=t,
+                        position="aboveBar",
+                        color="#7b1fa2",
+                        shape="arrowDown",
+                        text=sig_prefix(
                             "非上轨连续上插针", near_vegas=near_v, oi_anomaly=oi_on
                         ),
-                        "price": h,
-                        "kind": "continuous_non_upper_wick",
-                    })
+                        price=h,
+                        kind="continuous_non_upper_wick",
+                        oi_anomaly=oi_on,
+                    )
         if bb_lo and not in_lower:
             non_zone_lower.append(i)
             if len(non_zone_lower) > 20:
@@ -262,17 +321,19 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
                     else:
                         break
                 if recent >= 3:
-                    markers.append({
-                        "time": t,
-                        "position": "belowBar",
-                        "color": "#7b1fa2",
-                        "shape": "arrowUp",
-                        "text": sig_prefix(
+                    _append_marker(
+                        markers,
+                        time=t,
+                        position="belowBar",
+                        color="#7b1fa2",
+                        shape="arrowUp",
+                        text=sig_prefix(
                             "非下轨连续下插针", near_vegas=near_v, oi_anomaly=oi_on
                         ),
-                        "price": l,
-                        "kind": "continuous_non_lower_wick",
-                    })
+                        price=l,
+                        kind="continuous_non_lower_wick",
+                        oi_anomaly=oi_on,
+                    )
 
         at_lo = at_lower_band(row)
         shoot = detect_shooting_star(
@@ -288,28 +349,91 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
                 and i - last_shoot_i <= SHOOT_REPEAT_BARS
             )
             name = "射击之星（2）" if is_second else "射击之星"
-            markers.append({
-                "time": t,
-                "position": "aboveBar",
-                "color": "#ff4081",
-                "shape": "arrowDown",
-                "text": sig_prefix(name, near_vegas=near_v, oi_anomaly=oi_on),
-                "price": h,
-                "kind": "shooting_star",
-            })
+            _append_marker(
+                markers,
+                time=t,
+                position="aboveBar",
+                color="#ff4081",
+                shape="arrowDown",
+                text=sig_prefix(name, near_vegas=near_v, oi_anomaly=oi_on),
+                price=h,
+                kind="shooting_star",
+                oi_anomaly=oi_on,
+            )
             last_shoot_i = i
-            continue
+            pattern_hit = True
+        else:
+            below_mid = l <= basis
+            if below_mid and detect_inverted_hammer(
+                row, wick_ratio=STRATEGY_SHOOT_WICK_RATIO
+            ):
+                _append_marker(
+                    markers,
+                    time=t,
+                    position="belowBar",
+                    color="#00bcd4",
+                    shape="arrowUp",
+                    text=sig_prefix("倒锤子", near_vegas=near_v, oi_anomaly=oi_on),
+                    price=l,
+                    kind="inverted_hammer",
+                    oi_anomaly=oi_on,
+                )
 
-        below_mid = l <= basis
-        if below_mid and detect_inverted_hammer(row, wick_ratio=STRATEGY_SHOOT_WICK_RATIO):
-            markers.append({
-                "time": t,
-                "position": "belowBar",
-                "color": "#00bcd4",
-                "shape": "arrowUp",
-                "text": sig_prefix("倒锤子", near_vegas=near_v, oi_anomaly=oi_on),
-                "price": l,
-                "kind": "inverted_hammer",
-            })
+        if len(markers) > before_n:
+            pattern_hit = True
+
+        # 仅有 OI 异动、无 K 线形态：仍以标签标出
+        if oi_on and not pattern_hit:
+            up = oi_delta is not None and oi_delta > 0
+            _append_marker(
+                markers,
+                time=t,
+                position="aboveBar" if up or oi_delta is None else "belowBar",
+                color="#ff9800",
+                shape="circle",
+                text=_oi_only_label(oi_delta),
+                price=h if up or oi_delta is None else l,
+                kind="oi_anomaly",
+                oi_anomaly=True,
+            )
 
     return markers
+
+
+def find_last_closed_pattern_oi_combos(
+    df: pd.DataFrame,
+    *,
+    now_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    """最近一根已收盘 K 上「形态 ∩ OI异动」→ 短线推荐信号。"""
+    if df.empty or "open_time" not in df.columns:
+        return []
+    now = int(now_ms if now_ms is not None else time.time() * 1000)
+    # 未收盘柱（close_time 在未来）跳过，取上一根
+    idx = len(df) - 1
+    if "close_time" in df.columns:
+        try:
+            ct = int(df.iloc[idx]["close_time"])
+            if ct > now and idx > 0:
+                idx -= 1
+        except (TypeError, ValueError):
+            pass
+    closed_ts = _ts_sec(int(df.iloc[idx]["open_time"]))
+    markers = collect_candle_signal_markers(df)
+    combos: list[dict[str, Any]] = []
+    for m in markers:
+        if int(m.get("time") or 0) != closed_ts:
+            continue
+        kind = str(m.get("kind") or "")
+        if kind not in PATTERN_MARKER_KINDS:
+            continue
+        if not m.get("oi_anomaly"):
+            continue
+        combos.append({
+            "time": closed_ts,
+            "kind": kind,
+            "text": str(m.get("text") or kind),
+            "price": float(m.get("price") or 0),
+            "position": str(m.get("position") or ""),
+        })
+    return combos

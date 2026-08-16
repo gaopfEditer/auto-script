@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import type { TickerRow } from "../types";
 import { deriveOiAlerts, type OiAlertItem } from "../utils/deriveOiAlerts";
@@ -84,11 +84,36 @@ export const AlertFeed = memo(function AlertFeed({
   thresholds,
 }: Props) {
   const navigate = useNavigate();
-  const alerts = useMemo(
-    () => deriveOiAlerts(rows, thresholds),
-    [rows, thresholds],
-  );
-  const timeLabel = formatClock(scanTs);
+  /** 首次见到该异动卡时锁定时间，避免每轮扫描刷新成「当前时间」 */
+  const firstSeenRef = useRef<Map<string, number>>(new Map());
+
+  const alerts = useMemo(() => {
+    const derived = deriveOiAlerts(rows, thresholds, 40, scanTs);
+    const seen = firstSeenRef.current;
+    const alive = new Set<string>();
+    const out: OiAlertItem[] = derived.map((item) => {
+      alive.add(item.id);
+      let alertTs = item.alertTs;
+      if (alertTs > 0) {
+        seen.set(item.id, alertTs);
+      } else {
+        const prev = seen.get(item.id);
+        if (prev && prev > 0) {
+          alertTs = prev;
+        } else {
+          alertTs = scanTs > 0 ? scanTs : Date.now() / 1000;
+          seen.set(item.id, alertTs);
+        }
+      }
+      return { ...item, alertTs };
+    });
+    for (const id of [...seen.keys()]) {
+      if (!alive.has(id)) seen.delete(id);
+    }
+    return out;
+  }, [rows, thresholds, scanTs]);
+
+  const scanTimeLabel = formatClock(scanTs);
   const openPattern = (symbol: string) => navigate(patternsPathForSymbol(symbol));
 
   return (
@@ -100,7 +125,7 @@ export const AlertFeed = memo(function AlertFeed({
             ⓘ
           </span>
         </span>
-        <span className="panel-count">更新 {timeLabel}</span>
+        <span className="panel-count">更新 {scanTimeLabel}</span>
       </div>
 
       <div className="alert-scanner">
@@ -116,7 +141,7 @@ export const AlertFeed = memo(function AlertFeed({
             <AlertCard
               key={item.id}
               item={item}
-              timeLabel={timeLabel}
+              timeLabel={formatClock(item.alertTs)}
               onSelect={openPattern}
             />
           ))

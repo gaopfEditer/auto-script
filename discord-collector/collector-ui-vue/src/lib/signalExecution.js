@@ -218,10 +218,14 @@ export function hasEvaluation(ex, note = "") {
 export function evaluationSummaryLines(ex, note = "") {
   /** @type {string[]} */
   const lines = [];
+  if (!ex || typeof ex !== "object") {
+    const n0 = String(note ?? "").trim();
+    return n0 ? [`备注：${n0}`] : [];
+  }
   if (ex.outcome && ex.outcome !== "pending") {
     lines.push(`结果：${outcomeLabel(ex.outcome)}`);
   }
-  const a = ex.actual;
+  const a = ex.actual && typeof ex.actual === "object" ? ex.actual : {};
   if (a.buyPrice) lines.push(`入场：${a.buyPrice}`);
   if (a.sellPrice) lines.push(`出场：${a.sellPrice}`);
   const tp = takeProfitText(a);

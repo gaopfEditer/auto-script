@@ -10,6 +10,8 @@ export interface OiAlertItem {
   pct: number;
   isPump: boolean;
   isSuppressed: boolean;
+  /** 卡片产生时间（unix 秒） */
+  alertTs: number;
 }
 
 /** 与后端 OI_DELTA_MAX_PCT 对齐：超过视为脏数据，不进异动流 */
@@ -47,6 +49,8 @@ export function deriveOiAlerts(
   rows: TickerRow[],
   thresholds: { oi_usd_limit: number; oi_pct_limit: number },
   maxItems = 40,
+  /** 可选：本轮扫描时间，作 alert_ts 缺失时的回退 */
+  scanTs = 0,
 ): OiAlertItem[] {
   const { oi_usd_limit: usdLimit, oi_pct_limit: pctLimit } = thresholds;
   const items: OiAlertItem[] = [];
@@ -69,6 +73,13 @@ export function deriveOiAlerts(
       const inTrig = trigWins.includes(w.window);
       const isSuppressed = inRaw && !inTrig;
 
+      const alertTs =
+        Number(row.alert_ts) > 0
+          ? Number(row.alert_ts)
+          : Number(scanTs) > 0
+            ? Number(scanTs)
+            : 0;
+
       items.push({
         id: `${row.symbol}-${w.window}`,
         row,
@@ -77,11 +88,15 @@ export function deriveOiAlerts(
         pct: w.pct,
         isPump: w.deltaUsd > 0,
         isSuppressed,
+        alertTs,
       });
     }
   }
 
   items.sort((a, b) => {
+    // 新产生的卡片靠前；同秒再按幅度
+    const t = (b.alertTs || 0) - (a.alertTs || 0);
+    if (t !== 0) return t;
     const mag = Math.abs(b.pct) - Math.abs(a.pct);
     if (mag !== 0) return mag;
     const win = windowRank(b.window) - windowRank(a.window);

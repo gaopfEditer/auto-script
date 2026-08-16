@@ -233,6 +233,8 @@ export function buildChartFromCandles(
     if (s.price > 0) price_lines.push(s);
   }
 
+  const lastT = candles.length ? candles[candles.length - 1].time : 0;
+  const lastMarkers = markers.filter((m) => m.time === lastT);
   const analysis: PatternChartAnalysis = {
     status: String(st.status || ""),
     status_label: String(st.status_label || ""),
@@ -244,6 +246,8 @@ export function buildChartFromCandles(
     trigger_price: trigger || undefined,
     hh_price: hh || undefined,
     last_price: candles.length ? candles[candles.length - 1].close : undefined,
+    oi_anomaly: lastMarkers.some((m) => m.oi_anomaly || m.kind === "oi_anomaly"),
+    oi_anomaly_only: lastMarkers.some((m) => m.kind === "oi_anomaly"),
   };
 
   return { bb, vegas, macd, markers, price_lines, analysis };

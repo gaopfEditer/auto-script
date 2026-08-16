@@ -478,6 +478,7 @@ def build_pattern_chart_payload(
         if price > 0:
             price_lines.append({"kind": kind, "price": price, "color": color, "title": title})
 
+    last_ts = _ts_sec(int(last["open_time"]))
     analysis.update({
         "h_max": h_max,
         "lh_price": lh_price,
@@ -489,6 +490,16 @@ def build_pattern_chart_payload(
         "bb_wick_top": bool(_bb_upper_wick(last)),
         "macd_bull": bool(_macd_bull_filter(df)),
         "macd_top_weak": bool(_macd_top_weak(df)),
+        "oi_anomaly": any(
+            bool(m.get("oi_anomaly")) and int(m.get("time") or 0) == last_ts
+            for m in markers
+            if isinstance(m, dict)
+        ),
+        "oi_anomaly_only": any(
+            str(m.get("kind") or "") == "oi_anomaly" and int(m.get("time") or 0) == last_ts
+            for m in markers
+            if isinstance(m, dict)
+        ),
     })
 
     return {

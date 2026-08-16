@@ -57,6 +57,8 @@ export interface TickerRow {
   is_alert: boolean;
   is_suppressed: boolean;
   alert_reason?: string;
+  /** 该异动卡片首次产生时间（unix 秒）；冷却期内保持不变 */
+  alert_ts?: number;
   type: string;
   individual_strength_score: number | null;
   is_historic_anomaly: boolean;
@@ -387,6 +389,8 @@ export interface PatternChartMarker {
   text: string;
   price?: number;
   kind?: string;
+  /** 柱级 OI 异动（形态后缀或纯 OI 标签） */
+  oi_anomaly?: boolean;
 }
 
 export interface PatternPriceLine {
@@ -410,6 +414,10 @@ export interface PatternChartAnalysis {
   bb_wick_top?: boolean;
   macd_bull?: boolean;
   macd_top_weak?: boolean;
+  /** 最新 K 含 OI 异动（含形态+OI 或纯 OI） */
+  oi_anomaly?: boolean;
+  /** 最新 K 仅有 OI 异动、无形态 */
+  oi_anomaly_only?: boolean;
 }
 
 export interface PatternChartData {

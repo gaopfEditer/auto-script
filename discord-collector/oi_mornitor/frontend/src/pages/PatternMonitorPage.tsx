@@ -1016,7 +1016,11 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     ) : null}
                     <div className="sandbox-pool">
                       {sandboxPool.length === 0 ? (
-                        <span className="pattern-empty">等待扫描生成日池…</span>
+                        <span className="pattern-empty">
+                          {sandboxOn
+                            ? "日池未生成：等待下一轮雷达（或点重抽）…"
+                            : "沙盒未启用"}
+                        </span>
                       ) : (
                         sandboxPool.map((sym) => {
                           const entered = enteredSymbols.has(sym.toUpperCase());

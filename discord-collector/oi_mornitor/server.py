@@ -317,14 +317,13 @@ async def handle_sandbox_stats(_request: web.Request) -> web.Response:
 
 async def handle_sandbox_reshuffle(_request: web.Request) -> web.Response:
     svc = get_service()
-    rows = svc.radar.last_all_rows
-    fallback = svc.radar.heavyweight_symbol_list
-    candidates = [str(r.get("symbol")) for r in rows if r.get("oi_tier") == "heavyweight"]
-    if not candidates:
-        candidates = list(fallback)
-    if not candidates:
-        return _json_response({"ok": False, "error": "大象池未就绪"}, status=503)
-    picked = svc.sandbox_engine.ensure_daily_pool(candidates, force=True)
+    picked = svc.sandbox_engine.ensure_daily_pool_from_rows(
+        svc.radar.last_all_rows,
+        svc.radar.heavyweight_symbol_list,
+        force=True,
+    )
+    if not picked:
+        return _json_response({"ok": False, "error": "候选池未就绪"}, status=503)
     return _json_response({"ok": True, "picked": picked, **svc.sandbox_engine.get_payload()})
 
 

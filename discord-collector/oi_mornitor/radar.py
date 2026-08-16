@@ -37,6 +37,8 @@ from oi_mornitor.config import (
     OI_ZSCORE_THRESHOLD,
     OPEN_TRADE_SCAN_SEC,
     CARD_PRICE_REFRESH_SEC,
+    SANDBOX_SCAN_SEC,
+    SANDBOX_KLINE_FETCH_TIMEOUT_SEC,
     POLL_15M_SEC,
     POLL_5M_SEC,
     RATE_LIMIT_COOLDOWN_SEC,
@@ -909,6 +911,7 @@ class BinanceOIRadar:
                     "is_alert": False,
                     "is_suppressed": False,
                     "alert_reason": "",
+                    "alert_ts": 0.0,
                     "type": "WARMING",
                     "individual_strength_score": None,
                     "is_historic_anomaly": False,
@@ -964,6 +967,9 @@ class BinanceOIRadar:
         elif raw_windows:
             status = "suppressed"
 
+        alert_rec = self.cooldown.active_alerts.get(symbol)
+        alert_ts = float(alert_rec.ts) if alert_rec else 0.0
+
         row.update(
             {
                 "current_oi": oi_base,
@@ -981,6 +987,7 @@ class BinanceOIRadar:
                 "is_alert": should_emit and bool(triggered_windows),
                 "is_suppressed": bool(raw_windows) and not should_emit,
                 "alert_reason": alert_reason,
+                "alert_ts": alert_ts,
                 "type": (
                     "OI_PUMP"
                     if status == "pump"
@@ -1228,7 +1235,10 @@ class RadarService:
         self._session_trust_env: bool | None = None
         self._task: asyncio.Task[None] | None = None
         self._open_trade_task: asyncio.Task[None] | None = None
+        self._sandbox_task: asyncio.Task[None] | None = None
+        self._card_price_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
+        self._sandbox_scan_lock = asyncio.Lock()
         self._running = False
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
@@ -1254,6 +1264,14 @@ class RadarService:
         session = await self._ensure_session()
         hot = await self.radar.scan(session)
         self.matrix.update_from_rows(self.radar.last_all_rows, scan_ts=self.radar.last_scan_ts)
+        # 日池与形态/沙盒 K 线解耦：雷达一出结果立刻生成，避免 UI 长期「等待日池」
+        try:
+            self.sandbox_engine.ensure_daily_pool_from_rows(
+                self.radar.last_all_rows,
+                self.radar.heavyweight_symbol_list,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("沙盒日池生成失败: %s", exc)
         await self.breakout_engine.scan(
             session,
             self.radar.last_all_rows,
@@ -1287,14 +1305,7 @@ class RadarService:
             pool_rows=self.radar.last_all_rows,
             fallback_symbols=self.radar.heavyweight_symbol_list,
         )
-        await self.sandbox_engine.scan(
-            session,
-            base_url=self.radar.base_url,
-            scan_ts=self.radar.last_scan_ts,
-            pool_rows=self.radar.last_all_rows,
-            fallback_symbols=self.radar.heavyweight_symbol_list,
-            pattern_states=self.pattern_engine.last_states,
-        )
+        # S/T 纸面扫描改独立循环，避免被形态扫阻塞
         # 多榜共振 → TradingView BB-Wicks 信号监听（CDP；同时只跑一个任务）
         task = getattr(self, "_tv_alert_task", None)
         if task is None or task.done():
@@ -1313,6 +1324,48 @@ class RadarService:
                 logger.warning("TV 信号监听错误: %s", "; ".join(result["errors"][:5]))
         except Exception as exc:  # noqa: BLE001
             logger.warning("TV 信号监听 tick 失败: %s", exc)
+
+    async def _sandbox_loop(self) -> None:
+        """S/T 日池自动入场/出场：与主雷达解耦，带锁防重叠。"""
+        interval = max(20.0, float(SANDBOX_SCAN_SEC or 60))
+        await asyncio.sleep(min(5.0, interval / 4))
+        while self._running:
+            started = time.time()
+            try:
+                async with self._sandbox_scan_lock:
+                    session = await self._ensure_session()
+                    # 整轮硬超时，防止备选所连环超时卡死循环
+                    hard_timeout = max(50.0, float(SANDBOX_KLINE_FETCH_TIMEOUT_SEC or 45) + 15)
+                    try:
+                        alerts = await asyncio.wait_for(
+                            self.sandbox_engine.scan(
+                                session,
+                                base_url=self.radar.base_url,
+                                scan_ts=self.radar.last_scan_ts or time.time(),
+                                pool_rows=self.radar.last_all_rows,
+                                fallback_symbols=self.radar.heavyweight_symbol_list,
+                                pattern_states=self.pattern_engine.last_states,
+                            ),
+                            timeout=hard_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("沙盒扫描整轮超时 %.0fs，进入下一轮", hard_timeout)
+                        alerts = []
+                    if alerts:
+                        logger.info(
+                            "沙盒扫描告警 %d 条: %s",
+                            len(alerts),
+                            ",".join(
+                                f"{a.get('type')}:{a.get('symbol')}"
+                                for a in alerts[:8]
+                            ),
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("沙盒扫描异常: %s", exc)
+            elapsed = time.time() - started
+            await asyncio.sleep(max(5.0, interval - elapsed))
 
     async def _open_trade_loop(self) -> None:
         """已开仓 / 卡片挂单快扫：尽快触价更新交易逻辑与评价。"""
@@ -1394,19 +1447,23 @@ class RadarService:
         self._open_trade_task = asyncio.create_task(
             self._open_trade_loop(), name="oi-open-trade-loop"
         )
+        self._sandbox_task = asyncio.create_task(
+            self._sandbox_loop(), name="oi-sandbox-loop"
+        )
         self._card_price_task = asyncio.create_task(
             self._card_price_loop(), name="oi-card-price-loop"
         )
         logger.info(
-            "雷达后台循环已启动，间隔 %ds；持仓快扫 %.0fs；卡片市价 %.0fs",
+            "雷达后台循环已启动，间隔 %ds；持仓快扫 %.0fs；沙盒扫描 %.0fs；卡片市价 %.0fs",
             interval_sec,
             max(5.0, float(OPEN_TRADE_SCAN_SEC or 15)),
+            max(20.0, float(SANDBOX_SCAN_SEC or 60)),
             max(60.0, float(CARD_PRICE_REFRESH_SEC or 300)),
         )
 
     async def stop(self) -> None:
         self._running = False
-        for attr in ("_task", "_open_trade_task", "_card_price_task"):
+        for attr in ("_task", "_open_trade_task", "_sandbox_task", "_card_price_task"):
             task = getattr(self, attr, None)
             if task:
                 task.cancel()

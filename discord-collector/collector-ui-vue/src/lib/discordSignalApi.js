@@ -20,6 +20,7 @@
  * }} SignalCard */
 
 import { configureEvalLeverage } from "./signalExecution.js";
+import { readJsonResponse, readOkJson } from "./httpJson.js";
 
 /** @param {Record<string, unknown> | null | undefined} card */
 export function formatCardTime(card) {
@@ -70,8 +71,7 @@ let cachedConfig = /** @type {{ channelIds: string[], styles: Record<string, { l
 export async function fetchSignalConfig() {
   if (cachedConfig) return cachedConfig;
   const r = await fetch("/api/discord/signal-config");
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || "signal-config failed");
+  const j = await readOkJson(r, "加载信号配置失败");
   if (j.evalLeverage) configureEvalLeverage(j.evalLeverage);
   cachedConfig = {
     channelIds: Array.isArray(j.channelIds) ? j.channelIds.map(String) : [],
@@ -85,7 +85,7 @@ export async function fetchSignalConfig() {
 
 /** @param {string} channelId */
 export function isSignalChannelId(channelId, config) {
-  return config.channelIds.includes(String(channelId ?? ""));
+  return Boolean(config?.channelIds?.includes(String(channelId ?? "")));
 }
 
 /** @param {string} channelId @param {{ status?: string, limit?: number, days?: number, from?: string, to?: string }} [opts] */
@@ -96,8 +96,7 @@ export async function fetchSignalCards(channelId, opts = {}) {
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
   const r = await fetch(`/api/discord/signal-cards?${q}`);
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || "fetch cards failed");
+  const j = await readOkJson(r, "加载信号卡片失败");
   return /** @type {SignalCard[]} */ (j.cards ?? []);
 }
 
@@ -108,9 +107,7 @@ export async function fetchSignalOverview(opts = {}) {
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
   const r = await fetch(`/api/discord/signal-overview?${q}`);
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || "fetch overview failed");
-  return j;
+  return readOkJson(r, "加载信号概览失败");
 }
 
 /** @param {string} channelId @param {{ days?: number, from?: string, to?: string, limit?: number }} [opts] */
@@ -120,9 +117,7 @@ export async function fetchSignalHistory(channelId, opts = {}) {
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
   const r = await fetch(`/api/discord/signal-history?${q}`);
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || "fetch history failed");
-  return j;
+  return readOkJson(r, "加载信号历史失败");
 }
 
 /**
@@ -137,8 +132,7 @@ export async function updateSignalCard(id, patch) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || "update card failed");
+  const j = await readOkJson(r, "更新卡片失败");
   return /** @type {SignalCard} */ (j.card);
 }
 
@@ -161,8 +155,7 @@ export async function createSignalCard(payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || "create card failed");
+  const j = await readOkJson(r, "创建卡片失败");
   return /** @type {SignalCard} */ (j.card);
 }
 
@@ -173,7 +166,7 @@ export async function resendSignalTelegram(id, styleId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(styleId ? { styleId } : {}),
   });
-  const j = await r.json();
-  if (!j.ok && !j.skipped) throw new Error(j.error || "telegram failed");
+  const j = await readJsonResponse(r, "Telegram 发送失败");
+  if (!j?.ok && !j?.skipped) throw new Error(j?.error || "telegram failed");
   return j;
 }

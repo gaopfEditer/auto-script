@@ -36,6 +36,8 @@
 
 /** @typedef {{ channelId: string, channelName: string, count: number }} ArchiveChannelOption */
 
+import { readOkJson } from "./httpJson.js";
+
 /** @param {string | number} period */
 export function buildArchivePeriodQuery(period) {
   if (period === "today") {
@@ -60,8 +62,7 @@ export async function fetchArchiveCards(opts = {}) {
   if (opts.to) q.set("to", opts.to);
   if (opts.limit) q.set("limit", String(opts.limit));
   const res = await fetch(`/api/cards?${q}`);
-  const j = await res.json();
-  if (!j.ok) throw new Error(j.error || "加载卡片失败");
+  const j = await readOkJson(res, "加载卡片失败");
   return /** @type {{ cards: ArchiveCard[], fromMs: number, toMs: number, total: number }} */ ({
     cards: j.cards ?? [],
     fromMs: j.fromMs,
@@ -73,8 +74,7 @@ export async function fetchArchiveCards(opts = {}) {
 /** @param {number} id */
 export async function fetchArchiveCard(id) {
   const res = await fetch(`/api/cards/${id}`);
-  const j = await res.json();
-  if (!j.ok) throw new Error(j.error || "加载卡片失败");
+  const j = await readOkJson(res, "加载卡片失败");
   return /** @type {ArchiveCard} */ (j.card);
 }
 
@@ -85,15 +85,13 @@ export async function archiveYoutubeCard(body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const j = await res.json();
-  if (!j.ok) throw new Error(j.error || "YouTube 卡片归档失败");
+  const j = await readOkJson(res, "YouTube 卡片归档失败");
   return /** @type {ArchiveCard} */ (j.card);
 }
 
 export async function fetchCardSources() {
   const res = await fetch("/api/cards/sources");
-  const j = await res.json();
-  if (!j.ok) throw new Error(j.error || "加载来源失败");
+  const j = await readOkJson(res, "加载来源失败");
   return /** @type {string[]} */ (j.sources ?? []);
 }
 
@@ -107,7 +105,6 @@ export async function fetchCardChannels(opts = {}) {
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
   const res = await fetch(`/api/cards/channels?${q}`);
-  const j = await res.json();
-  if (!j.ok) throw new Error(j.error || "加载频道失败");
+  const j = await readOkJson(res, "加载频道失败");
   return /** @type {ArchiveChannelOption[]} */ (j.channels ?? []);
 }

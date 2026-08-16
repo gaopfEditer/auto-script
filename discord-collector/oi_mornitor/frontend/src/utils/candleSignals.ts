@@ -23,6 +23,16 @@ export const CANDLE_SIGNAL_KINDS = new Set([
   "continuous_lower_wick",
   "continuous_non_upper_wick",
   "continuous_non_lower_wick",
+  "oi_anomaly",
+]);
+
+const PATTERN_MARKER_KINDS = new Set([
+  "shooting_star",
+  "inverted_hammer",
+  "continuous_upper_wick",
+  "continuous_lower_wick",
+  "continuous_non_upper_wick",
+  "continuous_non_lower_wick",
 ]);
 
 type BarCtx = {
@@ -132,25 +142,24 @@ function trimmedMeanAbsPrev(
 export function computeOiAnomalyFlags(
   volumes: number[],
   oiSeries: (number | null)[],
-): boolean[] {
+): { flags: boolean[]; deltas: (number | null)[] } {
   const n = volumes.length;
   const flags = new Array<boolean>(n).fill(false);
   const deltaAbs: (number | null)[] = new Array(n).fill(null);
-  const deltaSigned: (number | null)[] = new Array(n).fill(null);
+  const deltas: (number | null)[] = new Array(n).fill(null);
 
   for (let i = 1; i < n; i++) {
     const a = oiSeries[i];
     const b = oiSeries[i - 1];
     if (a == null || b == null || !(a > 0) || !(b > 0)) continue;
     const d = a - b;
-    deltaSigned[i] = d;
+    deltas[i] = d;
     deltaAbs[i] = Math.abs(d);
   }
 
   for (let i = 0; i < n; i++) {
     const dAbs = deltaAbs[i];
-    const dSigned = deltaSigned[i];
-    if (dAbs == null || dSigned == null) continue;
+    if (dAbs == null) continue;
 
     const base = trimmedMeanAbsPrev(deltaAbs, i, OI_LOOKBACK, OI_TRIM_HIGH);
     if (base == null || !(base > 0) || !(dAbs > OI_BAR_MULT * base)) continue;
@@ -174,7 +183,14 @@ export function computeOiAnomalyFlags(
 
     flags[i] = true;
   }
-  return flags;
+  return { flags, deltas };
+}
+
+function oiOnlyLabel(delta: number | null): string {
+  if (delta == null) return "OI异动";
+  if (delta > 0) return "OI异动↑";
+  if (delta < 0) return "OI异动↓";
+  return "OI异动";
 }
 
 function sigPrefix(name: string, nearVegas: boolean, oiAnomaly: boolean): string {
@@ -244,7 +260,7 @@ export function buildCandleSignalMarkers(
     });
   }
 
-  const oiFlags = computeOiAnomalyFlags(volumes, oiSeries);
+  const { flags: oiFlags, deltas: oiDeltas } = computeOiAnomalyFlags(volumes, oiSeries);
 
   let contUpper = 0;
   let contLower = 0;
@@ -258,7 +274,9 @@ export function buildCandleSignalMarkers(
     const c = candles[i];
     const nearV = nearVegasChannel(b);
     const oiTag = oiFlags[i];
+    const oiDelta = oiDeltas[i];
     const label = (name: string) => sigPrefix(name, nearV, oiTag);
+    const beforeN = markers.length;
 
     // ---- 连续插针（上下轨附近）----
     const midToUpper = b.bbUpper - b.bbMid;
@@ -279,6 +297,7 @@ export function buildCandleSignalMarkers(
           text: label("连续上插针"),
           price: c.high,
           kind: "continuous_upper_wick",
+          oi_anomaly: oiTag,
         });
       }
     } else {
@@ -300,6 +319,7 @@ export function buildCandleSignalMarkers(
           text: label("连续下插针"),
           price: c.low,
           kind: "continuous_lower_wick",
+          oi_anomaly: oiTag,
         });
       }
     } else {
@@ -331,6 +351,7 @@ export function buildCandleSignalMarkers(
             text: label("非上轨连续上插针"),
             price: c.high,
             kind: "continuous_non_upper_wick",
+            oi_anomaly: oiTag,
           });
         }
       }
@@ -358,6 +379,7 @@ export function buildCandleSignalMarkers(
             text: label("非下轨连续下插针"),
             price: c.low,
             kind: "continuous_non_lower_wick",
+            oi_anomaly: oiTag,
           });
         }
       }
@@ -378,21 +400,37 @@ export function buildCandleSignalMarkers(
         text: label(name),
         price: c.high,
         kind: "shooting_star",
+        oi_anomaly: oiTag,
       });
       lastShootIdx = i;
-      continue;
+    } else {
+      const belowMid = b.low <= b.bbMid;
+      if (belowMid && detectInvertedHammer(b)) {
+        markers.push({
+          time: c.time,
+          position: "belowBar",
+          color: "#00bcd4",
+          shape: "arrowUp",
+          text: label("倒锤子"),
+          price: c.low,
+          kind: "inverted_hammer",
+          oi_anomaly: oiTag,
+        });
+      }
     }
 
-    const belowMid = b.low <= b.bbMid;
-    if (belowMid && detectInvertedHammer(b)) {
+    const patternHit = markers.slice(beforeN).some((m) => PATTERN_MARKER_KINDS.has(m.kind ?? ""));
+    if (oiTag && !patternHit) {
+      const up = oiDelta == null || oiDelta > 0;
       markers.push({
         time: c.time,
-        position: "belowBar",
-        color: "#00bcd4",
-        shape: "arrowUp",
-        text: label("倒锤子"),
-        price: c.low,
-        kind: "inverted_hammer",
+        position: up ? "aboveBar" : "belowBar",
+        color: "#ff9800",
+        shape: "circle",
+        text: oiOnlyLabel(oiDelta),
+        price: up ? c.high : c.low,
+        kind: "oi_anomaly",
+        oi_anomaly: true,
       });
     }
   }

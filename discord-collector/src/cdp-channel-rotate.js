@@ -19,8 +19,8 @@ import { getSignalChannelIds } from "./discord-signal-config.js";
 export function startCdpChannelRotate(opts) {
   const log = opts.log || console;
   const enabled = opts.enabled !== false;
-  // 默认 10 分钟切一个频道；一轮 N 个频道约 N×10 分钟扫完
-  const intervalMs = Math.max(60_000, Number(opts.intervalMs) || 600_000);
+  // 默认 15 分钟切一个频道；一轮 N 个频道约 N×15 分钟扫完
+  const intervalMs = Math.max(60_000, Number(opts.intervalMs) || 900_000);
   const navigate = opts.navigate;
   if (!enabled || typeof navigate !== "function") {
     return { stop() {} };

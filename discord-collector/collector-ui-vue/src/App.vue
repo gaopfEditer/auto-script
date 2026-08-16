@@ -6,6 +6,7 @@ import "./composables/useNewCardNotifications.js";
 import { useDebugMode } from "./composables/useDebugMode.js";
 import {
   COLLECTOR_WS_REFRESH_EVENT,
+  WS_DISCONNECT_WARN_MS,
   ensureCollectorSocket,
   useCollectorSocket,
 } from "./composables/useCollectorSocket.js";
@@ -34,7 +35,29 @@ const isOi = computed(() => activeModule.value === "oi");
 /** /content 独立全屏，不共用 Discord/OI 顶栏 */
 const isContentStandalone = computed(() => activeModule.value === "content");
 
-const { status: wsStatus, error: wsError, reconnect: reconnectWs } = useCollectorSocket();
+const { status: wsStatus, error: wsError, disconnectedSince, reconnect: reconnectWs } =
+  useCollectorSocket();
+
+/** 断线时长 tick，便于 >5min 提示 */
+const nowTick = ref(Date.now());
+/** @type {ReturnType<typeof setInterval> | null} */
+let wsWarnTimer = null;
+
+const wsDownMs = computed(() => {
+  const since = disconnectedSince.value;
+  if (!since || wsStatus.value === "open") return 0;
+  return Math.max(0, nowTick.value - since);
+});
+
+const wsLongDisconnect = computed(() => wsDownMs.value >= WS_DISCONNECT_WARN_MS);
+
+const wsDownLabel = computed(() => {
+  const sec = Math.floor(wsDownMs.value / 1000);
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s ? `${m}分${s}秒` : `${m}分钟`;
+});
 
 watch(
   isContentStandalone,
@@ -52,9 +75,16 @@ function onWsSilentRefresh() {
 }
 onMounted(() => {
   window.addEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
+  wsWarnTimer = setInterval(() => {
+    nowTick.value = Date.now();
+  }, 5_000);
 });
 onUnmounted(() => {
   window.removeEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
+  if (wsWarnTimer) {
+    clearInterval(wsWarnTimer);
+    wsWarnTimer = null;
+  }
 });
 
 const moduleLinks = computed(() => {
@@ -111,11 +141,11 @@ async function toggleDebug() {
         v-if="!isOi"
         type="button"
         class="ws-status"
-        :class="wsStatus"
+        :class="[wsStatus, { warn: wsLongDisconnect }]"
         :title="wsError || '点击重连 WebSocket'"
         @click="reconnectWs"
       >
-        {{ wsStatusLabel }}
+        {{ wsLongDisconnect ? `WS 断线 ${wsDownLabel}` : wsStatusLabel }}
       </button>
       <button
         v-if="!isOi && showDebugToggle"
@@ -126,6 +156,10 @@ async function toggleDebug() {
         {{ debugMode ? "Debug 开" : "精简模式" }}
       </button>
     </header>
+    <div v-if="!isOi && wsLongDisconnect" class="ws-down-banner" role="alert">
+      <span>实时通道已断开超过 {{ wsDownLabel }}，新消息可能收不到。已在自动重连。</span>
+      <button type="button" class="ws-down-btn" @click="reconnectWs">立即重连</button>
+    </div>
     <main class="main-outlet">
       <RouterView :key="viewEpoch" />
     </main>
@@ -233,6 +267,45 @@ async function toggleDebug() {
   border-color: #ed4245;
   background: rgba(237, 66, 69, 0.15);
   color: #f38688;
+}
+.ws-status.warn {
+  border-color: #faa81a;
+  background: rgba(250, 168, 26, 0.18);
+  color: #faa81a;
+  animation: ws-warn-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ws-warn-pulse {
+  50% {
+    opacity: 0.72;
+  }
+}
+.ws-down-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 1.1rem;
+  background: #3d1f21;
+  border-bottom: 1px solid #ed4245;
+  color: #f2c0c2;
+  font-size: 0.82rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.ws-down-btn {
+  border: 1px solid #ed4245;
+  background: rgba(237, 66, 69, 0.25);
+  color: #fff;
+  padding: 0.28rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ws-down-btn:hover {
+  background: rgba(237, 66, 69, 0.45);
 }
 .debug-toggle {
   border: 1px solid #3f4147;

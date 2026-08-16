@@ -39,10 +39,18 @@ from oi_mornitor.pattern_detector import (
     STATUS_TRIGGER,
     STATUS_WAITING,
     build_pattern_chart_payload,
+    enrich_indicators,
     evaluate_pattern,
 )
+from oi_mornitor.breakout_detector import klines_to_df
 from oi_mornitor.pattern_state_tracker import MAX_WATCH_SYMBOLS, PatternStateTracker
 from oi_mornitor.rank_metrics import TF_LABELS
+from oi_mornitor.strategy.candle_signals import (
+    PATTERN_MARKER_KINDS,
+    collect_candle_signal_markers,
+    find_last_closed_pattern_oi_combos,
+)
+from oi_mornitor.notify_telegram import send_pattern_oi_telegram_async
 from oi_mornitor.tv_alert_sync import symbols_on_n_boards
 
 logger = logging.getLogger("OI_Radar")
@@ -51,6 +59,24 @@ logger = logging.getLogger("OI_Radar")
 _PROTECTED_PATTERN_STATUSES = frozenset({STATUS_LH, STATUS_WAITING, STATUS_TRIGGER})
 # 涨幅∩持仓自动入池时，可被腾出的状态
 _EVICTABLE_PATTERN_STATUSES = frozenset({STATUS_SEARCHING, STATUS_EXPIRED})
+_SHORT_PATTERN_KINDS = frozenset({
+    "shooting_star",
+    "continuous_upper_wick",
+    "continuous_non_upper_wick",
+})
+_LONG_PATTERN_KINDS = frozenset({
+    "inverted_hammer",
+    "continuous_lower_wick",
+    "continuous_non_lower_wick",
+})
+
+
+def _combo_side_hint(kind: str) -> str:
+    if kind in _SHORT_PATTERN_KINDS:
+        return "短线做空"
+    if kind in _LONG_PATTERN_KINDS:
+        return "短线做多"
+    return "短线"
 
 
 async def fetch_pattern_klines(
@@ -436,6 +462,8 @@ class PatternMonitorEngine:
         self._last_scan_ts: float = 0.0
         self._last_pool_rows: list[dict[str, Any]] = []
         self._last_watchlist_refresh_ts: float = 0.0
+        # symbol:close_ts → 已推过的形态+OI 短线推荐
+        self._combo_seen: set[str] = set()
 
     @property
     def last_alerts(self) -> list[dict[str, Any]]:
@@ -1048,7 +1076,137 @@ class PatternMonitorEngine:
         self._last_alerts = alerts
         self._last_states = states
         self._last_scan_ts = scan_ts or time.time()
+
+        try:
+            combo_alerts = await self._scan_candle_oi_combos(
+                session,
+                base_url=base_url,
+                klines_map=klines_map,
+                watchlist=watchlist,
+                scan_ts=self._last_scan_ts,
+            )
+            if combo_alerts:
+                self._last_alerts = combo_alerts + self._last_alerts
+                alerts = self._last_alerts
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("形态+OI 短线扫描失败: %s", exc)
+
         return alerts
+
+    async def _scan_candle_oi_combos(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        base_url: str,
+        klines_map: dict[str, list],
+        watchlist: list[Any],
+        scan_ts: float,
+    ) -> list[dict[str, Any]]:
+        """最近收盘柱：K 线形态 ∩ 柱级 OI 异动 → Toast + Telegram 推荐短线。"""
+        now_ms = int(time.time() * 1000)
+        iv_by_sym = {w.symbol: w.interval for w in watchlist}
+        candidates: list[str] = []
+
+        for sym, klines in klines_map.items():
+            if not klines or len(klines) < 30:
+                continue
+            try:
+                df = enrich_indicators(klines_to_df(klines))
+                if df.empty or "bb_basis" not in df.columns:
+                    continue
+                # 无 OI 先看是否有形态；有再拉 OI 确认交集
+                markers = collect_candle_signal_markers(df)
+                closed_idx = len(df) - 1
+                if "close_time" in df.columns:
+                    try:
+                        ct = int(df.iloc[closed_idx]["close_time"])
+                        if ct > now_ms and closed_idx > 0:
+                            closed_idx -= 1
+                    except (TypeError, ValueError):
+                        pass
+                closed_ts = int(df.iloc[closed_idx]["open_time"] // 1000)
+                has_pat = any(
+                    int(m.get("time") or 0) == closed_ts
+                    and str(m.get("kind") or "") in PATTERN_MARKER_KINDS
+                    for m in markers
+                )
+                if has_pat:
+                    candidates.append(sym)
+            except Exception:  # noqa: BLE001
+                continue
+
+        if not candidates:
+            return []
+
+        sem = asyncio.Semaphore(max(4, min(OI_OI_BATCH_CONCURRENCY, 12)))
+
+        async def _oi_one(sym: str) -> tuple[str, dict[int, float]]:
+            async with sem:
+                oi = await fetch_open_interest_hist(
+                    session,
+                    base_url=base_url,
+                    symbol=sym,
+                    interval=iv_by_sym.get(sym) or PATTERN_KLINE_INTERVAL,
+                    limit=min(120, PATTERN_KLINE_LIMIT),
+                )
+                return sym, oi
+
+        oi_pairs = await asyncio.gather(*[_oi_one(s) for s in candidates])
+        oi_by_sym = {s: m for s, m in oi_pairs if m}
+
+        out: list[dict[str, Any]] = []
+        for sym in candidates:
+            oi_map = oi_by_sym.get(sym) or {}
+            if not oi_map:
+                continue
+            klines = klines_map.get(sym) or []
+            try:
+                df = enrich_indicators(klines_to_df(klines))
+                df["oi"] = [
+                    oi_map.get(int(ot // 1000), float("nan"))
+                    for ot in df["open_time"].tolist()
+                ]
+                combos = find_last_closed_pattern_oi_combos(df, now_ms=now_ms)
+            except Exception:  # noqa: BLE001
+                continue
+            if not combos:
+                continue
+            hit = combos[0]
+            close_ts = int(hit["time"])
+            dedupe = f"{sym}:{close_ts}:{hit.get('kind')}"
+            if dedupe in self._combo_seen:
+                continue
+            self._combo_seen.add(dedupe)
+            if len(self._combo_seen) > 800:
+                self._combo_seen = set(list(self._combo_seen)[-400:])
+
+            kind = str(hit.get("kind") or "")
+            text = str(hit.get("text") or kind)
+            side_hint = _combo_side_hint(kind)
+            last_price = float(klines[-1][4]) if klines else float(hit.get("price") or 0)
+            iv = iv_by_sym.get(sym) or PATTERN_KLINE_INTERVAL
+            alert = {
+                "symbol": sym,
+                "type": "candle_pattern_oi",
+                "interval": iv,
+                "status": "CANDLE_OI_COMBO",
+                "status_label": "形态+OI · 推荐短线",
+                "signal_kind": kind,
+                "signal_text": text,
+                "side_hint": side_hint,
+                "last_price": last_price,
+                "message": f"{text} · 推荐{side_hint}",
+                "scan_ts": scan_ts,
+                "kline_close_time": close_ts * 1000,
+            }
+            out.append(alert)
+            logger.info("⚡ 形态+OI短线 %s %s %s", sym, text, side_hint)
+            try:
+                await send_pattern_oi_telegram_async(alert)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Telegram 短线推荐失败 %s: %s", sym, exc)
+
+        return out
 
     async def get_chart_data(
         self,

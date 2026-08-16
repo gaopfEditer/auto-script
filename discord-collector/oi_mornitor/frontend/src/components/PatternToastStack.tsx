@@ -14,7 +14,11 @@ interface Props {
   onOpen?: (symbol: string) => void;
 }
 
-const TOAST_TTL_MS = 20000;
+const TOAST_TTL_MS = 22000;
+
+function isComboAlert(a: PatternAlert): boolean {
+  return a.type === "candle_pattern_oi";
+}
 
 export const PatternToastStack = memo(function PatternToastStack({
   alerts,
@@ -30,23 +34,27 @@ export const PatternToastStack = memo(function PatternToastStack({
     scanRef.current = scanTs;
 
     const fresh = alerts.filter((a) => {
-      const key = `${a.symbol}:${a.kline_close_time}`;
+      const key = `${a.type}:${a.symbol}:${a.kline_close_time}:${a.message}`;
       if (seenRef.current.has(key)) return false;
       seenRef.current.add(key);
       return true;
     });
     if (!fresh.length) return;
 
+    if (seenRef.current.size > 400) {
+      seenRef.current = new Set([...seenRef.current].slice(-200));
+    }
+
     const now = Date.now();
     setToasts((prev) =>
       [
         ...fresh.map((alert) => ({
-          id: `${alert.symbol}-${alert.kline_close_time}`,
+          id: `${alert.type}-${alert.symbol}-${alert.kline_close_time}-${now}`,
           alert,
           createdAt: now,
         })),
         ...prev,
-      ].slice(0, 6),
+      ].slice(0, 8),
     );
   }, [alerts, scanTs]);
 
@@ -67,32 +75,42 @@ export const PatternToastStack = memo(function PatternToastStack({
 
   return (
     <div className="pattern-toast-stack">
-      {toasts.map(({ id, alert }) => (
-        <div key={id} className="toast-card pattern-fire">
-          <button type="button" className="toast-close" onClick={() => dismiss(id)} aria-label="关闭">
-            ×
-          </button>
-          <div className="toast-head">
-            <span className="coin-avatar">{coinInitial(alert.symbol)}</span>
-            <div>
-              <div className="toast-title">
-                ${displaySymbol(alert.symbol)} · 形态多头爆发
-              </div>
-              <div className="toast-sub">
-                {alert.status_label} · {alert.interval}
-              </div>
-              <div className="toast-sub">{alert.message}</div>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="toast-action"
-            onClick={() => onOpen?.(alert.symbol)}
+      {toasts.map(({ id, alert }) => {
+        const combo = isComboAlert(alert);
+        return (
+          <div
+            key={id}
+            className={`toast-card ${combo ? "pattern-oi-combo" : "pattern-fire"}`}
           >
-            查看形态
-          </button>
-        </div>
-      ))}
+            <button type="button" className="toast-close" onClick={() => dismiss(id)} aria-label="关闭">
+              ×
+            </button>
+            <div className="toast-head">
+              <span className="coin-avatar">{coinInitial(alert.symbol)}</span>
+              <div>
+                <div className="toast-title">
+                  {combo
+                    ? `$${displaySymbol(alert.symbol)} · 形态+OI · 推荐短线`
+                    : `$${displaySymbol(alert.symbol)} · 形态多头爆发`}
+                </div>
+                <div className="toast-sub">
+                  {combo
+                    ? `${alert.status_label} · ${alert.interval}`
+                    : `${alert.status_label} · ${alert.interval}`}
+                </div>
+                <div className="toast-sub">{alert.message}</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => onOpen?.(alert.symbol)}
+            >
+              {combo ? "查看图表" : "查看形态"}
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 });
