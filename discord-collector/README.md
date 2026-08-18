@@ -9,6 +9,7 @@
 
 ## 文档
 
+- **[开发说明（加功能地图）](docs/development.md)** — 目录、数据流、新 API/页面/表/频道清单；配合仓库根 `.cursor/rules/`
 - **[前端部署手册](docs/frontend-deploy.md)** — 构建、`ui:build`、Nginx、发版、Umami、检查清单
 - [前端上云 + 后台本地](docs/deploy-frontend-remote-backend-local.md) — SSH 隧道完整步骤
 - [WebSocket 推送架构](docs/websocket-push-architecture.md)
@@ -38,6 +39,8 @@ pnpm run oi:start    # 一体托管 :8765（默认嵌入地址）
 
 **卡片档位进度 / 评估**：监控每小时（`CARD_LEVEL_CHECK_MS`）按 Binance 永续 K 线推进入场与 1/N 分批止盈；前端 `/eval` 按 Discord 频道看胜率与损益（`GET /api/cards/eval/summary`）。
 
+**推特列表 CDP**：本地页 `/twitter`。用已登录 X 的 Chrome（`--remote-debugging-port=9222` 或 `9223`）只抓指定列表最新帖，新帖推 Telegram；每个列表第一次只记档、不推历史。
+
 ## 环境准备
 
 ```bash
@@ -60,6 +63,14 @@ mysql -h127.0.0.1 -uroot -p < schema/init.sql   # 首次
 
 在打开的 Chrome 里访问 **https://discord.com** 并完成登录。
 
+推特列表若与 Discord 共用会抢同一浏览器，建议另开一个用户目录：
+
+```text
+chrome.exe --remote-debugging-port=9223 --user-data-dir="%USERPROFILE%\.twitter-collector-chrome"
+```
+
+在该窗口登录 **https://x.com**，然后到 UI `/twitter` 把端口设为 9223。
+
 ### 2. 终端 A — 采集 + 面板后端
 
 ```bash
@@ -79,6 +90,8 @@ pnpm run dev:ui-vue
 | `GET /api/discord/guilds/:guildId/channels` | 频道列表 |
 | `GET /api/discord/messages` | 解析后的 Discord 消息（含头像 URL） |
 | `POST /api/cdp/discord-channel` | `{ "guildId", "channelId" }` 在 CDP 页签 `goto` 到频道 |
+| `GET /api/twitter-cdp/status` | 推特列表 CDP 状态 / 最近帖 |
+| `POST /api/twitter-cdp/fetch` | 立即抓取指定列表最新帖并推 Telegram |
 | `ws://127.0.0.1:3851/ws` | 实时网络诊断 + WS 帧推送 |
 
 ### 3. 终端 B — Vue 开发（可选）
@@ -113,6 +126,10 @@ pnpm run collect
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `CDP_CONNECT_URL` | 空 | 如 `http://127.0.0.1:9222`，**推荐** |
+| `TWITTER_CDP_PORT` | `9222` | 推特列表抓取 CDP 端口（可 `9223`）；UI `/twitter` |
+| `TWITTER_CDP_LISTS` | 空 | 逗号分隔的 `x.com/i/lists/{id}`；也可在页面里保存 |
+| `TWITTER_CDP_INTERVAL_MS` | `120000` | 定时只拉最新帖（首次记档不推旧帖） |
+| `TWITTER_CDP_TELEGRAM` | `1` | 新帖走 `TELEGRAM_SEND_URL` + `TELEGRAM_PUSH_CHAT_ID` |
 | `TARGET_PAGE_URL` | — | 附加模式下提示用，如 `https://discord.com/channels/@me` |
 | `COLLECTOR_UI_PORT` | `3851` | UI / WS 端口 |
 | `DISCORD_MONITORED_GUILD_IDS` | 空 | 逗号分隔，仅入库指定服务器消息 |

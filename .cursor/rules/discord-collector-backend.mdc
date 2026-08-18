@@ -1,0 +1,36 @@
+---
+description: discord-collector Node 后台约定（store / API / 配置）
+globs: discord-collector/src/**/*.js
+alwaysApply: false
+---
+
+# 后台约定
+
+## 分层
+
+- **入口装配**：`collector-ui-server.js`（路由、WS `broadcast`、定时任务 start/stop）。
+- **业务**：`createXxxService` / 纯函数模块；API 用 `registerXxxRoutes(app, …)`。
+- **持久化**：只通过 `store.js`。MySQL 挂了也能跑 UI（`createOfflineStore`）。
+- **配置**：`config.js` 读 env；运行时可改的项用 `data/*.json`（如 `twitter-cdp.json`）。
+
+## 加 API
+
+1. 新 `src/foo-api.js` 导出 `registerFooRoutes`。
+2. 在 `collector-ui-server.js` 里 `express.json` 之后注册。
+3. 需要实时：`broadcast("meta", { kind: "…", … })`，信封见 `docs/websocket-push-architecture.md`。
+
+```js
+// ✅ 路由文件只组 HTTP，别在里面 new Playwright / 开定时器
+export function registerFooRoutes(app, service) { … }
+
+// ❌ 不要在路由里直接 pool.query
+```
+
+## 加表
+
+`openStore` 内：`CREATE TABLE IF NOT EXISTS` + `ALTER … ADD COLUMN`（已存在则忽略）+ 方法挂到 return + **同样名字的 noop 写进 `createOfflineStore`**。不要只改 `schema/init.sql`。
+
+## 日志 / 代理
+
+- `createLogger("foo")`，用户可见失败用 `log.warn`，刷屏细节用 `log.debug`。
+- 连 `127.0.0.1:9222/9223` 必须 `NO_PROXY` / `withLocalhostNoProxy`。

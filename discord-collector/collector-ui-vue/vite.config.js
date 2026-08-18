@@ -39,6 +39,7 @@ export default defineConfig(({ mode }) => {
       __UI_PAGE_OI__: JSON.stringify(pageOn("oi")),
       __UI_PAGE_CARDS__: JSON.stringify(pageOn("cards")),
       __UI_PAGE_EVAL__: JSON.stringify(pageOn("eval")),
+      __UI_PAGE_TWITTER__: JSON.stringify(pageOn("twitter")),
       __UI_PAGE_ARCHIVES__: JSON.stringify(pageOn("archives")),
       __UI_PAGE_TRADE__: JSON.stringify(pageOn("trade")),
       __UI_PAGE_COMMUNITY__: JSON.stringify(pageOn("community")),

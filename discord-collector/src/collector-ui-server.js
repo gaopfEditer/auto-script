@@ -49,6 +49,8 @@ import { registerBitgetRoutes } from "./bitget-api-routes.js";
 import { registerWeexRoutes } from "./weex-api-routes.js";
 import { getBitgetProxyInUse } from "./bitget-api.js";
 import { getWeexProxyInUse } from "./weex-api.js";
+import { createTwitterCdpService } from "./twitter-cdp-service.js";
+import { registerTwitterCdpRoutes } from "./twitter-cdp-api.js";
 import {
   getAutoTradeChannelIds,
   getTradePlatformToggles,
@@ -123,6 +125,7 @@ async function main() {
     cardSink,
   });
   const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast, { cardSink });
+  const twitterCdp = createTwitterCdpService(store, createLogger("twitter-cdp"), broadcast);
   const cardPriceMonitor = createCardPriceMonitor(
     store,
     createLogger("card-price"),
@@ -151,6 +154,7 @@ async function main() {
   registerWeexRoutes(app, weexOrder);
   registerCardArchiveRoutes(app, store, cardArchive);
   registerCardEvalRoutes(app, store);
+  registerTwitterCdpRoutes(app, twitterCdp);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast);
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")
@@ -706,6 +710,7 @@ async function main() {
     channelRotate?.stop();
     channelRotate = null;
     cardPriceMonitor.stop();
+    twitterCdp.stop();
     cardSink.stop();
     await telegramPush.flushAll().catch((e) => log.warn(String(e?.message ?? e)));
     if (session) await session.close().catch((e) => log.warn(String(e?.message ?? e)));
@@ -754,7 +759,7 @@ async function main() {
   if (listenError) throw listenError;
 
   log.info(
-    `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /cards  |  /fetch  |  /archives  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws`
+    `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /cards  |  /fetch  |  /twitter  |  /archives  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws`
   );
   if (mysqlOffline) {
     log.warn("MySQL 离线 — 服务已启动但无持久化；修复数据库后请重启 collect:ui");
@@ -769,6 +774,9 @@ async function main() {
         .catch((e) => log.warn(`coin-action 迁移: ${/** @type {Error} */ (e).message}`));
     }
   }
+  void twitterCdp.start().catch((e) =>
+    log.warn(`Twitter CDP 启动: ${/** @type {Error} */ (e).message}`)
+  );
 
   const oiSupervisor = startOiSupervisor({
     log: createLogger("oi-supervisor"),

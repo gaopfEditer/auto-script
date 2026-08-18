@@ -1,0 +1,14 @@
+---
+description: OI Monitor 与 Discord 采集的边界（Python :8765）
+globs: discord-collector/oi_mornitor/**/*
+alwaysApply: false
+---
+
+# OI Monitor 边界
+
+`oi_mornitor/` 是 **独立 Python 服务**（默认 `:8765`），Discord UI 只做模块切换 + iframe。不要把 OI 逻辑搬进 `collector-ui-server.js`。
+
+- 卡片 **计价/档位进度** 在 Node（`card-price-monitor` / `card-level-progress`）。
+- OI 通过 `CARD_SINK_WS_URL` / `CARD_SINK_HTTP_URL` **接收**卡片，做雷达/沙盒，不是行情源。
+- 前端在 `oi_mornitor/frontend`（React + Vite）；产物进 `static/dist`。
+- 改信号口径先读 `oi_mornitor/SIGNAL_LOGIC.md` 与 `oi_mornitor/README.md`。

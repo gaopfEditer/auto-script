@@ -300,8 +300,24 @@ export async function openStore(cfg, log) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS twitter_seen_tweets (
+      tweet_id VARCHAR(32) NOT NULL PRIMARY KEY,
+      list_id VARCHAR(128) NOT NULL,
+      author_handle VARCHAR(64) NULL,
+      author_name VARCHAR(128) NULL,
+      text TEXT NULL,
+      tweet_url VARCHAR(512) NULL,
+      tweet_at DATETIME(3) NULL,
+      fetched_at DATETIME(3) NOT NULL,
+      telegram_sent_at DATETIME(3) NULL,
+      KEY idx_twitter_list_fetched (list_id, fetched_at),
+      KEY idx_twitter_fetched (fetched_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   log.info(
-    "表 frames / discord_* / community_* 就绪"
+    "表 frames / discord_* / community_* / twitter_seen_tweets 就绪"
   );
 
   const insertFrameSql = `
@@ -1479,6 +1495,104 @@ export async function openStore(cfg, log) {
     }
   }
 
+  async function findExistingTwitterTweetIds(ids) {
+    const list = [...new Set((ids ?? []).map((x) => String(x ?? "").trim()).filter(Boolean))];
+    if (!list.length) return new Set();
+    const placeholders = list.map(() => "?").join(",");
+    const [rows] = await pool.query(
+      `SELECT tweet_id FROM twitter_seen_tweets WHERE tweet_id IN (${placeholders})`,
+      list
+    );
+    return new Set(rows.map((r) => String(r.tweet_id)));
+  }
+
+  /**
+   * @param {Array<{
+   *   tweetId: string,
+   *   listId: string,
+   *   authorHandle?: string,
+   *   authorName?: string,
+   *   text?: string,
+   *   tweetUrl?: string,
+   *   tweetAt?: string | null,
+   *   telegramSentAt?: string | null,
+   * }>} rows
+   */
+  async function insertTwitterTweets(rows) {
+    if (!rows?.length) return { inserted: 0 };
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    let inserted = 0;
+    for (const r of rows) {
+      const id = String(r.tweetId ?? "").trim();
+      if (!id) continue;
+      const tweetAt = r.tweetAt ? isoToMysqlDatetime3(r.tweetAt) : null;
+      const tgAt = r.telegramSentAt ? isoToMysqlDatetime3(r.telegramSentAt) : null;
+      const [ret] = await pool.execute(
+        `INSERT IGNORE INTO twitter_seen_tweets
+          (tweet_id, list_id, author_handle, author_name, text, tweet_url, tweet_at, fetched_at, telegram_sent_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          String(r.listId ?? "").slice(0, 128),
+          String(r.authorHandle ?? "").slice(0, 64) || null,
+          String(r.authorName ?? "").slice(0, 128) || null,
+          r.text ?? null,
+          String(r.tweetUrl ?? "").slice(0, 512) || null,
+          tweetAt,
+          now,
+          tgAt,
+        ]
+      );
+      inserted += Number(ret?.affectedRows) || 0;
+    }
+    return { inserted };
+  }
+
+  async function markTwitterTelegramSent(ids) {
+    const list = [...new Set((ids ?? []).map((x) => String(x ?? "").trim()).filter(Boolean))];
+    if (!list.length) return;
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const placeholders = list.map(() => "?").join(",");
+    await pool.execute(
+      `UPDATE twitter_seen_tweets SET telegram_sent_at = ? WHERE tweet_id IN (${placeholders}) AND telegram_sent_at IS NULL`,
+      [now, ...list]
+    );
+  }
+
+  async function listTwitterTweets(opts = {}) {
+    const lim = Math.min(200, Math.max(1, Number(opts.limit) || 50));
+    const listId = String(opts.listId ?? "").trim();
+    /** @type {unknown[]} */
+    const params = [];
+    let sql = `SELECT * FROM twitter_seen_tweets WHERE 1=1`;
+    if (listId) {
+      sql += ` AND list_id = ?`;
+      params.push(listId);
+    }
+    sql += ` ORDER BY fetched_at DESC, tweet_id DESC LIMIT ${lim}`;
+    const [rows] = await pool.query(sql, params);
+    return rows;
+  }
+
+  async function countTwitterListTweets(listId) {
+    const id = String(listId ?? "").trim();
+    if (!id) return 0;
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) AS n FROM twitter_seen_tweets WHERE list_id = ?`,
+      [id]
+    );
+    return Number(rows[0]?.n) || 0;
+  }
+
+  async function clearTwitterSeen(listId) {
+    const id = String(listId ?? "").trim();
+    if (id) {
+      await pool.execute(`DELETE FROM twitter_seen_tweets WHERE list_id = ?`, [id]);
+      return;
+    }
+    await pool.execute(`DELETE FROM twitter_seen_tweets`);
+  }
+
   async function communityListTips(limit = 40) {
     const [rows] = await pool.query(
       `SELECT * FROM community_tips ORDER BY id DESC LIMIT ?`,
@@ -1558,6 +1672,12 @@ export async function openStore(cfg, log) {
     communityInsertChatMessage,
     communityListChatMessages,
     communityGetChatMessage,
+    findExistingTwitterTweetIds,
+    insertTwitterTweets,
+    markTwitterTelegramSent,
+    listTwitterTweets,
+    countTwitterListTweets,
+    clearTwitterSeen,
     close,
   };
 }
@@ -1636,6 +1756,12 @@ export function createOfflineStore() {
     communityInsertChatMessage: async () => null,
     communityListChatMessages: async () => [],
     communityGetChatMessage: async () => null,
+    findExistingTwitterTweetIds: async () => new Set(),
+    insertTwitterTweets: async () => ({ inserted: 0 }),
+    markTwitterTelegramSent: async () => {},
+    listTwitterTweets: async () => [],
+    countTwitterListTweets: async () => 0,
+    clearTwitterSeen: async () => {},
     close: async () => {},
   };
 }

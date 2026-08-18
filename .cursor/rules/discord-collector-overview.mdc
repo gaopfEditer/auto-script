@@ -1,0 +1,30 @@
+---
+description: discord-collector 总览：目录边界、入口、硬约束。后续开发先读 docs/development.md
+alwaysApply: true
+---
+
+# discord-collector 总览
+
+本仓库是多项目工作区；**当前主项目是 `discord-collector/`**。改功能时不要动 `stream-collector/`、`telegram/`、`youtube-fetch/`、`workflow/`，除非用户明确点名。
+
+完整地图与加功能清单：[`discord-collector/docs/development.md`](discord-collector/docs/development.md)
+
+## 入口
+
+| 进程 | 命令 | 端口 | 代码 |
+|------|------|------|------|
+| Discord 后台 | `pnpm run collect:ui` | `3851` | `src/collector-ui-server.js` |
+| Discord 前端 | `pnpm run dev:ui-vue` | `5178` | `collector-ui-vue/` |
+| OI Monitor | `pnpm run oi:start` | `8765` | `oi_mornitor/`（Python，独立） |
+
+配置只读 `discord-collector/.env`（`src/load-env.js`），不要用上级目录 `.env`。
+
+## 硬约束
+
+- ESM（`"type": "module"`），新文件用 `import`。
+- 本机 CDP / `127.0.0.1` **禁止走 HTTP(S)_PROXY**（Playwright 会 400）。
+- 卡片现价/K 线走 Node `card-price-fetch.js`（Binance），**不要经 oi_mornitor 取价**。
+- 新环境变量：同步 `src/config.js` + `.env.example`。
+- 新表/列：`store.js` 的 CREATE/ALTER、return、`createOfflineStore` 三处一起改。
+- 默认不 commit、不改 `.cursor/plans/`。
+- 对用户用中文。

@@ -322,4 +322,22 @@ export const config = {
     : path.join(_collectorRoot, "uploads", "chat"),
   communityChatImageMaxBytes: Number(process.env.COMMUNITY_CHAT_IMAGE_MAX_BYTES ?? 5 * 1024 * 1024),
   communityChatVideoMaxBytes: Number(process.env.COMMUNITY_CHAT_VIDEO_MAX_BYTES ?? 20 * 1024 * 1024),
+  /**
+   * 本地 CDP 抓取已登录 X/Twitter 列表最新帖（默认端口 9222，可改 9223）。
+   * 列表：逗号分隔的 listId 或 https://x.com/i/lists/{id}
+   */
+  twitterCdpEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.TWITTER_CDP_ENABLED ?? "1").toLowerCase()
+  ),
+  twitterCdpPort: Number(process.env.TWITTER_CDP_PORT ?? 9222) || 9222,
+  twitterCdpHost: (process.env.TWITTER_CDP_HOST ?? "127.0.0.1").trim() || "127.0.0.1",
+  twitterCdpIntervalMs: Math.max(
+    30_000,
+    Number(process.env.TWITTER_CDP_INTERVAL_MS ?? 120_000) || 120_000
+  ),
+  twitterCdpTelegram: !["0", "false", "no", "off"].includes(
+    String(process.env.TWITTER_CDP_TELEGRAM ?? "1").toLowerCase()
+  ),
+  twitterCdpLists: parseIdList(process.env.TWITTER_CDP_LISTS ?? ""),
+  twitterCdpMaxPerList: Math.min(50, Math.max(5, Number(process.env.TWITTER_CDP_MAX_PER_LIST ?? 20) || 20)),
 };

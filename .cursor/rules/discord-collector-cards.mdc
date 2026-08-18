@@ -1,0 +1,33 @@
+---
+description: 信号卡片、档位进度、评估、自动交易边界
+globs: discord-collector/src/{card-*,discord-signal-*,trade-*,bitget-*,weex-*}.js
+alwaysApply: false
+---
+
+# 卡片管线
+
+```
+Gateway 消息 → ingest → signal-card-service（解析/去重/AI 风格）
+  → 入库 discord_signal_cards
+  → Telegram / Webhook / CARD_SINK(oi :8765)
+  → card-price-monitor：接近推送 + 每小时档位进度 + 窗口到期 autoEval
+```
+
+## 改哪里
+
+| 意图 | 文件 |
+|------|------|
+| 新博主/频道 | `discord-signal-config.js` + `discord-signal-parsers.js` |
+| 卡片字段/UID | `card-fields.js` / `card-uid.js` |
+| 入场/TP/SL 进度 | `card-level-progress.js`（1/N 分批；同 K 线先 SL） |
+| 杠杆/主流山寨 | `card-backtest-policy.js` |
+| 现价与 K 线 | `card-price-fetch.js` only |
+| 评估聚合 | `card-eval-api.js`（按 `channelId`，锚点 `signal_at`） |
+| Bitget/WEEX 下单 | `*-order-service.js`，频道开关 `trade-platform-toggles.js` |
+
+## 评估口径（已定，不要改语义）
+
+- 未入场：不进胜率分母。
+- 任意 TP = 赢；先 SL = 输。
+- N 个 TP 各平 `1/N`；`pnlPct` 按仓位加权累加。
+- `runAutoEval` 只做窗口到期兜底，盘中档位由 `progress_json` 状态机负责。
