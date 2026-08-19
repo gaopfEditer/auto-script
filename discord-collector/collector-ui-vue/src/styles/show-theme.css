@@ -140,16 +140,6 @@
   color: #b5bac1;
   font-variant-numeric: tabular-nums;
 }
-.channel-strip-week {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-.channel-strip-week.pos {
-  color: #3ba55d;
-}
-.channel-strip-week.neg {
-  color: #ed4245;
-}
 .channel-row:hover {
   background: #35373c;
   color: var(--text);

@@ -204,7 +204,7 @@ function channelStrip(channelId) {
 function channelStripVisible(channelId) {
   const s = channelStrip(channelId);
   if (!s?.hasTpStrategy) return false;
-  return (s.today?.tpCount ?? 0) > 0 || (s.today?.slCount ?? 0) > 0 || Boolean(s.lastWeek);
+  return (s.today?.tpCount ?? 0) > 0 || (s.today?.slCount ?? 0) > 0;
 }
 
 /** @param {import('../lib/cardEvalApi.js').ChannelStripRow | null | undefined} s */
@@ -217,13 +217,6 @@ function formatStripToday(s) {
   if (tp > 0) parts.push(`止盈${tp}`);
   if (sl > 0) parts.push(`止损${sl}`);
   return `今 ${parts.join(" · ")}`;
-}
-
-/** @param {import('../lib/cardEvalApi.js').ChannelStripRow | null | undefined} s */
-function formatStripWeek(s) {
-  const w = s?.lastWeek;
-  if (!w || !(w.decided > 0) || w.winRate == null || !Number.isFinite(Number(w.winRate))) return "";
-  return `上周 ${Number(w.winRate).toFixed(0)}%`;
 }
 
 async function loadChannelStripStats() {
@@ -1548,15 +1541,6 @@ onUnmounted(() => {
                 class="channel-strip-today"
                 :title="'当日已结算：止盈 / 止损（策略含止盈的卡片）'"
               >{{ formatStripToday(channelStrip(item.ch.channelId)) }}</span>
-              <span
-                v-if="formatStripWeek(channelStrip(item.ch.channelId))"
-                class="channel-strip-week"
-                :class="{
-                  pos: (channelStrip(item.ch.channelId)?.lastWeek?.winRate ?? 0) >= 50,
-                  neg: (channelStrip(item.ch.channelId)?.lastWeek?.winRate ?? 0) < 50,
-                }"
-                :title="'上周胜率（任意止盈=赢 · 先止损=输）'"
-              >{{ formatStripWeek(channelStrip(item.ch.channelId)) }}</span>
             </span>
           </button>
         </template>

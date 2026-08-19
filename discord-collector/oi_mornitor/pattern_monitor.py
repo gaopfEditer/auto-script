@@ -1078,16 +1078,21 @@ class PatternMonitorEngine:
         self._last_scan_ts = scan_ts or time.time()
 
         try:
-            combo_alerts = await self._scan_candle_oi_combos(
-                session,
-                base_url=base_url,
-                klines_map=klines_map,
-                watchlist=watchlist,
-                scan_ts=self._last_scan_ts,
+            combo_alerts = await asyncio.wait_for(
+                self._scan_candle_oi_combos(
+                    session,
+                    base_url=base_url,
+                    klines_map=klines_map,
+                    watchlist=watchlist,
+                    scan_ts=self._last_scan_ts,
+                ),
+                timeout=45,
             )
             if combo_alerts:
                 self._last_alerts = combo_alerts + self._last_alerts
                 alerts = self._last_alerts
+        except asyncio.TimeoutError:
+            logger.warning("形态+OI 短线扫描超时（45s），跳过")
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态+OI 短线扫描失败: %s", exc)
 
@@ -1151,8 +1156,17 @@ class PatternMonitorEngine:
                 )
                 return sym, oi
 
-        oi_pairs = await asyncio.gather(*[_oi_one(s) for s in candidates])
-        oi_by_sym = {s: m for s, m in oi_pairs if m}
+        oi_pairs = await asyncio.gather(
+            *[_oi_one(s) for s in candidates],
+            return_exceptions=True,
+        )
+        oi_by_sym: dict[str, dict[int, float]] = {}
+        for item in oi_pairs:
+            if isinstance(item, Exception):
+                continue
+            sym, oi = item
+            if oi:
+                oi_by_sym[sym] = oi
 
         out: list[dict[str, Any]] = []
         for sym in candidates:
