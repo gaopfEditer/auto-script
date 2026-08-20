@@ -1,11 +1,14 @@
 <script setup>
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   fetchAvatarPacks,
+  fetchCommunityAuthConfig,
+  loginCommunityWithEmail,
+  loginCommunityWithGoogle,
   logoutCommunity,
   patchCommunityMe,
   postCheckin,
-  registerCommunityMember,
+  registerCommunityWithEmail,
   SHOW_COMMUNITY_TIPS,
   updateMyAvatar,
 } from "../lib/communityApi.js";
@@ -23,12 +26,18 @@ const emit = defineEmits(["update:me", "logout", "tip-member", "goto", "refresh"
 /** 供模板使用 */
 const showTips = SHOW_COMMUNITY_TIPS;
 
-const editing = ref(false);
-const joinName = ref("");
-const joinHandle = ref("");
-const joinBusy = ref(false);
-const joinError = ref("");
+const authMode = ref("login"); // login | register
+const authBusy = ref(false);
+const authError = ref("");
+const email = ref("");
+const password = ref("");
+const displayName = ref("");
+const authCfg = ref({ googleEnabled: false, googleClientId: "", requireGoogleMail: false });
 
+const googleBtnEl = ref(null);
+let googleScriptLoaded = false;
+
+const editing = ref(false);
 const editName = ref("");
 const editBio = ref("");
 const editBusy = ref(false);
@@ -62,6 +71,16 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => [authCfg.value.googleEnabled, authCfg.value.googleClientId, props.me, authMode.value],
+  async () => {
+    if (!props.me && authCfg.value.googleEnabled) {
+      await nextTick();
+      void renderGoogleButton();
+    }
+  },
+);
+
 async function ensurePacks() {
   if (packsLoaded.value) return;
   try {
@@ -73,25 +92,111 @@ async function ensurePacks() {
   }
 }
 
-async function onJoin() {
-  joinBusy.value = true;
-  joinError.value = "";
+async function loadAuthConfig() {
   try {
-    const data = await registerCommunityMember({
-      displayName: joinName.value.trim(),
-      handle: joinHandle.value.trim() || undefined,
-    });
+    authCfg.value = await fetchCommunityAuthConfig();
+  } catch {
+    authCfg.value = { googleEnabled: false, googleClientId: "", requireGoogleMail: false };
+  }
+}
+
+function loadGoogleScript() {
+  return new Promise((resolve, reject) => {
+    if (googleScriptLoaded && /** @type {any} */ (window).google?.accounts?.id) {
+      resolve();
+      return;
+    }
+    const existing = document.querySelector("script[data-community-gis]");
+    if (existing) {
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", () => reject(new Error("Google 脚本加载失败")));
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true;
+    s.dataset.communityGis = "1";
+    s.onload = () => {
+      googleScriptLoaded = true;
+      resolve();
+    };
+    s.onerror = () => reject(new Error("Google 脚本加载失败"));
+    document.head.appendChild(s);
+  });
+}
+
+async function onGoogleCredential(resp) {
+  const idToken = resp?.credential;
+  if (!idToken) return;
+  authBusy.value = true;
+  authError.value = "";
+  try {
+    const data = await loginCommunityWithGoogle(idToken);
     emit("update:me", data.member);
     emit("refresh");
-    joinName.value = "";
-    joinHandle.value = "";
     editing.value = true;
-    showAvatars.value = true;
+    showAvatars.value = !data.member?.avatarUrl;
     await ensurePacks();
   } catch (e) {
-    joinError.value = e instanceof Error ? e.message : String(e);
+    authError.value = e instanceof Error ? e.message : String(e);
   } finally {
-    joinBusy.value = false;
+    authBusy.value = false;
+  }
+}
+
+async function renderGoogleButton() {
+  if (!authCfg.value.googleClientId || !googleBtnEl.value || props.me) return;
+  try {
+    await loadGoogleScript();
+    const g = /** @type {any} */ (window).google;
+    if (!g?.accounts?.id) return;
+    googleBtnEl.value.innerHTML = "";
+    g.accounts.id.initialize({
+      client_id: authCfg.value.googleClientId,
+      callback: onGoogleCredential,
+      auto_select: false,
+      ux_mode: "popup",
+    });
+    g.accounts.id.renderButton(googleBtnEl.value, {
+      theme: "filled_black",
+      size: "large",
+      shape: "pill",
+      text: "continue_with",
+      locale: "zh_CN",
+      width: 260,
+    });
+  } catch (e) {
+    authError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+async function onAuthSubmit() {
+  authBusy.value = true;
+  authError.value = "";
+  try {
+    const payload = {
+      email: email.value.trim(),
+      password: password.value,
+    };
+    const data =
+      authMode.value === "register"
+        ? await registerCommunityWithEmail({
+            ...payload,
+            displayName: displayName.value.trim() || undefined,
+          })
+        : await loginCommunityWithEmail(payload);
+    emit("update:me", data.member);
+    emit("refresh");
+    password.value = "";
+    if (authMode.value === "register") {
+      editing.value = true;
+      showAvatars.value = true;
+      await ensurePacks();
+    }
+  } catch (e) {
+    authError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    authBusy.value = false;
   }
 }
 
@@ -160,34 +265,90 @@ function onLogout() {
   logoutCommunity();
   emit("logout");
   editing.value = false;
+  nextTick(() => {
+    void renderGoogleButton();
+  });
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadAuthConfig();
   if (props.me) void ensurePacks();
+  else void renderGoogleButton();
+});
+
+onUnmounted(() => {
+  /* GIS 按钮随 DOM 销毁即可 */
 });
 </script>
 
 <template>
   <aside class="rail">
-    <!-- 未登录：创建资料 -->
+    <!-- 未登录：邮箱 / Google -->
     <section v-if="!me" class="card join-card">
-      <div class="join-avatar" aria-hidden="true">?</div>
-      <h3>创建你的资料</h3>
+      <div class="join-avatar" aria-hidden="true">✉</div>
+      <h3>{{ authMode === "login" ? "登录社区" : "注册账号" }}</h3>
       <p class="muted">
-        选个昵称加入社区，之后可随时换头像、改简介。
+        账号信息保存在后台。支持邮箱密码
+        <template v-if="authCfg.requireGoogleMail">（仅 Gmail）</template>
+        <template v-if="authCfg.googleEnabled">与 Google 一键登录</template>。
         <template v-if="showTips">注册赠 {{ welcomeTip }} 打赏币。</template>
       </p>
-      <label class="field">
-        <span>昵称</span>
-        <input v-model="joinName" maxlength="32" placeholder="怎么称呼你" @keyup.enter="onJoin" />
+
+      <div class="auth-tabs">
+        <button type="button" :class="{ on: authMode === 'login' }" @click="authMode = 'login'">登录</button>
+        <button type="button" :class="{ on: authMode === 'register' }" @click="authMode = 'register'">
+          注册
+        </button>
+      </div>
+
+      <div v-if="authCfg.googleEnabled" class="google-wrap">
+        <div ref="googleBtnEl" class="google-btn" />
+        <p class="or">或使用邮箱</p>
+      </div>
+      <p v-else class="muted tiny">未配置 Google Client ID 时仅可用邮箱注册登录。</p>
+
+      <label v-if="authMode === 'register'" class="field">
+        <span>昵称（可选）</span>
+        <input v-model="displayName" maxlength="32" placeholder="怎么称呼你" autocomplete="nickname" />
       </label>
       <label class="field">
-        <span>ID（可选）</span>
-        <input v-model="joinHandle" maxlength="24" placeholder="字母数字" @keyup.enter="onJoin" />
+        <span>邮箱</span>
+        <input
+          v-model="email"
+          type="email"
+          maxlength="255"
+          :placeholder="authCfg.requireGoogleMail ? 'you@gmail.com' : 'you@example.com'"
+          autocomplete="username"
+          @keyup.enter="onAuthSubmit"
+        />
       </label>
-      <p v-if="joinError" class="err">{{ joinError }}</p>
-      <button type="button" class="primary" :disabled="joinBusy || !joinName.trim()" @click="onJoin">
-        {{ joinBusy ? "创建中…" : "创建并加入" }}
+      <label class="field">
+        <span>密码</span>
+        <input
+          v-model="password"
+          type="password"
+          maxlength="128"
+          :placeholder="authMode === 'register' ? '至少 8 位' : '登录密码'"
+          autocomplete="current-password"
+          @keyup.enter="onAuthSubmit"
+        />
+      </label>
+      <p v-if="authError" class="err">{{ authError }}</p>
+      <button
+        type="button"
+        class="primary"
+        :disabled="authBusy || !email.trim() || password.length < (authMode === 'register' ? 8 : 1)"
+        @click="onAuthSubmit"
+      >
+        {{
+          authBusy
+            ? authMode === "login"
+              ? "登录中…"
+              : "注册中…"
+            : authMode === "login"
+              ? "登录"
+              : "注册并加入"
+        }}
       </button>
     </section>
 
@@ -205,6 +366,7 @@ onMounted(() => {
       </button>
       <h3 class="name">{{ me.displayName }}</h3>
       <p class="handle">@{{ me.handle }}</p>
+      <p v-if="me.email" class="muted tiny email-line">{{ me.email }}</p>
       <div class="level-row">
         <CommunityLevelBadges :badges="me.badges" :level="me.level" />
       </div>
@@ -351,7 +513,56 @@ onMounted(() => {
   margin: 0.35rem 0 0;
 }
 .join-card {
+  text-align: left;
+}
+.join-card h3 {
   text-align: center;
+}
+.join-card > .muted:first-of-type {
+  text-align: center;
+}
+.auth-tabs {
+  display: flex;
+  gap: 0.25rem;
+  background: #151618;
+  border-radius: 999px;
+  padding: 0.2rem;
+  margin: 0.75rem 0 0.65rem;
+}
+.auth-tabs button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #949ba4;
+  border-radius: 999px;
+  padding: 0.35rem 0.5rem;
+  font-weight: 700;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.auth-tabs button.on {
+  background: #5865f2;
+  color: #fff;
+}
+.google-wrap {
+  margin-bottom: 0.55rem;
+}
+.google-btn {
+  display: flex;
+  justify-content: center;
+  min-height: 40px;
+}
+.or {
+  margin: 0.55rem 0 0.15rem;
+  color: #6a6e76;
+  font-size: 0.72rem;
+}
+.tiny {
+  font-size: 0.72rem;
+}
+.email-line {
+  margin: 0.15rem 0 0.35rem;
+  word-break: break-all;
 }
 .join-avatar {
   width: 72px;

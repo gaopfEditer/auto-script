@@ -171,6 +171,12 @@ export function extractTweetsFromGraphqlJson(root) {
       if (id && !seen.has(id)) {
         seen.add(id);
         const handle = String(userLegacy.screen_name ?? "").trim();
+        const authorId = String(user.rest_id ?? userLegacy.id_str ?? "").trim();
+        const avatarUrl = String(
+          userLegacy.profile_image_url_https ?? userLegacy.profile_image_url ?? ""
+        )
+          .replace("_normal.", ".")
+          .trim();
         out.push({
           tweetId: id,
           handle,
@@ -178,6 +184,8 @@ export function extractTweetsFromGraphqlJson(root) {
           text: String(legacy.full_text ?? legacy.text ?? "").trim(),
           createdAt: legacy.created_at ? String(legacy.created_at) : null,
           url: `https://x.com/${handle || "i"}/status/${id}`,
+          authorId: authorId || undefined,
+          avatarUrl: avatarUrl || undefined,
         });
       }
     }

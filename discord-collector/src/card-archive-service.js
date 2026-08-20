@@ -10,17 +10,45 @@ import {
 } from "./card-fields.js";
 import { executionFromParsed, normalizeExecution, normalizePriceList } from "./discord-signal-execution.js";
 import { signalCardToClient, resolveCardSignalAt } from "./discord-signal-card-service.js";
-import { getSignalChannelConfig, COIN_ACTION_SIGNAL_CHANNEL_ID } from "./discord-signal-config.js";
+import { getSignalChannelConfig, COIN_ACTION_SIGNAL_CHANNEL_ID, isSignalChannel } from "./discord-signal-config.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
 import { buildCardSinkPayload, pickCardSinkText } from "./card-external-sink.js";
 import { extractSignalCardRowId } from "./store.js";
+import { messageContentPreview, messageRowToClientForPush } from "./discord-message-format.js";
+import { isDebugMode } from "./discord-debug.js";
+import { config } from "./config.js";
 import {
   COIN_ACTION_DEDUP_WINDOW_MS,
   COIN_ACTION_ENTRY_SIMILAR_PCT,
   isSimilarEntryPrice,
   shouldSkipSimilarCoinAction,
 } from "./discord-signal-numeric-dedup.js";
+
+/** Discord 雪花频道 ID（排除 api/youtube 等占位） */
+function isDiscordChannelId(id) {
+  return /^\d{16,22}$/.test(String(id ?? "").trim());
+}
+
+/**
+ * 卡片 → Show 频道时间线正文。
+ * @param {ReturnType<typeof archiveCardToClient>} card
+ */
+export function formatCardAsChannelMessage(card) {
+  const text = pickCardSinkText(card);
+  if (text) return String(text).trim().slice(0, 1900);
+  const symbol = String(card.symbol ?? "").trim();
+  const ex = card.execution && typeof card.execution === "object" ? card.execution : null;
+  const dir = String(ex?.direction ?? "").trim();
+  const entry = String(ex?.planned?.entryPrice ?? "").trim();
+  const parts = ["【卡片】"];
+  if (symbol) parts.push(symbol);
+  if (dir) parts.push(dir);
+  if (entry) parts.push(`入场 ${entry}`);
+  const raw = String(card.rawContent ?? "").trim();
+  if (raw) parts.push(raw.slice(0, 400));
+  return parts.filter(Boolean).join("\n").slice(0, 1900) || "【卡片】";
+}
 
 /** @param {string} channelId @param {string|null|undefined} [dbName] */
 export function resolveCardChannelName(channelId, dbName) {
@@ -106,10 +134,113 @@ export function formatCardSourceLog(card, meta) {
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
- * @param {{ cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink> }} [deps]
+ * @param {{ cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink>, communityFeed?: ReturnType<typeof import("./community-feed-service.js").createCommunityFeedService> }} [deps]
  */
 export function createCardArchiveService(store, log, broadcast, deps = {}) {
   const cardSink = deps.cardSink ?? null;
+  const communityFeed = deps.communityFeed ?? null;
+
+  /**
+   * API/归档卡片写入对应 Discord 频道时间线（按 signalAt/当前时间排序为最新）。
+   * 仅当 channelId 为真实频道雪花，且已在库中或为信号频道时注入。
+   * @param {ReturnType<typeof archiveCardToClient>} clientCard
+   * @param {{ force?: boolean }} [opts]
+   */
+  async function publishCardToChannelFeed(clientCard, opts = {}) {
+    if (!config.cardApiInjectChannelMessage && !opts.force) {
+      return { skipped: "disabled" };
+    }
+    const channelId = String(clientCard.channelId ?? "").trim();
+    if (!isDiscordChannelId(channelId)) {
+      return { skipped: "not_discord_channel" };
+    }
+
+    const meta = store.getChannelMeta ? await store.getChannelMeta(channelId) : null;
+    const known = Boolean(meta) || isSignalChannel(channelId);
+    if (!known && !opts.force) {
+      return { skipped: "unknown_channel" };
+    }
+
+    const guildId = String(
+      clientCard.guildId ?? meta?.guild_id ?? meta?.guildId ?? ""
+    ).trim();
+    const channelName =
+      String(clientCard.channelName ?? meta?.name ?? "").trim() ||
+      resolveCardChannelName(channelId, null);
+    const signalIso = clientCard.signalAt || new Date().toISOString();
+    const createdAtMs = Date.parse(String(signalIso)) || Date.now();
+    const content = formatCardAsChannelMessage(clientCard);
+    const messageId = `card-api-${clientCard.id ?? clientCard.uid ?? Date.now()}`;
+
+    const row = {
+      messageId,
+      guildId,
+      guildName: null,
+      channelId,
+      channelName,
+      authorId: "card-api",
+      authorUsername: "CardAPI",
+      authorGlobalName: "卡片 API",
+      authorAvatar: null,
+      content,
+      eventType: "MESSAGE_CREATE",
+      source: "card_api",
+      createdAtMs,
+      receivedAt: new Date().toISOString(),
+      rawJson: {
+        cardApi: true,
+        cardId: clientCard.id ?? null,
+        cardUid: clientCard.uid ?? null,
+        symbol: clientCard.symbol ?? null,
+      },
+    };
+
+    if (store.insertDiscordMessagesBatch) {
+      await store.insertDiscordMessagesBatch([row]);
+    }
+
+    broadcast?.("message", {
+      kind: "discord_message_batch",
+      debugMode: isDebugMode(),
+      count: 1,
+      source: "card_api",
+      rows: [
+        messageRowToClientForPush({
+          message_id: row.messageId,
+          guild_id: row.guildId,
+          guild_name: row.guildName,
+          channel_id: row.channelId,
+          channel_name: row.channelName,
+          author_id: row.authorId,
+          author_username: row.authorUsername,
+          author_global_name: row.authorGlobalName,
+          author_avatar: row.authorAvatar,
+          content: row.content,
+          event_type: row.eventType,
+          source: row.source,
+          created_at_ms: row.createdAtMs,
+          raw_json: row.rawJson,
+        }),
+      ],
+      channels: [
+        {
+          channelId,
+          guildId,
+          name: channelName,
+          lastMessagePreview: messageContentPreview(row),
+          lastMessageAtMs: createdAtMs,
+        },
+      ],
+    });
+
+    // 与自动建卡一致，方便 Show 信号栏 upsert
+    broadcast?.("meta", { kind: "signal_card_created", card: clientCard, source: "card_api" });
+    log.info(
+      `卡片→频道消息 channel=${channelName}(${channelId}) msg=${messageId} preview=${content.slice(0, 80)}`
+    );
+    return { ok: true, messageId, channelId, createdAtMs };
+  }
+
   /**
    * @param {{
    *   messageId?: string,
@@ -128,6 +259,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
    *   note?: string | null,
    *   signalAt?: string | null,
    *   source?: string,
+   *   injectChannelMessage?: boolean,
    * }} input
    */
   async function archiveCard(input) {
@@ -235,7 +367,49 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       source: input.source ?? (sourceType === "manual" ? "manual" : "auto"),
       note: input.note != null ? String(input.note) : "",
     }));
-    return clientCard;
+
+    if (communityFeed?.publishCard) {
+      try {
+        const text =
+          pickCardSinkText(clientCard) ||
+          formatCardAsChannelMessage(clientCard);
+        await communityFeed.publishCard({
+          text,
+          channelId: String(clientCard.channelId ?? channelId),
+          channelName: String(clientCard.channelName ?? ""),
+          cardId: clientCard.id != null ? Number(clientCard.id) : null,
+          symbol: String(clientCard.symbol ?? symbol ?? ""),
+        });
+      } catch (e) {
+        log.warn(`社区消息频道(归档)失败: ${/** @type {Error} */ (e).message}`);
+      }
+    }
+
+    /** @type {Awaited<ReturnType<typeof publishCardToChannelFeed>> | null} */
+    let channelMessage = null;
+    const injectFlag = (() => {
+      const v = input.injectChannelMessage;
+      if (v === undefined || v === null || v === "") return undefined;
+      if (v === true || v === 1 || v === "1" || v === "true") return true;
+      if (v === false || v === 0 || v === "0" || v === "false") return false;
+      return undefined;
+    })();
+    const wantInject =
+      injectFlag === true ||
+      (injectFlag !== false &&
+        (sourceType === "api" || sourceType === "manual" || sourceType === "youtube"));
+    if (wantInject) {
+      try {
+        channelMessage = await publishCardToChannelFeed(clientCard, {
+          force: injectFlag === true,
+        });
+      } catch (e) {
+        log.warn(`卡片写入频道消息失败: ${/** @type {Error} */ (e).message}`);
+        channelMessage = { skipped: "error", error: /** @type {Error} */ (e).message };
+      }
+    }
+
+    return Object.assign(clientCard, { channelMessage });
   }
 
   /**
@@ -566,7 +740,13 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     }
   }
 
-  return { archiveCard, archiveFromYoutube, archiveCardToClient, registerCoinActionWatches };
+  return {
+    archiveCard,
+    archiveFromYoutube,
+    archiveCardToClient,
+    registerCoinActionWatches,
+    publishCardToChannelFeed,
+  };
 }
 
 /**

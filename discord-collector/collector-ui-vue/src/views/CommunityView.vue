@@ -13,12 +13,13 @@ import {
   toggleLike,
 } from "../lib/communityApi.js";
 import CommunityChatPanel from "../components/CommunityChatPanel.vue";
+import CommunityFeedPanel from "../components/CommunityFeedPanel.vue";
 import CommunityProfileRail from "../components/CommunityProfileRail.vue";
 import CommunityHoverCard from "../components/CommunityHoverCard.vue";
 import CommunityLevelBadges from "../components/CommunityLevelBadges.vue";
 import { badgesCountLabel, levelBadgesFromLevel } from "../lib/communityLevel.js";
 
-const view = ref("chat"); // chat | plaza | tip | titles
+const view = ref("chat"); // chat | feed | twitter | plaza | tip | titles
 const loading = ref(true);
 const error = ref("");
 const me = ref(null);
@@ -229,10 +230,12 @@ onMounted(() => {
     <header class="top">
       <div>
         <h1>社区</h1>
-        <p class="sub">聊天大厅 · 资料与成长 · 动态</p>
+        <p class="sub">聊天大厅 · 消息频道 · Twitter · 动态</p>
       </div>
       <nav class="seg">
         <button type="button" :class="{ on: view === 'chat' }" @click="view = 'chat'">聊天</button>
+        <button type="button" :class="{ on: view === 'feed' }" @click="view = 'feed'">消息频道</button>
+        <button type="button" :class="{ on: view === 'twitter' }" @click="view = 'twitter'">Twitter</button>
         <button type="button" :class="{ on: view === 'plaza' }" @click="view = 'plaza'">动态</button>
         <button
           v-if="SHOW_COMMUNITY_TIPS"
@@ -255,6 +258,14 @@ onMounted(() => {
           <CommunityChatPanel :me="me" @update:me="me = $event" @tip-member="tipQuick" />
         </div>
 
+        <div v-show="view === 'feed'" class="chat-fill">
+          <CommunityFeedPanel feed-type="card" />
+        </div>
+
+        <div v-show="view === 'twitter'" class="chat-fill">
+          <CommunityFeedPanel feed-type="twitter" />
+        </div>
+
         <section v-show="view === 'plaza'" class="panel feed">
           <h2>动态广场</h2>
           <div v-if="me" class="composer">
@@ -263,7 +274,7 @@ onMounted(() => {
               {{ postBusy ? "发布中…" : "发布" }}
             </button>
           </div>
-          <p v-else class="muted">在右侧创建资料后可发动态。</p>
+          <p v-else class="muted">在右侧登录后可发动态。</p>
 
           <article v-for="p in posts" :key="p.id" class="post-card">
             <header class="post-hd">
@@ -342,7 +353,7 @@ onMounted(() => {
             </button>
             <p v-if="tipMsg" class="ok">{{ tipMsg }}</p>
           </div>
-          <p v-else class="muted">请先在右侧创建资料。</p>
+          <p v-else class="muted">请先在右侧登录。</p>
           <h3 class="subh">最近打赏</h3>
           <ul class="tip-list">
             <li v-for="t in tips" :key="t.id">

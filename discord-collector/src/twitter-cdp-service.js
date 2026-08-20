@@ -23,9 +23,11 @@ const TELEGRAM_TEXT_MAX = 3900;
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
+ * @param {{ communityFeed?: ReturnType<typeof import("./community-feed-service.js").createCommunityFeedService> }} [deps]
  */
-export function createTwitterCdpService(store, log, broadcast) {
+export function createTwitterCdpService(store, log, broadcast, deps = {}) {
   const telegram = createDiscordSignalTelegramPush(log);
+  const communityFeed = deps.communityFeed ?? null;
 
   /** @type {{
    *   enabled: boolean,
@@ -273,34 +275,54 @@ export function createTwitterCdpService(store, log, broadcast) {
         await persistTweets(rows);
 
         let sent = 0;
-        if (!seedAll && runtime.telegram && telegram.enabled) {
+        if (!seedAll && fresh.length) {
           for (const t of fresh) {
-            const text = formatTelegram({
-              listLabel: batch.list.label,
-              handle: t.handle,
-              displayName: t.displayName,
-              text: t.text,
-              url: t.url,
-              createdAt: twitterTimeToIso(t.createdAt),
-            });
-            try {
-              const r = await telegram.send(text, { skipChannelLabel: true, kind: "twitter_list" });
-              if (!r.skipped) {
-                sent += 1;
-                pushed.push({
-                  tweetId: t.tweetId,
-                  listId,
-                  handle: t.handle,
-                  text: t.text,
-                  url: t.url,
-                });
+            if (runtime.telegram && telegram.enabled) {
+              const text = formatTelegram({
+                listLabel: batch.list.label,
+                handle: t.handle,
+                displayName: t.displayName,
+                text: t.text,
+                url: t.url,
+                createdAt: twitterTimeToIso(t.createdAt),
+              });
+              try {
+                const r = await telegram.send(text, { skipChannelLabel: true, kind: "twitter_list" });
+                if (!r.skipped) {
+                  sent += 1;
+                  pushed.push({
+                    tweetId: t.tweetId,
+                    listId,
+                    handle: t.handle,
+                    text: t.text,
+                    url: t.url,
+                  });
+                }
+              } catch (e) {
+                pushLog(`Telegram 失败 ${t.tweetId}: ${/** @type {Error} */ (e).message}`);
               }
-            } catch (e) {
-              pushLog(`Telegram 失败 ${t.tweetId}: ${/** @type {Error} */ (e).message}`);
+            }
+            if (communityFeed?.publishTweet) {
+              try {
+                await communityFeed.publishTweet({
+                  tweetId: t.tweetId,
+                  text: t.text,
+                  tweetUrl: t.url,
+                  listId,
+                  listLabel: batch.list.label,
+                  handle: t.handle,
+                  displayName: t.displayName,
+                  avatarUrl: /** @type {{ avatarUrl?: string }} */ (t).avatarUrl,
+                  authorId: /** @type {{ authorId?: string }} */ (t).authorId,
+                  tweetAt: twitterTimeToIso(t.createdAt),
+                });
+              } catch (e) {
+                pushLog(`社区 Twitter 同步失败 ${t.tweetId}: ${/** @type {Error} */ (e).message}`);
+              }
             }
           }
           if (sent && store.markTwitterTelegramSent) {
-            await store.markTwitterTelegramSent(fresh.map((t) => t.tweetId));
+            await store.markTwitterTelegramSent(fresh.map((x) => x.tweetId));
           }
         } else if (seedAll) {
           pushLog(`列表 ${batch.list.label} 首次记档 ${tweets.length} 条（不推旧帖）`);

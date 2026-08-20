@@ -1132,7 +1132,11 @@ function onSocketMsg(msg) {
     if (msg.kind === "cdp_active_channel") {
       updateCdpActive(String(msg.channelId ?? ""), String(msg.guildId ?? ""));
     }
-    if (msg.kind === "signal_card_created" && msg.card && typeof msg.card === "object") {
+    if (
+      (msg.kind === "signal_card_created" || msg.kind === "card_archived") &&
+      msg.card &&
+      typeof msg.card === "object"
+    ) {
       const card = /** @type {Record<string, unknown>} */ (msg.card);
       const cid = String(card.channelId ?? "");
       if (selectedChannel.value?.channelId === cid) {

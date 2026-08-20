@@ -25,9 +25,11 @@ function ensureUploadRoot() {
  * @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
+ * @param {{ communityFeed?: ReturnType<typeof import("./community-feed-service.js").createCommunityFeedService> }} [deps]
  */
-export function registerCommunityRoutes(app, store, log, broadcast) {
+export function registerCommunityRoutes(app, store, log, broadcast, deps = {}) {
   const community = createCommunityService(store, log, broadcast);
+  const communityFeed = deps.communityFeed ?? null;
   const uploadRoot = ensureUploadRoot();
 
   const storage = multer.diskStorage({
@@ -125,6 +127,41 @@ export function registerCommunityRoutes(app, store, log, broadcast) {
     try {
       const limit = Number(req.query.limit) || 20;
       res.json({ ok: true, ...(await community.leaderboard(limit)) });
+    } catch (e) {
+      handleErr(res, e);
+    }
+  });
+
+  app.get("/api/community/auth/config", async (_req, res) => {
+    try {
+      res.json({ ok: true, ...(await Promise.resolve(community.authConfig())) });
+    } catch (e) {
+      handleErr(res, e);
+    }
+  });
+
+  app.post("/api/community/auth/register", async (req, res) => {
+    try {
+      const data = await community.registerWithEmail(req.body ?? {});
+      res.json({ ok: true, ...data });
+    } catch (e) {
+      handleErr(res, e);
+    }
+  });
+
+  app.post("/api/community/auth/login", async (req, res) => {
+    try {
+      const data = await community.loginWithEmail(req.body ?? {});
+      res.json({ ok: true, ...data });
+    } catch (e) {
+      handleErr(res, e);
+    }
+  });
+
+  app.post("/api/community/auth/google", async (req, res) => {
+    try {
+      const data = await community.loginWithGoogle(req.body ?? {});
+      res.json({ ok: true, ...data });
     } catch (e) {
       handleErr(res, e);
     }
@@ -337,4 +374,63 @@ export function registerCommunityRoutes(app, store, log, broadcast) {
     },
     express.static(uploadRoot, { fallthrough: false, index: false })
   );
+
+  /** 社区信息流：消息频道（卡片）/ Twitter */
+  app.get("/api/community/feed", async (req, res) => {
+    try {
+      if (!communityFeed?.listFeed) {
+        res.json({ ok: true, messages: [] });
+        return;
+      }
+      const feedType = String(req.query.type || req.query.feedType || "").trim();
+      const messages = await communityFeed.listFeed({
+        feedType: feedType || undefined,
+        beforeId: req.query.beforeId ? Number(req.query.beforeId) : undefined,
+        limit: Number(req.query.limit) || 40,
+      });
+      res.json({ ok: true, messages });
+    } catch (e) {
+      handleErr(res, e);
+    }
+  });
+
+  app.get("/api/community/twitter/authors", async (req, res) => {
+    try {
+      if (!communityFeed?.listAuthors) {
+        res.json({ ok: true, authors: [] });
+        return;
+      }
+      const authors = await communityFeed.listAuthors(Number(req.query.limit) || 200);
+      res.json({ ok: true, authors });
+    } catch (e) {
+      handleErr(res, e);
+    }
+  });
+
+  app.post("/api/community/twitter/authors", async (req, res) => {
+    try {
+      if (!communityFeed?.upsertAuthor) {
+        const e = /** @type {Error & { code?: string }} */ (new Error("社区信息流未启用"));
+        e.code = "COMMUNITY_OFFLINE";
+        throw e;
+      }
+      const body = req.body ?? {};
+      const authorKey = String(body.authorKey || body.handle || "").trim();
+      if (!authorKey) {
+        const e = /** @type {Error & { code?: string }} */ (new Error("需要 authorKey 或 handle"));
+        e.code = "BAD_REQUEST";
+        throw e;
+      }
+      const author = await communityFeed.upsertAuthor({
+        authorKey,
+        handle: body.handle,
+        displayName: body.displayName,
+        avatarUrl: body.avatarUrl,
+        note: body.note,
+      });
+      res.json({ ok: true, author });
+    } catch (e) {
+      handleErr(res, e);
+    }
+  });
 }

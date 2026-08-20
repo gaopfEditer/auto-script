@@ -15,6 +15,17 @@ import {
   titlesWithBadges,
 } from "./community-titles.js";
 import { allowedAvatarUrls, COMMUNITY_AVATAR_PACKS } from "./community-avatar-packs.js";
+import {
+  handleFromEmail,
+  hashPassword,
+  isGoogleMail,
+  isValidEmail,
+  normalizeEmail,
+  verifyGoogleIdToken,
+  verifyPassword,
+} from "./community-auth.js";
+import { config } from "./config.js";
+import { extractFirstHttpUrl, fetchLinkPreview } from "./community-link-preview.js";
 
 /** @param {Date | string} d */
 function toDayKey(d = new Date()) {
@@ -39,13 +50,15 @@ function newToken() {
 
 /**
  * @param {Record<string, unknown>} row
+ * @param {{ self?: boolean }} [opts]
  */
-function memberPublic(row) {
+function memberPublic(row, opts = {}) {
   if (!row) return null;
   const points = Number(row.points) || 0;
   const title = titleForPoints(points);
   const progress = titleProgress(points);
-  return {
+  /** @type {Record<string, unknown>} */
+  const out = {
     id: Number(row.id),
     handle: row.handle,
     displayName: row.display_name,
@@ -75,6 +88,12 @@ function memberPublic(row) {
     },
     createdAt: row.created_at,
   };
+  if (opts.self) {
+    out.email = row.email || "";
+    out.authProvider = row.auth_provider || "local";
+    out.hasPassword = Boolean(row.password_hash);
+  }
+  return out;
 }
 
 /**
@@ -117,30 +136,182 @@ export function createCommunityService(store, log, broadcast) {
   }
 
   /**
-   * @param {{ displayName: string, handle?: string, avatarUrl?: string, bio?: string }} body
+   * @param {string} preferred
    */
-  async function register(body) {
-    await ensureReady();
-    const displayName = String(body.displayName ?? "").trim().slice(0, 32);
-    if (!displayName) {
-      const err = new Error("请填写昵称");
-      err.code = "BAD_REQUEST";
-      throw err;
-    }
-    let handle = String(body.handle ?? "")
+  async function allocHandle(preferred) {
+    let base = String(preferred || "")
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9_]/g, "")
-      .slice(0, 24);
-    if (!handle) {
-      handle = `u${Date.now().toString(36)}`;
+      .slice(0, 20);
+    if (!base) base = `u${Date.now().toString(36)}`;
+    for (let i = 0; i < 20; i += 1) {
+      const candidate = (i === 0 ? base : `${base}${i}`).slice(0, 24);
+      const existing = await store.communityGetMemberByHandle(candidate);
+      if (!existing) return candidate;
     }
-    const existing = await store.communityGetMemberByHandle(handle);
-    if (existing) {
-      const err = new Error("该 handle 已被占用");
+    return `u${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`.slice(0, 24);
+  }
+
+  function authConfig() {
+    return {
+      googleClientId: config.communityGoogleClientId || "",
+      googleEnabled: Boolean(config.communityGoogleClientId),
+      emailAuth: true,
+      requireGoogleMail: config.communityEmailRequireGoogleMail,
+    };
+  }
+
+  /**
+   * 邮箱 + 密码注册（信息入库）。
+   * @param {{ email: string, password: string, displayName?: string, handle?: string }} body
+   */
+  async function registerWithEmail(body) {
+    await ensureReady();
+    const email = normalizeEmail(body.email);
+    if (!isValidEmail(email)) {
+      const err = new Error("请输入有效邮箱");
+      err.code = "BAD_REQUEST";
+      throw err;
+    }
+    if (config.communityEmailRequireGoogleMail && !isGoogleMail(email)) {
+      const err = new Error("仅支持 Google 邮箱（@gmail.com）注册，或使用「Google 登录」");
+      err.code = "BAD_REQUEST";
+      throw err;
+    }
+    const password = String(body.password ?? "");
+    if (password.length < 8 || password.length > 128) {
+      const err = new Error("密码长度须为 8～128 位");
+      err.code = "BAD_REQUEST";
+      throw err;
+    }
+    if (await store.communityGetMemberByEmail(email)) {
+      const err = new Error("该邮箱已注册，请直接登录");
       err.code = "CONFLICT";
       throw err;
     }
+    const displayName =
+      String(body.displayName ?? "").trim().slice(0, 32) ||
+      email.split("@")[0].slice(0, 32) ||
+      "会员";
+    const handle = await allocHandle(body.handle || handleFromEmail(email));
+    const token = newToken();
+    const passwordHash = await hashPassword(password);
+    const row = await store.communityInsertMember({
+      token,
+      handle,
+      displayName,
+      avatarUrl: "",
+      bio: "",
+      email,
+      passwordHash,
+      authProvider: "local",
+      points: 0,
+      tipBalance: WELCOME_TIP_BALANCE,
+    });
+    log.info(`社区邮箱注册 #${row.id} @${handle} ${email}`);
+    return {
+      member: memberPublic(row, { self: true }),
+      token,
+      welcomeTipBalance: WELCOME_TIP_BALANCE,
+      created: true,
+    };
+  }
+
+  /**
+   * 邮箱 + 密码登录。
+   * @param {{ email: string, password: string }} body
+   */
+  async function loginWithEmail(body) {
+    await ensureReady();
+    const email = normalizeEmail(body.email);
+    const password = String(body.password ?? "");
+    if (!isValidEmail(email) || !password) {
+      const err = new Error("请输入邮箱和密码");
+      err.code = "BAD_REQUEST";
+      throw err;
+    }
+    const row = await store.communityGetMemberByEmail(email);
+    if (!row || !row.password_hash) {
+      const err = new Error("邮箱或密码错误");
+      err.code = "UNAUTHORIZED";
+      throw err;
+    }
+    const ok = await verifyPassword(password, String(row.password_hash));
+    if (!ok) {
+      const err = new Error("邮箱或密码错误");
+      err.code = "UNAUTHORIZED";
+      throw err;
+    }
+    const token = newToken();
+    const next = await store.communityUpdateMember(row.id, { token });
+    log.info(`社区邮箱登录 #${row.id} @${row.handle}`);
+    return { member: memberPublic(next, { self: true }), token, created: false };
+  }
+
+  /**
+   * Google ID Token 登录 / 自动注册。
+   * @param {{ idToken: string }} body
+   */
+  async function loginWithGoogle(body) {
+    await ensureReady();
+    const profile = await verifyGoogleIdToken(body.idToken);
+    let row =
+      (await store.communityGetMemberByGoogleSub(profile.sub)) ||
+      (await store.communityGetMemberByEmail(profile.email));
+
+    const token = newToken();
+    if (row) {
+      /** @type {Record<string, unknown>} */
+      const patch = { token, googleSub: profile.sub };
+      if (!row.email) patch.email = profile.email;
+      if (profile.picture && !row.avatar_url) patch.avatarUrl = profile.picture;
+      if (row.auth_provider === "local") patch.authProvider = "both";
+      else if (!row.auth_provider || row.auth_provider === "google") patch.authProvider = "google";
+      const next = await store.communityUpdateMember(row.id, patch);
+      log.info(`社区 Google 登录 #${row.id} @${row.handle}`);
+      return { member: memberPublic(next, { self: true }), token, created: false };
+    }
+
+    const displayName = profile.name || profile.email.split("@")[0] || "Google用户";
+    const handle = await allocHandle(handleFromEmail(profile.email));
+    row = await store.communityInsertMember({
+      token,
+      handle,
+      displayName: displayName.slice(0, 32),
+      avatarUrl: profile.picture || "",
+      bio: "",
+      email: profile.email,
+      googleSub: profile.sub,
+      authProvider: "google",
+      points: 0,
+      tipBalance: WELCOME_TIP_BALANCE,
+    });
+    log.info(`社区 Google 注册 #${row.id} @${handle} ${profile.email}`);
+    return {
+      member: memberPublic(row, { self: true }),
+      token,
+      welcomeTipBalance: WELCOME_TIP_BALANCE,
+      created: true,
+    };
+  }
+
+  /**
+   * 兼容旧接口：无邮箱时仍可快速加入；有 email+password 则走正式注册。
+   * @param {{ displayName?: string, handle?: string, avatarUrl?: string, bio?: string, email?: string, password?: string }} body
+   */
+  async function register(body) {
+    if (body.email && body.password) {
+      return registerWithEmail(body);
+    }
+    await ensureReady();
+    const displayName = String(body.displayName ?? "").trim().slice(0, 32);
+    if (!displayName) {
+      const err = new Error("请填写昵称，或使用邮箱 / Google 注册");
+      err.code = "BAD_REQUEST";
+      throw err;
+    }
+    const handle = await allocHandle(body.handle);
     const token = newToken();
     const row = await store.communityInsertMember({
       token,
@@ -148,16 +319,17 @@ export function createCommunityService(store, log, broadcast) {
       displayName,
       avatarUrl: String(body.avatarUrl ?? "").trim().slice(0, 512),
       bio: String(body.bio ?? "").trim().slice(0, 200),
+      authProvider: "guest",
       points: 0,
       tipBalance: WELCOME_TIP_BALANCE,
     });
-    log.info(`社区新成员 #${row.id} @${handle}`);
-    return { member: memberPublic(row), token, welcomeTipBalance: WELCOME_TIP_BALANCE };
+    log.info(`社区游客加入 #${row.id} @${handle}`);
+    return { member: memberPublic(row, { self: true }), token, welcomeTipBalance: WELCOME_TIP_BALANCE };
   }
 
   async function me(token) {
     const row = await requireMember(token);
-    return { member: memberPublic(row) };
+    return { member: memberPublic(row, { self: true }) };
   }
 
   /**
@@ -171,7 +343,7 @@ export function createCommunityService(store, log, broadcast) {
       avatarUrl: patch.avatarUrl != null ? String(patch.avatarUrl).trim().slice(0, 512) : undefined,
       bio: patch.bio != null ? String(patch.bio).trim().slice(0, 200) : undefined,
     });
-    return { member: memberPublic(next) };
+    return { member: memberPublic(next, { self: true }) };
   }
 
   async function listTitles() {
@@ -482,11 +654,35 @@ export function createCommunityService(store, log, broadcast) {
    * @param {Record<string, unknown> | null} [memberRow]
    */
   function chatMessagePublic(row, memberRow) {
+    let meta = row.meta_json ?? row.metaJson ?? null;
+    if (typeof meta === "string") {
+      try {
+        meta = JSON.parse(meta);
+      } catch {
+        meta = null;
+      }
+    }
+    const linkPreview =
+      meta && typeof meta === "object" && meta.linkPreview && typeof meta.linkPreview === "object"
+        ? {
+            url: String(meta.linkPreview.url ?? ""),
+            title: String(meta.linkPreview.title ?? ""),
+            description: String(meta.linkPreview.description ?? ""),
+            image: String(meta.linkPreview.image ?? ""),
+            imageAlt: String(meta.linkPreview.imageAlt ?? ""),
+            siteName: String(meta.linkPreview.siteName ?? ""),
+            card: String(meta.linkPreview.card ?? ""),
+            twitterSite: String(meta.linkPreview.twitterSite ?? ""),
+            twitterCreator: String(meta.linkPreview.twitterCreator ?? ""),
+            source: String(meta.linkPreview.source ?? ""),
+          }
+        : null;
     return {
       id: Number(row.id),
       type: String(row.msg_type || "text"),
       content: String(row.content ?? ""),
       mediaUrl: String(row.media_url ?? ""),
+      linkPreview,
       createdAt: row.created_at,
       author: memberPublic(memberRow || null),
     };
@@ -543,11 +739,26 @@ export function createCommunityService(store, log, broadcast) {
       throw err;
     }
 
+    /** @type {Record<string, unknown> | null} */
+    let metaJson = null;
+    if (type === "text") {
+      const url = extractFirstHttpUrl(content);
+      if (url) {
+        try {
+          const preview = await fetchLinkPreview(url);
+          if (preview) metaJson = { linkPreview: preview };
+        } catch {
+          /* 预览失败仍发文字 */
+        }
+      }
+    }
+
     const inserted = await store.communityInsertChatMessage({
       memberId: Number(row.id),
       msgType: type,
       content,
       mediaUrl: type === "text" ? "" : mediaUrl,
+      metaJson,
     });
     const message = chatMessagePublic(inserted, row);
     try {
@@ -575,11 +786,15 @@ export function createCommunityService(store, log, broadcast) {
       throw err;
     }
     const next = await store.communityUpdateMember(row.id, { avatarUrl });
-    return { member: memberPublic(next) };
+    return { member: memberPublic(next, { self: true }) };
   }
 
   return {
     register,
+    registerWithEmail,
+    loginWithEmail,
+    loginWithGoogle,
+    authConfig,
     me,
     updateProfile,
     listTitles,

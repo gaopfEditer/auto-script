@@ -92,6 +92,7 @@ pnpm run dev:ui-vue
 | `POST /api/cdp/discord-channel` | `{ "guildId", "channelId" }` 在 CDP 页签 `goto` 到频道 |
 | `GET /api/twitter-cdp/status` | 推特列表 CDP 状态 / 最近帖 |
 | `POST /api/twitter-cdp/fetch` | 立即抓取指定列表最新帖并推 Telegram |
+| `POST /api/v1/cards` | 开放建卡（`X-Cards-Api-Key`）；`channelId` 为已知 Discord 频道时写入该频道最新消息 |
 | `ws://127.0.0.1:3851/ws` | 实时网络诊断 + WS 帧推送 |
 
 ### 3. 终端 B — Vue 开发（可选）

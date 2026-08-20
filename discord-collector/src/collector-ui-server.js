@@ -38,6 +38,7 @@ import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
 import { registerYoutubePasteBatchRoutes, startPasteBatchService } from "./youtube-paste-batch.js";
 import { createCardArchiveService } from "./card-archive-service.js";
 import { registerCardArchiveRoutes } from "./card-archive-api.js";
+import { createCommunityFeedService } from "./community-feed-service.js";
 import { registerCardEvalRoutes } from "./card-eval-api.js";
 import { registerCommunityRoutes } from "./community-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
@@ -119,13 +120,20 @@ async function main() {
   }
   const cardSink = createCardExternalSink(createLogger("card-sink"));
   cardSink.start();
+  const communityFeed = createCommunityFeedService(store, createLogger("community-feed"), broadcast);
   const signalCards = createDiscordSignalCardService(store, createLogger("signal"), broadcast, {
     bitgetOrder,
     weexOrder,
     cardSink,
+    communityFeed,
   });
-  const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast, { cardSink });
-  const twitterCdp = createTwitterCdpService(store, createLogger("twitter-cdp"), broadcast);
+  const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast, {
+    cardSink,
+    communityFeed,
+  });
+  const twitterCdp = createTwitterCdpService(store, createLogger("twitter-cdp"), broadcast, {
+    communityFeed,
+  });
   const cardPriceMonitor = createCardPriceMonitor(
     store,
     createLogger("card-price"),
@@ -155,7 +163,7 @@ async function main() {
   registerCardArchiveRoutes(app, store, cardArchive);
   registerCardEvalRoutes(app, store);
   registerTwitterCdpRoutes(app, twitterCdp);
-  registerCommunityRoutes(app, store, createLogger("community"), broadcast);
+  registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")
     .then(({ rebuildArchivesIndex, warmArchivesParsedCache }) => {

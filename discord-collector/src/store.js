@@ -216,6 +216,10 @@ export async function openStore(cfg, log) {
       display_name VARCHAR(64) NOT NULL,
       avatar_url VARCHAR(512) NOT NULL DEFAULT '',
       bio VARCHAR(255) NOT NULL DEFAULT '',
+      email VARCHAR(255) NULL,
+      google_sub VARCHAR(64) NULL,
+      password_hash VARCHAR(255) NULL,
+      auth_provider VARCHAR(16) NOT NULL DEFAULT 'local',
       points INT NOT NULL DEFAULT 0,
       tip_balance INT NOT NULL DEFAULT 0,
       checkin_streak INT NOT NULL DEFAULT 0,
@@ -224,9 +228,34 @@ export async function openStore(cfg, log) {
       updated_at DATETIME(3) NOT NULL,
       UNIQUE KEY uk_community_token (token),
       UNIQUE KEY uk_community_handle (handle),
+      UNIQUE KEY uk_community_email (email),
+      UNIQUE KEY uk_community_google_sub (google_sub),
       KEY idx_community_points (points DESC)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  for (const col of [
+    "ADD COLUMN email VARCHAR(255) NULL AFTER bio",
+    "ADD COLUMN google_sub VARCHAR(64) NULL AFTER email",
+    "ADD COLUMN password_hash VARCHAR(255) NULL AFTER google_sub",
+    "ADD COLUMN auth_provider VARCHAR(16) NOT NULL DEFAULT 'local' AFTER password_hash",
+  ]) {
+    try {
+      await pool.query(`ALTER TABLE community_members ${col}`);
+    } catch {
+      /* 列已存在 */
+    }
+  }
+  for (const idx of [
+    "ADD UNIQUE KEY uk_community_email (email)",
+    "ADD UNIQUE KEY uk_community_google_sub (google_sub)",
+  ]) {
+    try {
+      await pool.query(`ALTER TABLE community_members ${idx}`);
+    } catch {
+      /* 索引已存在 */
+    }
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS community_posts (
@@ -294,9 +323,53 @@ export async function openStore(cfg, log) {
       msg_type VARCHAR(16) NOT NULL DEFAULT 'text',
       content TEXT NOT NULL,
       media_url VARCHAR(512) NOT NULL DEFAULT '',
+      meta_json JSON NULL,
       created_at DATETIME(3) NOT NULL,
       KEY idx_community_chat_time (id DESC),
       KEY idx_community_chat_member (member_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  try {
+    await pool.query(`ALTER TABLE community_chat_messages ADD COLUMN meta_json JSON NULL AFTER media_url`);
+  } catch {
+    /* 列已存在 */
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_feed_messages (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      feed_type VARCHAR(16) NOT NULL,
+      channel_id VARCHAR(64) NULL,
+      channel_name VARCHAR(128) NULL,
+      card_id BIGINT NULL,
+      tweet_id VARCHAR(32) NULL,
+      author_key VARCHAR(64) NULL,
+      author_handle VARCHAR(64) NULL,
+      author_name VARCHAR(128) NULL,
+      author_avatar VARCHAR(512) NULL,
+      content TEXT NOT NULL,
+      raw_content TEXT NULL,
+      parsed_json JSON NULL,
+      meta_json JSON NULL,
+      created_at DATETIME(3) NOT NULL,
+      KEY idx_community_feed_type_time (feed_type, id DESC),
+      KEY idx_community_feed_card (card_id),
+      KEY idx_community_feed_tweet (tweet_id),
+      KEY idx_community_feed_author (author_key)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS community_twitter_authors (
+      author_key VARCHAR(64) NOT NULL PRIMARY KEY,
+      handle VARCHAR(64) NOT NULL DEFAULT '',
+      display_name VARCHAR(128) NOT NULL DEFAULT '',
+      avatar_url VARCHAR(512) NOT NULL DEFAULT '',
+      note VARCHAR(255) NOT NULL DEFAULT '',
+      created_at DATETIME(3) NOT NULL,
+      updated_at DATETIME(3) NOT NULL,
+      KEY idx_community_tw_author_handle (handle)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
@@ -317,7 +390,7 @@ export async function openStore(cfg, log) {
   `);
 
   log.info(
-    "表 frames / discord_* / community_* / twitter_seen_tweets 就绪"
+    "表 frames / discord_* / community_* / twitter_seen_tweets / community_feed_* 就绪"
   );
 
   const insertFrameSql = `
@@ -1210,6 +1283,24 @@ export async function openStore(cfg, log) {
     return rows[0] ?? null;
   }
 
+  async function communityGetMemberByEmail(email) {
+    const e = String(email || "")
+      .trim()
+      .toLowerCase();
+    if (!e) return null;
+    const [rows] = await pool.query(`SELECT * FROM community_members WHERE email = ? LIMIT 1`, [e]);
+    return rows[0] ?? null;
+  }
+
+  async function communityGetMemberByGoogleSub(sub) {
+    const s = String(sub || "").trim();
+    if (!s) return null;
+    const [rows] = await pool.query(`SELECT * FROM community_members WHERE google_sub = ? LIMIT 1`, [
+      s,
+    ]);
+    return rows[0] ?? null;
+  }
+
   async function communityGetMemberById(id) {
     const [rows] = await pool.query(`SELECT * FROM community_members WHERE id = ? LIMIT 1`, [id]);
     return rows[0] ?? null;
@@ -1219,15 +1310,21 @@ export async function openStore(cfg, log) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
     const [r] = await pool.execute(
       `INSERT INTO community_members (
-        token, handle, display_name, avatar_url, bio, points, tip_balance,
+        token, handle, display_name, avatar_url, bio,
+        email, google_sub, password_hash, auth_provider,
+        points, tip_balance,
         checkin_streak, last_checkin_day, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
       [
         p.token,
         p.handle,
         p.displayName,
         p.avatarUrl || "",
         p.bio || "",
+        p.email ? String(p.email).toLowerCase().slice(0, 255) : null,
+        p.googleSub ? String(p.googleSub).slice(0, 64) : null,
+        p.passwordHash ? String(p.passwordHash).slice(0, 255) : null,
+        String(p.authProvider || "local").slice(0, 16),
         Number(p.points) || 0,
         Number(p.tipBalance) || 0,
         now,
@@ -1253,6 +1350,26 @@ export async function openStore(cfg, log) {
     if (patch.bio != null) {
       sets.push("bio = ?");
       params.push(String(patch.bio));
+    }
+    if (patch.token != null) {
+      sets.push("token = ?");
+      params.push(String(patch.token));
+    }
+    if (patch.email !== undefined) {
+      sets.push("email = ?");
+      params.push(patch.email ? String(patch.email).toLowerCase().slice(0, 255) : null);
+    }
+    if (patch.googleSub !== undefined) {
+      sets.push("google_sub = ?");
+      params.push(patch.googleSub ? String(patch.googleSub).slice(0, 64) : null);
+    }
+    if (patch.passwordHash !== undefined) {
+      sets.push("password_hash = ?");
+      params.push(patch.passwordHash ? String(patch.passwordHash).slice(0, 255) : null);
+    }
+    if (patch.authProvider != null) {
+      sets.push("auth_provider = ?");
+      params.push(String(patch.authProvider).slice(0, 16));
     }
     params.push(id);
     await pool.execute(`UPDATE community_members SET ${sets.join(", ")} WHERE id = ?`, params);
@@ -1314,18 +1431,19 @@ export async function openStore(cfg, log) {
   }
 
   /**
-   * @param {{ memberId: number, msgType: string, content?: string, mediaUrl?: string }} p
+   * @param {{ memberId: number, msgType: string, content?: string, mediaUrl?: string, metaJson?: unknown }} p
    */
   async function communityInsertChatMessage(p) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
     const [r] = await pool.execute(
-      `INSERT INTO community_chat_messages (member_id, msg_type, content, media_url, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO community_chat_messages (member_id, msg_type, content, media_url, meta_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
         p.memberId,
         String(p.msgType || "text").slice(0, 16),
         String(p.content ?? ""),
         String(p.mediaUrl ?? "").slice(0, 512),
+        serializeRawJsonColumnForMysql(p.metaJson ?? null),
         now,
       ]
     );
@@ -1593,6 +1711,219 @@ export async function openStore(cfg, log) {
     await pool.execute(`DELETE FROM twitter_seen_tweets`);
   }
 
+  /**
+   * @param {{
+   *   feedType: string,
+   *   channelId?: string|null,
+   *   channelName?: string|null,
+   *   cardId?: number|null,
+   *   tweetId?: string|null,
+   *   authorKey?: string|null,
+   *   authorHandle?: string|null,
+   *   authorName?: string|null,
+   *   authorAvatar?: string|null,
+   *   content: string,
+   *   rawContent?: string|null,
+   *   parsedJson?: unknown,
+   *   metaJson?: unknown,
+   *   createdAt?: string|null,
+   * }} p
+   */
+  async function insertCommunityFeedMessage(p) {
+    const now = isoToMysqlDatetime3(p.createdAt || new Date().toISOString());
+    const [ret] = await pool.execute(
+      `INSERT INTO community_feed_messages (
+        feed_type, channel_id, channel_name, card_id, tweet_id,
+        author_key, author_handle, author_name, author_avatar,
+        content, raw_content, parsed_json, meta_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        String(p.feedType || "card").slice(0, 16),
+        p.channelId ? String(p.channelId).slice(0, 64) : null,
+        p.channelName ? String(p.channelName).slice(0, 128) : null,
+        p.cardId != null && Number.isFinite(Number(p.cardId)) ? Number(p.cardId) : null,
+        p.tweetId ? String(p.tweetId).slice(0, 32) : null,
+        p.authorKey ? String(p.authorKey).slice(0, 64) : null,
+        p.authorHandle ? String(p.authorHandle).slice(0, 64) : null,
+        p.authorName ? String(p.authorName).slice(0, 128) : null,
+        p.authorAvatar ? String(p.authorAvatar).slice(0, 512) : null,
+        String(p.content ?? ""),
+        p.rawContent != null ? String(p.rawContent) : null,
+        serializeRawJsonColumnForMysql(p.parsedJson ?? null),
+        serializeRawJsonColumnForMysql(p.metaJson ?? null),
+        now,
+      ]
+    );
+    const id = Number(/** @type {{ insertId: number }} */ (ret).insertId);
+    return communityGetFeedMessage(id);
+  }
+
+  async function communityGetFeedMessage(id) {
+    const [rows] = await pool.query(
+      `SELECT * FROM community_feed_messages WHERE id = ? LIMIT 1`,
+      [id]
+    );
+    return rows[0] ?? null;
+  }
+
+  /**
+   * @param {{ feedType?: string, beforeId?: number, limit?: number }} [opts]
+   */
+  async function listCommunityFeedMessages(opts = {}) {
+    const lim = Math.min(100, Math.max(1, Number(opts.limit) || 40));
+    const feedType = String(opts.feedType ?? "").trim();
+    const beforeId = Number(opts.beforeId);
+    /** @type {unknown[]} */
+    const params = [];
+    let sql = `SELECT * FROM community_feed_messages WHERE 1=1`;
+    if (feedType) {
+      sql += ` AND feed_type = ?`;
+      params.push(feedType);
+    }
+    if (Number.isFinite(beforeId) && beforeId > 0) {
+      sql += ` AND id < ?`;
+      params.push(beforeId);
+    }
+    sql += ` ORDER BY id DESC LIMIT ${lim}`;
+    const [rows] = await pool.query(sql, params);
+    return rows;
+  }
+
+  async function findCommunityFeedByCardId(cardId) {
+    const id = Number(cardId);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const [rows] = await pool.query(
+      `SELECT * FROM community_feed_messages WHERE feed_type = 'card' AND card_id = ? ORDER BY id DESC LIMIT 1`,
+      [id]
+    );
+    return rows[0] ?? null;
+  }
+
+  async function findCommunityFeedByTweetId(tweetId) {
+    const tid = String(tweetId ?? "").trim();
+    if (!tid) return null;
+    const [rows] = await pool.query(
+      `SELECT * FROM community_feed_messages WHERE feed_type = 'twitter' AND tweet_id = ? LIMIT 1`,
+      [tid]
+    );
+    return rows[0] ?? null;
+  }
+
+  async function updateCommunityFeedParsed(id, parsedJson, content = null) {
+    const sets = ["parsed_json = ?"];
+    /** @type {unknown[]} */
+    const params = [serializeRawJsonColumnForMysql(parsedJson)];
+    if (content != null) {
+      sets.push("content = ?");
+      params.push(String(content));
+    }
+    params.push(id);
+    await pool.execute(
+      `UPDATE community_feed_messages SET ${sets.join(", ")} WHERE id = ?`,
+      params
+    );
+    return communityGetFeedMessage(id);
+  }
+
+  /**
+   * @param {number} id
+   * @param {{
+   *   content?: string,
+   *   rawContent?: string|null,
+   *   channelId?: string|null,
+   *   channelName?: string|null,
+   *   metaJson?: unknown,
+   * }} p
+   */
+  async function updateCommunityFeedMessage(id, p) {
+    const fid = Number(id);
+    if (!Number.isFinite(fid) || fid <= 0) return null;
+    const sets = [];
+    /** @type {unknown[]} */
+    const params = [];
+    if (p.content != null) {
+      sets.push("content = ?");
+      params.push(String(p.content));
+    }
+    if (p.rawContent !== undefined) {
+      sets.push("raw_content = ?");
+      params.push(p.rawContent != null ? String(p.rawContent) : null);
+    }
+    if (p.channelId !== undefined) {
+      sets.push("channel_id = ?");
+      params.push(p.channelId ? String(p.channelId).slice(0, 64) : null);
+    }
+    if (p.channelName !== undefined) {
+      sets.push("channel_name = ?");
+      params.push(p.channelName ? String(p.channelName).slice(0, 128) : null);
+    }
+    if (p.metaJson !== undefined) {
+      sets.push("meta_json = ?");
+      params.push(serializeRawJsonColumnForMysql(p.metaJson));
+    }
+    if (!sets.length) return communityGetFeedMessage(fid);
+    params.push(fid);
+    await pool.execute(
+      `UPDATE community_feed_messages SET ${sets.join(", ")} WHERE id = ?`,
+      params
+    );
+    return communityGetFeedMessage(fid);
+  }
+
+  /**
+   * @param {{
+   *   authorKey: string,
+   *   handle?: string,
+   *   displayName?: string,
+   *   avatarUrl?: string,
+   *   note?: string,
+   * }} p
+   */
+  async function upsertCommunityTwitterAuthor(p) {
+    const key = String(p.authorKey ?? "").trim();
+    if (!key) return null;
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const handle = String(p.handle ?? "").replace(/^@/, "").trim().slice(0, 64);
+    const displayName = String(p.displayName ?? "").trim().slice(0, 128);
+    const avatarUrl = String(p.avatarUrl ?? "").trim().slice(0, 512);
+    const note = String(p.note ?? "").trim().slice(0, 255);
+    await pool.execute(
+      `INSERT INTO community_twitter_authors
+        (author_key, handle, display_name, avatar_url, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         handle = IF(VALUES(handle) != '', VALUES(handle), handle),
+         display_name = IF(VALUES(display_name) != '', VALUES(display_name), display_name),
+         avatar_url = IF(VALUES(avatar_url) != '', VALUES(avatar_url), avatar_url),
+         note = IF(VALUES(note) != '', VALUES(note), note),
+         updated_at = VALUES(updated_at)`,
+      [key, handle, displayName, avatarUrl, note, now, now]
+    );
+    const [rows] = await pool.query(
+      `SELECT * FROM community_twitter_authors WHERE author_key = ? LIMIT 1`,
+      [key]
+    );
+    return rows[0] ?? null;
+  }
+
+  async function listCommunityTwitterAuthors(limit = 200) {
+    const lim = Math.min(500, Math.max(1, Number(limit) || 200));
+    const [rows] = await pool.query(
+      `SELECT * FROM community_twitter_authors ORDER BY updated_at DESC LIMIT ${lim}`
+    );
+    return rows;
+  }
+
+  async function getCommunityTwitterAuthor(authorKey) {
+    const key = String(authorKey ?? "").trim();
+    if (!key) return null;
+    const [rows] = await pool.query(
+      `SELECT * FROM community_twitter_authors WHERE author_key = ? LIMIT 1`,
+      [key]
+    );
+    return rows[0] ?? null;
+  }
+
   async function communityListTips(limit = 40) {
     const [rows] = await pool.query(
       `SELECT * FROM community_tips ORDER BY id DESC LIMIT ?`,
@@ -1651,6 +1982,8 @@ export async function openStore(cfg, log) {
     communityEnsureSchema,
     communityGetMemberByToken,
     communityGetMemberByHandle,
+    communityGetMemberByEmail,
+    communityGetMemberByGoogleSub,
     communityGetMemberById,
     communityInsertMember,
     communityUpdateMember,
@@ -1678,6 +2011,16 @@ export async function openStore(cfg, log) {
     listTwitterTweets,
     countTwitterListTweets,
     clearTwitterSeen,
+    insertCommunityFeedMessage,
+    communityGetFeedMessage,
+    listCommunityFeedMessages,
+    findCommunityFeedByCardId,
+    findCommunityFeedByTweetId,
+    updateCommunityFeedParsed,
+    updateCommunityFeedMessage,
+    upsertCommunityTwitterAuthor,
+    listCommunityTwitterAuthors,
+    getCommunityTwitterAuthor,
     close,
   };
 }
@@ -1735,6 +2078,8 @@ export function createOfflineStore() {
     communityEnsureSchema: async () => {},
     communityGetMemberByToken: async () => null,
     communityGetMemberByHandle: async () => null,
+    communityGetMemberByEmail: async () => null,
+    communityGetMemberByGoogleSub: async () => null,
     communityGetMemberById: async () => null,
     communityInsertMember: async () => null,
     communityUpdateMember: async () => null,
@@ -1762,6 +2107,16 @@ export function createOfflineStore() {
     listTwitterTweets: async () => [],
     countTwitterListTweets: async () => 0,
     clearTwitterSeen: async () => {},
+    insertCommunityFeedMessage: async () => null,
+    communityGetFeedMessage: async () => null,
+    listCommunityFeedMessages: async () => [],
+    findCommunityFeedByCardId: async () => null,
+    findCommunityFeedByTweetId: async () => null,
+    updateCommunityFeedParsed: async () => null,
+    updateCommunityFeedMessage: async () => null,
+    upsertCommunityTwitterAuthor: async () => null,
+    listCommunityTwitterAuthors: async () => [],
+    getCommunityTwitterAuthor: async () => null,
     close: async () => {},
   };
 }

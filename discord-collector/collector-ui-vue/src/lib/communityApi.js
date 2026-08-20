@@ -72,6 +72,40 @@ export async function registerCommunityMember(body) {
   return data;
 }
 
+export function fetchCommunityAuthConfig() {
+  return communityFetch("/api/community/auth/config");
+}
+
+/**
+ * @param {{ email: string, password: string, displayName?: string, handle?: string }} body
+ */
+export async function registerCommunityWithEmail(body) {
+  const data = await communityFetch("/api/community/auth/register", { method: "POST", json: body });
+  if (data.token) setCommunityToken(data.token);
+  return data;
+}
+
+/**
+ * @param {{ email: string, password: string }} body
+ */
+export async function loginCommunityWithEmail(body) {
+  const data = await communityFetch("/api/community/auth/login", { method: "POST", json: body });
+  if (data.token) setCommunityToken(data.token);
+  return data;
+}
+
+/**
+ * @param {string} idToken
+ */
+export async function loginCommunityWithGoogle(idToken) {
+  const data = await communityFetch("/api/community/auth/google", {
+    method: "POST",
+    json: { idToken },
+  });
+  if (data.token) setCommunityToken(data.token);
+  return data;
+}
+
 export function fetchCommunityMe() {
   return communityFetch("/api/community/me");
 }
@@ -166,4 +200,30 @@ export async function uploadChatMedia(file) {
 
 export function logoutCommunity() {
   setCommunityToken("");
+}
+
+/**
+ * @param {{ type?: "card"|"twitter", limit?: number, beforeId?: number }} [opts]
+ */
+export function fetchCommunityFeed(opts = {}) {
+  const q = new URLSearchParams();
+  if (opts.type) q.set("type", opts.type);
+  if (opts.limit) q.set("limit", String(opts.limit));
+  if (opts.beforeId) q.set("beforeId", String(opts.beforeId));
+  const qs = q.toString();
+  return communityFetch(`/api/community/feed${qs ? `?${qs}` : ""}`);
+}
+
+/**
+ * @param {number} [limit]
+ */
+export function fetchTwitterAuthors(limit = 200) {
+  return communityFetch(`/api/community/twitter/authors?limit=${limit}`);
+}
+
+/**
+ * @param {{ authorKey: string, handle?: string, displayName?: string, avatarUrl?: string, note?: string }} body
+ */
+export function upsertTwitterAuthor(body) {
+  return communityFetch("/api/community/twitter/authors", { method: "POST", json: body });
 }

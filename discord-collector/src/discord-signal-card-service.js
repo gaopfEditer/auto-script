@@ -237,7 +237,7 @@ async function enrichTwOpgFromRecentCard(store, channelId, parsed) {
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
- * @param {{ bitgetOrder?: ReturnType<typeof import("./bitget-order-service.js").createBitgetOrderService>; weexOrder?: ReturnType<typeof import("./weex-order-service.js").createWeexOrderService>; cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink> }} [deps]
+ * @param {{ bitgetOrder?: ReturnType<typeof import("./bitget-order-service.js").createBitgetOrderService>; weexOrder?: ReturnType<typeof import("./weex-order-service.js").createWeexOrderService>; cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink>; communityFeed?: ReturnType<typeof import("./community-feed-service.js").createCommunityFeedService> }} [deps]
  */
 export function createDiscordSignalCardService(store, log, broadcast, deps = {}) {
   const dedup = createChannelTextDedup(store);
@@ -245,7 +245,26 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
   const bitgetOrder = deps.bitgetOrder ?? null;
   const weexOrder = deps.weexOrder ?? null;
   const cardSink = deps.cardSink ?? null;
+  const communityFeed = deps.communityFeed ?? null;
   let hydrated = false;
+
+  /**
+   * @param {{ text: string, channelId: string, channelName: string, cardId?: number|null, symbol?: string }} p
+   */
+  async function syncCommunityFeedCard(p) {
+    if (!communityFeed?.publishCard) return;
+    try {
+      await communityFeed.publishCard({
+        text: p.text,
+        channelId: p.channelId,
+        channelName: p.channelName,
+        cardId: p.cardId,
+        symbol: p.symbol,
+      });
+    } catch (e) {
+      log.warn(`社区消息频道同步失败: ${/** @type {Error} */ (e).message}`);
+    }
+  }
 
   /**
    * @param {string | Record<string, unknown>} textOrPayload
@@ -391,6 +410,13 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
             log.warn(`军长止损合并后 Telegram 失败: ${/** @type {Error} */ (e).message}`);
           }
         }
+        await syncCommunityFeedCard({
+          text: String(mergeText),
+          channelId,
+          channelName: chCfg.name,
+          cardId: openId,
+          symbol: String(clientCard.symbol ?? ""),
+        });
         await pushExternalCard({
           text: String(mergeText),
           card: clientCard,
@@ -495,6 +521,13 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
           cardsByStyle[chCfg.telegramStyle] ||
           Object.values(cardsByStyle)[0] ||
           content;
+        await syncCommunityFeedCard({
+          text: String(mergeText),
+          channelId,
+          channelName: chCfg.name,
+          cardId: openId,
+          symbol: String(clientCard.symbol ?? ""),
+        });
         await pushExternalCard({
           text: String(mergeText),
           card: clientCard,
@@ -643,6 +676,16 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       }
     } else if (deferJunzhangTelegram) {
       log.info(`军长开仓卡 #${cardId} 待止损（约 2 分钟内）后再推 Telegram symbol=${symbol}`);
+    }
+
+    if (!deferJunzhangTelegram) {
+      await syncCommunityFeedCard({
+        text: telegramText,
+        channelId,
+        channelName: chCfg.name,
+        cardId,
+        symbol,
+      });
     }
 
     await pushExternalCard({

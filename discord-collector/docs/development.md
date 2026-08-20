@@ -127,6 +127,8 @@ flowchart LR
 3. 前端 `collector-ui-vue/src/lib/fooApi.js` 用相对路径 `fetch('/api/foo')`
 4. 实时事件：`broadcast("meta", { kind: "foo_bar", … })`
 
+**开放建卡 → 频道时间线**：`POST /api/v1/cards`（需 `CARDS_API_KEY`）归档后，若 `channelId` 为已知 Discord 雪花（库中频道或信号频道），会再写入一条 `source=card_api` 消息并 `broadcast("message", discord_message_batch)`。Show 里选中同一频道即可看到最新消息；可用 `injectChannelMessage: false` 关闭单次注入，或 env `CARD_API_INJECT_CHANNEL_MESSAGE=0` 全局关。
+
 ### 5.2 新 Vue 页面（四处）
 
 1. `collector-ui-vue/src/lib/uiMode.js` → `ALL_UI_PAGES`
@@ -172,8 +174,8 @@ flowchart LR
 | 档位 | `card-level-progress.js` |
 | 评估 | `card-eval-api.js` `CardEvalView.vue` |
 | Show 布局 | `show-layout-store.js` `ShowView.vue` |
-| 社区 | `community-api.js` `CommunityView.vue` |
-| Twitter | `twitter-cdp-service.js` `TwitterCdpView.vue` |
+| 社区 | `community-api.js` `community-auth.js` `community-feed-service.js` `CommunityView.vue`（邮箱/Google 登录 · 聊天 · 消息频道 · Twitter） |
+| Twitter | `twitter-cdp-service.js` → TG + 社区 Twitter Tab（`community-twitter-ai.js`） |
 | YouTube 队列 | `youtube-fetch-proxy.js`（上游默认 :3920） |
 | 文稿粘贴 | `youtube-paste-parse.js` `youtube-paste-batch.js` |
 | 内容板 | `content_board/` + `content-board-proxy.js` |

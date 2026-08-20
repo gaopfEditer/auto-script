@@ -307,8 +307,14 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
         signalAt: body.signalAt,
         verifyMode: body.verifyMode,
         assetClass: body.assetClass ?? assetClass,
+        injectChannelMessage:
+          body.injectChannelMessage ?? body.inject_message ?? body.postToChannel,
       });
-      res.status(201).json({ ok: true, card });
+      res.status(201).json({
+        ok: true,
+        card,
+        channelMessage: card?.channelMessage ?? null,
+      });
     } catch (e) {
       res.status(400).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }

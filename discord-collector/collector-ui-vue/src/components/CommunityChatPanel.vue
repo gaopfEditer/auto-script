@@ -58,6 +58,47 @@ function isMine(m) {
   return Boolean(props.me?.id && m?.author?.id === props.me.id);
 }
 
+/** @param {string} text */
+function linkifyParts(text) {
+  const s = String(text ?? "");
+  const re = /https?:\/\/[^\s<>"'`）】》»\]]+/gi;
+  /** @type {{ text: string, href?: string }[]} */
+  const parts = [];
+  let last = 0;
+  let m;
+  while ((m = re.exec(s))) {
+    if (m.index > last) parts.push({ text: s.slice(last, m.index) });
+    let href = m[0].replace(/[.,;:!?。，；：！？、]+$/u, "");
+    parts.push({ text: href, href });
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) parts.push({ text: s.slice(last) });
+  return parts.length ? parts : [{ text: s }];
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
+}
+
+/** @param {any} p */
+function previewLayout(p) {
+  const card = String(p?.card || "").toLowerCase();
+  if (card === "summary" || card === "app") return "summary";
+  return "large";
+}
+
+/** @param {any} p */
+function previewSiteLine(p) {
+  const site = p?.siteName || hostOf(p?.url);
+  const tw = [p?.twitterSite, p?.twitterCreator].filter(Boolean).join(" · ");
+  if (site && tw) return `${site} · ${tw}`;
+  return site || tw || "";
+}
+
 /** 连续同作者时折叠头像/昵称 */
 function showAuthorChrome(m, idx) {
   if (idx === 0) return true;
@@ -211,7 +252,7 @@ onUnmounted(() => {
       <div class="room-dot" aria-hidden="true" />
       <div>
         <h2>公共大厅</h2>
-        <p class="muted">实时聊天 · 文字 / 图片 / 短视频</p>
+        <p class="muted">实时聊天 · 文字 / 链接预览 / 图片 / 短视频</p>
       </div>
       <span class="online-pill">在线</span>
     </header>
@@ -272,7 +313,41 @@ onUnmounted(() => {
             <span class="time">{{ formatClock(m.createdAt) }}</span>
           </header>
           <div class="bubble">
-            <p v-if="m.content" class="text">{{ m.content }}</p>
+            <p v-if="m.content" class="text">
+              <template v-for="(part, pi) in linkifyParts(m.content)" :key="pi">
+                <a
+                  v-if="part.href"
+                  class="inline-link"
+                  :href="part.href"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >{{ part.text }}</a
+                >
+                <template v-else>{{ part.text }}</template>
+              </template>
+            </p>
+            <a
+              v-if="m.linkPreview?.url"
+              class="link-card"
+              :class="previewLayout(m.linkPreview)"
+              :href="m.linkPreview.url"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <div v-if="m.linkPreview.image" class="link-thumb">
+                <img
+                  :src="m.linkPreview.image"
+                  :alt="m.linkPreview.imageAlt || m.linkPreview.title || ''"
+                  loading="lazy"
+                  referrerpolicy="no-referrer"
+                />
+              </div>
+              <div class="link-body">
+                <div class="link-site">{{ previewSiteLine(m.linkPreview) }}</div>
+                <div v-if="m.linkPreview.title" class="link-title">{{ m.linkPreview.title }}</div>
+                <div v-if="m.linkPreview.description" class="link-desc">{{ m.linkPreview.description }}</div>
+              </div>
+            </a>
             <button
               v-if="m.type === 'image' && m.mediaUrl"
               type="button"
@@ -333,7 +408,7 @@ onUnmounted(() => {
         发送
       </button>
     </footer>
-    <p v-else class="guest-hint">在右侧创建资料后即可发言</p>
+    <p v-else class="guest-hint">在右侧登录 / 注册后即可发言</p>
 
     <div v-if="lightboxUrl" class="lightbox" @click="lightboxUrl = ''">
       <img :src="lightboxUrl" alt="预览" />
@@ -521,6 +596,107 @@ onUnmounted(() => {
   word-break: break-word;
   font-size: 0.92rem;
   line-height: 1.45;
+}
+.inline-link {
+  color: #00a8fc;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.msg-row.mine .inline-link {
+  color: #e8ebff;
+}
+.link-card {
+  display: block;
+  margin-top: 0.45rem;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-decoration: none;
+  color: inherit;
+  max-width: 360px;
+}
+.link-card:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+/* Twitter Cards: summary = 小图横排；summary_large_image = 大图横幅 */
+.link-card.summary {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  max-width: 380px;
+}
+.link-card.summary .link-thumb {
+  max-height: none;
+  height: 100%;
+  min-height: 88px;
+}
+.link-card.summary .link-thumb img {
+  width: 88px;
+  height: 100%;
+  min-height: 88px;
+  max-height: 120px;
+  object-fit: cover;
+}
+.link-card.large .link-thumb {
+  width: 100%;
+  max-height: 180px;
+  overflow: hidden;
+  background: #1a1b1e;
+}
+.link-thumb {
+  width: 100%;
+  max-height: 160px;
+  overflow: hidden;
+  background: #1a1b1e;
+}
+.link-thumb img {
+  display: block;
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+}
+.link-card.large .link-thumb img {
+  height: 180px;
+}
+.link-body {
+  padding: 0.55rem 0.7rem 0.65rem;
+}
+.link-site {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #949ba4;
+  margin-bottom: 0.2rem;
+}
+.msg-row.mine .link-site {
+  color: rgba(255, 255, 255, 0.7);
+}
+.link-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #f2f3f5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msg-row.mine .link-title {
+  color: #fff;
+}
+.link-desc {
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #b5bac1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msg-row.mine .link-desc {
+  color: rgba(255, 255, 255, 0.82);
 }
 .media-btn {
   border: 0;

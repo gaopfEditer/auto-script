@@ -194,6 +194,13 @@ export const config = {
   pasteParseWatchIntervalMs: Number(process.env.PASTE_PARSE_WATCH_INTERVAL_MS ?? 600_000),
   /** 统一卡片开放 API Key（Header: X-Cards-Api-Key 或 Bearer） */
   cardsApiKey: (process.env.CARDS_API_KEY ?? "").trim(),
+  /**
+   * POST /api/v1/cards 等归档时：若 channelId 为已知 Discord 频道，写入该频道时间线一条最新消息。
+   * 默认开；CARD_API_INJECT_CHANNEL_MESSAGE=0 关闭。
+   */
+  cardApiInjectChannelMessage: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_API_INJECT_CHANNEL_MESSAGE ?? "1").toLowerCase()
+  ),
   /** 统一 HTTP(S) 代理（Bitget / WEEX / Webhook / 币安等默认共用） */
   commonProxy,
   /** 币安行情（卡片价格校验 / 接近推送） */
@@ -322,6 +329,27 @@ export const config = {
     : path.join(_collectorRoot, "uploads", "chat"),
   communityChatImageMaxBytes: Number(process.env.COMMUNITY_CHAT_IMAGE_MAX_BYTES ?? 5 * 1024 * 1024),
   communityChatVideoMaxBytes: Number(process.env.COMMUNITY_CHAT_VIDEO_MAX_BYTES ?? 20 * 1024 * 1024),
+  /**
+   * Google Identity Services Client ID（OAuth 网页客户端）。
+   * 用于社区「使用 Google 登录」；留空则仅邮箱密码。
+   */
+  communityGoogleClientId: (process.env.COMMUNITY_GOOGLE_CLIENT_ID ?? "").trim(),
+  /** 邮箱密码注册是否仅允许 Gmail / Googlemail */
+  communityEmailRequireGoogleMail: ["1", "true", "yes", "on"].includes(
+    String(process.env.COMMUNITY_EMAIL_REQUIRE_GOOGLE_MAIL ?? "0").toLowerCase()
+  ),
+  /** 公共聊天粘贴 URL 时抓取 og/meta 预览 */
+  communityLinkPreviewEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.COMMUNITY_LINK_PREVIEW ?? "1").toLowerCase()
+  ),
+  communityLinkPreviewTimeoutMs: Math.min(
+    15_000,
+    Math.max(2_000, Number(process.env.COMMUNITY_LINK_PREVIEW_TIMEOUT_MS ?? 6_000) || 6_000)
+  ),
+  communityLinkPreviewMaxBytes: Math.min(
+    2 * 1024 * 1024,
+    Math.max(64 * 1024, Number(process.env.COMMUNITY_LINK_PREVIEW_MAX_BYTES ?? 512 * 1024) || 512 * 1024)
+  ),
   /**
    * 本地 CDP 抓取已登录 X/Twitter 列表最新帖（默认端口 9222，可改 9223）。
    * 列表：逗号分隔的 listId 或 https://x.com/i/lists/{id}
