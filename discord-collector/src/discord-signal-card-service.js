@@ -785,13 +785,16 @@ export function signalCardToClient(row) {
   const messageId = String(row.message_id ?? row.messageId ?? "");
   const isManual = source === "manual" || messageId.startsWith("manual-");
   const id = extractSignalCardRowId(row.id ?? row.ID);
+  const rawContent = String(row.raw_content ?? row.rawContent ?? "");
   return {
     id,
     uid: formatCardUid(id),
     messageId,
     channelId: String(row.channel_id ?? row.channelId ?? ""),
     guildId: String(row.guild_id ?? row.guildId ?? ""),
-    rawContent: String(row.raw_content ?? row.rawContent ?? ""),
+    /** 正文（与 rawContent 同值，便于开放 API 调用方使用） */
+    body: rawContent,
+    rawContent,
     parsedJson,
     cardsByStyle: cardsByStyle && typeof cardsByStyle === "object" ? cardsByStyle : {},
     status: String(row.status ?? "active"),

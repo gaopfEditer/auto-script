@@ -10,6 +10,88 @@ import { normalizeExecution } from "./discord-signal-execution.js";
 import { detectAssetClass } from "./card-verify-policy.js";
 import { config } from "./config.js";
 
+/**
+ * 卡片正文：优先 body / content / 原文 / 正文，兼容 rawContent / description。
+ * @param {Record<string, unknown>} body
+ */
+export function pickCardBodyText(body) {
+  if (!body || typeof body !== "object") return "";
+  const v =
+    body.body ??
+    body.content ??
+    body["原文"] ??
+    body["正文"] ??
+    body.rawContent ??
+    body.description ??
+    "";
+  return String(v ?? "").trim();
+}
+
+/**
+ * 规范化图片列表。
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function normalizeImageList(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 20);
+  }
+  const s = String(raw ?? "").trim();
+  return s ? [s] : [];
+}
+
+/**
+ * 开放建卡：把调用方主字段收成 archiveCard 入参。
+ * @param {Record<string, unknown>} body
+ */
+export function normalizeOpenCardInput(body) {
+  const b = body && typeof body === "object" ? body : {};
+  const channelId = String(b.channelId ?? b.channel_id ?? "api").trim() || "api";
+  const channelName = String(b.channelName ?? b.channel_name ?? "").trim();
+  const channelAvatar = String(
+    b.channelAvatar ?? b.channel_avatar ?? b.avatar ?? ""
+  ).trim();
+  const images = normalizeImageList(b.images ?? b.image ?? b.pics);
+  const rawContent = pickCardBodyText(b);
+  const note = String(b.note ?? b["备注"] ?? "").trim();
+  const signalAt = b.signalAt ?? b.time ?? b.createdAt ?? b["时间"] ?? null;
+  const prevParsed =
+    b.parsedJson && typeof b.parsedJson === "object" && !Array.isArray(b.parsedJson)
+      ? /** @type {Record<string, unknown>} */ (b.parsedJson)
+      : {};
+
+  return {
+    messageId: b.messageId,
+    channelId,
+    guildId: b.guildId,
+    sourceType: b.sourceType ?? "api",
+    sourceRef: b.sourceRef ?? b.externalId,
+    rawContent,
+    channelName: channelName || undefined,
+    channelAvatar: channelAvatar || undefined,
+    images,
+    parsedJson: {
+      ...prevParsed,
+      ...(channelName ? { channelName } : {}),
+      ...(channelAvatar ? { channelAvatar } : {}),
+      ...(images.length ? { images } : {}),
+    },
+    cardsByStyle: b.cardsByStyle,
+    cardFields: b.cardFields ?? b.embed,
+    symbol: b.symbol,
+    note: note || undefined,
+    signalAt: signalAt != null ? String(signalAt) : undefined,
+    verifyMode: b.verifyMode,
+    assetClass: b.assetClass,
+    injectChannelMessage:
+      b.injectChannelMessage ?? b.inject_message ?? b.postToChannel,
+    direction: b.direction,
+    entry: b.entry,
+    targets: b.targets ?? b.takeProfits,
+    stopLoss: b.stopLoss,
+  };
+}
+
 /** @param {import("express").Request} req */
 function parseRangeMs(req) {
   const toRaw = req.query.to ?? req.query.to_ms;
@@ -245,7 +327,7 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
       const result = await archiveService.registerCoinActionWatches({
         sourceRef: String(body.sourceRef ?? body.sourceFile ?? ""),
         title: body.title,
-        rawContent: body.rawContent ?? body.content,
+        rawContent: pickCardBodyText(body) || body.rawContent || body.content,
         coinActions: body.coinActions,
         bandPct: body.bandPct,
       });
@@ -284,31 +366,45 @@ export function registerCardArchiveRoutes(app, store, archiveService) {
   app.post("/api/v1/cards", requireOpenApiKey, async (req, res) => {
     try {
       const body = req.body ?? {};
-      const execution = normalizeExecution(body.execution ?? body, body.parsedJson);
+      const input = normalizeOpenCardInput(body);
+      const execution = normalizeExecution(
+        {
+          symbol: input.symbol,
+          direction: input.direction,
+          entry: input.entry,
+          targets: input.targets,
+          takeProfits: input.targets,
+          stopLoss: input.stopLoss,
+          ...(body.execution && typeof body.execution === "object" ? body.execution : {}),
+        },
+        input.parsedJson
+      );
       const assetClass = detectAssetClass(
-        body.symbol ?? execution.symbol,
-        body.parsedJson,
+        input.symbol ?? execution.symbol,
+        input.parsedJson,
         execution,
-        body.rawContent
+        input.rawContent
       );
       const card = await archiveService.archiveCard({
-        messageId: body.messageId,
-        channelId: body.channelId ?? "api",
-        guildId: body.guildId,
-        sourceType: body.sourceType ?? "api",
-        sourceRef: body.sourceRef ?? body.externalId,
-        rawContent: body.rawContent ?? body.description,
-        parsedJson: body.parsedJson,
-        cardsByStyle: body.cardsByStyle,
+        messageId: input.messageId,
+        channelId: input.channelId,
+        guildId: input.guildId,
+        sourceType: input.sourceType,
+        sourceRef: input.sourceRef,
+        rawContent: input.rawContent,
+        parsedJson: input.parsedJson,
+        cardsByStyle: input.cardsByStyle,
         execution,
-        cardFields: body.cardFields ?? body.embed,
-        symbol: body.symbol ?? execution.symbol,
-        note: body.note,
-        signalAt: body.signalAt,
-        verifyMode: body.verifyMode,
-        assetClass: body.assetClass ?? assetClass,
-        injectChannelMessage:
-          body.injectChannelMessage ?? body.inject_message ?? body.postToChannel,
+        cardFields: input.cardFields,
+        symbol: input.symbol ?? execution.symbol,
+        note: input.note,
+        signalAt: input.signalAt,
+        verifyMode: input.verifyMode,
+        assetClass: input.assetClass ?? assetClass,
+        injectChannelMessage: input.injectChannelMessage,
+        channelName: input.channelName,
+        channelAvatar: input.channelAvatar,
+        images: input.images,
       });
       res.status(201).json({
         ok: true,

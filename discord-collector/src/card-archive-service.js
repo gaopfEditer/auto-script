@@ -181,7 +181,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       authorId: "card-api",
       authorUsername: "CardAPI",
       authorGlobalName: "卡片 API",
-      authorAvatar: null,
+      authorAvatar: String(clientCard.channelAvatar ?? "").trim() || null,
       content,
       eventType: "MESSAGE_CREATE",
       source: "card_api",
@@ -260,6 +260,9 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
    *   signalAt?: string | null,
    *   source?: string,
    *   injectChannelMessage?: boolean,
+   *   channelName?: string,
+   *   channelAvatar?: string,
+   *   images?: string[],
    * }} input
    */
   async function archiveCard(input) {
@@ -273,10 +276,26 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     if (symbol) execution.symbol = symbol.replace("USDT", "");
 
     const rawContent = String(input.rawContent ?? "").trim();
+    const channelNameIn = String(input.channelName ?? "").trim();
+    const channelAvatarIn = String(input.channelAvatar ?? "").trim();
+    const imagesIn = Array.isArray(input.images)
+      ? input.images.map((x) => String(x ?? "").trim()).filter(Boolean)
+      : [];
+    const prevParsed =
+      input.parsedJson && typeof input.parsedJson === "object" && !Array.isArray(input.parsedJson)
+        ? /** @type {Record<string, unknown>} */ (input.parsedJson)
+        : {};
+    const parsedJson = {
+      ...prevParsed,
+      ...(channelNameIn ? { channelName: channelNameIn } : {}),
+      ...(channelAvatarIn ? { channelAvatar: channelAvatarIn } : {}),
+      ...(imagesIn.length ? { images: imagesIn } : {}),
+    };
+
     const cardFields =
       input.cardFields && typeof input.cardFields === "object"
         ? input.cardFields
-        : buildCardFieldsFromExecution(execution, input.parsedJson, rawContent, {
+        : buildCardFieldsFromExecution(execution, parsedJson, rawContent, {
             sourceType,
             sourceRef: input.sourceRef,
             note: input.note,
@@ -291,7 +310,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     const assetClass =
       input.assetClass === "stock" || input.assetClass === "crypto"
         ? input.assetClass
-        : detectAssetClass(symbol, input.parsedJson, execution, rawContent);
+        : detectAssetClass(symbol, parsedJson, execution, rawContent);
     const verifyMode = resolveVerifyMode(assetClass, input.verifyMode);
 
     const row = await store.insertSignalCard({
@@ -300,7 +319,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       guildId: String(input.guildId ?? "").trim(),
       sourceTextHash: textHash,
       rawContent: rawContent || String(cardFields.title ?? "归档卡片"),
-      parsedJson: input.parsedJson ?? null,
+      parsedJson,
       cardsByStyle: input.cardsByStyle ?? { archive: rawContent || String(cardFields.title ?? "") },
       executionJson: execution,
       source: input.source ?? (sourceType === "manual" ? "manual" : "auto"),
@@ -813,11 +832,25 @@ export function archiveCardToClient(row) {
 
   const channelId = String(row.channel_id ?? row.channelId ?? base.channelId ?? "").trim();
   const dbChannelName = row.channel_name ?? row.channelName ?? null;
+  const parsed =
+    base.parsedJson && typeof base.parsedJson === "object"
+      ? /** @type {Record<string, unknown>} */ (base.parsedJson)
+      : {};
+  const parsedChannelName = String(parsed.channelName ?? "").trim();
+  const channelAvatar = String(parsed.channelAvatar ?? "").trim();
+  const images = Array.isArray(parsed.images)
+    ? parsed.images.map((x) => String(x ?? "").trim()).filter(Boolean)
+    : [];
 
   return {
     ...base,
+    /** 正文（与 rawContent 同值） */
+    body: String(base.rawContent ?? row.raw_content ?? row.rawContent ?? ""),
     channelId,
-    channelName: resolveCardChannelName(channelId, dbChannelName),
+    channelName:
+      parsedChannelName || resolveCardChannelName(channelId, dbChannelName),
+    channelAvatar: channelAvatar || null,
+    images,
     sourceType: String(row.source_type ?? row.sourceType ?? "discord"),
     sourceRef: row.source_ref ?? row.sourceRef ?? null,
     symbol: String(row.symbol ?? base.execution?.symbol ?? "").toUpperCase(),

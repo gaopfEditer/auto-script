@@ -1,0 +1,11 @@
+{
+  "name": "token-auth-test-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "测试用：正确 token 访问成功 / 过期 token 提示更新",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  }
+}
