@@ -221,6 +221,8 @@ export const config = {
     String(process.env.CARD_LEVEL_CHECK_ENABLED ?? "1").toLowerCase()
   ),
   cardLevelCheckMs: Number(process.env.CARD_LEVEL_CHECK_MS ?? 3_600_000),
+  /** 超过该时长未完结的卡片视为失效，不再拉 K 线兜底核验（默认 8h） */
+  cardKlineVerifyMaxAgeMs: Number(process.env.CARD_KLINE_VERIFY_MAX_AGE_MS ?? 8 * 3_600_000),
   /**
    * 卡片挂 Bitget/WEEX 单后：TP1 触达则把止损移到开仓价（默认开，每 30s 扫一次）。
    */
@@ -233,6 +235,19 @@ export const config = {
   cardProximityStockGapPct: Number(process.env.CARD_PROXIMITY_STOCK_GAP_PCT ?? 0.1),
   cardProximityTelegram: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_PROXIMITY_TELEGRAM ?? "0").toLowerCase()
+  ),
+  /** 浮盈达阶梯提醒上移止损（默认 5/10/15/20%） */
+  cardProfitTrailEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_PROFIT_TRAIL_ENABLED ?? "1").toLowerCase()
+  ),
+  cardProfitTrailTelegram: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_PROFIT_TRAIL_TELEGRAM ?? "1").toLowerCase()
+  ),
+  cardProfitTrailLevels: String(process.env.CARD_PROFIT_TRAIL_LEVELS ?? "5,10,15,20").trim(),
+  /** 同卡两次盈利阶梯提醒最短间隔（毫秒，默认 1h） */
+  cardProfitTrailCooldownMs: Math.max(
+    60_000,
+    Number(process.env.CARD_PROFIT_TRAIL_COOLDOWN_MS ?? 3_600_000) || 3_600_000
   ),
   /** 价格校验：加密默认 1 天（Binance K 线）；legacy 3h；股票较长周期 */
   cardVerifyCryptoWindowDays: Number(process.env.CARD_VERIFY_CRYPTO_WINDOW_DAYS ?? 1),
@@ -323,6 +338,13 @@ export const config = {
   weexAutoTradeChannelIds: parseIdList(
     process.env.WEEX_AUTO_TRADE_CHANNEL_IDS ?? process.env.BITGET_AUTO_TRADE_CHANNEL_IDS ?? ""
   ),
+  /** 社区数据走本地 SQLite（默认开；与 MySQL 社区表独立） */
+  communityUseSqlite: !["0", "false", "no", "off"].includes(
+    String(process.env.COMMUNITY_USE_SQLITE ?? "1").toLowerCase()
+  ),
+  communitySqlitePath: (process.env.COMMUNITY_SQLITE_PATH ?? "").trim()
+    ? path.resolve(process.env.COMMUNITY_SQLITE_PATH.trim())
+    : path.join(_collectorRoot, "data", "community.sqlite"),
   /** 社区聊天室媒体上传目录 */
   communityChatUploadDir: (process.env.COMMUNITY_CHAT_UPLOAD_DIR ?? "").trim()
     ? path.resolve(process.env.COMMUNITY_CHAT_UPLOAD_DIR.trim())

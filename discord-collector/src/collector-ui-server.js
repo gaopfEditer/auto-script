@@ -88,8 +88,33 @@ async function main() {
     }
   });
 
+  /** @type {ReturnType<typeof import("./card-archive-list-cache.js").createCardArchiveListCache> | null} */
+  let cardArchiveListCache = null;
+
   /** @param {string} channel @param {Record<string, unknown>} payload */
   function broadcast(channel, payload) {
+    if (channel === "meta" && cardArchiveListCache) {
+      const kind = payload.kind;
+      if (kind === "card_archived" && payload.card && typeof payload.card === "object") {
+        cardArchiveListCache.onClientCardChanged(
+          /** @type {ReturnType<typeof import("./card-archive-service.js").archiveCardToClient>} */ (
+            payload.card
+          )
+        );
+      } else if (
+        (kind === "signal_card_created" || kind === "signal_card_updated") &&
+        payload.card &&
+        typeof payload.card === "object"
+      ) {
+        const id = Number(/** @type {Record<string, unknown>} */ (payload.card).id);
+        if (Number.isFinite(id) && id > 0) {
+          void store.getSignalCardById(id).then((row) => row && cardArchiveListCache?.onRowChanged(row));
+        }
+      } else if (kind === "signal_card_deleted") {
+        const cardId = Number(payload.cardId);
+        if (Number.isFinite(cardId) && cardId > 0) cardArchiveListCache.removeFromBuckets(cardId);
+      }
+    }
     const msg = JSON.stringify({ v: 1, ts: Date.now(), channel, ...payload });
     for (const client of wss.clients) {
       if (client.readyState === 1) client.send(msg);
@@ -130,6 +155,7 @@ async function main() {
   const cardArchive = createCardArchiveService(store, createLogger("card-archive"), broadcast, {
     cardSink,
     communityFeed,
+    telegram: signalCards.telegram,
   });
   const twitterCdp = createTwitterCdpService(store, createLogger("twitter-cdp"), broadcast, {
     communityFeed,
@@ -160,7 +186,8 @@ async function main() {
   registerDiscordSignalRoutes(app, store, signalCards, broadcast);
   registerBitgetRoutes(app, bitgetOrder, bitgetManual);
   registerWeexRoutes(app, weexOrder);
-  registerCardArchiveRoutes(app, store, cardArchive);
+  const { listCache: cardArchiveListCacheRef } = registerCardArchiveRoutes(app, store, cardArchive, broadcast);
+  cardArchiveListCache = cardArchiveListCacheRef;
   registerCardEvalRoutes(app, store);
   registerTwitterCdpRoutes(app, twitterCdp);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
@@ -698,12 +725,17 @@ async function main() {
   const avatarsDir = path.join(__dirname, "..", "public", "community-avatars");
   app.use("/community-avatars", express.static(avatarsDir, { fallthrough: false, index: false }));
 
+  // Telegram 频道头像：仓库 telegram/avatar/{chatId}.png → GET /telegram-avatars/...
+  const telegramAvatarsDir = path.join(__dirname, "..", "..", "telegram", "avatar");
+  app.use("/telegram-avatars", express.static(telegramAvatarsDir, { fallthrough: false, index: false }));
+
   app.use(express.static(publicDir));
 
   app.use((req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     if (req.path.startsWith("/api")) return next();
     if (req.path.startsWith("/community-avatars")) return next();
+    if (req.path.startsWith("/telegram-avatars")) return next();
     if (/\.\w+$/.test(req.path)) return next();
     res.sendFile(path.join(publicDir, "index.html"), (err) => (err ? next(err) : undefined));
   });

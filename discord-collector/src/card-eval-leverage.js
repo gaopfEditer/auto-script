@@ -1,22 +1,21 @@
 /**
- * 卡片评价默认杠杆：主流 BTC/ETH vs 山寨。
+ * 卡片评价默认杠杆：主流 BTC/ETH、黄金、原油 100x；山寨 / 美股 20x。
  */
-import { detectSymbolTier } from "./card-backtest-policy.js";
-import { config } from "./config.js";
+import { resolveLiquidationLeverage } from "./card-liquidation-engine.js";
 
 /**
  * @param {unknown} symbol
+ * @param {unknown} [assetClass]
  * @returns {number}
  */
-export function resolveEvalLeverage(symbol) {
-  const tier = detectSymbolTier(symbol);
-  return tier === "major" ? config.cardEvalMajorLeverage : config.cardEvalAltcoinLeverage;
+export function resolveEvalLeverage(symbol, assetClass) {
+  return resolveLiquidationLeverage(symbol, assetClass);
 }
 
 /** @returns {{ major: number, altcoin: number }} */
 export function getEvalLeverageConfig() {
   return {
-    major: config.cardEvalMajorLeverage,
-    altcoin: config.cardEvalAltcoinLeverage,
+    major: resolveLiquidationLeverage("BTC"),
+    altcoin: resolveLiquidationLeverage("DOGE"),
   };
 }

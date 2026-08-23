@@ -37,23 +37,19 @@
 /** @typedef {{ channelId: string, channelName: string, count: number }} ArchiveChannelOption */
 
 import { readOkJson } from "./httpJson.js";
+import { buildArchivePeriodQuery, normalizeArchiveSourceList } from "./cardArchiveFilters.js";
 
-/** @param {string | number} period */
-export function buildArchivePeriodQuery(period) {
-  if (period === "today") {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    return { from: start.toISOString() };
-  }
-  const d = Number(period);
-  if (Number.isFinite(d) && d > 0) return { days: d };
-  return { days: 3650 };
-}
+export { buildArchivePeriodQuery } from "./cardArchiveFilters.js";
 
-/** @param {{ source?: string, symbol?: string, status?: string, channelId?: string, days?: number, from?: string, to?: string, limit?: number }} [opts] */
+/** @param {{ source?: string, sources?: string[], symbol?: string, status?: string, channelId?: string, days?: number, from?: string, to?: string, limit?: number, sinceId?: number, refresh?: boolean }} [opts] */
 export async function fetchArchiveCards(opts = {}) {
   const q = new URLSearchParams();
-  if (opts.source) q.set("source", opts.source);
+  const sources = opts.sources?.length
+    ? normalizeArchiveSourceList(opts.sources)
+    : opts.source
+      ? normalizeArchiveSourceList([opts.source])
+      : [];
+  if (sources.length) q.set("sources", sources.join(","));
   if (opts.symbol) q.set("symbol", opts.symbol);
   if (opts.status) q.set("status", opts.status);
   if (opts.channelId) q.set("channelId", opts.channelId);
@@ -61,14 +57,45 @@ export async function fetchArchiveCards(opts = {}) {
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
   if (opts.limit) q.set("limit", String(opts.limit));
+  if (opts.sinceId && opts.sinceId > 0) q.set("sinceId", String(opts.sinceId));
+  if (opts.refresh) q.set("refresh", "1");
   const res = await fetch(`/api/cards?${q}`);
   const j = await readOkJson(res, "加载卡片失败");
-  return /** @type {{ cards: ArchiveCard[], fromMs: number, toMs: number, total: number }} */ ({
+  return {
     cards: j.cards ?? [],
     fromMs: j.fromMs,
     toMs: j.toMs,
     total: j.total ?? j.cards?.length ?? 0,
+    maxId: Number(j.maxId) || 0,
+    cached: Boolean(j.cached),
+    incremental: Boolean(j.incremental),
+  };
+}
+
+/** @param {import("./cardArchiveApi.js").ArchiveCard} card */
+export function canDeleteArchiveCard(card) {
+  const st = String(card?.sourceType ?? "").trim().toLowerCase();
+  if (!st || st === "discord") return false;
+  const platform = st.includes(":") ? st.split(":").pop() : st;
+  return platform !== "discord";
+}
+
+/** @param {number} id */
+export async function deleteArchiveCard(id) {
+  const res = await fetch(`/api/cards/${id}`, { method: "DELETE" });
+  const j = await readOkJson(res, "删除卡片失败");
+  return j;
+}
+
+/** @param {number[]} cardIds */
+export async function deleteArchiveCards(cardIds) {
+  const res = await fetch("/api/cards/batch-delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cardIds }),
   });
+  const j = await readOkJson(res, "批量删除卡片失败");
+  return j;
 }
 
 /** @param {number} id */
@@ -95,16 +122,44 @@ export async function fetchCardSources() {
   return /** @type {string[]} */ (j.sources ?? []);
 }
 
-/** @param {{ source?: string, symbol?: string, status?: string, days?: number, from?: string, to?: string }} [opts] */
+/** @param {{ source?: string, sources?: string[], symbol?: string, status?: string, days?: number, from?: string, to?: string, refresh?: boolean }} [opts] */
 export async function fetchCardChannels(opts = {}) {
   const q = new URLSearchParams();
-  if (opts.source) q.set("source", opts.source);
+  const sources = opts.sources?.length
+    ? normalizeArchiveSourceList(opts.sources)
+    : opts.source
+      ? normalizeArchiveSourceList([opts.source])
+      : [];
+  if (sources.length) q.set("sources", sources.join(","));
   if (opts.symbol) q.set("symbol", opts.symbol);
   if (opts.status) q.set("status", opts.status);
   if (opts.days) q.set("days", String(opts.days));
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
+  if (opts.refresh) q.set("refresh", "1");
   const res = await fetch(`/api/cards/channels?${q}`);
   const j = await readOkJson(res, "加载频道失败");
   return /** @type {ArchiveChannelOption[]} */ (j.channels ?? []);
+}
+
+/** @param {{ source?: string, symbol?: string, channelId?: string, days?: number, from?: string, to?: string, limit?: number, cardIds?: number[] }} [opts] */
+export async function liquidateArchiveCards(opts = {}) {
+  const res = await fetch("/api/cards/liquidate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  const j = await readOkJson(res, "卡片清算失败");
+  return j;
+}
+
+/** @param {number[]} cardIds */
+export async function clearArchiveCardLiquidation(cardIds) {
+  const res = await fetch("/api/cards/clear-liquidation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cardIds }),
+  });
+  const j = await readOkJson(res, "清空结算失败");
+  return j;
 }

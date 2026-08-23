@@ -1143,6 +1143,13 @@ function onSocketMsg(msg) {
         signalCardRailRef.value?.upsertCard(/** @type {import("../lib/discordSignalApi.js").SignalCard} */ (card));
       }
     }
+    if (msg.kind === "signal_card_deleted") {
+      const cardId = Number(msg.cardId);
+      const cid = String(msg.channelId ?? "");
+      if (selectedChannel.value?.channelId === cid && Number.isFinite(cardId)) {
+        signalCardRailRef.value?.removeCardById(cardId);
+      }
+    }
     return;
   }
   if (msg.channel !== "message" || msg.kind !== "discord_message_batch") return;
@@ -1596,7 +1603,7 @@ onUnmounted(() => {
         </template>
         <template v-else>
           <span class="main-sub">从左侧选择服务器与频道；信号统计见</span>
-          <RouterLink to="/signals" class="main-sub">概览</RouterLink>
+          <RouterLink to="/eval" class="main-sub">评估</RouterLink>
           <span class="main-sub">；原始 WS 见</span>
           <RouterLink to="/debug" class="main-sub">Debug</RouterLink>
         </template>

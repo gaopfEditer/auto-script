@@ -15,39 +15,29 @@ import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { signalTextHash } from "./discord-signal-dedup.js";
 import { stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
 import { extractSignalCardRowId } from "./store.js";
+import { requireLocalRequest } from "./local-request.js";
+import {
+  filterSignalCardsByUiStatus,
+  summarizeCardsByOutcome,
+} from "./card-eval-outcome.js";
+import { parseArchiveRangeMs } from "./card-archive-api.js";
 
 /** @param {import("express").Request} req */
-function parseRangeMs(req) {
-  const toRaw = req.query.to ?? req.query.to_ms;
-  const fromRaw = req.query.from ?? req.query.from_ms;
-  const days = Number(req.query.days);
-  let toMs = toRaw ? new Date(String(toRaw)).getTime() : Date.now();
-  if (!Number.isFinite(toMs)) toMs = Date.now();
-  let fromMs = fromRaw ? new Date(String(fromRaw)).getTime() : NaN;
-  if (!Number.isFinite(fromMs) && Number.isFinite(days) && days > 0) {
-    fromMs = toMs - days * 86400000;
-  }
-  if (!Number.isFinite(fromMs)) fromMs = toMs - 30 * 86400000;
-  return { fromMs, toMs };
+function parseListFilters(req) {
+  const sourceType = String(req.query.source ?? req.query.source_type ?? req.query.sourceType ?? "").trim();
+  const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
+  const channelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
+  return {
+    sourceType: sourceType || undefined,
+    symbol: symbol || undefined,
+    channelId: channelId || undefined,
+  };
 }
 
-/** @param {ReturnType<typeof signalCardToClient>[]} cards */
-function summarizeCards(cards) {
-  /** @type {Record<string, number>} */
-  const byOutcome = {
-    total: cards.length,
-    pending: 0,
-    take_profit: 0,
-    stop_loss: 0,
-    manual_close: 0,
-    cancelled: 0,
-  };
-  for (const c of cards) {
-    const o = String(c.execution?.outcome ?? "pending");
-    if (o in byOutcome && o !== "total") byOutcome[o]++;
-    else byOutcome.pending++;
-  }
-  return byOutcome;
+/** @param {import("express").Request} req */
+function parseUiStatusFilter(req) {
+  const raw = String(req.query.status ?? req.query.card_status ?? req.query.cardStatus ?? "active").trim();
+  return raw.toLowerCase() === "all" ? "all" : "active";
 }
 
 /**
@@ -81,7 +71,7 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
       const channelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
       const status = String(req.query.status ?? "").trim();
       const limit = Number(req.query.limit) || 50;
-      const { fromMs, toMs } = parseRangeMs(req);
+      const { fromMs, toMs } = parseArchiveRangeMs(req);
       const rows = await store.listSignalCards({ channelId, status, limit, fromMs, toMs });
       res.json({
         ok: true,
@@ -98,22 +88,38 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
 
   app.get("/api/discord/signal-overview", async (req, res) => {
     try {
-      const { fromMs, toMs } = parseRangeMs(req);
+      const { fromMs, toMs } = parseArchiveRangeMs(req);
+      const uiStatus = parseUiStatusFilter(req);
+      const listFilters = parseListFilters(req);
       /** @type {Array<Record<string, unknown>>} */
       const channels = [];
-      for (const channelId of getSignalChannelIds()) {
+      const signalIds = getSignalChannelIds();
+      const channelIds = listFilters.channelId
+        ? signalIds.includes(listFilters.channelId)
+          ? [listFilters.channelId]
+          : []
+        : signalIds;
+      for (const channelId of channelIds) {
         const cfg = getSignalChannelConfig(channelId);
-        const rows = await store.listSignalCards({ channelId, fromMs, toMs, limit: 500 });
-        const cards = rows.map((r) => signalCardToClient(r));
+        const rows = await store.listSignalCards({
+          channelId,
+          fromMs,
+          toMs,
+          limit: 500,
+          sourceType: listFilters.sourceType,
+          symbol: listFilters.symbol,
+        });
+        const allCards = rows.map((r) => signalCardToClient(r));
+        const cards = filterSignalCardsByUiStatus(allCards, uiStatus);
         channels.push({
           channelId,
           name: cfg?.name ?? channelId,
           parser: cfg?.parser ?? "",
-          stats: summarizeCards(cards),
+          stats: summarizeCardsByOutcome(cards),
           recent: cards.slice(0, 8),
         });
       }
-      res.json({ ok: true, fromMs, toMs, channels });
+      res.json({ ok: true, fromMs, toMs, statusFilter: uiStatus, channels });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }
@@ -126,24 +132,36 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
         res.status(400).json({ ok: false, error: "channelId required" });
         return;
       }
-      const { fromMs, toMs } = parseRangeMs(req);
-      const limit = Number(req.query.limit) || 200;
-      const rows = await store.listSignalCards({ channelId, fromMs, toMs, limit });
+      const { fromMs, toMs } = parseArchiveRangeMs(req);
+      const uiStatus = parseUiStatusFilter(req);
+      const listFilters = parseListFilters(req);
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 500));
+      const rows = await store.listSignalCards({
+        channelId,
+        fromMs,
+        toMs,
+        limit,
+        sourceType: listFilters.sourceType,
+        symbol: listFilters.symbol,
+      });
+      const allCards = rows.map((r) => signalCardToClient(r));
+      const cards = filterSignalCardsByUiStatus(allCards, uiStatus);
       res.json({
         ok: true,
         channelId,
         fromMs,
         toMs,
+        statusFilter: uiStatus,
         channelConfig: getSignalChannelConfig(channelId),
-        cards: rows.map((r) => signalCardToClient(r)),
-        stats: summarizeCards(rows.map((r) => signalCardToClient(r))),
+        cards,
+        stats: summarizeCardsByOutcome(cards),
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }
   });
 
-  app.patch("/api/discord/signal-cards/:id", async (req, res) => {
+  app.patch("/api/discord/signal-cards/:id", requireLocalRequest, async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) {
@@ -186,7 +204,7 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
     }
   });
 
-  app.post("/api/discord/signal-cards", async (req, res) => {
+  app.post("/api/discord/signal-cards", requireLocalRequest, async (req, res) => {
     try {
       const channelId = String(req.body?.channelId ?? req.body?.channel_id ?? "").trim();
       const guildId = String(req.body?.guildId ?? req.body?.guild_id ?? "").trim();

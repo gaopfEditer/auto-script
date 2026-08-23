@@ -12,6 +12,10 @@
  *   telegramSentAt: string | null,
  *   note: string,
  *   execution: import("./signalExecution.js").SignalExecution,
+ *   symbol?: string,
+ *   channelName?: string,
+ *   progress?: Record<string, unknown> | null,
+ *   backtest?: Record<string, unknown> | null,
  *   source: string,
  *   isManual: boolean,
  *   signalAt: string | null,
@@ -100,22 +104,29 @@ export async function fetchSignalCards(channelId, opts = {}) {
   return /** @type {SignalCard[]} */ (j.cards ?? []);
 }
 
-/** @param {{ days?: number, from?: string, to?: string }} [opts] */
+/** @param {{ days?: number, from?: string, to?: string, status?: string }} [opts] */
 export async function fetchSignalOverview(opts = {}) {
   const q = new URLSearchParams();
   if (opts.days) q.set("days", String(opts.days));
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
+  if (opts.status) q.set("status", opts.status);
+  if (opts.source) q.set("source", opts.source);
+  if (opts.channelId) q.set("channelId", opts.channelId);
+  if (opts.symbol) q.set("symbol", opts.symbol);
   const r = await fetch(`/api/discord/signal-overview?${q}`);
   return readOkJson(r, "加载信号概览失败");
 }
 
-/** @param {string} channelId @param {{ days?: number, from?: string, to?: string, limit?: number }} [opts] */
+/** @param {string} channelId @param {{ days?: number, from?: string, to?: string, limit?: number, status?: string, source?: string, symbol?: string }} [opts] */
 export async function fetchSignalHistory(channelId, opts = {}) {
-  const q = new URLSearchParams({ channel_id: channelId, limit: String(opts.limit ?? 200) });
+  const q = new URLSearchParams({ channel_id: channelId, limit: String(opts.limit ?? 500) });
   if (opts.days) q.set("days", String(opts.days));
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
+  if (opts.status) q.set("status", opts.status);
+  if (opts.source) q.set("source", opts.source);
+  if (opts.symbol) q.set("symbol", opts.symbol);
   const r = await fetch(`/api/discord/signal-history?${q}`);
   return readOkJson(r, "加载信号历史失败");
 }

@@ -103,6 +103,7 @@ function memberPublic(row, opts = {}) {
  */
 export function createCommunityService(store, log, broadcast) {
   function assertDb() {
+    if (store?.communityDbActive) return;
     if (store?.offline || !store?.communityEnsureSchema) {
       const err = new Error("community_db_offline");
       err.code = "COMMUNITY_OFFLINE";

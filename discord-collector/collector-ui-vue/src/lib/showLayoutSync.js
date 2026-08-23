@@ -4,13 +4,13 @@
  * - 域名访问：仅首次从后台拉取一次，之后只读写 localStorage
  */
 
+import { isLocalClient } from "./localClient.js";
+
 export const SHOW_LAYOUT_SEEDED_KEY = "discord-collector.show.layout.server-seeded.v1";
 
 /** @returns {boolean} */
 export function isLocalShowClient() {
-  if (typeof location === "undefined") return true;
-  const host = String(location.hostname || "").toLowerCase();
-  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  return isLocalClient();
 }
 
 /** @returns {Promise<{ ok: boolean, layout?: Record<string, unknown>, updatedAt?: number | null, error?: string }>} */

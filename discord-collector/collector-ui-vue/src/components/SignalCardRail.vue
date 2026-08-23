@@ -24,10 +24,11 @@ import {
   hasEvaluation,
   evaluationSummaryLines,
   seedActualFromPlanned,
-  calcProfitPercents,
-  formatProfitPercent,
+  cardProfitBadge,
+  resolveCardEvalOutcome,
   formatCardId,
 } from "../lib/signalExecution.js";
+import { isLocalClient } from "../lib/localClient.js";
 
 const props = defineProps({
   channelId: { type: String, default: "" },
@@ -36,6 +37,7 @@ const props = defineProps({
 
 const emit = defineEmits(["cardUpdated", "cardsChange", "scrollToMessage"]);
 
+const canManageCards = isLocalClient();
 const cards = ref(/** @type {import("../lib/discordSignalApi.js").SignalCard[]} */ ([]));
 const styles = ref(/** @type {Record<string, { label: string }>} */ ({}));
 const loading = ref(false);
@@ -232,27 +234,8 @@ function cardHasEvaluation(card) {
 }
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
-function cardEvalProfit(card) {
-  const ex = cardExecution(card);
-  return calcProfitPercents(
-    ex.actual.buyPrice,
-    ex.actual.sellPrice,
-    ex.direction,
-    undefined,
-    ex.symbol || card.symbol
-  );
-}
-
-/** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 function cardEvalProfitBadge(card) {
-  const profit = cardEvalProfit(card);
-  if (!profit) return null;
-  const pct = profit.leveragePct;
-  return {
-    text: formatProfitPercent(pct),
-    gain: pct > 0,
-    loss: pct < 0,
-  };
+  return cardProfitBadge(/** @type {Record<string, unknown>} */ (card));
 }
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
@@ -287,6 +270,7 @@ function scheduleSave(card) {
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 async function saveCardFields(card) {
+  if (!canManageCards) return;
   const draft = executionDraftById[card.id] ?? emptyExecution();
   const payload = buildExecutionPayload(draft, {
     plannedTp: plannedTpTextById.value[card.id] ?? "",
@@ -310,6 +294,7 @@ async function saveCardFields(card) {
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 async function toggleStatus(card) {
+  if (!canManageCards) return;
   const next = isActive(card) ? "expired" : "active";
   try {
     const updated = await updateSignalCard(card.id, { status: next });
@@ -321,6 +306,7 @@ async function toggleStatus(card) {
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card @param {string} iso */
 async function setExpiresAt(card, iso) {
+  if (!canManageCards) return;
   try {
     const updated = await updateSignalCard(card.id, {
       expiresAt: iso || null,
@@ -354,7 +340,21 @@ function upsertCard(card) {
   emit("cardsChange", cards.value);
 }
 
+/** @param {number} cardId */
+function removeCardById(cardId) {
+  const id = Number(cardId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const idx = cards.value.findIndex((c) => c.id === id);
+  if (idx < 0) return;
+  cards.value.splice(idx, 1);
+  delete noteDraftById.value[id];
+  delete evalExpandedById.value[id];
+  delete executionDraftById[id];
+  emit("cardsChange", cards.value);
+}
+
 async function submitManualCard() {
+  if (!canManageCards) return;
   if (!props.channelId) return;
   const symbol = manualForm.value.symbol.trim();
   if (!symbol) {
@@ -408,7 +408,7 @@ async function submitManualCard() {
   }
 }
 
-defineExpose({ reload, upsertCard });
+defineExpose({ reload, upsertCard, removeCardById });
 
 watch(() => props.channelId, () => void reload());
 
@@ -423,14 +423,19 @@ onMounted(async () => {
     <div class="signal-card-head">
       <span>信号卡片</span>
       <div class="signal-head-actions">
-        <RouterLink to="/signals" class="signal-head-link" title="频道概览与历史">概览</RouterLink>
-        <button type="button" class="signal-head-btn" @click="showManualForm = !showManualForm">
+        <RouterLink to="/eval" class="signal-head-link" title="频道评估与盈利明细">评估</RouterLink>
+        <button
+          v-if="canManageCards"
+          type="button"
+          class="signal-head-btn"
+          @click="showManualForm = !showManualForm"
+        >
           {{ showManualForm ? "取消" : "+ 手动" }}
         </button>
       </div>
     </div>
     <div class="signal-card-scroll">
-      <form v-if="showManualForm" class="signal-manual-form" @submit.prevent="submitManualCard">
+      <form v-if="canManageCards && showManualForm" class="signal-manual-form" @submit.prevent="submitManualCard">
         <div class="signal-field-row">
           <label>币种</label>
           <input v-model="manualForm.symbol" placeholder="BTC/USDT" required />
@@ -491,20 +496,28 @@ onMounted(async () => {
             </RouterLink>
             <span v-if="card.isManual" class="signal-card-manual-tag">手动</span>
             <span
-              v-if="cardExecution(card).outcome && cardExecution(card).outcome !== 'pending'"
-              class="signal-card-outcome-tag"
-            >{{ outcomeLabel(cardExecution(card).outcome) }}</span>
-            <span v-else-if="cardHasEvaluation(card)" class="signal-card-eval-tags">
-              <span class="signal-card-outcome-tag noted">已评价</span>
+              v-if="resolveCardEvalOutcome(card) !== 'pending' || cardEvalProfitBadge(card) || cardHasEvaluation(card)"
+              class="signal-card-eval-tags"
+            >
+              <span
+                v-if="resolveCardEvalOutcome(card) !== 'pending'"
+                class="signal-card-outcome-tag"
+                :class="resolveCardEvalOutcome(card) === 'take_profit' ? 'tp' : 'sl'"
+              >{{ outcomeLabel(resolveCardEvalOutcome(card)) }}</span>
               <span
                 v-if="cardEvalProfitBadge(card)"
                 class="signal-card-profit-tag"
                 :class="{ gain: cardEvalProfitBadge(card).gain, loss: cardEvalProfitBadge(card).loss }"
               >{{ cardEvalProfitBadge(card).text }}</span>
+              <span
+                v-else-if="cardHasEvaluation(card)"
+                class="signal-card-outcome-tag noted"
+              >已评价</span>
             </span>
           </div>
           <div class="signal-card-top-actions">
             <div
+              v-if="canManageCards"
               class="signal-eval-wrap"
               :class="{ open: evalExpandedById[card.id], filled: cardHasEvaluation(card) }"
             >
@@ -533,7 +546,7 @@ onMounted(async () => {
 
         <pre v-if="cardBody(card)" class="signal-card-body">{{ cardBody(card) }}</pre>
 
-        <section v-if="evalExpandedById[card.id]" class="signal-eval-panel">
+        <section v-if="canManageCards && evalExpandedById[card.id]" class="signal-eval-panel">
           <header class="signal-eval-panel-head">评价 / 实际成交</header>
           <SignalEvaluationForm
             v-if="executionDraftById[card.id]"
@@ -546,13 +559,13 @@ onMounted(async () => {
           />
         </section>
 
-        <div class="signal-card-actions">
+        <div v-if="canManageCards" class="signal-card-actions">
           <button type="button" class="signal-act" @click="toggleStatus(card)">
             {{ isActive(card) ? "设为失效" : "恢复有效" }}
           </button>
           <button type="button" class="signal-act" title="推送到 Telegram" @click="pushTelegram(card)">TG</button>
         </div>
-        <label class="signal-expire-row">
+        <label v-if="canManageCards" class="signal-expire-row">
           <span>过期</span>
           <input
             type="datetime-local"

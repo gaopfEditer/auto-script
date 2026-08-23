@@ -5,9 +5,10 @@ import {
   cardExecution,
   outcomeLabel,
   hasEvaluation,
-  calcProfitPercents,
-  formatProfitPercent,
+  cardProfitBadge,
+  resolveCardEvalOutcome,
   formatCardId,
+  maskProfitPercentText,
 } from "../lib/signalExecution.js";
 import { resolveCardSourceLink } from "../lib/cardSourceLink.js";
 
@@ -114,28 +115,19 @@ function cardHasEvaluation(card) {
 
 /** @param {Record<string, unknown>} card */
 function cardEvalProfitBadge(card) {
-  const ex = cardExecution(/** @type {import("../lib/discordSignalApi.js").SignalCard} */ (card));
-  const profit = calcProfitPercents(
-    ex.actual.buyPrice,
-    ex.actual.sellPrice,
-    ex.direction,
-    undefined,
-    ex.symbol || card.symbol
-  );
-  if (!profit) return null;
-  const pct = profit.leveragePct;
-  return {
-    text: formatProfitPercent(pct),
-    gain: pct > 0,
-    loss: pct < 0,
-  };
+  return cardProfitBadge(card);
 }
 
 const title = computed(() => cardTitle(props.card));
 const body = computed(() => cardBody(props.card));
 const active = computed(() => isActive(props.card));
 const evaluated = computed(() => cardHasEvaluation(props.card));
-const profitBadge = computed(() => cardEvalProfitBadge(props.card));
+const profitBadge = computed(() => {
+  const badge = cardEvalProfitBadge(props.card);
+  if (!badge) return null;
+  if (!props.hideKolName) return badge;
+  return { ...badge, text: maskProfitPercentText(badge.text) };
+});
 const sourceLink = computed(() => resolveCardSourceLink(props.card));
 const channelLabel = computed(() => {
   const name = String(props.card.channelName ?? "").trim();
@@ -194,16 +186,23 @@ function onClick() {
         </RouterLink>
         <span v-if="card.isManual" class="signal-card-manual-tag">手动</span>
         <span
-          v-if="exec.outcome && exec.outcome !== 'pending'"
-          class="signal-card-outcome-tag"
-        >{{ outcomeLabel(exec.outcome) }}</span>
-        <span v-else-if="evaluated" class="signal-card-eval-tags">
-          <span class="signal-card-outcome-tag noted">已评价</span>
+          v-if="resolveCardEvalOutcome(card) !== 'pending' || profitBadge || evaluated"
+          class="signal-card-eval-tags"
+        >
+          <span
+            v-if="resolveCardEvalOutcome(card) !== 'pending'"
+            class="signal-card-outcome-tag"
+            :class="resolveCardEvalOutcome(card) === 'take_profit' ? 'tp' : 'sl'"
+          >{{ outcomeLabel(resolveCardEvalOutcome(card)) }}</span>
           <span
             v-if="profitBadge"
             class="signal-card-profit-tag"
             :class="{ gain: profitBadge.gain, loss: profitBadge.loss }"
           >{{ profitBadge.text }}</span>
+          <span
+            v-else-if="evaluated"
+            class="signal-card-outcome-tag noted"
+          >已评价</span>
         </span>
       </div>
     </header>

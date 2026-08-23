@@ -40,20 +40,23 @@ async function readJson(res, fallback) {
 }
 
 /**
- * @param {{ range?: string, from?: string, to?: string }} [opts]
+ * @param {{ range?: string, from?: string, to?: string, days?: number, source?: string, channelId?: string, symbol?: string }} [opts]
  */
 export async function fetchEvalSummary(opts = {}) {
   const q = new URLSearchParams();
-  q.set("range", opts.range || "1d");
+  if (opts.source) q.set("source", opts.source);
+  if (opts.channelId) q.set("channelId", opts.channelId);
+  if (opts.symbol) q.set("symbol", opts.symbol);
+  if (opts.days) q.set("days", String(opts.days));
   if (opts.from) q.set("from", opts.from);
   if (opts.to) q.set("to", opts.to);
+  if (opts.range) q.set("range", opts.range);
   const res = await fetch(`/api/cards/eval/summary?${q}`);
   const j = await readJson(res, "加载评估汇总失败");
   if (!j || typeof j !== "object" || !j.ok) {
     throw new Error((j && j.error) || "加载评估汇总失败");
   }
   return {
-    range: String(j.range ?? opts.range ?? "1d"),
     fromMs: Number(j.fromMs) || 0,
     toMs: Number(j.toMs) || 0,
     note: typeof j.note === "string" ? j.note : "",

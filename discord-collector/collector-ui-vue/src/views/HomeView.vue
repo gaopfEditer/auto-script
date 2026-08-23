@@ -11,7 +11,7 @@ import { RouterLink } from "vue-router";
     </p>
     <div class="actions">
       <RouterLink class="btn primary" to="/show">Show（群组 / 频道 / 消息）</RouterLink>
-      <RouterLink class="btn" to="/signals">信号概览 / 历史</RouterLink>
+      <RouterLink class="btn" to="/eval">卡片评估</RouterLink>
       <RouterLink class="btn" to="/cards">统一卡片归档（来源/币种/时间）</RouterLink>
       <RouterLink class="btn" to="/fetch">提交 YouTube URL 拉取文稿</RouterLink>
       <RouterLink class="btn" to="/archives">YouTube 文稿归档预览</RouterLink>

@@ -1,24 +1,31 @@
 # 统一配置（复制为 monitored_groups.txt 后编辑；该文件已 .gitignore）
 # 格式：key=value，value 里多项用英文逗号分隔；# 开头为注释行。
-# 仍兼容「单独一行纯整数」作为监听群 id（等价于 monitored=）。
 
-# 监听来源（超级群/频道 peer id，多为 -100…）
+# 主要发车来源（发车信息占比高）→ 检测到交易逻辑后 POST 到 discord-collector 卡片 API
+main_monitored=-1001766481463,-1003169740057
+
+# 次要闲聊群（发车占比低）→ 规则整理后发到 push_chat
 monitored=-1002161599183,-1001525379130
 
-# 发件人展示名包含以下任一子串时，listen.py 原样转发到 push_chat（默认不走 AI 交易聚合）
-sender_keywords=西西,梵乐,朱桑
-
-# 推送目标群（须本账号已加入）；多个 id 用逗号分隔，将逐一转发
+# 次要群推送目标（须本账号已加入）
 push_chat=-5123396026
 
-# ---------- 键名别名（任选其一）----------
-# 监听群：monitored | groups | chats | 监听群 | 监控群
-# 关键词：sender_keywords | sender | keywords | 发件人 | 发件人关键字
-# 推送群：push_chat | push | notify_chat | 推送群 | 推送
+# ---------- 频道展示（主群建卡用，可后补）----------
+# 复制 channel_profiles.example.json → channel_profiles.json
+# 为每个 main_monitored id 填 name / avatar：
+#   { "-1001766481463": { "name": "军长", "avatar": "https://..." } }
 #
-# 也可用环境变量覆盖文件：TELEGRAM_SENDER_KEYWORDS、TELEGRAM_PUSH_CHAT_ID
+# ---------- 主群建卡 ----------
+# 需 CARDS_API_KEY（discord-collector/.env）与 collect:ui 在跑
+# CARDS_API_BASE_URL 默认 http://127.0.0.1:3851
 #
-# ---------- 可选：AI 交易聚合（需 TELEGRAM_AI_TRADE_AGGREGATE=1）----------
-# 每群滑动窗口 TELEGRAM_TRADE_CONTEXT_SIZE=30，防抖 TELEGRAM_TRADE_CONTEXT_FLUSH_SEC=45
-# Ollama: OLLAMA_GENERATE_URL、OLLAMA_MODEL=gemma4:26b
-# 发送: TELEGRAM_SEND_URL=http://127.0.0.1:8000/api/telegram/send
+# ---------- 检测/等待（主群与次要群共用）----------
+# TELEGRAM_TRADE_SIGNAL_WINDOW=10
+# TELEGRAM_TRADE_FOLLOW_MSGS=3
+# TELEGRAM_TRADE_FOLLOW_WAIT_MIN_SEC=300
+# TELEGRAM_TRADE_FOLLOW_WAIT_MAX_SEC=600
+#
+# ---------- 键名别名 ----------
+# 主群：main_monitored | main | primary | 主群 | 发车群
+# 次要群：monitored | groups | chats | 监听群 | 次要群 | 闲聊群
+# 推送群：push_chat | push | notify_chat | 推送群

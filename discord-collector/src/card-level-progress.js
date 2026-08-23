@@ -324,6 +324,36 @@ export function progressChanged(prev, next) {
 
 /**
  * @param {Record<string, unknown>} card
+ * @param {number} [nowMs]
+ */
+export function isCardVerifyStale(card, nowMs = Date.now()) {
+  const startMs = cardSignalStartMs(card);
+  const maxAge = Number(config.cardKlineVerifyMaxAgeMs) || 8 * 3_600_000;
+  return nowMs - startMs > maxAge;
+}
+
+/**
+ * 超过有效窗口 → progress.status=expired，不再做 K 线核验。
+ * @param {Record<string, unknown>} card
+ * @param {number} [nowMs]
+ * @returns {ReturnType<typeof emptyProgress> | null} 需写库时返回新 progress，已过期则 null
+ */
+export function expireProgressIfStale(card, nowMs = Date.now()) {
+  if (!isCardVerifyStale(card, nowMs)) return null;
+  const prev = parseProgressJson(card.progress);
+  if (prev && String(prev.status ?? "") === "expired") return null;
+  return mergeProgress(
+    prev ?? emptyProgress(),
+    emptyProgress({
+      status: "expired",
+      note: "stale_8h",
+      lastCheckAt: new Date().toISOString(),
+    })
+  );
+}
+
+/**
+ * @param {Record<string, unknown>} card
  */
 export function cardSignalStartMs(card) {
   const iso = resolveCardSignalAt(card) ?? card.signalAt ?? card.signal_at ?? card.createdAt ?? card.created_at;

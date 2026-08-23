@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import mysql from "mysql2/promise";
 
 import { bufferToPlainPayloadText } from "./collect-ws-decode.js";
+import { bindCommunitySqliteToStore, openCommunitySqliteStore } from "./community-sqlite-store.js";
+import { config } from "./config.js";
 import { serializeRawJsonColumnForMysql } from "./mysql-json.js";
 
 /**
@@ -894,13 +896,17 @@ export async function openStore(cfg, log) {
   }
 
   /**
-   * @param {{ channelId?: string, status?: string, fromMs?: number, toMs?: number, sourceType?: string, symbol?: string, includeChannelId?: boolean }} filters
+   * @param {{ channelId?: string, status?: string, fromMs?: number, toMs?: number, sourceType?: string, sourceTypes?: string[], symbol?: string, includeChannelId?: boolean }} filters
    * @returns {{ where: string[], params: unknown[] }}
    */
   function buildSignalCardFilters(filters) {
     const ch = String(filters.channelId ?? "").trim();
     const status = String(filters.status ?? "").trim();
-    const sourceType = String(filters.sourceType ?? "").trim();
+    const sourceTypes = Array.isArray(filters.sourceTypes)
+      ? filters.sourceTypes.map((s) => String(s).trim().toLowerCase()).filter(Boolean)
+      : [];
+    const sourceType = String(filters.sourceType ?? "").trim().toLowerCase();
+    const srcList = sourceTypes.length ? sourceTypes : sourceType ? [sourceType] : [];
     const symbol = String(filters.symbol ?? "").trim().toUpperCase();
     const fromMs = Number(filters.fromMs);
     const toMs = Number(filters.toMs);
@@ -916,9 +922,13 @@ export async function openStore(cfg, log) {
       where.push("sc.status = ?");
       params.push(status);
     }
-    if (sourceType) {
-      where.push("sc.source_type = ?");
-      params.push(sourceType);
+    if (srcList.length) {
+      const parts = [];
+      for (const st of srcList) {
+        parts.push("(LOWER(sc.source_type) = ? OR LOWER(sc.source_type) LIKE ?)");
+        params.push(st, `%:${st}`);
+      }
+      where.push(`(${parts.join(" OR ")})`);
     }
     if (symbol) {
       const sym = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
@@ -933,15 +943,37 @@ export async function openStore(cfg, log) {
       where.push("sc.created_at <= ?");
       params.push(isoToMysqlDatetime3(new Date(toMs).toISOString()));
     }
+    const sinceId = Number(filters.sinceId);
+    if (Number.isFinite(sinceId) && sinceId > 0) {
+      where.push("sc.id > ?");
+      params.push(sinceId);
+    }
     return { where, params };
   }
 
   async function getRecentSignalCardBySymbolChannel({ symbol, channelId, withinMs = 600_000 }) {
-    const sym = String(symbol ?? "").trim().toUpperCase();
-    const ch = String(channelId ?? "").trim();
-    if (!sym || !ch) return null;
-    const ms = Number(withinMs);
-    const fromMs = Number.isFinite(ms) && ms > 0 ? Date.now() - ms : Date.now() - 600_000;
+    const rows = await listRecentSignalCardsBySymbolChannel({
+      symbol,
+      channelId,
+      withinMs,
+      limit: 1,
+    });
+    return rows[0] ?? null;
+  }
+
+  /** @param {{ symbol: string, channelId: string, withinMs?: number, limit?: number, fromMs?: number }} opts */
+  async function listRecentSignalCardsBySymbolChannel(opts) {
+    const sym = String(opts.symbol ?? "").trim().toUpperCase();
+    const ch = String(opts.channelId ?? "").trim();
+    if (!sym || !ch) return [];
+    const ms = Number(opts.withinMs);
+    const fromMs =
+      Number.isFinite(Number(opts.fromMs)) && Number(opts.fromMs) > 0
+        ? Number(opts.fromMs)
+        : Number.isFinite(ms) && ms > 0
+          ? Date.now() - ms
+          : Date.now() - 600_000;
+    const lim = Math.min(50, Math.max(1, Number(opts.limit) || 10));
     const { where, params } = buildSignalCardFilters({
       channelId: ch,
       symbol: sym,
@@ -952,10 +984,10 @@ export async function openStore(cfg, log) {
       `SELECT ${SIGNAL_CARD_SELECT}
        FROM discord_signal_cards sc
        ${SIGNAL_CARD_JOIN}
-       ${whereSql} ORDER BY sc.id DESC LIMIT 1`,
+       ${whereSql} ORDER BY sc.id DESC LIMIT ${lim}`,
       params
     );
-    return rows[0] ? normalizeSignalCardRow(rows[0]) : null;
+    return rows.map((r) => normalizeSignalCardRow(r));
   }
 
   /** @param {{ channelId: string, withinMs?: number }} opts */
@@ -981,14 +1013,19 @@ export async function openStore(cfg, log) {
    */
   async function listSignalCards(filters = {}) {
     const lim = Math.min(500, Math.max(1, Number(filters.limit) || 50));
+    const sinceId = Number(filters.sinceId);
+    const incremental = Number.isFinite(sinceId) && sinceId > 0;
     const { where, params } = buildSignalCardFilters(filters);
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const orderSql = incremental
+      ? "ORDER BY sc.id ASC"
+      : "ORDER BY COALESCE(sc.signal_at, sc.created_at) DESC, sc.id DESC";
     const [rows] = await pool.query(
       `SELECT ${SIGNAL_CARD_SELECT}
        FROM discord_signal_cards sc
        ${SIGNAL_CARD_JOIN}
        ${whereSql}
-       ORDER BY COALESCE(sc.signal_at, sc.created_at) DESC, sc.id DESC
+       ${orderSql}
        LIMIT ${lim}`,
       params
     );
@@ -1048,6 +1085,7 @@ export async function openStore(cfg, log) {
    */
   async function listCardsForBacktest(opts = {}) {
     const lim = Math.min(200, Math.max(1, Number(opts.limit) || 80));
+    const nowIso = isoToMysqlDatetime3(new Date().toISOString());
     const [rows] = await pool.query(
       `SELECT ${SIGNAL_CARD_SELECT}
        FROM discord_signal_cards sc
@@ -1056,6 +1094,7 @@ export async function openStore(cfg, log) {
          AND sc.symbol IS NOT NULL AND sc.symbol != ''
          AND sc.backtest_json IS NULL
          AND (sc.asset_class = 'crypto' OR sc.asset_class IS NULL OR sc.asset_class = '')
+         AND COALESCE(sc.signal_at, sc.created_at) >= DATE_SUB(?, INTERVAL 8 HOUR)
          AND (
            (
              UPPER(REPLACE(REPLACE(REPLACE(sc.symbol, 'USDT', ''), 'USDC', ''), 'BUSD', '')) IN ('BTC', 'ETH')
@@ -1068,7 +1107,7 @@ export async function openStore(cfg, log) {
          )
        ORDER BY sc.id ASC
        LIMIT ${lim}`,
-      [isoToMysqlDatetime3(new Date().toISOString()), isoToMysqlDatetime3(new Date().toISOString())]
+      [nowIso, nowIso, nowIso]
     );
     return rows;
   }
@@ -1158,33 +1197,27 @@ export async function openStore(cfg, log) {
 
   /**
    * 评估看板：按 signal_at（缺省 created_at）时间窗拉取。
-   * @param {{ fromMs: number, toMs: number, channelId?: string, limit?: number }} opts
+   * @param {{ fromMs: number, toMs: number, channelId?: string, sourceType?: string, symbol?: string, limit?: number }} opts
    */
   async function listCardsForEval(opts) {
-    const fromMs = Number(opts.fromMs);
-    const toMs = Number(opts.toMs);
     const lim = Math.min(2000, Math.max(1, Number(opts.limit) || 500));
-    const channelId = String(opts.channelId ?? "").trim();
-    /** @type {unknown[]} */
-    const params = [];
-    let sql = `SELECT ${SIGNAL_CARD_SELECT}
+    const { where, params } = buildSignalCardFilters({
+      channelId: opts.channelId,
+      sourceType: opts.sourceType,
+      symbol: opts.symbol,
+      fromMs: opts.fromMs,
+      toMs: opts.toMs,
+    });
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const [rows] = await pool.query(
+      `SELECT ${SIGNAL_CARD_SELECT}
        FROM discord_signal_cards sc
        ${SIGNAL_CARD_JOIN}
-       WHERE 1=1`;
-    if (Number.isFinite(fromMs) && fromMs > 0) {
-      sql += ` AND COALESCE(sc.signal_at, sc.created_at) >= ?`;
-      params.push(isoToMysqlDatetime3(new Date(fromMs).toISOString()));
-    }
-    if (Number.isFinite(toMs) && toMs > 0) {
-      sql += ` AND COALESCE(sc.signal_at, sc.created_at) <= ?`;
-      params.push(isoToMysqlDatetime3(new Date(toMs).toISOString()));
-    }
-    if (channelId) {
-      sql += ` AND sc.channel_id = ?`;
-      params.push(channelId);
-    }
-    sql += ` ORDER BY COALESCE(sc.signal_at, sc.created_at) DESC LIMIT ${lim}`;
-    const [rows] = await pool.query(sql, params);
+       ${whereSql}
+       ORDER BY COALESCE(sc.signal_at, sc.created_at) DESC
+       LIMIT ${lim}`,
+      params
+    );
     return rows;
   }
 
@@ -1262,6 +1295,39 @@ export async function openStore(cfg, log) {
     await pool.execute(`UPDATE discord_signal_cards SET ${sets.join(", ")} WHERE id = ?`, params);
     const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [id]);
     return rows[0] ?? null;
+  }
+
+  /** @param {number} id */
+  async function deleteSignalCard(id) {
+    const n = Number(id);
+    if (!Number.isFinite(n) || n <= 0) return false;
+    const [r] = await pool.execute(`DELETE FROM discord_signal_cards WHERE id = ?`, [n]);
+    return Number(/** @type {{ affectedRows?: number }} */ (r).affectedRows) > 0;
+  }
+
+  /** @param {string} messageId */
+  async function deleteDiscordMessageIfCardApi(messageId) {
+    const mid = String(messageId ?? "").trim();
+    if (!mid) return false;
+    const [rows] = await pool.query(
+      `SELECT source FROM discord_messages WHERE message_id = ? LIMIT 1`,
+      [mid]
+    );
+    if (!rows[0]) return false;
+    if (String(rows[0].source ?? "") !== "card_api") return false;
+    await pool.execute(`DELETE FROM discord_messages WHERE message_id = ?`, [mid]);
+    return true;
+  }
+
+  /** @param {number} cardId */
+  async function deleteCommunityFeedByCardId(cardId) {
+    const id = Number(cardId);
+    if (!Number.isFinite(id) || id <= 0) return 0;
+    const [r] = await pool.execute(
+      `DELETE FROM community_feed_messages WHERE feed_type = 'card' AND card_id = ?`,
+      [id]
+    );
+    return Number(/** @type {{ affectedRows?: number }} */ (r).affectedRows) || 0;
   }
 
   // —— 社区 ——
@@ -1969,6 +2035,7 @@ export async function openStore(cfg, log) {
     markSignalCardTelegramSent,
     listSignalCards,
     getRecentSignalCardBySymbolChannel,
+    listRecentSignalCardsBySymbolChannel,
     getRecentSignalCardByChannel,
     listSignalCardChannels,
     getSignalCardById,
@@ -1979,6 +2046,9 @@ export async function openStore(cfg, log) {
     listCardsForProgressCheck,
     listCardsForEval,
     updateSignalCard,
+    deleteSignalCard,
+    deleteDiscordMessageIfCardApi,
+    deleteCommunityFeedByCardId,
     communityEnsureSchema,
     communityGetMemberByToken,
     communityGetMemberByHandle,
@@ -2036,9 +2106,39 @@ export function formatMysqlUnavailableHint(cfg, err) {
     `MySQL 不可用（${code || err.message}）— ${addr} 库=${cfg.database}`,
     "collect:ui 将以「无数据库」模式继续运行：",
     "  · 可用：静态 UI、/archives、/debug、WebSocket 实时推送",
-    "  · 不可用：消息/帧入库、Show 历史、信号卡片持久化、社区",
+    "  · 不可用：消息/帧入库、Show 历史、信号卡片持久化",
+    "  · 社区：若 COMMUNITY_USE_SQLITE=1 仍可用本地 SQLite",
     "请启动 MySQL，或检查 .env 中 MYSQL_HOST / MYSQL_PORT / MYSQL_DATABASE",
   ].join("\n");
+}
+
+/** @type {ReturnType<typeof openCommunitySqliteStore> | null} */
+let _communitySqliteHandle = null;
+
+/**
+ * 将社区读写绑定到本地 SQLite（覆盖 MySQL / 离线 stub）。
+ * @param {ReturnType<typeof createOfflineStore>} store
+ * @param {Logger} log
+ * @param {string} dbPath
+ */
+export function attachCommunitySqlite(store, log, dbPath) {
+  try {
+    _communitySqliteHandle = openCommunitySqliteStore(dbPath, log);
+    bindCommunitySqliteToStore(store, _communitySqliteHandle);
+    const originalClose = store.close;
+    store.close = async () => {
+      if (_communitySqliteHandle?.closeCommunitySqlite) {
+        _communitySqliteHandle.closeCommunitySqlite();
+        _communitySqliteHandle = null;
+      }
+      if (originalClose) await originalClose();
+    };
+    return true;
+  } catch (e) {
+    const err = /** @type {Error} */ (e);
+    log.error(`社区 SQLite 打开失败: ${err.message}`);
+    return false;
+  }
 }
 
 /** @returns {ReturnType<typeof openStore> extends Promise<infer S> ? S : never} */
@@ -2065,6 +2165,7 @@ export function createOfflineStore() {
     markSignalCardTelegramSent: async () => {},
     listSignalCards: async () => [],
     getRecentSignalCardBySymbolChannel: async () => null,
+    listRecentSignalCardsBySymbolChannel: async () => [],
     getRecentSignalCardByChannel: async () => null,
     listSignalCardChannels: async () => [],
     getSignalCardById: async () => null,
@@ -2075,6 +2176,9 @@ export function createOfflineStore() {
     listCardsForProgressCheck: async () => [],
     listCardsForEval: async () => [],
     updateSignalCard: async () => null,
+    deleteSignalCard: async () => false,
+    deleteDiscordMessageIfCardApi: async () => false,
+    deleteCommunityFeedByCardId: async () => 0,
     communityEnsureSchema: async () => {},
     communityGetMemberByToken: async () => null,
     communityGetMemberByHandle: async () => null,
@@ -2127,13 +2231,21 @@ export function createOfflineStore() {
  * @param {Logger} log
  */
 export async function tryOpenStore(cfg, log) {
+  let result;
   try {
     const store = await openStore(cfg, log);
-    return { store, offline: false, error: null, hint: null };
+    result = { store, offline: false, error: null, hint: null };
   } catch (e) {
     const err = /** @type {Error} */ (e);
     const hint = formatMysqlUnavailableHint(cfg, err);
     for (const line of hint.split("\n")) log.error(line);
-    return { store: createOfflineStore(), offline: true, error: err.message, hint };
+    result = { store: createOfflineStore(), offline: true, error: err.message, hint };
   }
+  if (config.communityUseSqlite) {
+    const ok = attachCommunitySqlite(result.store, log, config.communitySqlitePath);
+    if (ok && result.offline) {
+      log.info("MySQL 离线，社区已改用本地 SQLite");
+    }
+  }
+  return result;
 }

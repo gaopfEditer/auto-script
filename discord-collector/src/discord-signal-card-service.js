@@ -34,6 +34,12 @@ import {
 } from "./trade-platform-toggles.js";
 import { formatCardUid, stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
 import { buildCardSinkPayload, pickCardSinkText } from "./card-external-sink.js";
+import {
+  buildSignalCardMergePatch,
+  findMergeTargetCard,
+  resolveAuthorKey,
+  authorKeysMatch,
+} from "./card-signal-merge.js";
 
 /** @param {Record<string, unknown>} row */
 export function resolveMessageSignalAt(row) {
@@ -303,6 +309,140 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     }
   }
 
+  /**
+   * 同频道 + 同作者 + 同币种 30 分钟内 → 合并到已有卡片。
+   * @param {{
+   *   channelId: string,
+   *   guildId: string,
+   *   symbol: string,
+   *   parsed: Record<string, unknown>,
+   *   executionJson: ReturnType<typeof executionFromParsed>,
+   *   content: string,
+   *   signalAt: string,
+   *   chCfg: ReturnType<typeof getSignalChannelConfig>,
+   *   row: Record<string, unknown>,
+   *   opts: Record<string, unknown>,
+   *   cardsByStyle: Record<string, string>,
+   *   cardFieldsJson: Record<string, unknown>,
+   * }} ctx
+   */
+  async function tryMergeSimilarSignalCard(ctx) {
+    const {
+      channelId,
+      guildId,
+      symbol,
+      parsed,
+      executionJson,
+      content,
+      signalAt,
+      chCfg,
+      row,
+      opts,
+      cardsByStyle,
+      cardFieldsJson,
+    } = ctx;
+    if (!symbol || !chCfg) return null;
+
+    const authorKey = resolveAuthorKey({
+      parsedJson: parsed,
+      authorId: row.authorId ?? row.author_id,
+      authorUsername: row.authorUsername ?? row.author_username,
+      authorGlobalName: row.authorGlobalName ?? row.author_global_name,
+    });
+    if (!authorKey) return null;
+
+    const signalAtMs = new Date(signalAt).getTime();
+    const target = await findMergeTargetCard(store, {
+      channelId,
+      symbol,
+      authorKey,
+      direction: String(parsed.direction ?? executionJson.direction ?? ""),
+      signalAtMs,
+    });
+    if (!target) return null;
+
+    const openId = extractSignalCardRowId(target.id ?? target.ID);
+    if (!openId) return null;
+
+    const patch = buildSignalCardMergePatch({
+      prevRow: target,
+      parsedJson: parsed,
+      executionJson,
+      rawContent: content,
+      signalAt,
+      authorKey,
+    });
+    const mergedParsed = /** @type {Record<string, unknown>} */ (patch.parsedJson);
+    const mergedExecution = patch.executionJson;
+    const mergedCardsByStyle = stampCardsByStyle(
+      await generateCardsByStyles(mergedParsed, chCfg.styles, patch.rawContent, {
+        debug: (s) => log.debug(s),
+        fastFallback:
+          opts.debugSimulate || String(mergedParsed.parser ?? "") === "junzhang",
+      }),
+      openId
+    );
+    const mergedCardFields = stampCardFieldsUid(
+      buildCardFieldsFromExecution(mergedExecution, mergedParsed, patch.rawContent, {
+        sourceType: "discord",
+        sourceRef: channelId,
+      }),
+      openId
+    );
+    await store.updateSignalCard(openId, {
+      parsedJson: mergedParsed,
+      executionJson: mergedExecution,
+      rawContent: patch.rawContent,
+      signalAt: patch.signalAt,
+      symbol: patch.symbol || symbol,
+      cardsByStyle: mergedCardsByStyle,
+      cardFieldsJson: mergedCardFields,
+    });
+    const updated = await store.getSignalCardById?.(openId);
+    const clientCard = signalCardToClient(updated ?? target);
+    const mergeText =
+      pickCardSinkText(clientCard, chCfg.telegramStyle) ||
+      mergedCardsByStyle[chCfg.telegramStyle] ||
+      Object.values(mergedCardsByStyle)[0] ||
+      patch.rawContent;
+    if (telegram.enabled && !opts.skipTelegram) {
+      try {
+        await telegram.send(String(mergeText), {
+          channelId,
+          channelName: chCfg.name,
+          cardId: openId,
+        });
+        await store.markSignalCardTelegramSent?.(openId);
+      } catch (e) {
+        log.warn(`雷同信号合并后 Telegram 失败: ${/** @type {Error} */ (e).message}`);
+      }
+    }
+    await syncCommunityFeedCard({
+      text: String(mergeText),
+      channelId,
+      channelName: chCfg.name,
+      cardId: openId,
+      symbol: String(clientCard.symbol ?? symbol),
+    });
+    await pushExternalCard({
+      text: String(mergeText),
+      card: clientCard,
+      message: row,
+      channelName: chCfg.name,
+      channelId,
+      guildId,
+      event: "updated",
+      parsed: mergedParsed,
+      execution: mergedExecution,
+      embed: mergedCardFields,
+    });
+    broadcast?.("meta", { kind: "signal_card_updated", card: clientCard });
+    log.info(
+      `雷同信号合并 → 卡片 #${openId} channel=${channelId} symbol=${symbol} author=${authorKey}`
+    );
+    return { card: clientCard, merged: true, parsed: mergedParsed };
+  }
+
   async function ensureHydrated() {
     if (hydrated) return;
     await dedup.hydrate();
@@ -558,6 +698,47 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
 
     const executionJson = executionFromParsed(parsed);
     const symbol = extractSymbolFromPayload(parsed, executionJson);
+    const signalAt = resolveMessageSignalAt(row);
+    const authorKey = resolveAuthorKey({
+      parsedJson: parsed,
+      authorId: row.authorId ?? row.author_id,
+      authorUsername: row.authorUsername ?? row.author_username,
+      authorGlobalName: row.authorGlobalName ?? row.author_global_name,
+    });
+    if (authorKey) {
+      parsed = {
+        ...parsed,
+        authorKey,
+        ...(row.authorId ?? row.author_id
+          ? { authorId: String(row.authorId ?? row.author_id).trim() }
+          : {}),
+        ...(row.authorUsername ?? row.author_username
+          ? { authorUsername: String(row.authorUsername ?? row.author_username).trim() }
+          : {}),
+      };
+    }
+
+    if (!opts.debugSimulate && symbol && authorKey) {
+      const cardFieldsForMerge = buildCardFieldsFromExecution(executionJson, parsed, content, {
+        sourceType: "discord",
+        sourceRef: channelId,
+      });
+      const mergedResult = await tryMergeSimilarSignalCard({
+        channelId,
+        guildId,
+        symbol,
+        parsed,
+        executionJson,
+        content,
+        signalAt,
+        chCfg,
+        row,
+        opts,
+        cardsByStyle,
+        cardFieldsJson: cardFieldsForMerge,
+      });
+      if (mergedResult) return mergedResult;
+    }
 
     let isReverse = false;
     /** @type {Record<string, unknown> | null} */
@@ -602,10 +783,14 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         shouldSkipNumericDuplicate(
           normalizeExecution(prev.execution_json ?? prev.executionJson, prev.parsed_json ?? prev.parsedJson),
           executionJson
+        ) &&
+        authorKeysMatch(
+          resolveAuthorKey({ parsedJson: cardRowParsed(prev), note: prev.note }),
+          authorKey
         )
       ) {
         log.debug(
-          `信号跳过数值重复 symbol=${symbol} channel=${channelId} blogger=${chCfg.name} preview=${content.slice(0, 80)}`
+          `信号跳过数值重复 symbol=${symbol} channel=${channelId} author=${authorKey} preview=${content.slice(0, 80)}`
         );
         return { skipped: "duplicate_numeric" };
       }
@@ -764,6 +949,20 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
 }
 
 /** @param {Record<string, unknown>} row */
+function parseSignalCardJsonField(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** @param {Record<string, unknown>} row */
 export function signalCardToClient(row) {
   let cardsByStyle = row.cards_by_style ?? row.cardsByStyle;
   if (typeof cardsByStyle === "string") {
@@ -805,6 +1004,10 @@ export function signalCardToClient(row) {
     source,
     sourceType: String(row.source_type ?? row.sourceType ?? "discord"),
     sourceRef: row.source_ref ?? row.sourceRef ?? null,
+    symbol: String(row.symbol ?? "").trim() || undefined,
+    channelName: row.channel_name != null ? String(row.channel_name) : undefined,
+    progress: parseSignalCardJsonField(row.progress_json ?? row.progressJson),
+    backtest: parseSignalCardJsonField(row.backtest_json ?? row.backtestJson),
     isManual,
     signalAt: resolveCardSignalAt(row),
     createdAt: row.created_at ?? row.createdAt ?? null,

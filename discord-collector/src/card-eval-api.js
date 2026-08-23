@@ -3,6 +3,8 @@
  */
 import { archiveCardToClient, resolveCardChannelName } from "./card-archive-service.js";
 import { parseProgressJson } from "./card-level-progress.js";
+import { parseArchiveRangeMs } from "./card-archive-api.js";
+import { isCardEnteredForEval, resolveCardEvalOutcome } from "./card-eval-outcome.js";
 
 /**
  * @param {string} range
@@ -51,26 +53,19 @@ export function classifyCardEval(card) {
   const entryHit = Boolean(progress?.entryHitAt);
   const tpHits = Array.isArray(progress?.tpHits) ? progress.tpHits : [];
   const status = String(progress?.status ?? "");
-  const outcomeRaw = String(progress?.outcome ?? "");
 
-  let outcome = "pending";
-  if (tpHits.length > 0 || outcomeRaw === "take_profit") outcome = "take_profit";
-  else if (status === "closed_sl" || outcomeRaw === "stop_loss") outcome = "stop_loss";
-  else if (backtest?.outcome === "take_profit" || backtest?.outcome === "stop_loss") {
-    // 未入进度机时回退窗口回测结果（须已入场语义：有 entry）
-    if (backtest.entry != null || entryHit) {
-      outcome = String(backtest.outcome);
-    }
+  if (status === "not_entered") {
+    return {
+      entered: false,
+      outcome: "pending",
+      pnlPct: 0,
+      tpHits: [],
+      progress,
+    };
   }
 
-  const entered =
-    entryHit ||
-    status === "entered" ||
-    status === "partial_tp" ||
-    status === "closed_tp" ||
-    status === "closed_sl" ||
-    outcome === "take_profit" ||
-    outcome === "stop_loss";
+  const outcome = resolveCardEvalOutcome(card);
+  const entered = isCardEnteredForEval(card);
 
   let pnlPct = null;
   if (progress && Number.isFinite(Number(progress.pnlPct))) {
@@ -217,12 +212,18 @@ function groupByChannel(cards) {
 export function registerCardEvalRoutes(app, store) {
   app.get("/api/cards/eval/summary", async (req, res) => {
     try {
-      const { range, fromMs, toMs } = resolveEvalRangeMs(
-        String(req.query.range ?? "1d"),
-        req.query.from != null ? String(req.query.from) : undefined,
-        req.query.to != null ? String(req.query.to) : undefined
-      );
-      const rows = await store.listCardsForEval({ fromMs, toMs, limit: 2000 });
+      const { fromMs, toMs } = parseArchiveRangeMs(req);
+      const sourceType = String(req.query.source ?? req.query.source_type ?? req.query.sourceType ?? "").trim();
+      const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
+      const channelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
+      const rows = await store.listCardsForEval({
+        fromMs,
+        toMs,
+        channelId: channelId || undefined,
+        sourceType: sourceType || undefined,
+        symbol: symbol || undefined,
+        limit: 2000,
+      });
       const cards = rowsToCards(rows);
 
       const byChannel = groupByChannel(cards);
@@ -244,9 +245,9 @@ export function registerCardEvalRoutes(app, store) {
 
       res.json({
         ok: true,
-        range,
         fromMs,
         toMs,
+        filters: { sourceType, symbol, channelId },
         note: "PnL 按 1/N 分批止盈累加（杠杆口径与回测一致）；胜率：任意 TP=赢，先 SL=输，未入场不计",
         overall: aggregateMetrics(cards),
         channels,
@@ -320,17 +321,19 @@ export function registerCardEvalRoutes(app, store) {
 
   app.get("/api/cards/eval/channels/:channelId", async (req, res) => {
     try {
+      const { fromMs, toMs } = parseArchiveRangeMs(req);
+      const sourceType = String(req.query.source ?? req.query.source_type ?? req.query.sourceType ?? "").trim();
+      const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
       let channelId = String(req.params.channelId ?? "").trim();
       if (channelId === "none" || channelId === "_unknown") channelId = "";
-      const { range, fromMs, toMs } = resolveEvalRangeMs(
-        String(req.query.range ?? "1d"),
-        req.query.from != null ? String(req.query.from) : undefined,
-        req.query.to != null ? String(req.query.to) : undefined
-      );
+      const filterChannelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
+      if (filterChannelId) channelId = filterChannelId;
       const rows = await store.listCardsForEval({
         fromMs,
         toMs,
         channelId: channelId || undefined,
+        sourceType: sourceType || undefined,
+        symbol: symbol || undefined,
         limit: 1000,
       });
       let cards = rowsToCards(rows);
@@ -363,9 +366,9 @@ export function registerCardEvalRoutes(app, store) {
 
       res.json({
         ok: true,
-        range,
         fromMs,
         toMs,
+        filters: { sourceType, symbol, channelId },
         channelId,
         channelName: resolveCardChannelName(channelId, cards[0]?.channelName),
         metrics: aggregateMetrics(cards),

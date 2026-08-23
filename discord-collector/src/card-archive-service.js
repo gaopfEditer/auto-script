@@ -24,10 +24,46 @@ import {
   isSimilarEntryPrice,
   shouldSkipSimilarCoinAction,
 } from "./discord-signal-numeric-dedup.js";
+import {
+  buildSignalCardMergePatch,
+  findMergeTargetCard,
+  resolveAuthorKey,
+} from "./card-signal-merge.js";
 
 /** Discord 雪花频道 ID（排除 api/youtube 等占位） */
 function isDiscordChannelId(id) {
   return /^\d{16,22}$/.test(String(id ?? "").trim());
+}
+
+const CARD_FEED_PLACEHOLDER_IDS = new Set([
+  "api",
+  "youtube",
+  "telegram",
+  "discord",
+  "manual",
+  "external",
+  "paste",
+]);
+
+/** 可写入 Show 时间线的频道 id（Discord 雪花 / Telegram 群 id 等） */
+function isCardFeedChannelId(id) {
+  const s = String(id ?? "").trim();
+  if (!s || CARD_FEED_PLACEHOLDER_IDS.has(s.toLowerCase())) return false;
+  if (isDiscordChannelId(s)) return true;
+  return /^-?\d{8,22}$/.test(s);
+}
+
+/**
+ * 非 Discord 来源的虚拟服务器（Show 左侧栏）。
+ * @param {string} sourceType
+ */
+function resolveVirtualGuildForCardSource(sourceType) {
+  const t = resolveSourcePlatform(sourceType);
+  if (t === "telegram") return { guildId: "telegram", guildName: "Telegram" };
+  if (t === "youtube") return { guildId: "youtube", guildName: "YouTube" };
+  if (t === "x") return { guildId: "x", guildName: "X" };
+  if (t === "api" || t === "manual") return { guildId: "external", guildName: "外部来源" };
+  return null;
 }
 
 /**
@@ -61,7 +97,94 @@ export function resolveCardChannelName(channelId, dbName) {
   return id;
 }
 
-export const SOURCE_TYPES = /** @type {const} */ (["discord", "youtube", "api", "manual"]);
+export const SOURCE_TYPES = /** @type {const} */ ([
+  "discord",
+  "youtube",
+  "telegram",
+  "x",
+  "api",
+  "manual",
+]);
+
+/** 与 discord_signal_cards.source_type VARCHAR(32) 对齐 */
+export const MAX_CARD_SOURCE_TYPE_LEN = 32;
+
+/**
+ * 复合来源里的平台段（twitter → x）。
+ * @param {unknown} raw
+ */
+export function normalizeSourcePlatform(raw) {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s === "twitter") return "x";
+  return s;
+}
+
+/**
+ * 开放 API `source` / `sourceType` 归一化。
+ * 支持：`x`、`python-ai-operate:x`（项目:平台，twitter → x）。
+ * @param {unknown} raw
+ */
+export function normalizeCardSourceType(raw) {
+  const s = String(raw ?? "api").trim().toLowerCase();
+  if (!s) return "api";
+  const colon = s.indexOf(":");
+  if (colon > 0) {
+    const project = s.slice(0, colon).trim();
+    const platform = normalizeSourcePlatform(s.slice(colon + 1));
+    if (project && platform) {
+      const out = `${project}:${platform}`;
+      return out.length > MAX_CARD_SOURCE_TYPE_LEN ? out.slice(0, MAX_CARD_SOURCE_TYPE_LEN) : out;
+    }
+  }
+  return normalizeSourcePlatform(s);
+}
+
+/**
+ * @param {unknown} raw
+ */
+export function isValidCardSourceType(raw) {
+  const s = normalizeCardSourceType(raw);
+  if (!s) return false;
+  if (s.length > MAX_CARD_SOURCE_TYPE_LEN) return false;
+  if (SOURCE_TYPES.includes(/** @type {typeof SOURCE_TYPES[number]} */ (s))) return true;
+  const colon = s.indexOf(":");
+  if (colon <= 0 || colon >= s.length - 1) return false;
+  const project = s.slice(0, colon);
+  const platform = s.slice(colon + 1);
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(project)) return false;
+  return SOURCE_TYPES.includes(/** @type {typeof SOURCE_TYPES[number]} */ (platform));
+}
+
+/**
+ * 复合来源的平台段；纯平台名则原样返回。
+ * @param {unknown} raw
+ */
+export function resolveSourcePlatform(raw) {
+  const s = normalizeCardSourceType(raw);
+  if (SOURCE_TYPES.includes(/** @type {typeof SOURCE_TYPES[number]} */ (s))) return s;
+  const colon = s.indexOf(":");
+  return colon > 0 ? s.slice(colon + 1) : s;
+}
+
+/**
+ * 非 Discord 网关采集的卡片（外部 API / Telegram / X / YouTube / 手动等）允许删除。
+ * @param {Record<string, unknown> | null | undefined} row
+ */
+export function isExternallySourcedCard(row) {
+  if (!row || typeof row !== "object") return false;
+  const sourceType = normalizeCardSourceType(row.source_type ?? row.sourceType ?? "discord");
+  return resolveSourcePlatform(sourceType) !== "discord";
+}
+
+/**
+ * 复合来源的项目段；无冒号则空串。
+ * @param {unknown} raw
+ */
+export function resolveSourceProject(raw) {
+  const s = normalizeCardSourceType(raw);
+  const colon = s.indexOf(":");
+  return colon > 0 ? s.slice(0, colon) : "";
+}
 
 /**
  * 归档卡片来源日志（排查用：频道 / YouTube / API 等）。
@@ -100,20 +223,40 @@ export function formatCardSourceLog(card, meta) {
   /** @type {string[]} */
   const parts = [`卡片归档 ${uid}`, `sourceType=${sourceType}`];
 
-  if (sourceType === "discord") {
+  if (resolveSourcePlatform(sourceType) === "discord") {
     parts.push(
       channelName ? `discord频道=${channelName}(${channelId || "?"})` : `discord频道Id=${channelId || "?"}`
     );
     if (guildId) parts.push(`guildId=${guildId}`);
-  } else if (sourceType === "youtube") {
+  } else if (resolveSourcePlatform(sourceType) === "youtube") {
     parts.push(`youtube=${sourceRef || channelId || "?"}`);
     if (channelId && channelId !== "youtube" && channelId !== sourceRef) {
       parts.push(`channelId=${channelId}${channelName ? `(${channelName})` : ""}`);
     }
-  } else if (sourceType === "api") {
+  } else if (resolveSourcePlatform(sourceType) === "telegram") {
+    const project = resolveSourceProject(sourceType);
+    parts.push(
+      project
+        ? `telegram项目=${project}`
+        : channelName
+          ? `telegram=${channelName}(${channelId || sourceRef || "?"})`
+          : `telegram=${sourceRef || channelId || "?"}`
+    );
+    if (channelName) parts.push(`channel=${channelName}(${channelId || "?"})`);
+  } else if (resolveSourcePlatform(sourceType) === "x") {
+    const project = resolveSourceProject(sourceType);
+    parts.push(
+      project
+        ? `x项目=${project}`
+        : channelName
+          ? `x=${channelName}(${channelId || sourceRef || "?"})`
+          : `x=${sourceRef || channelId || "?"}`
+    );
+    if (channelName) parts.push(`channel=${channelName}(${channelId || "?"})`);
+  } else if (sourceType === "api" || resolveSourcePlatform(sourceType) === "api") {
     parts.push(`api来源=${sourceRef || channelId || "external"}`);
     if (channelId) parts.push(`channelId=${channelId}`);
-  } else if (sourceType === "manual") {
+  } else if (sourceType === "manual" || resolveSourcePlatform(sourceType) === "manual") {
     parts.push(`manual=${sourceRef || channelId || "ui"}`);
   } else {
     if (channelId) parts.push(`channelId=${channelId}${channelName ? `(${channelName})` : ""}`);
@@ -131,42 +274,213 @@ export function formatCardSourceLog(card, meta) {
 }
 
 /**
+ * Telegram 推送附带来源追溯行（API / Telegram 等经开放 API 归档的卡片）。
+ * @param {ReturnType<typeof archiveCardToClient> | Record<string, unknown> | null | undefined} card
+ */
+export function formatTelegramCardSourceTrace(card) {
+  if (!card || typeof card !== "object") return "";
+  const sourceType = normalizeCardSourceType(card.sourceType ?? card.source_type ?? "api");
+  const platform = resolveSourcePlatform(sourceType);
+  const project = resolveSourceProject(sourceType);
+  const sourceRef = String(card.sourceRef ?? card.source_ref ?? "").trim();
+  const channelId = String(card.channelId ?? card.channel_id ?? "").trim();
+  const channelName =
+    String(card.channelName ?? card.channel_name ?? "").trim() ||
+    resolveCardChannelName(channelId, null);
+  const uid =
+    card.uid != null && String(card.uid).trim()
+      ? String(card.uid).trim()
+      : card.id != null
+        ? `#${card.id}`
+        : "";
+
+  /** @type {string[]} */
+  const parts = [];
+
+  if (project) parts.push(`项目=${project}`);
+
+  if (platform === "api") {
+    parts.push("API");
+    if (sourceRef) parts.push(`ref=${sourceRef}`);
+    if (channelName && channelId && channelId !== "api") {
+      parts.push(`频道=${channelName}(${channelId})`);
+    } else if (channelName) {
+      parts.push(`频道=${channelName}`);
+    } else if (channelId && channelId !== "api") {
+      parts.push(`channelId=${channelId}`);
+    }
+  } else if (platform === "telegram") {
+    parts.push("Telegram");
+    if (channelName) parts.push(`群=${channelName}`);
+    if (channelId) parts.push(`chat=${channelId}`);
+    if (sourceRef) parts.push(`ref=${sourceRef}`);
+  } else {
+    parts.push(`source=${sourceType}`);
+    if (sourceRef) parts.push(`ref=${sourceRef}`);
+    if (channelName || channelId) {
+      parts.push(
+        channelName && channelId
+          ? `频道=${channelName}(${channelId})`
+          : channelName || `channelId=${channelId}`
+      );
+    }
+  }
+
+  if (uid) parts.push(`卡片${uid}`);
+
+  return parts.length ? `【追溯】${parts.join(" · ")}` : "";
+}
+
+/**
+ * 经开放 API 归档且需推 Telegram 的来源平台。
+ * @param {unknown} sourceType
+ */
+export function shouldPushArchivedCardToTelegram(sourceType) {
+  const platform = resolveSourcePlatform(sourceType);
+  return platform === "telegram" || platform === "api";
+}
+
+/**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
- * @param {{ cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink>, communityFeed?: ReturnType<typeof import("./community-feed-service.js").createCommunityFeedService> }} [deps]
+ * @param {{ cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink>, communityFeed?: ReturnType<typeof import("./community-feed-service.js").createCommunityFeedService>, telegram?: ReturnType<typeof import("./discord-signal-telegram.js").createDiscordSignalTelegramPush> }} [deps]
  */
 export function createCardArchiveService(store, log, broadcast, deps = {}) {
   const cardSink = deps.cardSink ?? null;
   const communityFeed = deps.communityFeed ?? null;
+  const telegram = deps.telegram ?? null;
 
   /**
-   * API/归档卡片写入对应 Discord 频道时间线（按 signalAt/当前时间排序为最新）。
-   * 仅当 channelId 为真实频道雪花，且已在库中或为信号频道时注入。
+   * 经开放 API 归档的卡片（API / Telegram 等）→ 推送到 TELEGRAM_PUSH_CHAT_ID，正文末尾附【追溯】来源行。
+   * @param {ReturnType<typeof archiveCardToClient>} clientCard
+   */
+  async function pushArchivedCardToTelegram(clientCard) {
+    if (!telegram?.enabled) return { skipped: "telegram_disabled" };
+    const sourceType = normalizeCardSourceType(clientCard.sourceType);
+    if (!shouldPushArchivedCardToTelegram(sourceType)) {
+      return { skipped: "not_pushable_source" };
+    }
+
+    const text = pickCardSinkText(clientCard) || formatCardAsChannelMessage(clientCard);
+    if (!String(text ?? "").trim()) return { skipped: "empty" };
+
+    const channelId = String(clientCard.channelId ?? "").trim();
+    const channelName = resolveCardChannelName(channelId, clientCard.channelName);
+    const cardId = extractSignalCardRowId(clientCard.id);
+    const platform = resolveSourcePlatform(sourceType);
+
+    const trace = formatTelegramCardSourceTrace(clientCard);
+    let bodyText = String(text).trim();
+    if (trace && !bodyText.includes(trace)) {
+      bodyText = `${bodyText}\n\n${trace}`;
+    }
+
+    const skipChannelLabel =
+      platform === "api" &&
+      (!channelId || channelId === "api" || CARD_FEED_PLACEHOLDER_IDS.has(channelId));
+
+    try {
+      await telegram.send(bodyText, {
+        channelId,
+        channelName,
+        cardId: cardId ?? undefined,
+        skipChannelLabel,
+      });
+      if (cardId && store.markSignalCardTelegramSent) {
+        await store.markSignalCardTelegramSent(cardId);
+      }
+      log.info(
+        `Telegram 推送归档卡片 #${cardId ?? "?"} source=${sourceType} channel=${channelName || channelId}`
+      );
+      return { ok: true };
+    } catch (e) {
+      log.warn(`Telegram 推送归档卡片失败: ${/** @type {Error} */ (e).message}`);
+      return { error: String(/** @type {Error} */ (e).message ?? e) };
+    }
+  }
+
+  /**
+   * API/归档卡片写入对应频道时间线（按 signalAt/当前时间排序为最新）。
+   * 频道不存在时自动创建虚拟服务器/频道（Telegram 等）。
    * @param {ReturnType<typeof archiveCardToClient>} clientCard
    * @param {{ force?: boolean }} [opts]
    */
   async function publishCardToChannelFeed(clientCard, opts = {}) {
     if (!config.cardApiInjectChannelMessage && !opts.force) {
+      log.info("卡片→频道消息 跳过: CARD_API_INJECT_CHANNEL_MESSAGE=0");
       return { skipped: "disabled" };
     }
     const channelId = String(clientCard.channelId ?? "").trim();
-    if (!isDiscordChannelId(channelId)) {
-      return { skipped: "not_discord_channel" };
+    const sourceType = String(clientCard.sourceType ?? "api").trim().toLowerCase();
+    const symbol = String(clientCard.symbol ?? "").trim();
+    const cardUid = clientCard.uid || (clientCard.id != null ? `#${clientCard.id}` : "?");
+
+    log.info(
+      `收到卡片消息 ${cardUid} source=${sourceType} channelId=${channelId} symbol=${symbol || "-"} name=${String(clientCard.channelName ?? "").trim() || "-"}`
+    );
+
+    if (!isCardFeedChannelId(channelId)) {
+      log.info(`卡片→频道消息 跳过: channelId=${channelId || "?"} 非可注入频道`);
+      return { skipped: "not_feed_channel" };
     }
 
-    const meta = store.getChannelMeta ? await store.getChannelMeta(channelId) : null;
-    const known = Boolean(meta) || isSignalChannel(channelId);
-    if (!known && !opts.force) {
-      return { skipped: "unknown_channel" };
+    let meta = store.getChannelMeta ? await store.getChannelMeta(channelId) : null;
+    const knownBefore = Boolean(meta) || isSignalChannel(channelId);
+    let channelCreated = false;
+    let guildCreated = false;
+
+    const channelName =
+      String(clientCard.channelName ?? meta?.name ?? "").trim() ||
+      resolveCardChannelName(channelId, null);
+
+    if (!knownBefore) {
+      let guildId = String(clientCard.guildId ?? meta?.guild_id ?? meta?.guildId ?? "").trim();
+      let guildName = "";
+
+      if (!guildId) {
+        const virtual = resolveVirtualGuildForCardSource(sourceType);
+        if (virtual) {
+          guildId = virtual.guildId;
+          guildName = virtual.guildName;
+        }
+      }
+
+      if (guildId && guildName && store.upsertDiscordGuildsBatch) {
+        const gn = await store.upsertDiscordGuildsBatch([{ guildId, name: guildName }]);
+        if (gn > 0) {
+          guildCreated = true;
+          log.info(`卡片→创建服务器 ${guildName}(${guildId})`);
+          broadcast?.("meta", { kind: "guilds_updated", count: gn });
+        }
+      }
+
+      if (store.upsertDiscordChannelsBatch) {
+        await store.upsertDiscordChannelsBatch([
+          {
+            channelId,
+            guildId,
+            name: channelName,
+            type: 0,
+          },
+        ]);
+        channelCreated = true;
+        log.info(
+          `卡片→创建频道 ${channelName}(${channelId}) guild=${guildId || "(空)"} source=${sourceType}`
+        );
+        if (guildId) {
+          broadcast?.("meta", { kind: "channels_updated", guildId, count: 1 });
+        }
+      }
+
+      meta = store.getChannelMeta ? await store.getChannelMeta(channelId) : null;
+    } else {
+      log.info(`卡片→频道已存在 ${channelName}(${channelId})`);
     }
 
     const guildId = String(
       clientCard.guildId ?? meta?.guild_id ?? meta?.guildId ?? ""
     ).trim();
-    const channelName =
-      String(clientCard.channelName ?? meta?.name ?? "").trim() ||
-      resolveCardChannelName(channelId, null);
     const signalIso = clientCard.signalAt || new Date().toISOString();
     const createdAtMs = Date.parse(String(signalIso)) || Date.now();
     const content = formatCardAsChannelMessage(clientCard);
@@ -236,9 +550,17 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     // 与自动建卡一致，方便 Show 信号栏 upsert
     broadcast?.("meta", { kind: "signal_card_created", card: clientCard, source: "card_api" });
     log.info(
-      `卡片→频道消息 channel=${channelName}(${channelId}) msg=${messageId} preview=${content.slice(0, 80)}`
+      `卡片→写入频道消息 ok channel=${channelName}(${channelId}) msg=${messageId} createdChannel=${channelCreated} createdGuild=${guildCreated} preview=${content.slice(0, 80)}`
     );
-    return { ok: true, messageId, channelId, createdAtMs };
+    return {
+      ok: true,
+      messageId,
+      channelId,
+      createdAtMs,
+      channelCreated,
+      guildCreated,
+      channelExisted: !channelCreated,
+    };
   }
 
   /**
@@ -266,10 +588,11 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
    * }} input
    */
   async function archiveCard(input) {
-    const sourceType = String(input.sourceType ?? "api").trim().toLowerCase();
-    if (!SOURCE_TYPES.includes(/** @type {typeof SOURCE_TYPES[number]} */ (sourceType))) {
+    const sourceType = normalizeCardSourceType(input.sourceType ?? "api");
+    if (!isValidCardSourceType(sourceType)) {
       throw new Error(`invalid sourceType: ${sourceType}`);
     }
+    const sourceProject = resolveSourceProject(sourceType);
 
     const execution = normalizeExecution(input.execution ?? input.executionJson ?? input, input.parsedJson);
     const symbol = normalizeSymbol(input.symbol ?? execution.symbol ?? extractSymbolFromPayload(input.parsedJson, execution));
@@ -312,6 +635,103 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
         ? input.assetClass
         : detectAssetClass(symbol, parsedJson, execution, rawContent);
     const verifyMode = resolveVerifyMode(assetClass, input.verifyMode);
+    const signalAtIso = input.signalAt ?? new Date().toISOString();
+    const authorKey = resolveAuthorKey({
+      parsedJson,
+      note: input.note,
+      sender: parsedJson.sender,
+    });
+    if (authorKey) parsedJson.authorKey = authorKey;
+
+    if (symbol && authorKey) {
+      const signalAtMs = new Date(signalAtIso).getTime();
+      const mergeTarget = await findMergeTargetCard(store, {
+        channelId,
+        symbol,
+        authorKey,
+        direction: String(execution.direction ?? parsedJson.direction ?? ""),
+        signalAtMs,
+      });
+      if (mergeTarget) {
+        const openId = extractSignalCardRowId(mergeTarget.id ?? mergeTarget.ID);
+        if (openId) {
+          const patch = buildSignalCardMergePatch({
+            prevRow: mergeTarget,
+            parsedJson,
+            executionJson: execution,
+            rawContent: rawContent || String(cardFields.title ?? "归档卡片"),
+            signalAt: signalAtIso,
+            authorKey,
+          });
+          const mergedParsed = /** @type {Record<string, unknown>} */ (patch.parsedJson);
+          const mergedExecution = patch.executionJson;
+          const mergedRaw = patch.rawContent;
+          const mergedFields = buildCardFieldsFromExecution(mergedExecution, mergedParsed, mergedRaw, {
+            sourceType,
+            sourceRef: input.sourceRef,
+            note: input.note,
+          });
+          const mergedStyles = stampCardsByStyle(
+            input.cardsByStyle ?? { archive: mergedRaw || String(mergedFields.title ?? "") },
+            openId
+          );
+          const stampedFields = stampCardFieldsUid(mergedFields, openId);
+          const updated =
+            (await store.updateSignalCard(openId, {
+              parsedJson: mergedParsed,
+              executionJson: mergedExecution,
+              rawContent: mergedRaw,
+              signalAt: patch.signalAt,
+              symbol: patch.symbol || symbol,
+              cardsByStyle: mergedStyles,
+              cardFieldsJson: stampedFields,
+            })) ?? mergeTarget;
+          const clientCard = archiveCardToClient(updated);
+          if (cardSink?.enabled) {
+            const text = pickCardSinkText(clientCard);
+            if (text) {
+              try {
+                await cardSink.publish(
+                  buildCardSinkPayload({
+                    text,
+                    card: clientCard,
+                    channelId: String(clientCard.channelId ?? ""),
+                    channelName: String(clientCard.channelName ?? ""),
+                    event: "updated",
+                    parsed: mergedParsed,
+                    execution: clientCard.execution,
+                    embed: clientCard.cardFields,
+                  })
+                );
+              } catch (e) {
+                log.warn(`卡片外送异常: ${/** @type {Error} */ (e).message}`);
+              }
+            }
+          }
+          broadcast?.("meta", { kind: "signal_card_updated", card: clientCard });
+          log.info(
+            `归档雷同合并 → #${openId} channel=${channelId} symbol=${symbol} author=${authorKey}`
+          );
+          if (communityFeed?.publishCard) {
+            try {
+              const text =
+                pickCardSinkText(clientCard) || formatCardAsChannelMessage(clientCard);
+              await communityFeed.publishCard({
+                text,
+                channelId: String(clientCard.channelId ?? channelId),
+                channelName: String(clientCard.channelName ?? ""),
+                cardId: openId,
+                symbol: String(clientCard.symbol ?? symbol ?? ""),
+              });
+            } catch (e) {
+              log.warn(`社区消息频道(合并)失败: ${/** @type {Error} */ (e).message}`);
+            }
+          }
+          await pushArchivedCardToTelegram(clientCard);
+          return Object.assign(clientCard, { channelMessage: null, merged: true });
+        }
+      }
+    }
 
     const row = await store.insertSignalCard({
       messageId,
@@ -326,10 +746,10 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       status: input.status ?? "active",
       note: input.note ?? null,
       sourceType,
-      sourceRef: input.sourceRef ? String(input.sourceRef) : null,
+      sourceRef: input.sourceRef ? String(input.sourceRef) : sourceProject || null,
       symbol,
       cardFieldsJson: cardFields,
-      signalAt: input.signalAt ?? new Date().toISOString(),
+      signalAt: signalAtIso,
       verifyMode,
       assetClass,
     });
@@ -404,6 +824,8 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       }
     }
 
+    await pushArchivedCardToTelegram(clientCard);
+
     /** @type {Awaited<ReturnType<typeof publishCardToChannelFeed>> | null} */
     let channelMessage = null;
     const injectFlag = (() => {
@@ -413,19 +835,26 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       if (v === false || v === 0 || v === "0" || v === "false") return false;
       return undefined;
     })();
+    const injectPlatforms = new Set(["api", "manual", "youtube", "telegram", "x"]);
     const wantInject =
       injectFlag === true ||
-      (injectFlag !== false &&
-        (sourceType === "api" || sourceType === "manual" || sourceType === "youtube"));
+      (injectFlag !== false && injectPlatforms.has(resolveSourcePlatform(sourceType)));
     if (wantInject) {
       try {
         channelMessage = await publishCardToChannelFeed(clientCard, {
           force: injectFlag === true,
         });
+        if (channelMessage?.skipped) {
+          log.info(
+            `卡片→频道消息未写入: ${channelMessage.skipped}${channelMessage.error ? ` (${channelMessage.error})` : ""}`
+          );
+        }
       } catch (e) {
         log.warn(`卡片写入频道消息失败: ${/** @type {Error} */ (e).message}`);
         channelMessage = { skipped: "error", error: /** @type {Error} */ (e).message };
       }
+    } else {
+      log.info(`卡片→频道消息 跳过: injectChannelMessage=false source=${sourceType}`);
     }
 
     return Object.assign(clientCard, { channelMessage });
@@ -759,12 +1188,74 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     }
   }
 
+  async function deleteCard(cardId) {
+    const id = Number(cardId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error("invalid card id");
+    const row = await store.getSignalCardById(id);
+    if (!row) throw new Error("not found");
+    if (!isExternallySourcedCard(row)) {
+      throw new Error("Discord 采集卡片不可删除（仅外部 API / Telegram / X 等来源可删）");
+    }
+
+    const messageId = String(row.message_id ?? row.messageId ?? "").trim();
+    const channelId = String(row.channel_id ?? row.channelId ?? "").trim();
+
+    if (store.deleteDiscordMessageIfCardApi) {
+      await store.deleteDiscordMessageIfCardApi(messageId);
+    }
+    if (store.deleteCommunityFeedByCardId) {
+      await store.deleteCommunityFeedByCardId(id);
+    }
+    const deleted = await store.deleteSignalCard(id);
+    if (!deleted) throw new Error("delete failed");
+
+    broadcast?.("meta", {
+      kind: "signal_card_deleted",
+      cardId: id,
+      channelId,
+      messageId,
+    });
+    log.info(
+      `删除外部卡片 #${id} sourceType=${row.source_type ?? row.sourceType} channel=${channelId}`
+    );
+    return { id, deleted: true, channelId, messageId };
+  }
+
+  async function deleteCards(cardIds) {
+    const ids = Array.isArray(cardIds) ? cardIds : [];
+    let deleted = 0;
+    let skipped = 0;
+    /** @type {Array<{ id: number, error: string }>} */
+    const errors = [];
+    for (const raw of ids) {
+      const id = Number(raw);
+      if (!Number.isFinite(id) || id <= 0) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        await deleteCard(id);
+        deleted += 1;
+      } catch (e) {
+        const msg = String(/** @type {Error} */ (e).message ?? e);
+        if (msg === "not found" || msg.includes("不可删除")) {
+          skipped += 1;
+        } else {
+          errors.push({ id, error: msg });
+        }
+      }
+    }
+    return { deleted, skipped, failed: errors.length, errors };
+  }
+
   return {
     archiveCard,
     archiveFromYoutube,
     archiveCardToClient,
     registerCoinActionWatches,
     publishCardToChannelFeed,
+    deleteCard,
+    deleteCards,
   };
 }
 

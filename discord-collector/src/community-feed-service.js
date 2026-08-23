@@ -67,6 +67,10 @@ export function twitterAuthorToClient(row) {
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
  */
 export function createCommunityFeedService(store, log, broadcast) {
+  function feedDbReady() {
+    return Boolean(store?.communityDbActive || (!store?.offline && store?.insertCommunityFeedMessage));
+  }
+
   /**
    * 卡片 → 消息频道（正文与 Telegram 一致：【频道名】+ 风格文案）。
    * @param {{
@@ -79,7 +83,7 @@ export function createCommunityFeedService(store, log, broadcast) {
    * }} input
    */
   async function publishCard(input) {
-    if (store.offline || !store.insertCommunityFeedMessage) {
+    if (!feedDbReady()) {
       return { skipped: "db_offline" };
     }
     const cardId = input.cardId != null ? Number(input.cardId) : null;
@@ -159,7 +163,7 @@ export function createCommunityFeedService(store, log, broadcast) {
    * }} tweet
    */
   async function publishTweet(tweet) {
-    if (store.offline || !store.insertCommunityFeedMessage) {
+    if (!feedDbReady()) {
       return { skipped: "db_offline" };
     }
     const tweetId = String(tweet.tweetId ?? "").trim();

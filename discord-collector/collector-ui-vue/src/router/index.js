@@ -6,17 +6,23 @@ import { createRouter, createWebHistory } from "vue-router";
  * 白名单见 discord-collector/.env.production → VITE_UI_PAGES。
  */
 /* global __UI_DEPLOY__, __UI_PAGE_SHOW__, __UI_PAGE_FETCH__, __UI_PAGE_OI__,
-   __UI_PAGE_CARDS__, __UI_PAGE_EVAL__, __UI_PAGE_TWITTER__, __UI_PAGE_ARCHIVES__, __UI_PAGE_TRADE__, __UI_PAGE_COMMUNITY__,
-   __UI_PAGE_SIGNALS__, __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__ */
+   __UI_PAGE_CARDS__,    __UI_PAGE_EVAL__, __UI_PAGE_TWITTER__, __UI_PAGE_ARCHIVES__, __UI_PAGE_TRADE__, __UI_PAGE_COMMUNITY__,
+   __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__ */
 
 const IS_DEPLOY = __UI_DEPLOY__;
 const DEFAULT_PATH = __UI_PAGE_SHOW__
   ? "/show"
-  : __UI_PAGE_FETCH__
-    ? "/fetch"
-    : __UI_PAGE_OI__
-      ? "/oi"
-      : "/show";
+  : __UI_PAGE_CARDS__
+    ? "/cards"
+    : __UI_PAGE_EVAL__
+      ? "/eval"
+      : __UI_PAGE_COMMUNITY__
+        ? "/community"
+        : __UI_PAGE_FETCH__
+          ? "/fetch"
+          : __UI_PAGE_OI__
+            ? "/oi"
+            : "/show";
 
 /**
  * @returns {import('vue-router').RouteRecordRaw[]}
@@ -69,6 +75,7 @@ function buildRoutes() {
       name: "eval",
       component: () => import("../views/CardEvalView.vue"),
     });
+    routes.push({ path: "/signals", redirect: "/eval" });
   }
   if (__UI_PAGE_TWITTER__) {
     routes.push({
@@ -96,13 +103,6 @@ function buildRoutes() {
       path: "/community",
       name: "community",
       component: () => import("../views/CommunityView.vue"),
-    });
-  }
-  if (__UI_PAGE_SIGNALS__) {
-    routes.push({
-      path: "/signals",
-      name: "signals",
-      component: () => import("../views/SignalOverviewView.vue"),
     });
   }
   if (__UI_PAGE_DEBUG__) {

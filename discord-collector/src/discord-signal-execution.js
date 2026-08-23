@@ -202,6 +202,32 @@ function parseEvalPrice(v) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** @param {string} [direction] @returns {"long" | "short" | null} */
+function resolveTradeDirection(direction) {
+  const d = String(direction ?? "").trim();
+  if (/空|short|sell/i.test(d)) return "short";
+  if (/多|long|buy/i.test(d)) return "long";
+  return null;
+}
+
+/**
+ * buy=入场、sell=出场；兼容旧清算空单反存。
+ * @param {{ buyPrice?: string, sellPrice?: string }} actual
+ * @param {string} [direction]
+ */
+export function resolveActualEntryExit(actual, direction) {
+  const buy = parseEvalPrice(actual?.buyPrice);
+  const sell = parseEvalPrice(actual?.sellPrice);
+  const side = resolveTradeDirection(direction);
+  if (buy == null || sell == null || !side) {
+    return { entry: buy, exit: sell, side };
+  }
+  if (side === "short" && buy < sell) {
+    return { entry: sell, exit: buy, side };
+  }
+  return { entry: buy, exit: sell, side };
+}
+
 /**
  * 用户已填写入场/出场且可计算收益率 → 无需自动回测。
  * @param {SignalExecution} ex
@@ -209,11 +235,9 @@ function parseEvalPrice(v) {
 export function hasEvaluatedYield(ex) {
   const a = ex?.actual;
   if (!a) return false;
-  const entry = parseEvalPrice(a.buyPrice);
-  const exit = parseEvalPrice(a.sellPrice);
-  if (entry == null || exit == null) return false;
-  const dir = String(ex.direction ?? "");
-  return /空|short|sell|多|long|buy/i.test(dir);
+  const { entry, exit, side } = resolveActualEntryExit(a, ex.direction);
+  if (entry == null || exit == null || !side) return false;
+  return true;
 }
 
 export const OUTCOME_VALUES = ["pending", "take_profit", "stop_loss", "manual_close", "cancelled"];

@@ -238,6 +238,22 @@
   color: #dbdee1;
   max-height: 130px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #4e5058 transparent;
+}
+.signal-card-body::-webkit-scrollbar {
+  width: 6px;
+}
+.signal-card-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.signal-card-body::-webkit-scrollbar-thumb {
+  background: #4e5058;
+  border-radius: 4px;
+}
+.signal-card-body::-webkit-scrollbar-thumb:hover {
+  background: #72767d;
 }
 .signal-card-actions {
   display: flex;

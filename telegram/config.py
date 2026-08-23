@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 _root = Path(__file__).resolve().parent.parent
 _telegram_dir = Path(__file__).resolve().parent
 load_dotenv(_root / ".env")
+load_dotenv(_root / "discord-collector" / ".env")
 load_dotenv(_telegram_dir / ".env")
 
 
@@ -165,7 +166,10 @@ def _monitored_groups_path() -> Path:
     return (_telegram_dir / "monitored_groups.txt").resolve()
 
 
-_MONITORED_KEYS = frozenset({"monitored", "groups", "chats", "监听群", "监控群"})
+_MONITORED_KEYS = frozenset({"monitored", "groups", "chats", "监听群", "监控群", "次要群", "闲聊群"})
+_MAIN_MONITORED_KEYS = frozenset(
+    {"main_monitored", "main", "primary", "主群", "主要群", "发车群"}
+)
 _KEYWORD_KEYS = frozenset(
     {"sender_keywords", "sender", "keywords", "发件人", "发件人关键字"}
 )
@@ -177,6 +181,8 @@ def _classify_config_key(key: str) -> str | None:
     if not k:
         return None
     kl = k.lower()
+    if kl in _MAIN_MONITORED_KEYS or k in _MAIN_MONITORED_KEYS:
+        return "main"
     if kl in _MONITORED_KEYS or k in _MONITORED_KEYS:
         return "monitored"
     if kl in _KEYWORD_KEYS or k in _KEYWORD_KEYS:
@@ -205,6 +211,9 @@ class ParsedMonitoredFile:
     """由 monitored_groups.txt 解析出的结构化配置。"""
 
     group_ids: list[int] = field(default_factory=list)
+    """次要闲聊群（发车占比低）→ 规则推送到 push_chat。"""
+    main_group_ids: list[int] = field(default_factory=list)
+    """主要发车群（发车占比高）→ 写入 discord-collector 卡片 API。"""
     sender_keywords: list[str] = field(default_factory=list)
     push_chat_ids: list[int] = field(default_factory=list)
 
@@ -213,6 +222,7 @@ def parse_monitored_groups_file(text: str) -> ParsedMonitoredFile:
     """
     统一配置格式（UTF-8）：
     - key=value，value 内多个条目用英文逗号分隔，如 monitored=-100xxx,-100yyy
+    - main_monitored= 主要发车来源；monitored= 次要闲聊群
     - 仍支持单独一行纯整数 peer id（负数超级群等），等价于写入 monitored=
     - # 开头整行为注释；不含 = 且非整数的行忽略
     """
@@ -233,6 +243,12 @@ def parse_monitored_groups_file(text: str) -> ParsedMonitoredFile:
                         out.group_ids.append(int(p))
                     except ValueError:
                         continue
+            elif bucket == "main":
+                for p in parts:
+                    try:
+                        out.main_group_ids.append(int(p))
+                    except ValueError:
+                        continue
             elif bucket == "keywords":
                 out.sender_keywords.extend(parts)
             else:
@@ -249,6 +265,10 @@ def parse_monitored_groups_file(text: str) -> ParsedMonitoredFile:
                 pass
 
     out.group_ids = _dedupe_preserve(out.group_ids)
+    out.main_group_ids = _dedupe_preserve(out.main_group_ids)
+    # 次要列表去掉已在主群里的 id，避免双投
+    main_set = set(out.main_group_ids)
+    out.group_ids = [x for x in out.group_ids if x not in main_set]
     seen_kw: set[str] = set()
     kw_ordered: list[str] = []
     for k in out.sender_keywords:
@@ -298,11 +318,10 @@ def get_notify_forward_config() -> tuple[list[str], list[int]]:
 
 def get_monitored_group_ids() -> list[int]:
     """
-    poll_groups / listen 使用的群组/频道 id 列表：合并
-    - 环境变量 TELEGRAM_MONITORED_GROUP_IDS（逗号分隔）
-    - 文件 monitored_groups.txt（或 TELEGRAM_MONITORED_GROUPS_FILE）：
-      支持 key=value 与每行纯 id，见 parse_monitored_groups_file。
-    结果去重且保持顺序。
+    次要闲聊群 id（poll_groups / 规则推送 push_chat）：
+    - 环境变量 TELEGRAM_MONITORED_GROUP_IDS
+    - 文件 monitored= …
+    不含 main_monitored（主发车群另见 get_main_monitored_group_ids）。
     """
     ids: list[int] = []
     raw = os.environ.get("TELEGRAM_MONITORED_GROUP_IDS", "").strip()
@@ -314,6 +333,146 @@ def get_monitored_group_ids() -> list[int]:
         ids.extend(parse_monitored_groups_file(path.read_text(encoding="utf-8")).group_ids)
 
     return _dedupe_preserve(ids)
+
+
+def get_main_monitored_group_ids() -> list[int]:
+    """主要发车来源 → 写入卡片 API。"""
+    ids: list[int] = []
+    raw = os.environ.get("TELEGRAM_MAIN_MONITORED_GROUP_IDS", "").strip()
+    if raw:
+        ids.extend(_parse_id_line_list(raw))
+    path = _monitored_groups_path()
+    if path.is_file():
+        ids.extend(parse_monitored_groups_file(path.read_text(encoding="utf-8")).main_group_ids)
+    return _dedupe_preserve(ids)
+
+
+def get_all_listen_group_ids() -> list[int]:
+    """listen.py 监听范围 = 主发车群 ∪ 次要闲聊群。"""
+    return _dedupe_preserve([*get_main_monitored_group_ids(), *get_monitored_group_ids()])
+
+
+def resolve_listen_chat_ids() -> tuple[list[int] | None, str]:
+    """
+    listen.py / list_groups.py 共用：要处理的群 id。
+    - None：TELEGRAM_LISTEN_ALL，表示全部已加入对话
+    - []：未配置
+    - list：明确 id 列表
+    """
+    if os.environ.get("TELEGRAM_LISTEN_ALL", "").strip().lower() in ("1", "true", "yes", "on"):
+        return None, "TELEGRAM_LISTEN_ALL=1（所有已加入对话）"
+    env = get_target_chat_ids()
+    if env:
+        return env, "TELEGRAM_TARGET_CHAT_IDS"
+    file_ids = get_all_listen_group_ids()
+    if file_ids:
+        return file_ids, "monitored_groups.txt (main_monitored ∪ monitored)"
+    return [], ""
+
+
+def get_cards_api_base_url() -> str:
+    return (
+        os.environ.get("CARDS_API_BASE_URL", "").strip()
+        or os.environ.get("COLLECTOR_UI_BASE_URL", "").strip()
+        or "http://127.0.0.1:3851"
+    ).rstrip("/")
+
+
+def get_cards_api_key() -> str:
+    return (os.environ.get("CARDS_API_KEY") or "").strip()
+
+
+def channel_profiles_path() -> Path:
+    raw = os.environ.get("TELEGRAM_CHANNEL_PROFILES_FILE", "").strip()
+    if raw:
+        p = Path(raw)
+        return p.resolve() if p.is_absolute() else (_root / p).resolve()
+    return (_telegram_dir / "channel_profiles.json").resolve()
+
+
+def load_channel_profiles() -> dict[str, dict[str, str]]:
+    """
+    Telegram chat_id → {name, avatar}。
+    键可用 "-100…" 或去掉符号的数字串；缺省时空对象。
+    """
+    path = channel_profiles_path()
+    if not path.is_file():
+        return {}
+    try:
+        import json
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for k, v in raw.items():
+        if not isinstance(v, dict):
+            continue
+        key = str(k).strip()
+        out[key] = {
+            "name": str(v.get("name") or v.get("channelName") or "").strip(),
+            "avatar": str(v.get("avatar") or v.get("channelAvatar") or "").strip(),
+        }
+    return out
+
+
+def telegram_avatar_dir() -> Path:
+    return (_telegram_dir / "avatar").resolve()
+
+
+def default_avatar_path_for_chat(chat_id: int) -> Path | None:
+    """约定：telegram/avatar/{去掉符号的 chat_id}.png|.jpg|.webp"""
+    stem = str(chat_id).lstrip("-")
+    base = telegram_avatar_dir()
+    for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+        p = base / f"{stem}{ext}"
+        if p.is_file():
+            return p
+    return None
+
+
+def resolve_avatar_path(raw: str, *, chat_id: int) -> str:
+    """
+    解析头像配置：
+    - http(s):// 原样返回
+    - 空：尝试 telegram/avatar/{chat_id去符号}.png
+    - 相对路径：相对 telegram/ 目录（推荐 avatar/100….png）
+    - 绝对路径：直接用
+    返回本地绝对路径字符串，或 http URL；找不到则空串。
+    """
+    s = (raw or "").strip()
+    if s.startswith("http://") or s.startswith("https://") or s.startswith("data:"):
+        return s
+    if not s:
+        found = default_avatar_path_for_chat(chat_id)
+        return str(found) if found else ""
+    p = Path(s)
+    if not p.is_absolute():
+        # 允许 avatar/xxx.png 或 /telegram/avatar/xxx.png 写法
+        cleaned = s.lstrip("/")
+        if cleaned.startswith("telegram/"):
+            cleaned = cleaned[len("telegram/") :]
+        p = (_telegram_dir / cleaned).resolve()
+    if p.is_file():
+        return str(p)
+    # 仅写了文件名时落到 avatar/
+    only = Path(s).name
+    cand = telegram_avatar_dir() / only
+    if cand.is_file():
+        return str(cand)
+    return ""
+
+
+def resolve_channel_profile(chat_id: int, *, fallback_title: str = "") -> dict[str, str]:
+    profiles = load_channel_profiles()
+    key = str(chat_id)
+    alt = key.lstrip("-")
+    meta = profiles.get(key) or profiles.get(alt) or {}
+    name = (meta.get("name") or "").strip() or (fallback_title or "").strip() or f"TG {chat_id}"
+    avatar = resolve_avatar_path(meta.get("avatar") or "", chat_id=chat_id)
+    return {"name": name, "avatar": avatar, "channelId": key}
 
 
 def monitored_groups_file_default() -> Path:

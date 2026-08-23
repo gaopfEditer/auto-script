@@ -9,7 +9,7 @@
  *
  * 环境变量（discord-collector/.env*）：
  *   VITE_UI_MODE=local|deploy
- *   VITE_UI_PAGES=show,fetch,oi       # deploy 模式白名单（路径名，逗号分隔）
+ *   VITE_UI_PAGES=show,cards,eval,community   # deploy 模式白名单（路径名，逗号分隔）
  *   VITE_OI_EMBED_URL=http://127.0.0.1:5173  # 可选，oi:dev 时指向 Vite
  *
  * 未设置 VITE_UI_MODE 时：开发 → local，生产构建 → deploy
@@ -28,7 +28,6 @@ export const ALL_UI_PAGES = [
   { path: "/archives", name: "archives", label: "文稿", nav: true, module: "discord" },
   { path: "/trade", name: "trade", label: "下单", nav: true, module: "discord" },
   { path: "/community", name: "community", label: "社区", nav: true, module: "discord" },
-  { path: "/signals", name: "signals", label: "信号", nav: false, module: "discord" },
   { path: "/debug", name: "debug", label: "Debug", nav: true, module: "discord" },
   /** 独立页：不进 Discord/OI 顶栏，全屏自管 */
   { path: "/content", name: "content", label: "内容", nav: false, module: "content" },
@@ -41,7 +40,7 @@ export const UI_MODULES = [
   { id: "oi", label: "OI Monitor", to: "/oi" },
 ];
 
-const DEFAULT_DEPLOY_PAGES = ["show", "fetch", "oi"];
+const DEFAULT_DEPLOY_PAGES = ["show", "cards", "eval", "community", "oi"];
 
 /**
  * @returns {"local" | "deploy"}
@@ -106,9 +105,13 @@ export function isOiModuleEnabled() {
 /** 部署版默认落地页 */
 export function getDefaultDeployPath() {
   const enabled = getEnabledPageNames();
-  if (enabled.has("show")) return "/show";
-  if (enabled.has("fetch")) return "/fetch";
-  if (enabled.has("oi")) return "/oi";
+  const prefer = ["show", "cards", "eval", "community", "fetch", "oi"];
+  for (const name of prefer) {
+    if (enabled.has(name)) {
+      const page = ALL_UI_PAGES.find((p) => p.name === name);
+      if (page?.path) return page.path;
+    }
+  }
   const first = ALL_UI_PAGES.find(
     (p) => enabled.has(p.name) && p.path !== "/" && (p.module ?? "discord") === "discord"
   );

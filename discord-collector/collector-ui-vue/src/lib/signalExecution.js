@@ -226,8 +226,9 @@ export function evaluationSummaryLines(ex, note = "") {
     lines.push(`结果：${outcomeLabel(ex.outcome)}`);
   }
   const a = ex.actual && typeof ex.actual === "object" ? ex.actual : {};
-  if (a.buyPrice) lines.push(`入场：${a.buyPrice}`);
-  if (a.sellPrice) lines.push(`出场：${a.sellPrice}`);
+  const { entry, exit } = resolveActualEntryExit(a, ex.direction);
+  if (entry != null) lines.push(`入场：${entry}`);
+  if (exit != null) lines.push(`出场：${exit}`);
   const tp = takeProfitText(a);
   if (tp) lines.push(`止盈：${tp}`);
   if (a.stopLossPrice) lines.push(`止损：${a.stopLossPrice}`);
@@ -236,7 +237,8 @@ export function evaluationSummaryLines(ex, note = "") {
     a.buyPrice,
     a.sellPrice,
     ex.direction,
-    resolveEvalLeverage(ex.symbol)
+    resolveEvalLeverage(ex.symbol),
+    ex.symbol
   );
   if (profit) {
     lines.push(
@@ -352,6 +354,37 @@ export function parsePrice(price) {
 }
 
 /**
+ * 从 actual 解析入场/出场：统一 buy=入场、sell=出场。
+ * 兼容旧清算数据（空单曾把 buy/sell 按开平方向反存）。
+ * @param {{ buyPrice?: string, sellPrice?: string }} actual
+ * @param {string} [direction]
+ */
+export function resolveActualEntryExit(actual, direction) {
+  const buy = parsePrice(actual?.buyPrice);
+  const sell = parsePrice(actual?.sellPrice);
+  const side = resolveTradeDirection(direction);
+  if (buy == null || sell == null || !side) {
+    return { entry: buy, exit: sell, side };
+  }
+  if (side === "short" && buy < sell) {
+    return { entry: sell, exit: buy, side };
+  }
+  return { entry: buy, exit: sell, side };
+}
+
+/**
+ * 用户已填写入场/出场且可计算收益率 → 无需自动回测。
+ * @param {SignalExecution} ex
+ */
+export function hasEvaluatedYield(ex) {
+  const a = ex?.actual;
+  if (!a) return false;
+  const { entry, exit, side } = resolveActualEntryExit(a, ex.direction);
+  if (entry == null || exit == null || !side) return false;
+  return true;
+}
+
+/**
  * 买入=入场价，卖出=出场价
  * @param {string} buy 入场
  * @param {string} sell 出场
@@ -361,16 +394,67 @@ export function parsePrice(price) {
  * @returns {{ spot: number, leveragePct: number, leverage: number, side: "long" | "short" } | null}
  */
 export function calcProfitPercents(buy, sell, direction, leverage, symbol) {
-  const entry = parsePrice(buy);
-  const exit = parsePrice(sell);
   const side = resolveTradeDirection(direction);
-  if (entry == null || exit == null || !side) return null;
+  if (!side) return null;
+  const { entry, exit } = resolveActualEntryExit({ buyPrice: buy, sellPrice: sell }, direction);
+  if (entry == null || exit == null) return null;
   const spot = side === "short"
     ? ((entry - exit) / entry) * 100
     : ((exit - entry) / entry) * 100;
   const lev = resolveEvalLeverage(symbol, leverage);
   const leveragePct = spot * lev;
   return { spot, leveragePct, leverage: lev, side };
+}
+
+/** @param {unknown} raw */
+function parseCardJsonBlob(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return /** @type {Record<string, unknown>} */ (raw);
+  if (typeof raw === "string") {
+    try {
+      const v = JSON.parse(raw);
+      return v && typeof v === "object" ? /** @type {Record<string, unknown>} */ (v) : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * 卡片杠杆盈亏 %：优先 actual 买卖价，其次清算 progress / backtest。
+ * @param {Record<string, unknown>} card
+ */
+export function resolveCardPnlPct(card) {
+  const ex = cardExecution(/** @type {import("./discordSignalApi.js").SignalCard} */ (card));
+  const profit = calcProfitPercents(
+    ex.actual.buyPrice,
+    ex.actual.sellPrice,
+    ex.direction,
+    undefined,
+    ex.symbol || card.symbol
+  );
+  if (profit) return profit.leveragePct;
+
+  const progress = parseCardJsonBlob(card.progress ?? card.progress_json);
+  if (progress && Number.isFinite(Number(progress.pnlPct))) {
+    return Number(progress.pnlPct);
+  }
+
+  const bt = parseCardJsonBlob(card.backtest ?? card.backtest_json);
+  if (bt) {
+    const p = Number(bt.pnlPct ?? bt.pnl);
+    if (Number.isFinite(p)) return p;
+  }
+
+  const rawEx = card.execution;
+  if (rawEx && typeof rawEx === "object") {
+    const auto = /** @type {Record<string, unknown>} */ (rawEx).autoEval;
+    if (auto && typeof auto === "object" && Number.isFinite(Number(auto.pnlPct))) {
+      return Number(auto.pnlPct);
+    }
+  }
+  return null;
 }
 
 /** @param {number | null | undefined} pct @returns {string} */
@@ -380,23 +464,155 @@ export function formatProfitPercent(pct) {
   return `${sign}${pct.toFixed(2)}%`;
 }
 
+/** 隐藏 KOL 时掩码百分比：无正负号 `6***%`，有则 `+1***%` / `-1***%` */
+export function maskProfitPercentText(formatted) {
+  const s = String(formatted ?? "").trim();
+  if (!s || s === "—") return s;
+  const hasPct = s.endsWith("%");
+  const body = hasPct ? s.slice(0, -1).trim() : s.trim();
+
+  let sign = "";
+  let rest = body;
+  if (rest.startsWith("+") || rest.startsWith("-")) {
+    sign = rest[0];
+    rest = rest.slice(1).trim();
+  }
+
+  const digit = rest.match(/\d/)?.[0] ?? "";
+  if (!digit) return `${sign}***${hasPct ? "%" : ""}`;
+
+  return `${sign}${digit}***${hasPct ? "%" : ""}`;
+}
+
+/**
+ * @param {Record<string, unknown>} card
+ */
+export function cardProfitBadge(card) {
+  const pct = resolveCardPnlPct(card);
+  if (pct == null || !Number.isFinite(pct)) return null;
+  return {
+    text: formatProfitPercent(pct),
+    gain: pct > 0,
+    loss: pct < 0,
+  };
+}
+
+/** @param {Record<string, unknown>} card */
+export function resolveCardEvalOutcome(card) {
+  const ex = cardExecution(/** @type {import("./discordSignalApi.js").SignalCard} */ (card));
+  if (ex.outcome && ex.outcome !== "pending") return ex.outcome;
+
+  const progress = parseCardJsonBlob(card.progress ?? card.progress_json);
+  const status = String(progress?.status ?? "").trim();
+  const tpHits = Array.isArray(progress?.tpHits) ? progress.tpHits : [];
+  const po = String(progress?.outcome ?? "").trim();
+
+  if (tpHits.length > 0 || po === "take_profit" || status === "closed_tp") return "take_profit";
+  if (status === "closed_sl" || po === "stop_loss" || progress?.slHitAt) return "stop_loss";
+
+  const bt = parseCardJsonBlob(card.backtest ?? card.backtest_json);
+  const bo = String(bt?.outcome ?? "").trim();
+  if (bo === "take_profit" || bo === "stop_loss") {
+    const entryHit = Boolean(progress?.entryHitAt);
+    if (entryHit || bt?.entry != null) return bo;
+  }
+
+  if (hasEvaluatedYield(ex)) {
+    if (tpHits.length > 0) return "take_profit";
+    if (progress?.slHitAt || status === "closed_sl") return "stop_loss";
+  }
+
+  return ex.outcome || "pending";
+}
+
+/**
+ * 是否已触发入场（与后端 card-eval-outcome 一致；未入场不计盈亏统计）。
+ * @param {Record<string, unknown>} card
+ */
+export function isCardEnteredForEval(card) {
+  const progress = parseCardJsonBlob(card.progress ?? card.progress_json);
+  const status = String(progress?.status ?? "").trim();
+  if (status === "not_entered") return false;
+
+  const entryHit = Boolean(progress?.entryHitAt);
+  if (entryHit) return true;
+  if (
+    status === "entered" ||
+    status === "partial_tp" ||
+    status === "closed_tp" ||
+    status === "closed_sl"
+  ) {
+    return true;
+  }
+
+  const ex = cardExecution(/** @type {import("./discordSignalApi.js").SignalCard} */ (card));
+  if (ex.outcome === "take_profit" || ex.outcome === "stop_loss") return true;
+  if (hasEvaluatedYield(ex)) return true;
+
+  const po = String(progress?.outcome ?? "").trim();
+  if (po === "take_profit" || po === "stop_loss") return true;
+
+  const bt = parseCardJsonBlob(card.backtest ?? card.backtest_json);
+  const bo = String(bt?.outcome ?? "").trim();
+  if (bo === "take_profit" || bo === "stop_loss") {
+    if (bt?.entry != null || entryHit) return true;
+  }
+
+  return false;
+}
+
 /** @param {import("./discordSignalApi.js").SignalCard[]} cards */
 export function statLineFromCards(cards) {
   /** @type {Record<string, number>} */
   const stats = {
-    total: cards.length,
+    total: 0,
     pending: 0,
     take_profit: 0,
     stop_loss: 0,
     manual_close: 0,
     cancelled: 0,
+    not_entered: 0,
   };
   for (const c of cards) {
-    const o = String(cardExecution(c).outcome ?? "pending");
-    if (o in stats && o !== "total") stats[o]++;
+    const row = /** @type {Record<string, unknown>} */ (c);
+    if (!isCardEnteredForEval(row)) {
+      stats.not_entered++;
+      continue;
+    }
+    stats.total++;
+    const o = resolveCardEvalOutcome(row);
+    if (o in stats && o !== "total" && o !== "not_entered") stats[o]++;
     else stats.pending++;
   }
   return stats;
+}
+
+/**
+ * 盈利率展示：优先 actual 买卖价，其次清算 progress / backtest。
+ * @param {Record<string, unknown>} card
+ */
+export function resolveCardProfitDisplay(card) {
+  if (!isCardEnteredForEval(/** @type {Record<string, unknown>} */ (card))) return null;
+  const ex = cardExecution(/** @type {import("./discordSignalApi.js").SignalCard} */ (card));
+  const profit = calcProfitPercents(
+    ex.actual.buyPrice,
+    ex.actual.sellPrice,
+    ex.direction,
+    undefined,
+    ex.symbol || card.symbol
+  );
+  if (profit) return profit;
+  const levPct = resolveCardPnlPct(card);
+  if (levPct == null || !Number.isFinite(levPct)) return null;
+  const lev = resolveEvalLeverage(ex.symbol || card.symbol);
+  const side = resolveTradeDirection(ex.direction);
+  if (!side) return null;
+  return {
+    spot: levPct / lev,
+    leveragePct: levPct,
+    leverage: lev,
+    side,
+  };
 }
 
 /**
@@ -408,16 +624,11 @@ export function sumLeverageProfitFromCards(cards) {
   let sum = 0;
   let count = 0;
   for (const c of cards) {
-    const ex = cardExecution(c);
-    const profit = calcProfitPercents(
-      ex.actual.buyPrice,
-      ex.actual.sellPrice,
-      ex.direction,
-      undefined,
-      ex.symbol
-    );
-    if (!profit) continue;
-    sum += profit.leveragePct;
+    const row = /** @type {Record<string, unknown>} */ (c);
+    if (!isCardEnteredForEval(row)) continue;
+    const pct = resolveCardPnlPct(row);
+    if (pct == null || !Number.isFinite(pct)) continue;
+    sum += pct;
     count += 1;
   }
   if (!count) return null;

@@ -18,7 +18,9 @@ export default defineConfig(({ mode }) => {
     uiMode !== "local" &&
     uiMode !== "dev" &&
     uiMode !== "full";
-  const pagesCsv = String(env.VITE_UI_PAGES ?? "show,fetch,oi").trim() || "show,fetch,oi";
+  const pagesCsv =
+    String(env.VITE_UI_PAGES ?? "show,cards,eval,community,oi").trim() ||
+    "show,cards,eval,community,oi";
   const pageSet = new Set(
     pagesCsv.split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
   );
@@ -43,7 +45,6 @@ export default defineConfig(({ mode }) => {
       __UI_PAGE_ARCHIVES__: JSON.stringify(pageOn("archives")),
       __UI_PAGE_TRADE__: JSON.stringify(pageOn("trade")),
       __UI_PAGE_COMMUNITY__: JSON.stringify(pageOn("community")),
-      __UI_PAGE_SIGNALS__: JSON.stringify(pageOn("signals")),
       __UI_PAGE_DEBUG__: JSON.stringify(pageOn("debug")),
       __UI_PAGE_CONTENT__: JSON.stringify(pageOn("content")),
       __UI_PAGE_HOME__: JSON.stringify(pageOn("home") || !isDeployBuild),

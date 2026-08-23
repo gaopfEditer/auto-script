@@ -3,6 +3,7 @@
  */
 import { calcLeveragePnl, fetchKlinesForCard, parseEntryPrice, parsePrice } from "./card-price-fetch.js";
 import { getCardBacktestPlan } from "./card-backtest-policy.js";
+import { config } from "./config.js";
 import { hasEvaluatedYield, normalizeExecution } from "./discord-signal-execution.js";
 
 /**
@@ -335,5 +336,7 @@ export function isBacktestDue(card, signalMs, nowMs = Date.now()) {
   if (plan.skip) return false;
   if (shouldSkipCardBacktest(card).skip) return false;
   if (card.backtest && typeof card.backtest === "object") return false;
+  const maxAgeMs = Number(config.cardKlineVerifyMaxAgeMs) || 8 * 3_600_000;
+  if (nowMs - signalMs > maxAgeMs) return false;
   return nowMs - signalMs >= plan.spec.minDueMs;
 }
