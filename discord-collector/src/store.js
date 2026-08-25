@@ -936,11 +936,11 @@ export async function openStore(cfg, log) {
       params.push(sym, symbol.replace(/USDT$/, ""), `${symbol.replace(/USDT$/, "")}%`);
     }
     if (Number.isFinite(fromMs) && fromMs > 0) {
-      where.push("sc.created_at >= ?");
+      where.push("COALESCE(sc.signal_at, sc.created_at) >= ?");
       params.push(isoToMysqlDatetime3(new Date(fromMs).toISOString()));
     }
     if (Number.isFinite(toMs) && toMs > 0) {
-      where.push("sc.created_at <= ?");
+      where.push("COALESCE(sc.signal_at, sc.created_at) <= ?");
       params.push(isoToMysqlDatetime3(new Date(toMs).toISOString()));
     }
     const sinceId = Number(filters.sinceId);
@@ -1197,13 +1197,14 @@ export async function openStore(cfg, log) {
 
   /**
    * 评估看板：按 signal_at（缺省 created_at）时间窗拉取。
-   * @param {{ fromMs: number, toMs: number, channelId?: string, sourceType?: string, symbol?: string, limit?: number }} opts
+   * @param {{ fromMs: number, toMs: number, channelId?: string, sourceType?: string, sourceTypes?: string[], symbol?: string, limit?: number }} opts
    */
   async function listCardsForEval(opts) {
     const lim = Math.min(2000, Math.max(1, Number(opts.limit) || 500));
     const { where, params } = buildSignalCardFilters({
       channelId: opts.channelId,
       sourceType: opts.sourceType,
+      sourceTypes: opts.sourceTypes,
       symbol: opts.symbol,
       fromMs: opts.fromMs,
       toMs: opts.toMs,

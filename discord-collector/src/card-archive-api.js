@@ -188,7 +188,7 @@ export function resolveArchiveBodySourceTypes(body) {
  * @param {import("express").Response} res
  * @param {import("express").NextFunction} next
  */
-function requireOpenApiKey(req, res, next) {
+export function requireOpenApiKey(req, res, next) {
   const configured = config.cardsApiKey;
   if (!configured) {
     res.status(503).json({ ok: false, error: "CARDS_API_KEY 未配置，开放 API 已禁用" });
@@ -263,16 +263,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
     }
   }
 
-  app.get("/api/cards", listHandler);
-
-  app.get("/api/cards/sources", (_req, res) => {
-    res.json({
-      ok: true,
-      sources: ["discord", "youtube", "telegram", "x", "api", "manual"],
-    });
-  });
-
-  app.get("/api/cards/channels", async (req, res) => {
+  async function channelsHandler(req, res) {
     try {
       const { fromMs, toMs } = parseArchiveRangeMs(req);
       const sourceTypes = resolveArchiveListSourceTypes(req);
@@ -294,13 +285,27 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
         channelName: resolveCardChannelName(c.channelId, c.channelName),
         count: c.count,
       }));
-      res.json({ ok: true, fromMs, toMs, channels, cached: Boolean(safe.cached) });
+      res.json({
+        ok: true,
+        fromMs,
+        toMs,
+        filters: { sourceTypes, symbol, status },
+        channels,
+        cached: Boolean(safe.cached),
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }
-  });
+  }
 
-  app.get("/api/cards/:id", async (req, res) => {
+  function sourcesHandler(_req, res) {
+    res.json({
+      ok: true,
+      sources: ["discord", "youtube", "telegram", "x", "api", "manual"],
+    });
+  }
+
+  async function getCardByIdHandler(req, res) {
     try {
       const id = Number(req.params.id);
       const row = await store.getSignalCardById(id);
@@ -312,7 +317,38 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }
-  });
+  }
+
+  async function liquidateHandler(req, res) {
+    try {
+      const body = req.body ?? {};
+      const { fromMs, toMs } = parseLiquidateRangeMs(body);
+      const channelId = String(body.channelId ?? body.channel_id ?? "").trim();
+      const sourceTypes = resolveArchiveBodySourceTypes(body);
+      const symbol = String(body.symbol ?? "").trim();
+      const limit = Number(body.limit) || 300;
+      const cardIds = Array.isArray(body.cardIds)
+        ? body.cardIds.map((/** @type {unknown} */ id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
+        : undefined;
+      const result = await runBatchLiquidation(store, liquidationLog, {
+        fromMs,
+        toMs,
+        channelId: channelId || undefined,
+        sourceTypes: sourceTypes.length ? sourceTypes : undefined,
+        symbol: symbol || undefined,
+        limit,
+        cardIds,
+      }, liquidationHooks);
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  }
+
+  app.get("/api/cards", listHandler);
+  app.get("/api/cards/sources", sourcesHandler);
+  app.get("/api/cards/channels", channelsHandler);
+  app.get("/api/cards/:id", getCardByIdHandler);
 
   app.delete("/api/cards/:id", requireLocalRequest, async (req, res) => {
     try {
@@ -480,20 +516,10 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
 
   /** 对外开放 v1 */
   app.get("/api/v1/cards", requireOpenApiKey, listHandler);
-
-  app.get("/api/v1/cards/:id", requireOpenApiKey, async (req, res) => {
-    try {
-      const id = Number(req.params.id);
-      const row = await store.getSignalCardById(id);
-      if (!row) {
-        res.status(404).json({ ok: false, error: "not found" });
-        return;
-      }
-      res.json({ ok: true, card: archiveCardToClient(row) });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
-    }
-  });
+  app.get("/api/v1/cards/sources", requireOpenApiKey, sourcesHandler);
+  app.get("/api/v1/cards/channels", requireOpenApiKey, channelsHandler);
+  app.post("/api/v1/cards/liquidate", requireOpenApiKey, liquidateHandler);
+  app.get("/api/v1/cards/:id", requireOpenApiKey, getCardByIdHandler);
 
   app.delete("/api/v1/cards/:id", requireOpenApiKey, async (req, res) => {
     try {
@@ -571,31 +597,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
     }
   });
 
-  app.post("/api/cards/liquidate", requireLocalRequest, async (req, res) => {
-    try {
-      const body = req.body ?? {};
-      const { fromMs, toMs } = parseLiquidateRangeMs(body);
-      const channelId = String(body.channelId ?? body.channel_id ?? "").trim();
-      const sourceTypes = resolveArchiveBodySourceTypes(body);
-      const symbol = String(body.symbol ?? "").trim();
-      const limit = Number(body.limit) || 300;
-      const cardIds = Array.isArray(body.cardIds)
-        ? body.cardIds.map((/** @type {unknown} */ id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
-        : undefined;
-      const result = await runBatchLiquidation(store, liquidationLog, {
-        fromMs,
-        toMs,
-        channelId: channelId || undefined,
-        sourceTypes: sourceTypes.length ? sourceTypes : undefined,
-        symbol: symbol || undefined,
-        limit,
-        cardIds,
-      }, liquidationHooks);
-      res.json(result);
-    } catch (e) {
-      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
-    }
-  });
+  app.post("/api/cards/liquidate", requireLocalRequest, liquidateHandler);
 
   app.post("/api/cards/clear-liquidation", requireLocalRequest, async (req, res) => {
     try {

@@ -2,7 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import NewCardToastStack from "./components/NewCardToastStack.vue";
+import OnboardingGuide from "./components/OnboardingGuide.vue";
 import "./composables/useNewCardNotifications.js";
+import { useOnboardingGuide, isOnboardingCompleted, onboardingState } from "./composables/useOnboardingGuide.js";
 import { useDebugMode } from "./composables/useDebugMode.js";
 import {
   COLLECTOR_WS_REFRESH_EVENT,
@@ -22,6 +24,7 @@ import {
 } from "./lib/uiMode.js";
 
 const route = useRoute();
+const { open: openOnboarding } = useOnboardingGuide();
 const { debugMode, setDebugMode } = useDebugMode();
 
 const uiMode = getUiMode();
@@ -78,6 +81,9 @@ onMounted(() => {
   wsWarnTimer = setInterval(() => {
     nowTick.value = Date.now();
   }, 5_000);
+  if (!isContentStandalone.value && !isOnboardingCompleted()) {
+    window.setTimeout(() => openOnboarding(0), 800);
+  }
 });
 onUnmounted(() => {
   window.removeEventListener(COLLECTOR_WS_REFRESH_EVENT, onWsSilentRefresh);
@@ -138,6 +144,14 @@ async function toggleDebug() {
       </nav>
       <div v-else class="oi-nav-spacer">OI Monitor · 行情 / 形态 / 沙盒</div>
       <button
+        type="button"
+        class="guide-btn"
+        title="新手操作指引"
+        @click="openOnboarding(0)"
+      >
+        新手指引
+      </button>
+      <button
         v-if="!isOi"
         type="button"
         class="ws-status"
@@ -163,6 +177,7 @@ async function toggleDebug() {
     <main class="main-outlet">
       <RouterView :key="viewEpoch" />
     </main>
+    <OnboardingGuide v-if="!isOi || onboardingState.open" />
     <NewCardToastStack v-if="!isOi" />
   </div>
 </template>
@@ -306,6 +321,20 @@ async function toggleDebug() {
 }
 .ws-down-btn:hover {
   background: rgba(237, 66, 69, 0.45);
+}
+.guide-btn {
+  border: 1px solid #4e5058;
+  background: #2b2d31;
+  color: #dbdee1;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.guide-btn:hover {
+  border-color: #5865f2;
+  color: #fff;
 }
 .debug-toggle {
   border: 1px solid #3f4147;

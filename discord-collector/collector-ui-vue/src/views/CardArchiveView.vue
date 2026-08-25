@@ -511,7 +511,7 @@ onUnmounted(() => {
 
 <template>
   <div class="cards-page">
-    <aside class="filters">
+    <aside class="filters" data-onboard="cards-filters">
       <div class="head">
         <h2>卡片归档</h2>
         <RouterLink to="/eval" class="link">Discord 信号频道 →</RouterLink>
@@ -569,7 +569,7 @@ onUnmounted(() => {
       <p v-if="error" class="err">{{ error }}</p>
     </aside>
 
-    <section class="grid-panel">
+    <section class="grid-panel" data-onboard="cards-grid">
       <div class="grid-head">
         <span class="grid-count">
           <span class="grid-count-main">

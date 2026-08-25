@@ -3,7 +3,7 @@
  */
 import { archiveCardToClient, resolveCardChannelName } from "./card-archive-service.js";
 import { parseProgressJson } from "./card-level-progress.js";
-import { parseArchiveRangeMs } from "./card-archive-api.js";
+import { parseArchiveRangeMs, resolveArchiveListSourceTypes } from "./card-archive-api.js";
 import { isCardEnteredForEval, resolveCardEvalOutcome } from "./card-eval-outcome.js";
 
 /**
@@ -208,19 +208,22 @@ function groupByChannel(cards) {
 /**
  * @param {import("express").Express} app
  * @param {ReturnType<typeof import("./store.js").openStore>} store
+ * @param {{ requireOpenApiKey?: import("express").RequestHandler }} [deps]
  */
-export function registerCardEvalRoutes(app, store) {
-  app.get("/api/cards/eval/summary", async (req, res) => {
+export function registerCardEvalRoutes(app, store, deps = {}) {
+  const openAuth = deps.requireOpenApiKey;
+
+  async function evalSummaryHandler(req, res) {
     try {
       const { fromMs, toMs } = parseArchiveRangeMs(req);
-      const sourceType = String(req.query.source ?? req.query.source_type ?? req.query.sourceType ?? "").trim();
+      const sourceTypes = resolveArchiveListSourceTypes(req);
       const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
       const channelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
       const rows = await store.listCardsForEval({
         fromMs,
         toMs,
         channelId: channelId || undefined,
-        sourceType: sourceType || undefined,
+        sourceTypes: sourceTypes.length ? sourceTypes : undefined,
         symbol: symbol || undefined,
         limit: 2000,
       });
@@ -247,7 +250,7 @@ export function registerCardEvalRoutes(app, store) {
         ok: true,
         fromMs,
         toMs,
-        filters: { sourceType, symbol, channelId },
+        filters: { sourceTypes, symbol, channelId },
         note: "PnL 按 1/N 分批止盈累加（杠杆口径与回测一致）；胜率：任意 TP=赢，先 SL=输，未入场不计",
         overall: aggregateMetrics(cards),
         channels,
@@ -255,12 +258,9 @@ export function registerCardEvalRoutes(app, store) {
     } catch (e) {
       res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
     }
-  });
+  }
 
-  /**
-   * Show 频道列表条：当日止盈/止损笔数 + 上周胜率（仅统计策略含止盈的卡片）。
-   */
-  app.get("/api/cards/eval/channel-strip", async (_req, res) => {
+  async function evalChannelStripHandler(_req, res) {
     try {
       const today = resolveEvalRangeMs("1d");
       const lastWeek = resolveLastWeekMs();
@@ -317,12 +317,12 @@ export function registerCardEvalRoutes(app, store) {
     } catch (e) {
       res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
     }
-  });
+  }
 
-  app.get("/api/cards/eval/channels/:channelId", async (req, res) => {
+  async function evalChannelDetailHandler(req, res) {
     try {
       const { fromMs, toMs } = parseArchiveRangeMs(req);
-      const sourceType = String(req.query.source ?? req.query.source_type ?? req.query.sourceType ?? "").trim();
+      const sourceTypes = resolveArchiveListSourceTypes(req);
       const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
       let channelId = String(req.params.channelId ?? "").trim();
       if (channelId === "none" || channelId === "_unknown") channelId = "";
@@ -332,7 +332,7 @@ export function registerCardEvalRoutes(app, store) {
         fromMs,
         toMs,
         channelId: channelId || undefined,
-        sourceType: sourceType || undefined,
+        sourceTypes: sourceTypes.length ? sourceTypes : undefined,
         symbol: symbol || undefined,
         limit: 1000,
       });
@@ -351,6 +351,7 @@ export function registerCardEvalRoutes(app, store) {
           direction: ex?.direction ?? null,
           channelId: card.channelId,
           channelName: card.channelName,
+          sourceType: card.sourceType,
           signalAt: card.signalAt,
           entry: planned?.entryPrice ?? null,
           takeProfits: planned?.takeProfitPrices ?? [],
@@ -361,6 +362,8 @@ export function registerCardEvalRoutes(app, store) {
           pnlPct: c.pnlPct,
           tpHits: c.tpHits,
           progress: c.progress,
+          execution: card.execution ?? null,
+          backtest: card.backtest ?? null,
         };
       });
 
@@ -368,7 +371,7 @@ export function registerCardEvalRoutes(app, store) {
         ok: true,
         fromMs,
         toMs,
-        filters: { sourceType, symbol, channelId },
+        filters: { sourceTypes, symbol, channelId },
         channelId,
         channelName: resolveCardChannelName(channelId, cards[0]?.channelName),
         metrics: aggregateMetrics(cards),
@@ -377,5 +380,15 @@ export function registerCardEvalRoutes(app, store) {
     } catch (e) {
       res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
     }
-  });
+  }
+
+  app.get("/api/cards/eval/summary", evalSummaryHandler);
+  app.get("/api/cards/eval/channel-strip", evalChannelStripHandler);
+  app.get("/api/cards/eval/channels/:channelId", evalChannelDetailHandler);
+
+  if (openAuth) {
+    app.get("/api/v1/cards/eval/summary", openAuth, evalSummaryHandler);
+    app.get("/api/v1/cards/eval/channel-strip", openAuth, evalChannelStripHandler);
+    app.get("/api/v1/cards/eval/channels/:channelId", openAuth, evalChannelDetailHandler);
+  }
 }

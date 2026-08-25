@@ -1402,7 +1402,7 @@ onUnmounted(() => {
       </p>
     </aside>
 
-    <aside class="channel-panel">
+    <aside class="channel-panel" data-onboard="show-channels">
       <div v-if="cacheBanner" class="kook-cache-banner">{{ cacheBanner }}</div>
       <div v-if="selectedGuild" class="channel-panel-toolbar">
         <span class="channel-panel-guild-name" :title="selectedGuild.name">{{ selectedGuild.name }}</span>
@@ -1558,7 +1558,7 @@ onUnmounted(() => {
       </div>
     </aside>
 
-    <section class="main">
+    <section class="main" data-onboard="show-messages">
       <header class="main-header">
         <template v-if="selectedChannel">
           <span class="main-hash">#</span>

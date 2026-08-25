@@ -109,7 +109,7 @@ onMounted(() => void reload());
 
 <template>
   <div class="eval-page">
-    <aside class="filters">
+    <aside class="filters" data-onboard="eval-filters">
       <div class="head">
         <h2>卡片评估</h2>
         <RouterLink to="/cards" class="link">卡片归档 →</RouterLink>
@@ -145,7 +145,7 @@ onMounted(() => void reload());
       <p v-if="error" class="err">{{ error }}</p>
     </aside>
 
-    <main class="eval-main">
+    <main class="eval-main" data-onboard="eval-summary">
       <header class="eval-head">
         <div>
           <h1>评估汇总</h1>

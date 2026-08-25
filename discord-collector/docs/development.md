@@ -128,7 +128,7 @@ flowchart LR
 3. 前端 `collector-ui-vue/src/lib/fooApi.js` 用相对路径 `fetch('/api/foo')`
 4. 实时事件：`broadcast("meta", { kind: "foo_bar", … })`
 
-**开放建卡 → 频道时间线**：完整请求格式见 [cards-api.md](./cards-api.md)。`POST /api/v1/cards`（需 `CARDS_API_KEY`）归档后，若 `channelId` 为已知 Discord 雪花（库中频道或信号频道），会再写入一条 `source=card_api` 消息并 `broadcast("message", discord_message_batch)`。Show 里选中同一频道即可看到最新消息；可用 `injectChannelMessage: false` 关闭单次注入，或 env `CARD_API_INJECT_CHANNEL_MESSAGE=0` 全局关。
+**开放卡片 API**：完整格式见 [cards-api.md](./cards-api.md)。`GET /api/v1/cards` 支持与前端归档页相同的时间 / 来源 / 博主 / 币种筛选，并返回 `execution` 执行情况；`GET /api/v1/cards/eval/*` 提供胜率与盈亏汇总。`POST /api/v1/cards`（需 `CARDS_API_KEY`）建卡后，若 `channelId` 为已知 Discord 雪花（库中频道或信号频道），会再写入一条 `source=card_api` 消息并 `broadcast("message", discord_message_batch)`。Show 里选中同一频道即可看到最新消息；可用 `injectChannelMessage: false` 关闭单次注入，或 env `CARD_API_INJECT_CHANNEL_MESSAGE=0` 全局关。
 
 ### 5.2 新 Vue 页面（四处）
 
@@ -174,7 +174,7 @@ flowchart LR
 | 现价 | `card-price-fetch.js` |
 | 档位 | `card-level-progress.js` |
 | 评估 | `card-eval-api.js` `CardEvalView.vue` |
-| 开放建卡 API | `docs/cards-api.md` `card-archive-api.js` |
+| 开放卡片 API | `docs/cards-api.md` `card-archive-api.js` `card-eval-api.js` `card-validate-api.js` |
 | Show 布局 | `show-layout-store.js` `ShowView.vue` |
 | 社区 | `community-api.js` `community-auth.js` `community-feed-service.js` `CommunityView.vue`（邮箱/Google 登录 · 聊天 · 消息频道 · Twitter） |
 | Twitter | `twitter-cdp-service.js` → TG + 社区 Twitter Tab（`community-twitter-ai.js`） |

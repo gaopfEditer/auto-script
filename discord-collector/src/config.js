@@ -192,8 +192,8 @@ export const config = {
   pasteParseStartupDelayMs: Number(process.env.PASTE_PARSE_STARTUP_DELAY_MS ?? 15_000),
   /** 输入目录轮询间隔：探测新 .txt 并自动解析（默认 10 分钟） */
   pasteParseWatchIntervalMs: Number(process.env.PASTE_PARSE_WATCH_INTERVAL_MS ?? 600_000),
-  /** 统一卡片开放 API Key（Header: X-Cards-Api-Key 或 Bearer） */
-  cardsApiKey: (process.env.CARDS_API_KEY ?? "").trim(),
+  /** 统一卡片开放 API Key（Header: X-Cards-Api-Key 或 Bearer）；未设 env 时用下方默认 */
+  cardsApiKey: (process.env.CARDS_API_KEY ?? "Gpf123456").trim(),
   /**
    * POST /api/v1/cards 等归档时：若 channelId 为已知 Discord 频道，写入该频道时间线一条最新消息。
    * 默认开；CARD_API_INJECT_CHANNEL_MESSAGE=0 关闭。
