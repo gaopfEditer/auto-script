@@ -85,6 +85,7 @@ type ChartLayers = {
   volume: boolean;
   macd: boolean;
   candlePattern: boolean;
+  structure: boolean;
 };
 
 const DEFAULT_LAYERS: ChartLayers = {
@@ -92,6 +93,7 @@ const DEFAULT_LAYERS: ChartLayers = {
   volume: true,
   macd: true,
   candlePattern: true,
+  structure: true,
 };
 
 const LAYER_TOGGLES: { key: keyof ChartLayers; label: string }[] = [
@@ -99,7 +101,22 @@ const LAYER_TOGGLES: { key: keyof ChartLayers; label: string }[] = [
   { key: "volume", label: "量能" },
   { key: "macd", label: "MACD" },
   { key: "candlePattern", label: "K线形态" },
+  { key: "structure", label: "形态线" },
 ];
+
+/** H_max / LH / L₁ / HL / 扳机 等水平价线 */
+const STRUCTURE_LINE_KINDS = new Set(["h_max", "lh", "l1", "hl", "trigger"]);
+/** 形态结构箭头标记（与价线对应） */
+const STRUCTURE_MARKER_KINDS = new Set([
+  "h_max",
+  "lh",
+  "l1",
+  "hl",
+  "mid_peak",
+  "trigger",
+  "hh",
+  "bb_wick",
+]);
 
 const MARKER_LEGEND = [
   { kind: "h_max", label: "① H_max 绝对高点", color: "#ff5252" },
@@ -174,13 +191,19 @@ function alignMarkerTime(
 function toCandleMarkers(
   markers: PatternChartData["markers"],
   showCandlePattern: boolean,
+  showStructure: boolean,
   candles?: PatternCandle[],
 ): SeriesMarker<UTCTimestamp>[] {
   const candleTimes = (candles ?? []).map((c) => c.time).sort((a, b) => a - b);
   const candleTimeSet = new Set(candleTimes);
 
   return [...(markers ?? [])]
-    .filter((m) => showCandlePattern || !COMPACT_MARKER_KINDS.has(m.kind ?? ""))
+    .filter((m) => {
+      const kind = m.kind ?? "";
+      if (!showCandlePattern && COMPACT_MARKER_KINDS.has(kind)) return false;
+      if (!showStructure && STRUCTURE_MARKER_KINDS.has(kind)) return false;
+      return true;
+    })
     .map((m) => {
       const aligned = alignMarkerTime(m.time, candleTimeSet, candleTimes);
       if (aligned == null) return null;
@@ -420,7 +443,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     const series = seriesRef.current;
     if (!series || payload.partial) return;
     clearPriceLines();
+    const showStructure = layersRef.current.structure;
     for (const line of payload.price_lines ?? []) {
+      if (!showStructure && STRUCTURE_LINE_KINDS.has(line.kind ?? "")) continue;
       priceLinesRef.current.push(
         series.createPriceLine({
           price: line.price,
@@ -451,8 +476,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         series.setData(toCandleData(sortedCandles));
 
         const showPattern = layersRef.current.candlePattern;
+        const showStructure = layersRef.current.structure;
         const rawMarkers = payload.partial ? metaRef.current?.markers : payload.markers;
-        const markers = toCandleMarkers(rawMarkers, showPattern, sortedCandles);
+        const markers = toCandleMarkers(rawMarkers, showPattern, showStructure, sortedCandles);
         if (markers.length) {
           series.setMarkers(markers);
         } else {
@@ -747,12 +773,20 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     const series = seriesRef.current;
     if (series) {
       series.setMarkers(
-        toCandleMarkers(metaRef.current?.markers, next.candlePattern, candlesRef.current),
+        toCandleMarkers(
+          metaRef.current?.markers,
+          next.candlePattern,
+          next.structure,
+          candlesRef.current,
+        ),
       );
+    }
+    if (metaRef.current && !metaRef.current.partial) {
+      applyPriceLines(metaRef.current);
     }
 
     if (chart) applyPaneMargins(chart, next);
-  }, []);
+  }, [applyPriceLines]);
 
   const toggleLayer = useCallback(
     (key: keyof ChartLayers) => {
@@ -880,6 +914,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           axisPressedMouseMove: { time: true, price: true },
           mouseWheel: true,
           pinch: true,
+        },
+        handleScroll: {
+          mouseWheel: true,
+          pressedMouseMove: true,
+          horzTouchDrag: true,
+          vertTouchDrag: false,
         },
       });
 
@@ -1053,7 +1093,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     } catch (e) {
       setErr(e instanceof Error ? e.message : "图表初始化失败");
     }
-  }, [symbol, timeframe, loadMoreHistory]);
+  }, [symbol, timeframe]);
 
   useEffect(() => {
     if (!data?.candles?.length || !seriesRef.current) return;
@@ -1227,7 +1267,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
             <>
               <p className="pattern-analysis-msg">{analysis?.message || "扫描形态结构中…"}</p>
               <ul className="pattern-marker-legend">
-                {MARKER_LEGEND.filter((m) => activeKinds.has(m.kind)).map((m) => (
+                {MARKER_LEGEND.filter(
+                  (m) =>
+                    activeKinds.has(m.kind) &&
+                    (layers.structure || !STRUCTURE_MARKER_KINDS.has(m.kind)),
+                ).map((m) => (
                   <li key={m.kind}>
                     <span className="legend-dot" style={{ background: m.color }} />
                     {m.label}
@@ -1276,7 +1320,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 {timeframe} · 已加载 {candleCount} 根
                 {lastCandleTime ? ` · 最新 ${formatCandleLocalTime(lastCandleTime)}` : ""}
                 {wsConnected ? " · 实时" : " · 连接中…"}
-                {loadingMore ? " · 加载更早…" : hasMore ? " · 左滑/缩小可加载更多" : " · 已到最早"}
+                {loadingMore ? " · 加载更早…" : hasMore ? " · 右拖/左滑看更早可续载" : " · 已到最早"}
               </p>
             </>
           )}
