@@ -43,6 +43,11 @@ from oi_mornitor.pattern_detector import (
     evaluate_pattern,
 )
 from oi_mornitor.breakout_detector import klines_to_df
+from oi_mornitor.derivatives_metrics import (
+    build_derivatives_context,
+    build_mtf_context,
+    fetch_premium_index,
+)
 from oi_mornitor.pattern_state_tracker import MAX_WATCH_SYMBOLS, PatternStateTracker
 from oi_mornitor.rank_metrics import TF_LABELS
 from oi_mornitor.strategy.candle_signals import (
@@ -1014,6 +1019,15 @@ class PatternMonitorEngine:
             )
 
             if snap.status == STATUS_LH and current_status in (STATUS_SEARCHING, ""):
+                mtf = await self._fetch_mtf_context(session, base_url=base_url, symbol=sym)
+                if not mtf.get("allow_short", True):
+                    logger.info(
+                        "MTF 过滤阶段1 %s: %s",
+                        sym,
+                        mtf.get("block_reason") or mtf.get("summary"),
+                    )
+                    states.append(self._state_dict(sym, item.interval, row))
+                    continue
                 self.tracker.save_state(
                     sym,
                     status=snap.status,
@@ -1222,6 +1236,33 @@ class PatternMonitorEngine:
 
         return out
 
+    async def _fetch_mtf_context(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        base_url: str,
+        symbol: str,
+    ) -> dict[str, Any]:
+        """拉 4h / 1d K 线并计算多周期共振过滤。"""
+        sym = symbol.strip().upper()
+        k4, k1d = await asyncio.gather(
+            fetch_pattern_klines(
+                session,
+                base_url=base_url,
+                symbol=sym,
+                interval="4h",
+                limit=200,
+            ),
+            fetch_pattern_klines(
+                session,
+                base_url=base_url,
+                symbol=sym,
+                interval="1d",
+                limit=120,
+            ),
+        )
+        return build_mtf_context({"4h": k4, "1d": k1d})
+
     async def get_chart_data(
         self,
         session: aiohttp.ClientSession,
@@ -1266,6 +1307,8 @@ class PatternMonitorEngine:
             }
 
         oi_by_time: dict[int, float] = {}
+        funding: dict[str, Any] = {}
+        mtf: dict[str, Any] = {}
         if not partial:
             oi_by_time = await fetch_open_interest_hist(
                 session,
@@ -1274,9 +1317,26 @@ class PatternMonitorEngine:
                 interval=tf,
                 limit=req_limit,
             )
+            funding, mtf = await asyncio.gather(
+                fetch_premium_index(session, base_url=base_url, symbol=sym),
+                self._fetch_mtf_context(session, base_url=base_url, symbol=sym),
+            )
+
+        derivatives_ctx = None
+        if not partial and klines:
+            derivatives_ctx = build_derivatives_context(
+                klines=klines,
+                oi_by_time=oi_by_time or None,
+                funding=funding,
+                mtf=mtf,
+                structure=state_dict,
+            )
 
         chart = build_pattern_chart_payload(
-            klines, state=state_dict, oi_by_time=oi_by_time or None
+            klines,
+            state=state_dict,
+            oi_by_time=oi_by_time or None,
+            derivatives_ctx=derivatives_ctx,
         )
 
         if partial:

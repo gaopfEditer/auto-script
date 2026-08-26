@@ -292,10 +292,12 @@ def build_pattern_chart_payload(
     *,
     state: dict[str, Any] | None = None,
     oi_by_time: dict[int, float] | None = None,
+    derivatives_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     构建 K 线 + 形态拐点标注数据，供前端图表渲染。
-    oi_by_time: open_time 秒 → 持仓量，用于 (oi异动) 标注。
+    oi_by_time: open_time 秒 → 持仓量，用于 (oi异动) 标注与 OI 曲线。
+    derivatives_ctx: 资金费率 / OI 共振 / 多周期 / 清算区。
     """
     state = state or {}
     df = klines_to_df(klines)
@@ -308,6 +310,7 @@ def build_pattern_chart_payload(
             "bb": {"upper": [], "mid": [], "lower": []},
             "vegas": {"filter": [], "a1": [], "a2": [], "b1": [], "b2": []},
             "macd": {"line": [], "signal": [], "hist": []},
+            "oi": [],
         }
 
     df = enrich_indicators(df)
@@ -323,6 +326,7 @@ def build_pattern_chart_payload(
     macd_line: list[dict[str, float | int]] = []
     macd_signal: list[dict[str, float | int]] = []
     macd_hist: list[dict[str, float | int]] = []
+    oi_series: list[dict[str, float | int]] = []
     vegas: dict[str, list[dict[str, float | int]]] = {
         "filter": [],
         "a1": [],
@@ -351,6 +355,9 @@ def build_pattern_chart_payload(
             macd_line.append({"time": t, "value": float(row.macd)})
             macd_signal.append({"time": t, "value": float(row.macd_signal)})
             macd_hist.append({"time": t, "value": float(row.macd_hist)})
+        oi_val = getattr(row, "oi", None)
+        if oi_val is not None and pd.notna(oi_val) and float(oi_val) > 0:
+            oi_series.append({"time": t, "value": float(oi_val)})
         for key, col in zip(vegas_keys, vegas_cols):
             val = getattr(row, col, None)
             if val is not None and pd.notna(val):
@@ -478,6 +485,11 @@ def build_pattern_chart_payload(
         if price > 0:
             price_lines.append({"kind": kind, "price": price, "color": color, "title": title})
 
+    if derivatives_ctx:
+        for lz in derivatives_ctx.get("liquidation_zones") or []:
+            if isinstance(lz, dict) and float(lz.get("price") or 0) > 0:
+                price_lines.append(lz)
+
     last_ts = _ts_sec(int(last["open_time"]))
     analysis.update({
         "h_max": h_max,
@@ -501,11 +513,14 @@ def build_pattern_chart_payload(
             if isinstance(m, dict)
         ),
     })
+    if derivatives_ctx:
+        analysis["derivatives"] = derivatives_ctx
 
     return {
         "candles": _dedupe_candles(candles),
         "markers": _sort_series_by_time(markers),
         "price_lines": price_lines,
+        "oi": _sort_series_by_time(oi_series),
         "bb": {
             "upper": _sort_series_by_time(bb_upper),
             "mid": _sort_series_by_time(bb_mid),

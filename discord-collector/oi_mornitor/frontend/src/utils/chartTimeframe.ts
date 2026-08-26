@@ -84,6 +84,13 @@ export function mergeMacdMap(
   return out;
 }
 
+export function mergeOiSeries(
+  existing: { time: number; value: number }[] | undefined,
+  incoming: { time: number; value: number }[] | undefined,
+): { time: number; value: number }[] {
+  return mergeBbSeries(existing ?? [], incoming ?? []);
+}
+
 export function chartApiUrl(
   symbol: string,
   interval: ChartTimeframe,
@@ -112,6 +119,8 @@ type ChartMetaPayload = {
   ticker?: PatternChartData["ticker"];
   sandbox_markers?: PatternChartData["markers"];
   price_lines?: PatternChartData["price_lines"];
+  derivatives?: PatternChartData["analysis"]["derivatives"];
+  analysis?: PatternChartData["analysis"];
 };
 
 async function fetchChartMeta(
@@ -180,11 +189,20 @@ async function fetchPatternChartFromClient(
   );
   const sandboxMarkers = meta.sandbox_markers || [];
   const markers = [...built.markers, ...sandboxMarkers];
-  const price_lines =
-    meta.price_lines && meta.price_lines.length ? meta.price_lines : built.price_lines;
+  const metaLines = meta.price_lines && meta.price_lines.length ? meta.price_lines : [];
+  const price_lines = [...built.price_lines, ...metaLines.filter(
+    (l) => !built.price_lines.some((b) => b.kind === l.kind && b.price === l.price),
+  )];
+  const derivatives = meta.derivatives || meta.analysis?.derivatives;
 
   const last = candles[candles.length - 1];
   const ticker = meta.ticker || { last_price: last.close };
+
+  const oiSeries = oiByTime.size
+    ? [...oiByTime.entries()]
+        .map(([time, value]) => ({ time, value }))
+        .sort((a, b) => a.time - b.time)
+    : [];
 
   return {
     ok: true,
@@ -198,8 +216,10 @@ async function fetchPatternChartFromClient(
     bb: built.bb,
     vegas: built.vegas,
     macd: built.macd,
+    oi: oiSeries,
     analysis: {
       ...built.analysis,
+      ...(derivatives ? { derivatives } : {}),
       ...(meta.state
         ? {
             status: meta.state.status,

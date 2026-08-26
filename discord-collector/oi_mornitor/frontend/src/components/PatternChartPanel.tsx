@@ -31,6 +31,7 @@ import {
   mergeBbSeries,
   mergeCandlesByTime,
   mergeMacdMap,
+  mergeOiSeries,
   mergeVegasMap,
   oldestCandleOpenMs,
   type VegasKey,
@@ -84,6 +85,8 @@ type ChartLayers = {
   bb: boolean;
   volume: boolean;
   macd: boolean;
+  oi: boolean;
+  liq: boolean;
   candlePattern: boolean;
   structure: boolean;
 };
@@ -92,6 +95,8 @@ const DEFAULT_LAYERS: ChartLayers = {
   bb: true,
   volume: true,
   macd: true,
+  oi: true,
+  liq: false,
   candlePattern: true,
   structure: true,
 };
@@ -99,13 +104,16 @@ const DEFAULT_LAYERS: ChartLayers = {
 const LAYER_TOGGLES: { key: keyof ChartLayers; label: string }[] = [
   { key: "bb", label: "布林" },
   { key: "volume", label: "量能" },
+  { key: "oi", label: "OI" },
   { key: "macd", label: "MACD" },
+  { key: "liq", label: "清算区" },
   { key: "candlePattern", label: "K线形态" },
   { key: "structure", label: "形态线" },
 ];
 
 /** H_max / LH / L₁ / HL / 扳机 等水平价线 */
 const STRUCTURE_LINE_KINDS = new Set(["h_max", "lh", "l1", "hl", "trigger"]);
+const LIQ_LINE_KINDS = new Set(["liq_short", "liq_long"]);
 /** 形态结构箭头标记（与价线对应） */
 const STRUCTURE_MARKER_KINDS = new Set([
   "h_max",
@@ -320,30 +328,42 @@ function macdAutoscaleInfoProvider(
  * 仅 MACD 在整图最底独占一条。
  */
 function applyPaneMargins(chart: IChartApi, layers: ChartLayers) {
-  const { volume, macd } = layers;
+  const { volume, macd, oi } = layers;
   const MACD_H = 0.24;
-  // 量能相对「主图区」高度的占比（叠在底部，不上推 K 线）
+  const OI_H = oi ? 0.14 : 0;
   const VOL_IN_MAIN = 0.28;
 
-  const mainBottom = macd ? MACD_H : 0.04;
+  const mainBottom = (macd ? MACD_H : 0.04) + OI_H;
   const mainTop = 0.03;
-  // 主图区高度 → 量能从主图底部向上占 VOL_IN_MAIN
   const mainSpan = 1 - mainTop - mainBottom;
   const volTop = mainTop + mainSpan * (1 - (volume ? VOL_IN_MAIN : 0));
 
-  // K 线始终铺满主图，不因量能上移留白
   chart.priceScale("right").applyOptions({
     scaleMargins: { top: mainTop, bottom: mainBottom },
   });
 
   if (volume) {
     chart.priceScale("volume").applyOptions({
-      // 与 K 线同 bottom → 量能贴着主图底边叠画，而不是挤在中间另开一条
       scaleMargins: { top: volTop, bottom: mainBottom },
       borderVisible: false,
     });
   } else {
     chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.95, bottom: 0 },
+      borderVisible: false,
+    });
+  }
+
+  if (oi) {
+    chart.priceScale("oi").applyOptions({
+      scaleMargins: {
+        top: 1 - (macd ? MACD_H : 0.04) - OI_H + 0.02,
+        bottom: macd ? MACD_H + 0.02 : 0.04,
+      },
+      borderVisible: false,
+    });
+  } else {
+    chart.priceScale("oi").applyOptions({
       scaleMargins: { top: 0.95, bottom: 0 },
       borderVisible: false,
     });
@@ -389,6 +409,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const macdLineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const oiLineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const vegasRefs = useRef<Partial<Record<VegasKey, ISeriesApi<"Line">>>>({});
   const priceLinesRef = useRef<IPriceLine[]>([]);
 
@@ -444,8 +465,24 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     if (!series || payload.partial) return;
     clearPriceLines();
     const showStructure = layersRef.current.structure;
+    const showLiq = layersRef.current.liq;
     for (const line of payload.price_lines ?? []) {
-      if (!showStructure && STRUCTURE_LINE_KINDS.has(line.kind ?? "")) continue;
+      const kind = line.kind ?? "";
+      if (LIQ_LINE_KINDS.has(kind)) {
+        if (!showLiq) continue;
+        priceLinesRef.current.push(
+          series.createPriceLine({
+            price: line.price,
+            color: line.color,
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: line.title,
+          }),
+        );
+        continue;
+      }
+      if (!showStructure && STRUCTURE_LINE_KINDS.has(kind)) continue;
       priceLinesRef.current.push(
         series.createPriceLine({
           price: line.price,
@@ -554,6 +591,13 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           );
         }
 
+        if (oiLineRef.current) {
+          const oiPts = [...(payload.oi ?? [])].sort((a, b) => a.time - b.time);
+          oiLineRef.current.setData(
+            oiPts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+        }
+
         applyPaneMargins(chart, layersRef.current);
 
         candlesRef.current = sortedCandles;
@@ -630,12 +674,14 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       const mergedLower = mergeBbSeries(metaRef.current?.bb?.lower ?? [], chunk.bb?.lower ?? []);
       const mergedVegas = mergeVegasMap(metaRef.current?.vegas, chunk.vegas);
       const mergedMacd = mergeMacdMap(metaRef.current?.macd, chunk.macd);
+      const mergedOi = mergeOiSeries(metaRef.current?.oi, chunk.oi);
       if (metaRef.current) {
         metaRef.current = {
           ...metaRef.current,
           bb: { upper: mergedUpper, mid: mergedMid, lower: mergedLower },
           vegas: mergedVegas,
           macd: mergedMacd,
+          oi: mergedOi,
         };
       }
       applyChartSeries(
@@ -645,6 +691,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           bb: { upper: mergedUpper, mid: mergedMid, lower: mergedLower },
           vegas: mergedVegas,
           macd: mergedMacd,
+          oi: mergedOi,
         },
         merged,
         { isPrepend: true },
@@ -760,6 +807,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     macdHistRef.current?.applyOptions({ visible: next.macd });
     macdLineRef.current?.applyOptions({ visible: next.macd });
     macdSignalRef.current?.applyOptions({ visible: next.macd });
+    oiLineRef.current?.applyOptions({ visible: next.oi });
     if (macdLineRef.current) {
       if (next.macd && metaRef.current?.macd) {
         macdLineRef.current.setMarkers(
@@ -1006,6 +1054,16 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         autoscaleInfoProvider: macdAutoscaleInfoProvider,
       });
 
+      oiLineRef.current = chart.addLineSeries({
+        priceScaleId: "oi",
+        color: "rgba(171, 71, 188, 0.95)",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.oi,
+        title: "OI",
+      });
+
       applyPaneMargins(chart, layersRef.current);
 
       chartApi.current = chart;
@@ -1102,6 +1160,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   }, [data, applyChartSeries, applyLayerVisibility]);
 
   const analysis = data?.analysis;
+  const deriv = analysis?.derivatives;
+  const mtf = deriv?.mtf;
   const ticker = data?.ticker;
   const lastPrice =
     markPrice ?? liveTicker?.last_price ?? ticker?.last_price ?? analysis?.last_price;
@@ -1155,6 +1215,29 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                   {pct != null ? ` · ${fmtPct(pct)}` : ""}
                 </span>
                 <span>OI {fmtNum(oiUsd)}</span>
+                {deriv?.funding_rate_pct != null ? (
+                  <span
+                    className={
+                      deriv.funding_extreme_positive
+                        ? "deriv-funding hot"
+                        : deriv.funding_rate_pct < 0
+                          ? "deriv-funding neg"
+                          : "deriv-funding"
+                    }
+                    title="永续资金费率（8h）"
+                  >
+                    费率 {deriv.funding_rate_pct >= 0 ? "+" : ""}
+                    {deriv.funding_rate_pct}%
+                  </span>
+                ) : null}
+                {deriv?.oi_regime_label ? (
+                  <span
+                    className={`deriv-oi ${deriv.oi_regime === "squeeze" ? "warn" : deriv.oi_regime === "breakout" ? "pos" : ""}`}
+                    title={`价变 ${deriv.oi_price_chg_pct ?? "—"}% · OI变 ${deriv.oi_chg_pct ?? "—"}%`}
+                  >
+                    {deriv.oi_regime_label}
+                  </span>
+                ) : null}
                 <span>24h额 {fmtNum(quoteVol)}</span>
                 <span className="pat-status-tag">{statusLabel}</span>
               </div>
@@ -1311,11 +1394,49 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 {analysis?.bb_wick_top && <span className="sig bb">BB-Wicks 顶部</span>}
                 {analysis?.macd_top_weak && <span className="sig macd-weak">MACD 走弱</span>}
                 {analysis?.macd_bull && <span className="sig macd-bull">MACD 金叉放大</span>}
+                {deriv?.high_funding_short_bias && (
+                  <span className="sig funding-short" title="高正费率 + 挤空/突破结构，顶背离胜率提升">
+                    高费率·看空共振
+                  </span>
+                )}
+                {deriv?.oi_regime === "squeeze" && (
+                  <span className="sig oi-squeeze">挤空假突破风险</span>
+                )}
+                {deriv?.oi_regime === "breakout" && (
+                  <span className="sig oi-breakout">OI 真突破</span>
+                )}
+                {mtf?.summary ? (
+                  <span
+                    className={`sig mtf ${mtf.allow_short === false ? "blocked" : "ok"}`}
+                    title={mtf.block_reason || mtf.summary}
+                  >
+                    MTF {mtf["4h"]?.vegas_label ? `4h ${mtf["4h"].vegas_label}` : ""}
+                    {mtf.allow_short === false ? " · 过滤空信号" : ""}
+                  </span>
+                ) : null}
                 {analysis?.oi_anomaly_only && <span className="sig oi">OI异动</span>}
                 {analysis?.oi_anomaly && !analysis?.oi_anomaly_only && (
                   <span className="sig oi-combo">形态+OI异动</span>
                 )}
               </div>
+              {mtf?.["4h"]?.ready || mtf?.["1d"]?.ready ? (
+                <p className="pattern-mtf-row">
+                  多周期：
+                  {mtf?.["4h"]?.ready ? (
+                    <span>
+                      {" "}
+                      4h {String(mtf["4h"].vegas_label || "—")} / {String(mtf["4h"].trend || "—")}
+                      {mtf["4h"].macd_top_weak ? " · MACD顶弱" : ""}
+                    </span>
+                  ) : null}
+                  {mtf?.["1d"]?.ready ? (
+                    <span>
+                      {" · "}
+                      日线 {String(mtf["1d"].vegas_label || "—")} / {String(mtf["1d"].trend || "—")}
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
               <p className="pattern-interval-tag">
                 {timeframe} · 已加载 {candleCount} 根
                 {lastCandleTime ? ` · 最新 ${formatCandleLocalTime(lastCandleTime)}` : ""}

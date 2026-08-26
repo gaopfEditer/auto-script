@@ -1874,6 +1874,67 @@ button {
   color: #ff80ab;
 }
 
+.pattern-signal-tags .sig.oi-squeeze {
+  background: rgba(255, 193, 7, 0.18);
+  color: #ffd54f;
+}
+
+.pattern-signal-tags .sig.oi-breakout {
+  background: rgba(0, 230, 118, 0.14);
+  color: #69f0ae;
+}
+
+.pattern-signal-tags .sig.funding-short {
+  background: rgba(255, 87, 34, 0.18);
+  color: #ff8a65;
+}
+
+.pattern-signal-tags .sig.mtf {
+  background: rgba(100, 181, 246, 0.14);
+  color: #90caf9;
+}
+
+.pattern-signal-tags .sig.mtf.blocked {
+  background: rgba(158, 158, 158, 0.14);
+  color: #bdbdbd;
+}
+
+.pattern-signal-tags .sig.mtf.ok {
+  background: rgba(129, 199, 132, 0.14);
+  color: #a5d6a7;
+}
+
+.pattern-chart-meta .deriv-funding {
+  color: #b0bec5;
+}
+
+.pattern-chart-meta .deriv-funding.hot {
+  color: #ff8a65;
+}
+
+.pattern-chart-meta .deriv-funding.neg {
+  color: #81d4fa;
+}
+
+.pattern-chart-meta .deriv-oi {
+  color: #ce93d8;
+}
+
+.pattern-chart-meta .deriv-oi.warn {
+  color: #ffd54f;
+}
+
+.pattern-chart-meta .deriv-oi.pos {
+  color: #69f0ae;
+}
+
+.pattern-mtf-row {
+  font-size: 0.65rem;
+  color: #888;
+  margin: 0 0 8px;
+  line-height: 1.45;
+}
+
 .pattern-interval-tag {
   font-size: 0.65rem;
   color: #555;

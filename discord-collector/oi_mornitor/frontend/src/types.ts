@@ -400,6 +400,27 @@ export interface PatternPriceLine {
   title: string;
 }
 
+export interface PatternChartDerivatives {
+  funding_rate?: number;
+  funding_rate_pct?: number;
+  funding_extreme?: boolean;
+  funding_extreme_positive?: boolean;
+  oi_regime?: "breakout" | "squeeze" | "dump_oi_up" | "neutral" | string;
+  oi_regime_label?: string;
+  oi_price_chg_pct?: number;
+  oi_chg_pct?: number;
+  high_funding_short_bias?: boolean;
+  liquidation_zones?: PatternPriceLine[];
+  mtf?: {
+    allow_short?: boolean;
+    allow_long?: boolean;
+    summary?: string;
+    block_reason?: string;
+    "4h"?: Record<string, unknown>;
+    "1d"?: Record<string, unknown>;
+  };
+}
+
 export interface PatternChartAnalysis {
   status?: string;
   status_label?: string;
@@ -418,6 +439,7 @@ export interface PatternChartAnalysis {
   oi_anomaly?: boolean;
   /** 最新 K 仅有 OI 异动、无形态 */
   oi_anomaly_only?: boolean;
+  derivatives?: PatternChartDerivatives;
 }
 
 export interface PatternChartData {
@@ -444,6 +466,7 @@ export interface PatternChartData {
     signal?: { time: number; value: number }[];
     hist?: { time: number; value: number }[];
   };
+  oi?: { time: number; value: number }[];
   analysis: PatternChartAnalysis;
   state: PatternState;
   partial?: boolean;

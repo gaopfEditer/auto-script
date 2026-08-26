@@ -20,8 +20,9 @@ from aiohttp import web
 
 
 
-from oi_mornitor.config import SCAN_INTERVAL_SEC, WEB_HOST, WEB_PORT
-
+from oi_mornitor.config import PATTERN_CHART_DEFAULT_LIMIT, SCAN_INTERVAL_SEC, WEB_HOST, WEB_PORT
+from oi_mornitor.derivatives_metrics import build_derivatives_context, fetch_premium_index
+from oi_mornitor.pattern_monitor import fetch_open_interest_hist, fetch_pattern_klines
 from oi_mornitor.radar import get_service
 from oi_mornitor.sandbox.card_ws import register_card_routes
 
@@ -238,7 +239,7 @@ async def handle_patterns_chart(request: web.Request) -> web.Response:
 
 
 async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
-    """轻量元数据：形态状态 + 沙盒入出标记（供浏览器直连 K 线时叠加）。"""
+    """轻量元数据：形态状态 + 沙盒入出标记 + 衍生品/多周期（供浏览器直连 K 线时叠加）。"""
     symbol = request.query.get("symbol", "").strip().upper()
     if not symbol:
         return _json_response({"ok": False, "error": "symbol required"}, status=400)
@@ -272,6 +273,40 @@ async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
             }
             break
     trade_markers = svc.sandbox_engine.get_trade_markers(symbol, interval)
+    derivatives: dict[str, Any] = {}
+    session = await svc._ensure_session()
+    try:
+        klines = await fetch_pattern_klines(
+            session,
+            base_url=svc.radar.base_url,
+            symbol=symbol,
+            interval=interval,
+            limit=min(120, PATTERN_CHART_DEFAULT_LIMIT),
+        )
+        oi_by_time = await fetch_open_interest_hist(
+            session,
+            base_url=svc.radar.base_url,
+            symbol=symbol,
+            interval=interval,
+            limit=120,
+        )
+        funding, mtf = await asyncio.gather(
+            fetch_premium_index(session, base_url=svc.radar.base_url, symbol=symbol),
+            svc.pattern_engine._fetch_mtf_context(
+                session, base_url=svc.radar.base_url, symbol=symbol
+            ),
+        )
+        if klines:
+            derivatives = build_derivatives_context(
+                klines=klines,
+                oi_by_time=oi_by_time or None,
+                funding=funding,
+                mtf=mtf,
+                structure=state,
+            )
+    except Exception as exc:
+        logger.debug("chart-meta 衍生品 %s: %s", symbol, exc)
+
     return _json_response({
         "ok": True,
         "symbol": symbol,
@@ -279,7 +314,9 @@ async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
         "state": state,
         "ticker": ticker,
         "sandbox_markers": trade_markers,
-        "price_lines": [],
+        "price_lines": (derivatives.get("liquidation_zones") or []) if derivatives else [],
+        "derivatives": derivatives,
+        "analysis": {"derivatives": derivatives} if derivatives else {},
     })
 
 
