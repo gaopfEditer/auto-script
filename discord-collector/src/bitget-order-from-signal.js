@@ -2,6 +2,7 @@
  * 信号卡片 → Bitget 合约下单计划。
  */
 import { normalizeSymbol } from "./card-fields.js";
+import { isShortDirection, resolveTradeDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { detectSymbolTier } from "./card-backtest-policy.js";
 import { config } from "./config.js";
@@ -59,7 +60,7 @@ export function parseEntryPriceForOrder(entryRaw, direction) {
     const low = Number(range[1]);
     const high = Number(range[2]);
     if (!Number.isFinite(low) || !Number.isFinite(high)) return null;
-    const isShort = /空|short|sell/i.test(direction);
+    const isShort = isShortDirection(direction);
     return isShort ? Math.max(low, high) : Math.min(low, high);
   }
   const m = s.match(/([\d.]+)/);
@@ -216,9 +217,8 @@ export function resolveBitgetOrderSize(marginUsdt, price, contract, opts = {}) {
 
 /** @param {string} direction */
 export function directionToSide(direction) {
-  const d = String(direction ?? "").trim();
-  if (/空|short|sell/i.test(d)) return "sell";
-  if (/多|long|buy/i.test(d)) return "buy";
+  if (isShortDirection(direction)) return "sell";
+  if (resolveTradeDirection(direction) === "long") return "buy";
   return null;
 }
 

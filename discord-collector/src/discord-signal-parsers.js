@@ -2,6 +2,7 @@
  * Discord 各频道信号正文解析（规则 + 结构化字段）。
  */
 import { normalizeSignalText } from "./discord-signal-dedup.js";
+import { isShortDirection } from "./card-direction.js";
 
 /** @param {string} text */
 function lines(text) {
@@ -907,7 +908,7 @@ export function parseSignalText(text, kind) {
 function formatCnBriefTradeCard(parsed) {
   const symbol = String(parsed.symbol ?? parsed.asset ?? "").trim() || "—";
   const direction = String(parsed.direction ?? "").trim();
-  const isShort = /空|short|sell/i.test(direction);
+  const isShort = isShortDirection(direction);
   const isLong = /多|long|buy/i.test(direction);
   const emoji = isShort ? "📉" : isLong ? "📈" : "📌";
   const entry = String(parsed.entry ?? "").trim()

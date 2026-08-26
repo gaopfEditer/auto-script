@@ -576,7 +576,7 @@ onUnmounted(() => {
             {{ loading ? "加载中…" : `共 ${cards.length} 张` }}
             <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
           </span>
-          <span class="grid-count-rules">
+          <span class="grid-count-rules" data-onboard="cards-rules">
             结算规则：BTC / ETH / SOL 按 100x，其余山寨 20x；卡片未设止盈止损（仅有方向）时，默认 ±5% 止盈止损价清算
           </span>
         </span>

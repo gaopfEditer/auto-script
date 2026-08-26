@@ -7,6 +7,7 @@ import {
   parseEntryPrice,
   parsePrice,
 } from "./card-price-fetch.js";
+import { isShortDirection } from "./card-direction.js";
 import { getCardVerifyPlan, getVerifyWindowSpec, resolveVerifyMode } from "./card-verify-policy.js";
 import {
   emptyProgress,
@@ -220,7 +221,7 @@ function buildNotEnteredResult(note, ctx) {
 export function evaluateLiquidation(card, klines, opts) {
   const signalMs = Number(opts.signalMs);
   const execution = resolveCardExecution(card);
-  const isShort = /空|short|sell/i.test(String(execution.direction ?? ""));
+  const isShort = isShortDirection(execution.direction);
   const leverage = resolveLiquidationLeverage(
     card.symbol,
     card.assetClass ?? card.asset_class ?? detectAssetClass(card.symbol, card.parsedJson, execution, card.rawContent)

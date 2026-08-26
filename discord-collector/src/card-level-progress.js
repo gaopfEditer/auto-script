@@ -4,6 +4,7 @@
  */
 import { getCardBacktestPlan } from "./card-backtest-policy.js";
 import { calcLeveragePnl, parseEntryPrice, parsePrice } from "./card-price-fetch.js";
+import { isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { config } from "./config.js";
@@ -189,7 +190,7 @@ function touchesLevel(isShort, high, low, level, kind) {
 export function evaluateCardProgress(card, opts = {}) {
   const nowIso = new Date().toISOString();
   const execution = resolveCardExecution(card);
-  const isShort = /空|short|sell/i.test(String(execution.direction ?? ""));
+  const isShort = isShortDirection(execution.direction);
   const entry = parseEntryPrice(execution.planned?.entryPrice);
   const sl = parsePrice(execution.planned?.stopLossPrice);
   const tps = (execution.planned?.takeProfitPrices ?? [])

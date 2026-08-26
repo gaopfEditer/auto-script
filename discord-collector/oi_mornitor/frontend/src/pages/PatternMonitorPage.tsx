@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { PatternAlert, PatternPayload, PatternState, PatternWatchItem } from "../types";
 import { coinInitial, displaySymbol } from "../utils/symbol";
@@ -8,6 +8,7 @@ import { PatternToastStack } from "../components/PatternToastStack";
 import { SandboxToastStack } from "../components/SandboxToastStack";
 import { CardLifecyclePanel } from "../components/CardLifecyclePanel";
 import { useRadarSSE } from "../hooks/useRadarSSE";
+import { useOiOnboardBridge } from "../hooks/useOiOnboardBridge";
 import { useSandboxTradeHistory } from "../hooks/useSandboxTradeHistory";
 import { fmtMetaPrice, fmtTs } from "../utils/format";
 import { resolveSandboxCardAuthor } from "../utils/cardAuthor";
@@ -68,6 +69,13 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<"pattern" | "sandbox">("pattern");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; symbol: string } | null>(null);
+  /** 本页是否已做过「进入默认选中」；用户手动关掉图表后不再强选 */
+  const didAutoSelectRef = useRef(false);
+
+  const ensurePatternTab = useCallback(() => {
+    setMainTab("pattern");
+  }, []);
+  useOiOnboardBridge({ onEnsurePatternTab: ensurePatternTab });
 
   const watchlist: PatternWatchItem[] = pattern?.watchlist ?? [];
   const states: PatternState[] = pattern?.states ?? [];
@@ -385,7 +393,9 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     if (!raw) return;
     const sym = raw.trim().toUpperCase();
     if (!sym) return;
+    didAutoSelectRef.current = true;
     setSelectedSymbol(sym);
+    setManualSym(sym);
     setMainTab("pattern");
     const wantAdd = searchParams.get("add") === "1";
     const next = new URLSearchParams(searchParams);
@@ -398,6 +408,22 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     // 仅响应 URL 变化；勿把 watchSet/addSymbol 放进 deps 以免重复加
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  // 进入形态页：默认选中左侧列表第一个币种（展示 K 线）
+  useEffect(() => {
+    if (didAutoSelectRef.current) return;
+    if (searchParams.get("symbol")) return;
+    if (selectedSymbol) {
+      didAutoSelectRef.current = true;
+      return;
+    }
+    const first = sortedWatchlist[0]?.symbol;
+    if (!first) return;
+    didAutoSelectRef.current = true;
+    setSelectedSymbol(first);
+    setManualSym(first);
+    setMainTab("pattern");
+  }, [sortedWatchlist, selectedSymbol, searchParams]);
 
   const removeSymbol = useCallback(async (symbol: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -516,7 +542,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
       />
 
       <div className="pattern-layout">
-        <aside className="pattern-sidebar panel">
+        <aside className="pattern-sidebar panel" data-onboard="oi-sidebar">
           <h2>形态追踪</h2>
           <p className="pattern-desc">
             上限 {maxWatchSymbols} · 每{" "}
@@ -634,7 +660,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
           </ul>
         </aside>
 
-        <main className="pattern-main panel">
+        <main className="pattern-main panel" data-onboard="oi-main">
           <div className="pattern-main-head">
             <div className="pattern-main-tabs" role="tablist">
               <button

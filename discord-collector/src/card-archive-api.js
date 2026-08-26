@@ -9,6 +9,7 @@ import {
 } from "./card-archive-service.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { detectAssetClass } from "./card-verify-policy.js";
+import { isShortDirection } from "./card-direction.js";
 import { config } from "./config.js";
 import { createLogger } from "./logger.js";
 import { runBatchLiquidation, runBatchClearLiquidation } from "./card-liquidation-engine.js";
@@ -409,7 +410,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
       const settlement = Number(body.settlement_price ?? body.settlementPrice);
       const entry = Number(body.entry_price ?? body.entryPrice ?? ex.planned?.entryPrice);
       const bestTp = body.best_tp ?? body.bestTp ?? null;
-      const isShort = /空|short|sell/i.test(String(ex.direction ?? body.side ?? ""));
+      const isShort = isShortDirection(ex.direction ?? body.side);
       const isProgress = body.progress === true || outcome === "pending";
 
       /** @type {Record<string, unknown>} */

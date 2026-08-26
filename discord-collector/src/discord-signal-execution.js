@@ -2,6 +2,8 @@
  * 信号卡片执行结果：信号计划 vs 实际成交。
  */
 
+import { resolveTradeDirection } from "./card-direction.js";
+
 /** @typedef {{
  *   entryPrice: string,
  *   takeProfitPrices: string[],
@@ -200,14 +202,6 @@ export function summarizeCardExecution(row) {
 function parseEvalPrice(v) {
   const n = Number(String(v ?? "").trim().replace(/,/g, ""));
   return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-/** @param {string} [direction] @returns {"long" | "short" | null} */
-function resolveTradeDirection(direction) {
-  const d = String(direction ?? "").trim();
-  if (/空|short|sell/i.test(d)) return "short";
-  if (/多|long|buy/i.test(d)) return "long";
-  return null;
 }
 
 /**

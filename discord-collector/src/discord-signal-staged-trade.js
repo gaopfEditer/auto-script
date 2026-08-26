@@ -3,6 +3,13 @@
  */
 import { normalizeSymbol } from "./card-fields.js";
 import { shouldSkipNumericDuplicate } from "./discord-signal-numeric-dedup.js";
+import {
+  isLongDirection,
+  isShortDirection,
+  resolveTradeDirection,
+} from "./card-direction.js";
+
+export { isLongDirection, isShortDirection, resolveTradeDirection };
 
 export const STAGED_SYMBOL_DEDUP_MS = 4 * 60 * 60 * 1000;
 export const STAGED_REVERSE_WINDOW_MS = 5 * 60 * 1000;
@@ -25,16 +32,6 @@ export function isStagedTradeSignal(parsed) {
   if (!STAGED_TRADE_PARSERS.has(String(parsed.parser ?? ""))) return false;
   const phase = String(parsed.signalPhase ?? "");
   return phase === "open" || phase === "tpsl" || phase === "full" || parsed.orderMode === "market";
-}
-
-/** @param {string} direction */
-export function isLongDirection(direction) {
-  return /多|long|buy|進多|做多/i.test(String(direction ?? ""));
-}
-
-/** @param {string} direction */
-export function isShortDirection(direction) {
-  return /空|short|sell|進空|做空/i.test(String(direction ?? ""));
 }
 
 /** @param {string} a @param {string} b */

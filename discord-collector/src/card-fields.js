@@ -3,6 +3,8 @@
  * @see https://discord.com/developers/docs/resources/channel#embed-object
  */
 
+import { isShortDirection } from "./card-direction.js";
+
 /** @typedef {{ name: string, value: string, inline?: boolean }} DiscordEmbedField */
 /** @typedef {{
  *   title?: string,
@@ -53,7 +55,7 @@ export function buildDiscordCardFields(input) {
   const entry = String(input.entry ?? "").trim();
   const targets = Array.isArray(input.targets) ? input.targets.filter(Boolean) : [];
   const stopLoss = String(input.stopLoss ?? "").trim();
-  const isShort = /空|short|sell/i.test(direction);
+  const isShort = isShortDirection(direction);
 
   /** @type {DiscordEmbedField[]} */
   const fields = [];

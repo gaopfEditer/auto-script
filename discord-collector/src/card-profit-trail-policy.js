@@ -5,6 +5,7 @@
  */
 import { config } from "./config.js";
 import { calcLeveragePnl, parseEntryPrice } from "./card-price-fetch.js";
+import { isShortDirection } from "./card-direction.js";
 import { isCardEnteredForEval } from "./card-eval-outcome.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import {
@@ -64,7 +65,7 @@ export function resolveUnrealizedPnl(card, price) {
   const entry = resolveTrailEntry(card);
   if (entry == null || !Number.isFinite(price) || price <= 0) return null;
   const ex = normalizeExecution(card.execution);
-  const isShort = /空|short|sell/i.test(String(ex.direction ?? ""));
+  const isShort = isShortDirection(ex.direction);
   const leverage = resolveProgressLeverage(card);
   const pnl = calcLeveragePnl(entry, price, isShort, leverage);
   if (!pnl) return null;

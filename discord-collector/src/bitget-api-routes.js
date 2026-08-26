@@ -5,6 +5,7 @@ import { loadBitgetTradeConfig } from "./bitget-trade-config.js";
 import { signalChannelDisplayName } from "./discord-signal-config.js";
 import { config } from "./config.js";
 import { getBitgetProxyInUse } from "./bitget-api.js";
+import { isShortDirection } from "./card-direction.js";
 
 /**
  * @param {import("express").Express} app
@@ -64,7 +65,7 @@ export function registerBitgetRoutes(app, bitgetOrder, bitgetManual) {
     const symbol = String(body.symbol ?? "").trim();
     let side = String(body.side ?? "").trim().toLowerCase();
     if (!side && body.direction) {
-      side = /空|short|sell/i.test(String(body.direction)) ? "sell" : "buy";
+      side = isShortDirection(body.direction) ? "sell" : "buy";
     }
     if (!symbol || (side !== "buy" && side !== "sell")) {
       res.status(400).json({ ok: false, error: "symbol_and_side_required" });

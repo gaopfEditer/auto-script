@@ -114,7 +114,7 @@ onMounted(() => void reload());
         <h2>卡片评估</h2>
         <RouterLink to="/cards" class="link">卡片归档 →</RouterLink>
       </div>
-      <p class="hint">筛选条件与卡片归档页一致：来源、发车频道、币种、时间。</p>
+      <p class="hint">可按时间（今天 / 近一周等）筛选样本，再配合来源、发车频道、币种。</p>
 
       <label class="field">
         <span>来源</span>
@@ -135,7 +135,7 @@ onMounted(() => void reload());
         <span>币种</span>
         <input v-model="symbol" type="text" placeholder="BTC / ETH" />
       </label>
-      <label class="field">
+      <label class="field" data-onboard="eval-period">
         <span>时间</span>
         <select v-model="period">
           <option v-for="p in PERIOD_OPTIONS" :key="String(p.value)" :value="p.value">{{ p.label }}</option>

@@ -8,6 +8,7 @@ import {
   fetchKlinesForCard,
   parseEntryPrice,
 } from "./card-price-fetch.js";
+import { isShortDirection } from "./card-direction.js";
 import { resolveLiquidationLeverage } from "./card-liquidation-engine.js";
 import { isCardEnteredForEval, resolveCardEvalOutcome } from "./card-eval-outcome.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
@@ -99,7 +100,7 @@ export async function validateCardMetrics(card) {
   const sym = String(card.symbol ?? "").trim().toUpperCase();
   const ex = normalizeExecution(card.execution, card.parsedJson);
   const entry = parseEntryPrice(ex.planned?.entryPrice);
-  const isShort = /空|short|sell/i.test(String(ex.direction ?? ""));
+  const isShort = isShortDirection(ex.direction);
   const leverage = resolveLiquidationLeverage(sym, card.assetClass);
   const inProgress = isCardValidationInProgress(card);
   const entered = isCardEnteredForEval(card);

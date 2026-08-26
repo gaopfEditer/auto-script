@@ -4,6 +4,7 @@
  */
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 import { config } from "./config.js";
+import { isShortDirection } from "./card-direction.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("card-price");
@@ -368,7 +369,7 @@ export function calcLeveragePnl(entry, exitPrice, isShort, leverage = DEFAULT_LE
  */
 export function evaluatePricePath(execution, klines) {
   const dir = String(execution?.direction ?? "");
-  const isShort = /空|short|sell/i.test(dir);
+  const isShort = isShortDirection(dir);
   const entry = parseEntryPrice(execution?.planned?.entryPrice);
   const sl = parsePrice(execution?.planned?.stopLossPrice);
   const tps = (execution?.planned?.takeProfitPrices ?? [])

@@ -2,6 +2,7 @@
  * 分层最优回测 + TP1/TP2/TP3 最佳出场结算。
  */
 import { calcLeveragePnl, fetchKlinesForCard, parseEntryPrice, parsePrice } from "./card-price-fetch.js";
+import { isShortDirection } from "./card-direction.js";
 import { getCardBacktestPlan } from "./card-backtest-policy.js";
 import { config } from "./config.js";
 import { hasEvaluatedYield, normalizeExecution } from "./discord-signal-execution.js";
@@ -18,7 +19,7 @@ import { hasEvaluatedYield, normalizeExecution } from "./discord-signal-executio
 export function evaluateBestTpSettlement(execution, klines, leverage) {
   const ex = normalizeExecution(execution);
   const dir = String(ex.direction ?? execution?.direction ?? "");
-  const isShort = /空|short|sell/i.test(dir);
+  const isShort = isShortDirection(dir);
   const entry = parseEntryPrice(ex.planned?.entryPrice ?? execution?.planned?.entryPrice);
   const sl = parsePrice(ex.planned?.stopLossPrice ?? execution?.planned?.stopLossPrice);
   /** @type {number[]} */
@@ -128,7 +129,7 @@ export function evaluateBestTpSettlement(execution, klines, leverage) {
  */
 export function evaluateOptimalInWindow(execution, klines, leverage) {
   const dir = String(execution?.direction ?? "");
-  const isShort = /空|short|sell/i.test(dir);
+  const isShort = isShortDirection(dir);
   const entry = parseEntryPrice(execution?.planned?.entryPrice);
   const sl = parsePrice(execution?.planned?.stopLossPrice);
   const sorted = [...klines].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));

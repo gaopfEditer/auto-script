@@ -1,5 +1,9 @@
 <script setup>
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import {
+  OI_EMBED_PATH_EVENT,
+  getPendingOiEmbedPath,
+} from "../composables/useOnboardingGuide.js";
 
 const active = ref(false);
 const loading = ref(true);
@@ -7,6 +11,8 @@ const embedUrl = ref("");
 const error = ref("");
 const hint = ref("");
 const latencyMs = ref(null);
+/** 新手指引要求的嵌入子路径，如 /patterns */
+const forcedEmbedPath = ref(/** @type {string | null} */ (getPendingOiEmbedPath()));
 
 let pollTimer = null;
 
@@ -15,6 +21,21 @@ function normalizeEmbed(raw) {
   const s = String(raw || "").trim().replace(/\/$/, "");
   return s ? `${s}/` : "";
 }
+
+/**
+ * @param {string} base
+ * @param {string | null} path
+ */
+function withEmbedPath(base, path) {
+  const root = normalizeEmbed(base);
+  if (!root) return "";
+  const p = String(path || "").trim();
+  if (!p || p === "/") return root;
+  const clean = p.replace(/^\//, "").replace(/\/$/, "");
+  return `${root}${clean}`;
+}
+
+const iframeSrc = computed(() => withEmbedPath(embedUrl.value, forcedEmbedPath.value));
 
 /**
  * 上云时 API 若仍返回 127.0.0.1，改用构建期公网地址。
@@ -70,13 +91,22 @@ async function refreshStatus() {
   }
 }
 
+/** @param {Event} ev */
+function onEmbedPathEvent(ev) {
+  const path = /** @type {CustomEvent} */ (ev).detail?.path;
+  forcedEmbedPath.value = path ? String(path) : null;
+}
+
 onMounted(() => {
+  forcedEmbedPath.value = getPendingOiEmbedPath();
   void refreshStatus();
   pollTimer = setInterval(() => void refreshStatus(), 5_000);
+  window.addEventListener(OI_EMBED_PATH_EVENT, onEmbedPathEvent);
 });
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
+  window.removeEventListener(OI_EMBED_PATH_EVENT, onEmbedPathEvent);
 });
 
 watch(active, (ok) => {
@@ -85,7 +115,7 @@ watch(active, (ok) => {
 </script>
 
 <template>
-  <div class="oi-shell">
+  <div class="oi-shell" data-onboard="oi-frame">
     <div v-if="!active" class="oi-gate">
       <div class="oi-card">
         <h2>OI Monitor</h2>
@@ -99,7 +129,7 @@ watch(active, (ok) => {
           <li>终端 C：<code>pnpm run oi:dev</code> 或 <code>pnpm run oi:start</code></li>
         </ol>
         <p class="muted">
-          嵌入地址：<code>{{ embedUrl || "—" }}</code>
+          嵌入地址：<code>{{ iframeSrc || embedUrl || "—" }}</code>
           <span v-if="latencyMs != null"> · {{ latencyMs }}ms</span>
         </p>
         <button type="button" class="retry" @click="refreshStatus">重新探测</button>
@@ -108,7 +138,7 @@ watch(active, (ok) => {
     <iframe
       v-else
       class="oi-frame"
-      :src="embedUrl"
+      :src="iframeSrc"
       title="OI Monitor"
       allow="clipboard-read; clipboard-write"
     />

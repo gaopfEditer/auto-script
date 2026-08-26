@@ -269,14 +269,12 @@ export function dash(v) {
 
 /** @param {string} direction */
 export function isLongDirection(direction) {
-  const d = String(direction ?? "").trim();
-  if (/空|做空|SHORT/i.test(d)) return false;
-  return /多|做多|LONG/i.test(d);
+  return resolveTradeDirection(direction) === "long";
 }
 
 /** @param {string} direction */
 export function isShortDirection(direction) {
-  return /空|做空|SHORT/i.test(String(direction ?? "").trim());
+  return resolveTradeDirection(direction) === "short";
 }
 
 /**
@@ -284,8 +282,25 @@ export function isShortDirection(direction) {
  * @returns {"long" | "short" | null}
  */
 export function resolveTradeDirection(direction) {
-  if (isShortDirection(direction)) return "short";
-  if (isLongDirection(direction)) return "long";
+  const raw = String(direction ?? "").trim();
+  if (!raw) return null;
+
+  // 句首明确方向优先：「多 建仓…」「空 …」；避免正文「清空」误判为空单
+  const lead = raw.match(/^(做多|做空|多单|空单|LONG|SHORT|多|空)(?=$|[\s:：·,，/|（(\[【]|\d)/i);
+  if (lead) {
+    return /空|SHORT/i.test(lead[1]) ? "short" : "long";
+  }
+
+  const d = raw.replace(
+    /清空|空气|空调|空间|太空|空白|空泛|空想|空洞|空仓观望|空仓等待|空仓中|空方力量|多空博弈|多空|空头回补/g,
+    "·"
+  );
+  if (/做空|空单|進空|\bSHORT\b/i.test(d)) return "short";
+  if (/做多|多单|進多|\bLONG\b/i.test(d)) return "long";
+  if (/(^|[^\u4e00-\u9fff])空([^\u4e00-\u9fff]|$)/.test(d)) return "short";
+  if (/(^|[^\u4e00-\u9fff])多([^\u4e00-\u9fff]|$)/.test(d)) return "long";
+  if (/\bsell\b/i.test(d) && !/\bbuy\b/i.test(d)) return "short";
+  if (/\bbuy\b/i.test(d)) return "long";
   return null;
 }
 

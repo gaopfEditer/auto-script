@@ -9,7 +9,7 @@ const progress = computed(() => {
   return `${state.stepIndex + 1} / ${total}`;
 });
 
-const hasHighlight = computed(() => Boolean(state.rect && step.value?.target));
+const hasHighlight = computed(() => Boolean(state.rect));
 
 let resizeObserver = null;
 
@@ -27,7 +27,14 @@ watch(
 watch(
   () => state.stepIndex,
   () => {
-    if (state.open) void refreshRect();
+    if (!state.open) return;
+    void refreshRect();
+    // OI iframe 切路径后可能晚一点才可测
+    if (step.value?.iframeTarget) {
+      window.setTimeout(() => {
+        if (state.open) void refreshRect();
+      }, 700);
+    }
   }
 );
 
