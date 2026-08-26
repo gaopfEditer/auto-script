@@ -4,6 +4,14 @@ import os
 import shutil
 import glob
 
+SKIP_DIR_NAMES = {'vendor', 'node_modules', 'target', 'build', 'dist'}
+
+
+def should_skip_dir(name):
+    """跳过 . / __ 开头目录及常见构建/依赖目录"""
+    return name.startswith('.') or name.startswith('__') or name in SKIP_DIR_NAMES
+
+
 def fix_file_encoding(file_path):
     """模拟用户的手动操作：读取文件内容，重新创建文件"""
     if not os.path.exists(file_path):
@@ -56,8 +64,7 @@ def cleanup_backup_files():
     
     # 遍历所有子目录，找到备份文件
     for root, dirs, files in os.walk('.'):
-        # 跳过以 . 开头的目录（如 .git, .vscode 等）以及其他不需要处理的目录
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'vendor' and d != 'node_modules' and d != 'target' and d != 'build' and d != 'dist']
+        dirs[:] = [d for d in dirs if not should_skip_dir(d)]
         
         for file in files:
             if file.endswith('.bak') or file.endswith('.backup'):
@@ -96,8 +103,7 @@ def main():
     
     # 遍历所有子目录
     for root, dirs, files in os.walk('.'):
-        # 跳过以 . 开头的目录（如 .git, .vscode 等）以及其他不需要处理的目录
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'vendor' and d != 'node_modules' and d != 'target' and d != 'build' and d != 'dist']
+        dirs[:] = [d for d in dirs if not should_skip_dir(d)]
         
         for file in files:
             # 获取文件扩展名

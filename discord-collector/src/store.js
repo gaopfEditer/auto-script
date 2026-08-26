@@ -1295,7 +1295,7 @@ export async function openStore(cfg, log) {
     params.push(id);
     await pool.execute(`UPDATE discord_signal_cards SET ${sets.join(", ")} WHERE id = ?`, params);
     const [rows] = await pool.query(`SELECT * FROM discord_signal_cards WHERE id = ? LIMIT 1`, [id]);
-    return rows[0] ?? null;
+    return rows[0] ? normalizeSignalCardRow(rows[0]) : null;
   }
 
   /** @param {number} id */

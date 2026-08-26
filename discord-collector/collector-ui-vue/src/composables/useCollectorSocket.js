@@ -45,6 +45,20 @@ function isWsOpen() {
 /** @param {Record<string, unknown>} msg */
 function dispatch(msg) {
   lastMessageAt.value = Date.now();
+  const kind = String(msg.kind ?? "");
+  if (kind === "card_validate_started") {
+    const total = Number(msg.total);
+    if (Number.isFinite(total)) {
+      console.info(
+        `[collector-ws] 回测验证开始，共 ${total} 张卡片${msg.mock ? " (mock)" : ""}`
+      );
+    }
+  } else if (kind === "card_validate_done") {
+    const n = Array.isArray(msg.items)
+      ? msg.items.length
+      : Number(msg.processed ?? msg.total) || 0;
+    console.info(`[collector-ws] 回测验证完成，共 ${n} 张卡片`);
+  }
   for (const h of handlers) {
     try {
       h(msg);

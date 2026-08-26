@@ -9,13 +9,13 @@ import {
   resolveArchiveBodySourceTypes,
   resolveArchiveListSourceTypes,
 } from "./card-archive-api.js";
-import { archiveCardToClient } from "./card-archive-service.js";
-import { validateCardMetrics } from "./card-validate-engine.js";
 import {
   buildMockValidateCards,
+  buildMockValidateCardsFromSignals,
   buildMockValidateItem,
   buildMockValidateSample,
 } from "./card-validate-mock.js";
+import { BACKTEST_WINDOW_DAYS, parseBacktestSignals } from "./card-validate-signals.js";
 import { createLogger } from "./logger.js";
 import { requireLocalRequest } from "./local-request.js";
 
@@ -23,7 +23,6 @@ const log = createLogger("card-validate");
 
 const JOB_TTL_MS = 60 * 60 * 1000;
 const MAX_JOBS = 20;
-const CARD_DELAY_MS = 180;
 const MOCK_CARD_DELAY_MS = 350;
 
 /** @type {Map<string, Record<string, unknown>>} */
@@ -65,39 +64,21 @@ function resolveValidateFilters(req) {
   const cardIds = Array.isArray(merged.cardIds)
     ? merged.cardIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
     : [];
-  const mock = ["1", "true", "yes", "on"].includes(String(merged.mock ?? "").toLowerCase());
   const mockCount = Math.min(20, Math.max(1, Number(merged.mockCount ?? merged.count) || 8));
-  return { fromMs, toMs, sourceTypes, channelId, symbol, status, limit, cardIds, mock, mockCount };
-}
-
-/**
- * @param {ReturnType<typeof import("./store.js").openStore>} store
- * @param {ReturnType<typeof import("./card-archive-list-cache.js").createCardArchiveListCache>} listCache
- * @param {{ fromMs: number, toMs: number, sourceTypes: string[], channelId: string, symbol: string, status: string, limit: number, cardIds: number[] }} filters
- */
-async function loadCardsForValidation(store, listCache, filters) {
-  if (filters.cardIds.length) {
-    /** @type {ReturnType<typeof archiveCardToClient>[]} */
-    const cards = [];
-    for (const id of filters.cardIds) {
-      const row = await store.getSignalCardById(id);
-      if (row) cards.push(archiveCardToClient(row));
-    }
-    return cards;
-  }
-  const result = await listCache.list(
-    {
-      channelId: filters.channelId || undefined,
-      status: filters.status || undefined,
-      limit: filters.limit,
-      fromMs: filters.fromMs,
-      toMs: filters.toMs,
-      sourceTypes: filters.sourceTypes,
-      symbol: filters.symbol || undefined,
-    },
-    { force: true }
-  );
-  return Array.isArray(result?.cards) ? result.cards : [];
+  const signals = parseBacktestSignals(merged);
+  return {
+    fromMs,
+    toMs,
+    sourceTypes,
+    channelId,
+    symbol,
+    status,
+    limit,
+    cardIds,
+    mock: true,
+    mockCount,
+    signals,
+  };
 }
 
 /**
@@ -105,6 +86,18 @@ async function loadCardsForValidation(store, listCache, filters) {
  */
 function emit(broadcast, payload) {
   if (!broadcast) return;
+  const kind = String(payload.kind ?? "");
+  if (kind === "card_validate_started") {
+    log.info(
+      `回测验证开始 jobId=${payload.jobId} 卡片数=${payload.total ?? 0}${payload.mock ? " (mock)" : ""}`
+    );
+  } else if (kind === "card_validate_done") {
+    const n = Array.isArray(payload.items)
+      ? payload.items.length
+      : Number(payload.processed ?? payload.total) || 0;
+    const errN = Array.isArray(payload.errors) ? payload.errors.length : 0;
+    log.info(`回测验证完成 jobId=${payload.jobId} 卡片数=${n} 错误=${errN}`);
+  }
   broadcast("meta", payload);
 }
 
@@ -123,7 +116,9 @@ export function createCardValidateRunner(store, listCache, broadcast) {
     if (!job || job.status !== "running") return;
 
     const mockCount = Number(filters.mockCount) || 8;
-    const cards = buildMockValidateCards(mockCount);
+    const cards = filters.signals?.length
+      ? buildMockValidateCardsFromSignals(filters.signals)
+      : buildMockValidateCards(mockCount);
     job.total = cards.length;
     job.mock = true;
     job.cards = cards.map((c) => ({
@@ -203,97 +198,8 @@ export function createCardValidateRunner(store, listCache, broadcast) {
    * @param {Record<string, unknown>} filters
    */
   async function runJob(jobId, filters) {
-    if (filters.mock) {
-      await runMockJob(jobId, filters);
-      return;
-    }
-    const job = jobs.get(jobId);
-    if (!job || job.status !== "running") return;
-
-    try {
-      const cards = await loadCardsForValidation(store, listCache, /** @type {never} */ (filters));
-      job.total = cards.length;
-      job.cards = cards.map((c) => ({
-        id: c.id,
-        symbol: c.symbol,
-        channelId: c.channelId,
-        channelName: c.channelName,
-      }));
-      emit(broadcast, {
-        kind: "card_validate_started",
-        jobId,
-        total: cards.length,
-        filters: job.filters,
-      });
-
-      /** @type {Record<string, unknown>[]} */
-      const items = [];
-      /** @type {Array<{ cardId: number, error: string }>} */
-      const errors = [];
-
-      for (let i = 0; i < cards.length; i++) {
-        const card = cards[i];
-        const symbol = String(card.symbol ?? "").trim() || "—";
-        job.processed = i;
-        job.current = { index: i + 1, total: cards.length, cardId: card.id, symbol };
-        emit(broadcast, {
-          kind: "card_validate_progress",
-          jobId,
-          index: i + 1,
-          total: cards.length,
-          cardId: card.id,
-          symbol,
-          channelId: card.channelId,
-          channelName: card.channelName,
-        });
-
-        try {
-          const item = await validateCardMetrics(card);
-          items.push(item);
-          job.items = items;
-          emit(broadcast, {
-            kind: "card_validate_item",
-            jobId,
-            index: i + 1,
-            total: cards.length,
-            item,
-          });
-        } catch (e) {
-          const err = String(/** @type {Error} */ (e).message ?? e);
-          errors.push({ cardId: card.id, error: err });
-          job.errors = errors;
-          log.warn(`validate #${card.id} ${symbol}: ${err}`);
-        }
-
-        if (i + 1 < cards.length) {
-          await new Promise((r) => setTimeout(r, CARD_DELAY_MS));
-        }
-      }
-
-      job.status = "done";
-      job.processed = cards.length;
-      job.finishedAt = Date.now();
-      job.items = items;
-      job.errors = errors;
-      job.current = null;
-      emit(broadcast, {
-        kind: "card_validate_done",
-        jobId,
-        total: cards.length,
-        processed: cards.length,
-        items,
-        errors,
-        filters: job.filters,
-      });
-    } catch (e) {
-      const err = String(/** @type {Error} */ (e).message ?? e);
-      job.status = "error";
-      job.error = err;
-      job.finishedAt = Date.now();
-      job.current = null;
-      emit(broadcast, { kind: "card_validate_error", jobId, error: err });
-      log.warn(`validate job ${jobId}: ${err}`);
-    }
+    // 当前阶段：一律 mock 回测，不读 MySQL / 不拉 K 线（见 docs/cards-api.md）
+    await runMockJob(jobId, filters);
   }
 
   /**
@@ -342,6 +248,12 @@ export function registerCardValidateRoutes(app, store, listCache, broadcast, dep
         ok: true,
         jobId: job.id,
         status: job.status,
+        mode: "backtest",
+        mock: true,
+        readOnly: true,
+        windowDays: BACKTEST_WINDOW_DAYS,
+        note: "当前返回模拟回测结果；真实 K 线回测尚未启用",
+        signalCount: filters.signals.length || filters.mockCount,
         filters,
         ws: {
           path: "/ws",

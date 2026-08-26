@@ -686,6 +686,9 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
               cardsByStyle: mergedStyles,
               cardFieldsJson: stampedFields,
             })) ?? mergeTarget;
+          if (!updated) {
+            throw new Error(`合并更新卡片失败 openId=${openId}`);
+          }
           const clientCard = archiveCardToClient(updated);
           if (cardSink?.enabled) {
             const text = pickCardSinkText(clientCard);
@@ -754,6 +757,13 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       assetClass,
     });
 
+    if (!row) {
+      const offlineHint = store.offline
+        ? "MySQL 未连接（collect:ui 离线模式），无法持久化卡片。请启动 MySQL 并重启 collect:ui。"
+        : "insertSignalCard 返回空，建卡失败";
+      throw new Error(offlineHint);
+    }
+
     const cardId = extractSignalCardRowId(row?.id ?? row?.ID);
     let stampedRow = row;
     if (cardId) {
@@ -769,6 +779,9 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     }
 
     const clientCard = archiveCardToClient(stampedRow);
+    if (!clientCard?.id) {
+      throw new Error("archiveCard: 建卡后无有效 id");
+    }
     if (cardSink?.enabled) {
       const text = pickCardSinkText(clientCard);
       if (text) {

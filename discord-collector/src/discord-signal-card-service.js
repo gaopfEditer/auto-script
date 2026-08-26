@@ -964,6 +964,9 @@ function parseSignalCardJsonField(raw) {
 
 /** @param {Record<string, unknown>} row */
 export function signalCardToClient(row) {
+  if (!row || typeof row !== "object") {
+    throw new Error("signalCardToClient: row 为空");
+  }
   let cardsByStyle = row.cards_by_style ?? row.cardsByStyle;
   if (typeof cardsByStyle === "string") {
     try {

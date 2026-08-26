@@ -34,12 +34,17 @@ async function main() {
     console.log(`  首张: #${a.cardId} ${a.symbol} mode=${a.mode} maxProfit=${a.maxProfitPct}%`);
   }
 
-  console.log("\n=== 2) 启动模拟验证任务 POST ===");
+  console.log("\n=== 2) 启动回测任务 POST（signals） ===");
   const startUrl = `${BASE}${api("/cards/validate")}`;
   const startRes = await fetch(startUrl, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ mock: true, mockCount: 6 }),
+    body: JSON.stringify({
+      signals: [
+        { id: "demo-1", symbol: "BTC", direction: "long", signalAt: new Date(Date.now() - 86400000).toISOString(), entry: "95000" },
+        { id: "demo-2", symbol: "PEPE", direction: "short", signalAt: new Date(Date.now() - 172800000).toISOString(), entryMode: "market" },
+      ],
+    }),
   });
   const started = await startRes.json();
   if (!started.ok) {
@@ -64,7 +69,9 @@ async function main() {
           const msg = JSON.parse(String(ev.data));
           if (msg.channel !== "meta" || !String(msg.kind ?? "").startsWith("card_validate")) return;
           if (msg.jobId && msg.jobId !== jobId) return;
-          if (msg.kind === "card_validate_progress") {
+          if (msg.kind === "card_validate_started") {
+            console.log(`  started 卡片数=${msg.total ?? 0}${msg.mock ? " (mock)" : ""}`);
+          } else if (msg.kind === "card_validate_progress") {
             console.log(`  [${msg.index}/${msg.total}] ${msg.symbol} #${msg.cardId}`);
           } else if (msg.kind === "card_validate_item") {
             const it = msg.item ?? {};
@@ -74,7 +81,8 @@ async function main() {
                 : `maxProfit=${it.maxProfitPct}% maxDD=${it.maxDrawdownPct}%`;
             console.log(`  item #${it.cardId} ${it.symbol} ${line}`);
           } else if (msg.kind === "card_validate_done") {
-            console.log(`  done items=${msg.items?.length ?? 0} errors=${msg.errors?.length ?? 0}`);
+            const n = msg.items?.length ?? msg.total ?? 0;
+            console.log(`  done 卡片数=${n} errors=${msg.errors?.length ?? 0}`);
             clearTimeout(timeout);
             ws.close();
             resolve(null);

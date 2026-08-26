@@ -34,6 +34,40 @@ export function pickCardBodyText(body) {
   return String(v ?? "").trim();
 }
 
+/** 开放 API 误把回测请求打到建卡端点时的识别（只读历史 + WS 返回，不 INSERT）。 */
+export function looksLikeCardValidateRequest(body) {
+  const b = body && typeof body === "object" ? body : {};
+  const mockRaw = String(b.mock ?? "").toLowerCase();
+  if (["1", "true", "yes", "on"].includes(mockRaw) || b.mock === true) return true;
+  if (Array.isArray(b.signals) && b.signals.length > 0) return true;
+  if (Array.isArray(b.items) && b.items.length > 0 && (b.items[0]?.symbol || b.items[0]?.coin)) return true;
+  if (Array.isArray(b.coins) && b.coins.length > 0) return true;
+
+  const hasCreatePayload =
+    b.messageId != null ||
+    pickCardBodyText(b).length > 0 ||
+    (b.symbol && (b.entry != null || b.targets != null || b.takeProfits != null || b.stopLoss != null));
+
+  if (hasCreatePayload) return false;
+
+  return (
+    b.days != null ||
+    b.from != null ||
+    b.to != null ||
+    b.sources != null ||
+    b.mockCount != null ||
+    (b.limit != null && (b.channelId != null || b.symbol != null || b.sources != null))
+  );
+}
+
+export const CARD_VALIDATE_MISROUTE_HINT = {
+  error:
+    "此请求属于历史卡片回测（只读），不会创建新卡片。请改用 POST /api/v1/cards/validate",
+  hint: "POST /api/v1/cards/validate，Body 传 signals: [{ symbol, direction, signalAt, entry? }]，再连 ws://127.0.0.1:3851/ws 收 card_validate_* 事件",
+  correctEndpoint: "/api/v1/cards/validate",
+  ws: { path: "/ws", channel: "meta", events: ["card_validate_started", "card_validate_item", "card_validate_done"] },
+};
+
 /**
  * 规范化图片列表。
  * @param {unknown} raw
@@ -537,6 +571,17 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
   app.post("/api/v1/cards", requireOpenApiKey, async (req, res) => {
     try {
       const body = req.body ?? {};
+      if (looksLikeCardValidateRequest(body)) {
+        return res.status(400).json({ ok: false, ...CARD_VALIDATE_MISROUTE_HINT });
+      }
+      if (store?.offline) {
+        return res.status(503).json({
+          ok: false,
+          error: "MySQL 未连接，无法创建卡片（collect:ui 离线模式）",
+          hint: "建卡需 MySQL。若目的是历史数据回测，请改用 POST /api/v1/cards/validate（联调可加 mock: true）",
+          correctEndpoint: "/api/v1/cards/validate",
+        });
+      }
       const input = normalizeOpenCardInput(body);
       const execution = normalizeExecution(
         {
@@ -584,7 +629,12 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
         channelMessage: card?.channelMessage ?? null,
       });
     } catch (e) {
-      res.status(400).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      const body = req.body ?? {};
+      if (looksLikeCardValidateRequest(body) || /insertSignalCard|离线模式|无法持久化/.test(msg)) {
+        return res.status(400).json({ ok: false, error: msg, ...CARD_VALIDATE_MISROUTE_HINT });
+      }
+      res.status(400).json({ ok: false, error: msg });
     }
   });
 

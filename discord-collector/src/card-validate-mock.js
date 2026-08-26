@@ -1,6 +1,8 @@
 /**
- * 卡片列表验证 — 模拟数据（不访问行情 / 数据库）。
+ * 卡片回测 — 模拟数据（不访问行情 / 数据库）。
+ * 当前 validate 接口默认走此路径；真实 K 线回测尚未启用。
  */
+import { detectSymbolTier, getBacktestSpec } from "./card-backtest-policy.js";
 
 const MOCK_CHANNELS = [
   { channelId: "mock-ch-001", channelName: "军长频道" },
@@ -18,6 +20,64 @@ const MOCK_SYMBOLS = [
   { symbol: "WIF", entry: 2.4, leverage: 20, direction: "long" },
   { symbol: "SUI", entry: 3.2, leverage: 20, direction: "short" },
 ];
+
+/**
+ * @param {import("./card-validate-signals.js").BacktestSignalInput} sig
+ * @param {number} index
+ */
+export function backtestSignalToMockCard(sig, index) {
+  const tier = detectSymbolTier(sig.symbol);
+  const spec = getBacktestSpec(tier);
+  const ch = MOCK_CHANNELS[index % MOCK_CHANNELS.length];
+  const entry =
+    sig.entry ??
+    (tier === "major"
+      ? sig.symbol === "ETH"
+        ? 3200
+        : 95000
+      : 1 + index * 0.37);
+  return {
+    id: 91001 + index,
+    uid: `SC-BT-${91001 + index}`,
+    symbol: sig.symbol,
+    channelId: ch.channelId,
+    channelName: ch.channelName,
+    sourceType: "api",
+    signalAt: sig.signalAt,
+    createdAt: sig.signalAt,
+    assetClass: "crypto",
+    backtestInput: {
+      signalId: sig.id,
+      direction: sig.direction,
+      entryMode: sig.entryMode,
+      entry: sig.entry,
+      tier: sig.tier,
+      profitThresholdPct: sig.profitThresholdPct,
+    },
+    execution: {
+      symbol: sig.symbol,
+      direction: sig.direction === "short" ? "做空" : "做多",
+      outcome: "pending",
+      planned: {
+        entryPrice: String(entry),
+        takeProfitPrices: [],
+        stopLossPrice: "",
+      },
+    },
+    parsedJson: {},
+    progress: { status: "entered", entryHitAt: sig.signalAt },
+    _mockLeverage: spec.leverage,
+    _mockDirection: sig.direction,
+    _mockEntry: entry,
+  };
+}
+
+/**
+ * @param {import("./card-validate-signals.js").BacktestSignalInput[]} signals
+ */
+export function buildMockValidateCardsFromSignals(signals) {
+  return signals.map((sig, i) => backtestSignalToMockCard(sig, i));
+}
 
 /**
  * @param {number} [count]
@@ -48,16 +108,19 @@ export function buildMockValidateCards(count = 8) {
         outcome: inProgress ? "pending" : i % 4 === 0 ? "take_profit" : "stop_loss",
         planned: {
           entryPrice: String(sym.entry),
-          takeProfitPrices: sym.direction === "long"
-            ? [String(sym.entry * 1.03), String(sym.entry * 1.06)]
-            : [String(sym.entry * 0.97), String(sym.entry * 0.94)],
-          stopLossPrice: sym.direction === "long"
-            ? String(sym.entry * 0.97)
-            : String(sym.entry * 1.03),
+          takeProfitPrices:
+            sym.direction === "long"
+              ? [String(sym.entry * 1.03), String(sym.entry * 1.06)]
+              : [String(sym.entry * 0.97), String(sym.entry * 0.94)],
+          stopLossPrice:
+            sym.direction === "long" ? String(sym.entry * 0.97) : String(sym.entry * 1.03),
         },
       },
       parsedJson: {},
       progress: inProgress ? { status: "entered", entryHitAt: signalAt } : { status: "closed_tp" },
+      _mockLeverage: sym.leverage,
+      _mockDirection: sym.direction,
+      _mockEntry: sym.entry,
     });
   }
   return cards;
@@ -68,69 +131,70 @@ export function buildMockValidateCards(count = 8) {
  * @param {number} index
  */
 export function buildMockValidateItem(card, index) {
-  const sym = MOCK_SYMBOLS[index % MOCK_SYMBOLS.length];
+  const input =
+    card.backtestInput && typeof card.backtestInput === "object"
+      ? /** @type {Record<string, unknown>} */ (card.backtestInput)
+      : {};
+  const symMeta = MOCK_SYMBOLS[index % MOCK_SYMBOLS.length];
+  const symbol = String(card.symbol ?? symMeta.symbol);
+  const tier = detectSymbolTier(symbol);
+  const spec = getBacktestSpec(tier);
+  const leverage = Number(card._mockLeverage) || spec.leverage;
+  const direction = String(card._mockDirection ?? input.direction ?? symMeta.direction);
+  const isShort = direction === "short";
   const signalAt = String(card.signalAt ?? card.createdAt ?? new Date().toISOString());
   const signalMs = new Date(signalAt).getTime();
-  const inProgress =
-    String(/** @type {Record<string, unknown>} */ (card.execution)?.outcome ?? "") === "pending";
-  const isShort = sym.direction === "short";
-  const entry = sym.entry;
-  const leverage = sym.leverage;
+  const entry = Number(card._mockEntry ?? input.entry ?? symMeta.entry);
+  const profitThresholdPct = tier === "major" ? 2 : 5;
+  const entryMode = String(input.entryMode ?? (input.entry != null ? "limit" : "market"));
+
+  const maxProfitPct = Math.round((18 + (index % 6) * 7.2) * 100) / 100;
+  const minProfitPct = Math.round(-(6 + (index % 5) * 2.8) * 100) / 100;
+  const maxProfitAt = new Date(signalMs + (4 + index) * 3600_000).toISOString();
+  const minProfitAt = new Date(signalMs + (8 + index) * 3600_000).toISOString();
+  const hitProfitThresholdBeforeMax = index % 3 !== 2;
+  const hitProfitThresholdBeforeMin = index % 4 === 0;
+  const windowEndAt = new Date(signalMs + 3 * 86400_000).toISOString();
 
   /** @type {Record<string, unknown>} */
   const base = {
+    signalId: input.signalId ?? card.uid ?? card.id,
     cardId: card.id,
     uid: card.uid,
-    symbol: sym.symbol,
+    symbol,
     channelId: card.channelId,
     channelName: card.channelName,
     sourceType: card.sourceType,
     signalAt,
-    direction: sym.direction,
+    direction,
     entry,
+    entryMode,
     leverage,
-    inProgress,
-    entered: true,
-    outcome: inProgress ? "pending" : index % 4 === 0 ? "take_profit" : "stop_loss",
+    tier,
+    windowDays: 3,
+    profitThresholdPct,
     mock: true,
+    note: "模拟回测结果；真实 K 线回测尚未启用",
   };
 
-  if (index === 5) {
+  if (index === 5 && !input.signalId) {
     return { ...base, error: "missing_entry", entry: null };
   }
 
-  if (inProgress) {
-    const move = isShort ? -0.012 + index * 0.003 : 0.018 - index * 0.004;
-    const currentPrice = isShort ? entry * (1 - move) : entry * (1 + move);
-    const currentPnlPct = Math.round(move * leverage * 100 * 100) / 100;
-    return {
-      ...base,
-      mode: "current",
-      currentPrice: Math.round(currentPrice * 1e6) / 1e6,
-      currentPnlPct,
-      currentPnlLabel: `${currentPnlPct >= 0 ? "+" : ""}${currentPnlPct.toFixed(2)}% (@${leverage}x)`,
-    };
-  }
-
-  const maxProfitPct = 28 + (index % 5) * 6.5;
-  const maxDrawdownPct = 8 + (index % 4) * 3.2;
-  const maxProfitAt = new Date(signalMs + (2 + index) * 3600_000).toISOString();
-  const maxDrawdownAt = new Date(signalMs + (5 + index) * 3600_000).toISOString();
-  const currentPnlPct = index % 4 === 0 ? maxProfitPct * 0.6 : -maxDrawdownPct * 0.4;
-
   return {
     ...base,
-    mode: "full",
-    signalMs,
-    maxProfitPct: Math.round(maxProfitPct * 100) / 100,
+    mode: "backtest_window",
+    maxProfitPct,
     maxProfitAt,
-    maxProfitPrice: isShort ? entry * 0.92 : entry * 1.08,
-    maxDrawdownPct: Math.round(maxDrawdownPct * 100) / 100,
-    maxDrawdownAt,
-    currentPnlPct: Math.round(currentPnlPct * 100) / 100,
-    currentPrice: isShort ? entry * 0.96 : entry * 1.04,
-    klineCount: 48 + index * 12,
-    windowEndAt: new Date().toISOString(),
+    maxProfitPrice: isShort ? entry * 0.9 : entry * 1.12,
+    minProfitPct,
+    minProfitAt,
+    minProfitPrice: isShort ? entry * 1.06 : entry * 0.94,
+    hitProfitThresholdBeforeMax,
+    hitProfitThresholdBeforeMin,
+    currentPnlPct: Math.round((maxProfitPct + minProfitPct) / 2 * 100) / 100,
+    klineCount: 36 + index * 8,
+    windowEndAt,
   };
 }
 
@@ -141,7 +205,8 @@ export function buildMockValidateSample() {
   return {
     ok: true,
     mock: true,
-    note: "模拟数据，未访问行情与数据库",
+    note: "模拟数据，未访问行情与数据库；真实回测尚未启用",
+    windowDays: 3,
     total: items.length,
     items,
     errors: items.filter((x) => x.error).map((x) => ({ cardId: x.cardId, error: String(x.error) })),
