@@ -435,10 +435,26 @@ export interface PatternChartAnalysis {
   bb_wick_top?: boolean;
   macd_bull?: boolean;
   macd_top_weak?: boolean;
-  /** 最新 K 含 OI 异动（含形态+OI 或纯 OI） */
+  /** 最新 K：OI 异动（含形态+OI 或纯 OI） */
   oi_anomaly?: boolean;
-  /** 最新 K 仅有 OI 异动、无形态 */
+  /** 最新 K：仅有 OI 异动、无形态 */
   oi_anomaly_only?: boolean;
+  /** 扫流动性 / 反转持续性（Pinbar + 量能 + OI） */
+  sweep_momentum?: {
+    symbol?: string;
+    timestamp?: string | null;
+    price_close: number;
+    vol_ratio: number;
+    oi_delta_pct: number | null;
+    sustainability_score: number;
+    signal_type: string;
+    is_bullish_sweep?: boolean;
+    is_bearish_sweep?: boolean;
+    lower_shadow_ratio?: number;
+    upper_shadow_ratio?: number;
+    body_ratio?: number;
+    reasons: string[];
+  };
   derivatives?: PatternChartDerivatives;
 }
 

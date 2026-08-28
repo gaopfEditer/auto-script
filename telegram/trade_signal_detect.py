@@ -43,7 +43,7 @@ _ENTRY = re.compile(
     re.I,
 )
 _TP = re.compile(
-    r"(?:止盈|目标|TP|take\s*profit)\s*[:：]?\s*([^\n]{1,60})",
+    r"(?:止盈|目标|TP|take\s*profit)\s*[:：]?\s*([^\n止損损]{1,40})",
     re.I,
 )
 _SL = re.compile(
@@ -107,7 +107,15 @@ _SYM_BLOCK = frozenset(
         "SPOT",
         "SWAP",
         "PERP",
+        # 约定标签，不是币种
+        "PROM",
     }
+)
+
+_PROM_TAG = re.compile(r"(?<![A-Za-z0-9])#prom(?![A-Za-z0-9])", re.I)
+_TP_LEVELS = re.compile(
+    r"(?:tp\s*([123])|止盈\s*([123])|目标\s*([123]))\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?)",
+    re.I,
 )
 
 
@@ -122,12 +130,18 @@ class TradeSignal:
     note: str = ""
     sender: str = ""
     is_departure: bool = False  # 发车/先信号
+    is_prom: bool = False  # #prom 约定开仓标签
     source_text: str = ""
     msg_ids: list[int] = field(default_factory=list)
 
     @property
     def has_core(self) -> bool:
         return bool(self.symbol and self.direction)
+
+    @property
+    def has_prom_open(self) -> bool:
+        """#prom + 方向即可视为开仓意图（币种可稍后补）。"""
+        return bool(self.is_prom and self.direction)
 
     @property
     def has_tpsl(self) -> bool:
@@ -146,6 +160,7 @@ class TradeSignal:
             note=self.note or other.note,
             sender=self.sender or other.sender,
             is_departure=self.is_departure or other.is_departure,
+            is_prom=self.is_prom or other.is_prom,
             source_text=self.source_text or other.source_text,
             msg_ids=list(dict.fromkeys([*self.msg_ids, *other.msg_ids])),
         )
@@ -207,7 +222,23 @@ def _clean_field(v: str) -> str:
     s = (v or "").strip()
     s = re.sub(r"\s+", " ", s)
     s = re.split(r"[|｜]{2,}|\s{2,}", s)[0].strip()
+    # 截断误吞的止损等后续字段
+    s = re.split(r"(?:止损|止損|SL\b)", s, maxsplit=1, flags=re.I)[0].strip()
     return s[:80]
+
+
+def _pick_tp_levels(text: str) -> str:
+    """收集 tp1/tp2/tp3 或 止盈1/2/3，按档位排序后逗号拼接。"""
+    found: dict[int, str] = {}
+    for m in _TP_LEVELS.finditer(text or ""):
+        level = m.group(1) or m.group(2) or m.group(3)
+        price = (m.group(4) or "").strip()
+        if not level or not price:
+            continue
+        found[int(level)] = price
+    if not found:
+        return ""
+    return ",".join(found[k] for k in sorted(found.keys()))
 
 
 def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) -> TradeSignal | None:
@@ -216,6 +247,7 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
     if not body:
         return None
 
+    is_prom = bool(_PROM_TAG.search(body))
     sig = TradeSignal(
         symbol=_pick_symbol(body),
         direction=_pick_direction(body),
@@ -224,7 +256,9 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
             _FARE.search(body)
             or _MARKET_DIR_LONG.search(body)
             or _MARKET_DIR_SHORT.search(body)
+            or is_prom
         ),
+        is_prom=is_prom,
         source_text=body[:500],
         msg_ids=[int(msg_id)] if msg_id is not None else [],
     )
@@ -240,8 +274,16 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
         elif re.search(r"入场\s*[:：]?\s*现价|现价\s*入场|市价\s*开", body):
             sig.entry = "现价"
 
+    levels = _pick_tp_levels(body)
     tm = _TP.search(body)
-    if tm:
+    if levels:
+        # 若通用止盈行也有内容，合并去重
+        base = _clean_field(tm.group(1)) if tm else ""
+        if base and base not in levels:
+            sig.take_profit = f"{levels},{base}" if not re.search(r"tp\s*[123]", base, re.I) else levels
+        else:
+            sig.take_profit = levels
+    elif tm:
         sig.take_profit = _clean_field(tm.group(1))
     sm = _SL.search(body)
     if sm:
@@ -253,9 +295,11 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
     if nm:
         sig.note = _clean_field(nm.group(1))
 
-    if sig.has_core:
+    if sig.has_core or sig.has_prom_open:
         return sig
     if sig.take_profit or sig.stop_loss or sig.entry:
+        return sig
+    if is_prom:
         return sig
     return None
 
@@ -263,6 +307,8 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
 def looks_like_trade_message(text: str) -> bool:
     """粗筛：是否值得进窗口分析。"""
     t = text or ""
+    if _PROM_TAG.search(t):
+        return True
     if _SYM_HASH.search(t):
         return True
     if _MARKET_DIR_LONG.search(t) or _MARKET_DIR_SHORT.search(t):
@@ -271,7 +317,13 @@ def looks_like_trade_message(text: str) -> bool:
         return True
     if _TP.search(t) or _SL.search(t) or _ENTRY.search(t) or _FARE.search(t):
         return True
+    if _TP_LEVELS.search(t):
+        return True
     return False
+
+
+def has_prom_tag(text: str) -> bool:
+    return bool(_PROM_TAG.search(text or ""))
 
 
 def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:
@@ -290,7 +342,9 @@ def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:
     lines = [header]
     arrow = "📈" if sig.direction == "多" else "📉" if sig.direction == "空" else "▪️"
     dir_cn = f"做{sig.direction}" if sig.direction in ("多", "空") else (sig.direction or "")
-    lines.append(f"{arrow} {sig.symbol} {dir_cn}".strip())
+    lines.append(f"{arrow} {sig.symbol or '?'} {dir_cn}".strip())
+    if sig.is_prom:
+        lines.append("#prom")
 
     if sig.entry:
         lines.append(f"📈 入场：{sig.entry}")

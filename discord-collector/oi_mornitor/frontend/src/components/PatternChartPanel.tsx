@@ -1418,7 +1418,52 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 {analysis?.oi_anomaly && !analysis?.oi_anomaly_only && (
                   <span className="sig oi-combo">形态+OI异动</span>
                 )}
+                {analysis?.sweep_momentum ? (
+                  <span
+                    className={`sig sweep score-${
+                      analysis.sweep_momentum.sustainability_score >= 70
+                        ? "high"
+                        : analysis.sweep_momentum.sustainability_score >= 40
+                          ? "mid"
+                          : "low"
+                    } ${
+                      analysis.sweep_momentum.is_bullish_sweep
+                        ? "bull"
+                        : analysis.sweep_momentum.is_bearish_sweep
+                          ? "bear"
+                          : ""
+                    }`}
+                    title={[
+                      analysis.sweep_momentum.signal_type,
+                      `量能 ${analysis.sweep_momentum.vol_ratio}x`,
+                      analysis.sweep_momentum.oi_delta_pct != null
+                        ? `OI ${analysis.sweep_momentum.oi_delta_pct > 0 ? "+" : ""}${analysis.sweep_momentum.oi_delta_pct}%`
+                        : "OI —",
+                      ...(analysis.sweep_momentum.reasons || []),
+                    ].join("\n")}
+                  >
+                    扫荡 {analysis.sweep_momentum.sustainability_score}
+                    {analysis.sweep_momentum.signal_type !== "普通震荡"
+                      ? ` · ${analysis.sweep_momentum.signal_type.replace("反转扫荡", "")}`
+                      : ""}
+                  </span>
+                ) : null}
               </div>
+              {analysis?.sweep_momentum && analysis.sweep_momentum.reasons?.length ? (
+                <ul className="pattern-sweep-reasons">
+                  <li className="pattern-sweep-head">
+                    持续性 {analysis.sweep_momentum.sustainability_score}/100 ·{" "}
+                    {analysis.sweep_momentum.signal_type}
+                    {" · "}量 {analysis.sweep_momentum.vol_ratio}x
+                    {analysis.sweep_momentum.oi_delta_pct != null
+                      ? ` · OI ${analysis.sweep_momentum.oi_delta_pct > 0 ? "+" : ""}${analysis.sweep_momentum.oi_delta_pct}%`
+                      : ""}
+                  </li>
+                  {analysis.sweep_momentum.reasons.map((r, i) => (
+                    <li key={`sweep-r-${i}`}>{r}</li>
+                  ))}
+                </ul>
+              ) : null}
               {mtf?.["4h"]?.ready || mtf?.["1d"]?.ready ? (
                 <p className="pattern-mtf-row">
                   多周期：

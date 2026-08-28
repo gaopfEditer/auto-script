@@ -6,7 +6,7 @@ import { createRouter, createWebHistory } from "vue-router";
  * 白名单见 discord-collector/.env.production → VITE_UI_PAGES。
  */
 /* global __UI_DEPLOY__, __UI_PAGE_SHOW__, __UI_PAGE_FETCH__, __UI_PAGE_OI__,
-   __UI_PAGE_CARDS__,    __UI_PAGE_EVAL__, __UI_PAGE_TWITTER__, __UI_PAGE_ARCHIVES__, __UI_PAGE_TRADE__, __UI_PAGE_COMMUNITY__,
+   __UI_PAGE_CARDS__,    __UI_PAGE_EVAL__, __UI_PAGE_TELEGRAM__, __UI_PAGE_TWITTER__, __UI_PAGE_ARCHIVES__, __UI_PAGE_TRADE__, __UI_PAGE_COMMUNITY__,
    __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__ */
 
 const IS_DEPLOY = __UI_DEPLOY__;
@@ -76,6 +76,13 @@ function buildRoutes() {
       component: () => import("../views/CardEvalView.vue"),
     });
     routes.push({ path: "/signals", redirect: "/eval" });
+  }
+  if (__UI_PAGE_TELEGRAM__) {
+    routes.push({
+      path: "/telegram",
+      name: "telegram",
+      component: () => import("../views/TelegramPromView.vue"),
+    });
   }
   if (__UI_PAGE_TWITTER__) {
     routes.push({

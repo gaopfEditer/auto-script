@@ -180,6 +180,8 @@ curl -s -X POST "http://127.0.0.1:3851/api/v1/cards" \
 
 可选：`direction`（`long` / `short` / 做多 / 做空）。
 
+Telegram `#prom`：`note` 含 `#prom` 或 Body 传 `mergeWindowMs: 600000` 时，同频道同作者同币种 **10 分钟内**再 POST 会合并更新同一张卡（默认合并窗为 30 分钟）。
+
 ---
 
 ## 批量清算 `POST /api/v1/cards/liquidate`

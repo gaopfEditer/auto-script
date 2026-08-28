@@ -41,6 +41,7 @@ import { registerCardArchiveRoutes, requireOpenApiKey } from "./card-archive-api
 import { createCommunityFeedService } from "./community-feed-service.js";
 import { registerCardEvalRoutes } from "./card-eval-api.js";
 import { registerCardValidateRoutes } from "./card-validate-api.js";
+import { registerTelegramPromRoutes } from "./telegram-prom-api.js";
 import { registerCommunityRoutes } from "./community-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
 import { createCardExternalSink } from "./card-external-sink.js";
@@ -191,6 +192,7 @@ async function main() {
   cardArchiveListCache = cardArchiveListCacheRef;
   registerCardEvalRoutes(app, store, { requireOpenApiKey });
   registerCardValidateRoutes(app, store, cardArchiveListCacheRef, broadcast, { requireOpenApiKey });
+  registerTelegramPromRoutes(app, store, cardArchiveListCacheRef, broadcast, { requireOpenApiKey });
   registerTwitterCdpRoutes(app, twitterCdp);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });

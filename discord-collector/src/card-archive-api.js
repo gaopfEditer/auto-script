@@ -134,6 +134,7 @@ export function normalizeOpenCardInput(body) {
     entry: b.entry,
     targets: b.targets ?? b.takeProfits,
     stopLoss: b.stopLoss,
+    mergeWindowMs: Number(b.mergeWindowMs ?? b.merge_window_ms) || undefined,
   };
 }
 
@@ -621,6 +622,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
         channelName: input.channelName,
         channelAvatar: input.channelAvatar,
         images: input.images,
+        mergeWindowMs: input.mergeWindowMs,
       });
       listCache.onClientCardChanged(card);
       res.status(201).json({

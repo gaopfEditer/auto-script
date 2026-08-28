@@ -185,7 +185,7 @@ async function fetchPatternChartFromClient(
   const built = buildChartFromCandles(
     candles,
     meta.state as unknown as Record<string, unknown> | undefined,
-    { oiByTime },
+    { oiByTime, symbol: symbol.toUpperCase() },
   );
   const sandboxMarkers = meta.sandbox_markers || [];
   const markers = [...built.markers, ...sandboxMarkers];

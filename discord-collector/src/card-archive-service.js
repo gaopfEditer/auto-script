@@ -651,6 +651,12 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
         authorKey,
         direction: String(execution.direction ?? parsedJson.direction ?? ""),
         signalAtMs,
+        withinMs:
+          Number(input.mergeWindowMs) > 0
+            ? Number(input.mergeWindowMs)
+            : String(input.note ?? "").includes("#prom")
+              ? 10 * 60 * 1000
+              : undefined,
       });
       if (mergeTarget) {
         const openId = extractSignalCardRowId(mergeTarget.id ?? mergeTarget.ID);

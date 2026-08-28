@@ -70,6 +70,7 @@ def signal_to_card_payload(
     signal_at: datetime | None = None,
     phase: str = "full",
     raw_body: str = "",
+    merge_window_ms: int | None = None,
 ) -> dict[str, Any]:
     profile = resolve_channel_profile(chat_id, fallback_title=chat_title or sig.sender)
     direction = ""
@@ -86,6 +87,8 @@ def signal_to_card_payload(
     formatted = format_signal_push(sig, phase=phase if phase != "update" else "full")
     body = (raw_body or "").strip() or formatted
     note_parts = []
+    if sig.is_prom:
+        note_parts.append("#prom")
     if sig.note:
         note_parts.append(sig.note)
     if phase == "update":
@@ -110,6 +113,10 @@ def signal_to_card_payload(
         "source": "telegram",
         "sourceRef": f"tg:{chat_id}:{','.join(str(x) for x in sig.msg_ids[:5])}",
     }
+    if merge_window_ms is not None and merge_window_ms > 0:
+        payload["mergeWindowMs"] = int(merge_window_ms)
+    elif sig.is_prom:
+        payload["mergeWindowMs"] = 10 * 60 * 1000
     if sig.sender:
         payload["authorKey"] = sig.sender.strip()
         payload["sender"] = sig.sender.strip()

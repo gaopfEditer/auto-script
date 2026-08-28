@@ -9,6 +9,7 @@ import type {
   PatternPriceLine,
 } from "../types";
 import { buildCandleSignalMarkers } from "./candleSignals";
+import { evaluateSweepMomentum } from "./sweepMomentum";
 
 const BB_LEN = 20;
 const BB_MULT = 2;
@@ -69,7 +70,7 @@ function isPivotExtreme(
 export function buildChartFromCandles(
   candles: PatternCandle[],
   state?: Record<string, unknown> | null,
-  opts?: { oiByTime?: Map<number, number> },
+  opts?: { oiByTime?: Map<number, number>; symbol?: string },
 ): {
   bb: { upper: Pt[]; mid: Pt[]; lower: Pt[] };
   vegas: Record<"filter" | "a1" | "a2" | "b1" | "b2", Pt[]>;
@@ -249,6 +250,12 @@ export function buildChartFromCandles(
     oi_anomaly: lastMarkers.some((m) => m.oi_anomaly || m.kind === "oi_anomaly"),
     oi_anomaly_only: lastMarkers.some((m) => m.kind === "oi_anomaly"),
   };
+
+  const sweep = evaluateSweepMomentum(candles, {
+    oiByTime: opts?.oiByTime,
+    symbol: opts?.symbol,
+  });
+  if (sweep) analysis.sweep_momentum = sweep;
 
   return { bb, vegas, macd, markers, price_lines, analysis };
 }

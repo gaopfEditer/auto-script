@@ -22,6 +22,7 @@ from oi_mornitor.config import (
     STRATEGY_VEGAS_PERIODS,
 )
 from oi_mornitor.strategy.candle_signals import collect_candle_signal_markers
+from oi_mornitor.strategy.sweep_momentum import evaluate_sweep_momentum_from_df
 
 STATUS_SEARCHING = "SEARCHING_TOP"
 STATUS_LH = "STAGE_1_LH_DETECTED"
@@ -513,6 +514,9 @@ def build_pattern_chart_payload(
             if isinstance(m, dict)
         ),
     })
+    sweep = evaluate_sweep_momentum_from_df(df, symbol=str(state.get("symbol") or ""))
+    if sweep:
+        analysis["sweep_momentum"] = sweep
     if derivatives_ctx:
         analysis["derivatives"] = derivatives_ctx
 
