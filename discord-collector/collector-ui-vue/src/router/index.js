@@ -7,7 +7,7 @@ import { createRouter, createWebHistory } from "vue-router";
  */
 /* global __UI_DEPLOY__, __UI_PAGE_SHOW__, __UI_PAGE_FETCH__, __UI_PAGE_OI__,
    __UI_PAGE_CARDS__,    __UI_PAGE_EVAL__, __UI_PAGE_TELEGRAM__, __UI_PAGE_TWITTER__, __UI_PAGE_ARCHIVES__, __UI_PAGE_TRADE__, __UI_PAGE_COMMUNITY__,
-   __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__ */
+   __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__, __UI_PAGE_LOCAL__, __UI_PAGE_MANUAL_STATS__ */
 
 const IS_DEPLOY = __UI_DEPLOY__;
 const DEFAULT_PATH = __UI_PAGE_SHOW__
@@ -18,11 +18,9 @@ const DEFAULT_PATH = __UI_PAGE_SHOW__
       ? "/eval"
       : __UI_PAGE_COMMUNITY__
         ? "/community"
-        : __UI_PAGE_FETCH__
-          ? "/fetch"
-          : __UI_PAGE_OI__
-            ? "/oi"
-            : "/show";
+        : __UI_PAGE_OI__
+          ? "/oi"
+          : "/show";
 
 /**
  * @returns {import('vue-router').RouteRecordRaw[]}
@@ -48,13 +46,6 @@ function buildRoutes() {
       component: () => import("../views/ShowView.vue"),
     });
   }
-  if (__UI_PAGE_FETCH__) {
-    routes.push({
-      path: "/fetch",
-      name: "fetch",
-      component: () => import("../views/YoutubeFetchView.vue"),
-    });
-  }
   if (__UI_PAGE_OI__) {
     routes.push({
       path: "/oi",
@@ -76,6 +67,36 @@ function buildRoutes() {
       component: () => import("../views/CardEvalView.vue"),
     });
     routes.push({ path: "/signals", redirect: "/eval" });
+  }
+  if (__UI_PAGE_COMMUNITY__) {
+    routes.push({
+      path: "/community",
+      name: "community",
+      component: () => import("../views/CommunityView.vue"),
+    });
+  }
+
+  // —— Local 模块（仅非 deploy；构建期 __UI_PAGE_* = false 时整段 DCE）——
+  if (__UI_PAGE_LOCAL__) {
+    routes.push({
+      path: "/local",
+      name: "local",
+      component: () => import("../views/LocalHubView.vue"),
+    });
+  }
+  if (__UI_PAGE_MANUAL_STATS__) {
+    routes.push({
+      path: "/local/manual-stats",
+      name: "manual-stats",
+      component: () => import("../views/ManualStatsView.vue"),
+    });
+  }
+  if (__UI_PAGE_FETCH__) {
+    routes.push({
+      path: "/fetch",
+      name: "fetch",
+      component: () => import("../views/YoutubeFetchView.vue"),
+    });
   }
   if (__UI_PAGE_TELEGRAM__) {
     routes.push({
@@ -103,13 +124,6 @@ function buildRoutes() {
       path: "/trade",
       name: "trade",
       component: () => import("../views/BitgetTradeView.vue"),
-    });
-  }
-  if (__UI_PAGE_COMMUNITY__) {
-    routes.push({
-      path: "/community",
-      name: "community",
-      component: () => import("../views/CommunityView.vue"),
     });
   }
   if (__UI_PAGE_DEBUG__) {

@@ -14,6 +14,7 @@ from oi_mornitor.config import HTTP_TIMEOUT_SEC, OI_OI_BATCH_CONCURRENCY
 
 # 与前端 tf-btn / radar OI_TF_WINDOWS 对齐（5m K 线根数）
 TF_KLINE_BARS: dict[str, int] = {
+    "5m": 1,
     "15m": 3,
     "30m": 6,
     "1h": 12,

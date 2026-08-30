@@ -137,7 +137,7 @@ flowchart LR
 3. `router/index.js` → global + 懒加载路由
 4. `views/FooView.vue`
 
-部署可见性：`.env.production` 的 `VITE_UI_PAGES`。**构建期注入**，改完必须 `pnpm run ui:build`。
+部署可见性：`.env.production` 的 `VITE_UI_PAGES`。**构建期注入**，改完必须 `pnpm run ui:build`。本机 Local 模块页（`local/telegram/twitter/fetch/archives/trade/debug`）在 `vite.config.js` 中 **deploy 强制关闭**，不会进产物。
 
 ### 5.3 新 Discord 信号频道
 
@@ -202,4 +202,4 @@ flowchart LR
 - 不要把档位计价改去 oi_mornitor；OI 只收 `CARD_SINK`。
 - 不要在 Discord CDP 页上顺便 scrape Twitter（端口/profile 分开）。
 - 不要新增「第二套卡片表」。归档与信号共用 `discord_signal_cards`。
-- 不要把 deploy 默认页塞满；本机工具页（`/twitter` `/debug` `/eval`）按需加进 `VITE_UI_PAGES`。
+- 不要把 deploy 默认页塞满；本机工具（Telegram / 推特 / 拉取 / 文稿 / 下单 / Debug）在顶栏 **Local** 模块，**构建期强制剔除**，不要写进 `VITE_UI_PAGES`。

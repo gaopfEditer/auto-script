@@ -18,18 +18,35 @@ export default defineConfig(({ mode }) => {
     uiMode !== "local" &&
     uiMode !== "dev" &&
     uiMode !== "full";
+  /** 本机工具页：deploy 构建强制关闭，避免误写入 VITE_UI_PAGES 后打进包 */
+  const LOCAL_ONLY = new Set([
+    "local",
+    "manual-stats",
+    "telegram",
+    "twitter",
+    "fetch",
+    "archives",
+    "trade",
+    "debug",
+  ]);
   const pagesCsv =
     String(env.VITE_UI_PAGES ?? "show,cards,eval,community,oi").trim() ||
     "show,cards,eval,community,oi";
   const pageSet = new Set(
-    pagesCsv.split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
+    pagesCsv
+      .split(/[,;\s]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s && !LOCAL_ONLY.has(s))
   );
   /** @param {string} name */
-  const pageOn = (name) => !isDeployBuild || pageSet.has(name);
+  const pageOn = (name) => {
+    if (LOCAL_ONLY.has(name)) return !isDeployBuild;
+    return !isDeployBuild || pageSet.has(name);
+  };
 
   if (mode === "production") {
     console.info(
-      `[discord-collector-ui] build mode=${mode} deploy=${isDeployBuild} pages=${[...pageSet].join(",")}`
+      `[discord-collector-ui] build mode=${mode} deploy=${isDeployBuild} pages=${[...pageSet].join(",")} (local-only stripped)`
     );
   }
 
@@ -48,6 +65,8 @@ export default defineConfig(({ mode }) => {
       __UI_PAGE_COMMUNITY__: JSON.stringify(pageOn("community")),
       __UI_PAGE_DEBUG__: JSON.stringify(pageOn("debug")),
       __UI_PAGE_CONTENT__: JSON.stringify(pageOn("content")),
+      __UI_PAGE_LOCAL__: JSON.stringify(pageOn("local")),
+      __UI_PAGE_MANUAL_STATS__: JSON.stringify(pageOn("manual-stats")),
       __UI_PAGE_HOME__: JSON.stringify(pageOn("home") || !isDeployBuild),
     },
     plugins: [

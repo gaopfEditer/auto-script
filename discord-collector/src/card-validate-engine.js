@@ -12,6 +12,7 @@ import { isShortDirection } from "./card-direction.js";
 import { resolveLiquidationLeverage } from "./card-liquidation-engine.js";
 import { isCardEnteredForEval, resolveCardEvalOutcome } from "./card-eval-outcome.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
+import { BACKTEST_WINDOW_DAYS } from "./card-validate-signals.js";
 
 /**
  * 未完结（止盈/止损/手动平仓前）的卡片：只返回当前盈亏率。
@@ -164,4 +165,173 @@ export async function validateCardMetrics(card) {
   } catch (e) {
     return { ...base, error: String(/** @type {Error} */ (e).message ?? e) };
   }
+}
+
+/**
+ * @param {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }>} klines
+ * @param {number} signalMs
+ */
+function marketPriceAtOrAfter(klines, signalMs) {
+  const sorted = [...klines].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  const bar = sorted.find((k) => (k.ts ?? 0) >= signalMs) ?? sorted[0];
+  if (!bar) return null;
+  const p = Number(bar.open ?? bar.close ?? bar.high ?? bar.low);
+  return Number.isFinite(p) && p > 0 ? p : null;
+}
+
+/**
+ * 真实 K 线回测：信号时刻入场，窗口内最大/最小盈亏与阈值触及（文档 planned 规则）。
+ * @param {import("./card-validate-signals.js").BacktestSignalInput} sig
+ * @param {{ windowDays?: number }} [opts]
+ */
+export async function backtestSignalReal(sig, opts = {}) {
+  const windowDays = Number(opts.windowDays) > 0 ? Number(opts.windowDays) : BACKTEST_WINDOW_DAYS;
+  const symbol = String(sig.symbol ?? "").trim().toUpperCase();
+  const signalMs = Date.parse(String(sig.signalAt ?? ""));
+  const isShort = sig.direction === "short";
+  const leverage = resolveLiquidationLeverage(symbol, "crypto");
+  const profitThresholdPct = Number(sig.profitThresholdPct) || (sig.tier === "major" ? 2 : 5);
+  const entryMode = sig.entryMode === "limit" && sig.entry != null ? "limit" : "market";
+
+  /** @type {Record<string, unknown>} */
+  const base = {
+    signalId: sig.id,
+    symbol,
+    signalAt: sig.signalAt,
+    direction: sig.direction,
+    entryMode,
+    leverage,
+    tier: sig.tier,
+    windowDays,
+    profitThresholdPct,
+    mock: false,
+  };
+
+  if (!symbol) return { ...base, error: "missing_symbol" };
+  if (!Number.isFinite(signalMs)) return { ...base, error: "invalid_signal_time" };
+
+  const endMs = Math.min(Date.now(), signalMs + windowDays * 86400_000);
+  /** @type {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }>} */
+  let klines;
+  try {
+    klines = await fetchKlinesForCard(symbol, "crypto", signalMs, endMs, "5m");
+  } catch (e) {
+    return { ...base, error: String(/** @type {Error} */ (e).message ?? e) };
+  }
+
+  const marketAtSignal = marketPriceAtOrAfter(klines, signalMs);
+  if (marketAtSignal == null) {
+    return { ...base, error: "no_market_price", klineCount: klines.length };
+  }
+
+  /** @type {number | null} */
+  let entry = null;
+  /** @type {string | null} */
+  let entryHitAt = null;
+
+  if (entryMode === "market" || sig.entry == null) {
+    entry = marketAtSignal;
+    entryHitAt = new Date(signalMs).toISOString();
+  } else {
+    const planned = Number(sig.entry);
+    const diffPct = (Math.abs(marketAtSignal - planned) / planned) * 100;
+    if (diffPct <= 0.5) {
+      entry = marketAtSignal;
+      entryHitAt = new Date(signalMs).toISOString();
+    } else {
+      const deadline = signalMs + 12 * 60 * 60 * 1000;
+      for (const k of [...klines].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))) {
+        const ts = k.ts ?? 0;
+        if (ts < signalMs) continue;
+        if (ts > deadline) break;
+        const high = Number(k.high);
+        const low = Number(k.low);
+        if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+        const touched = isShort ? high >= planned : low <= planned;
+        if (touched) {
+          entry = planned;
+          entryHitAt = new Date(ts).toISOString();
+          break;
+        }
+      }
+    }
+  }
+
+  if (entry == null || !entryHitAt) {
+    return {
+      ...base,
+      mode: "backtest_window",
+      entered: false,
+      entry: sig.entry,
+      marketAtSignal,
+      klineCount: klines.length,
+      note: "窗口内未入场",
+      error: "not_entered",
+    };
+  }
+
+  const entryMs = Date.parse(entryHitAt);
+  const sorted = [...klines]
+    .filter((k) => (k.ts ?? 0) >= entryMs - 1)
+    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+
+  let peak = -Infinity;
+  let trough = Infinity;
+  let peakAt = /** @type {string | null} */ (null);
+  let troughAt = /** @type {string | null} */ (null);
+  let peakPrice = /** @type {number | null} */ (null);
+  let troughPrice = /** @type {number | null} */ (null);
+  let hitProfitThresholdBeforeMax = false;
+  let hitProfitThresholdBeforeMin = false;
+  let hitTh = false;
+  for (const k of sorted) {
+    const high = Number(k.high);
+    const low = Number(k.low);
+    if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+    const at = k.ts ? new Date(k.ts).toISOString() : null;
+    const bestPrice = isShort ? low : high;
+    const worstPrice = isShort ? high : low;
+    const best = calcLeveragePnl(entry, bestPrice, isShort, leverage);
+    const worst = calcLeveragePnl(entry, worstPrice, isShort, leverage);
+    if (best && best.pnlPctOnMargin > peak) {
+      peak = best.pnlPctOnMargin;
+      peakAt = at;
+      peakPrice = bestPrice;
+      hitProfitThresholdBeforeMax = hitTh;
+    }
+    if (worst && worst.pnlPctOnMargin < trough) {
+      trough = worst.pnlPctOnMargin;
+      troughAt = at;
+      troughPrice = worstPrice;
+      hitProfitThresholdBeforeMin = hitTh;
+    }
+    if (best && best.pnlPctOnMargin >= profitThresholdPct) hitTh = true;
+    if (worst && worst.pnlPctOnMargin >= profitThresholdPct) hitTh = true;
+  }
+
+  const last = sorted[sorted.length - 1];
+  const currentPnl =
+    last != null
+      ? calcLeveragePnl(entry, Number(last.close ?? last.high ?? last.low), isShort, leverage)
+      : null;
+
+  return {
+    ...base,
+    mode: "backtest_window",
+    entered: true,
+    entry,
+    entryHitAt,
+    marketAtSignal,
+    maxProfitPct: Number.isFinite(peak) ? Math.round(peak * 100) / 100 : null,
+    maxProfitAt: peakAt,
+    maxProfitPrice: peakPrice,
+    minProfitPct: Number.isFinite(trough) ? Math.round(trough * 100) / 100 : null,
+    minProfitAt: troughAt,
+    minProfitPrice: troughPrice,
+    hitProfitThresholdBeforeMax,
+    hitProfitThresholdBeforeMin,
+    currentPnlPct: currentPnl?.pnlPctOnMargin ?? null,
+    klineCount: klines.length,
+    windowEndAt: last?.ts ? new Date(last.ts).toISOString() : new Date(endMs).toISOString(),
+  };
 }

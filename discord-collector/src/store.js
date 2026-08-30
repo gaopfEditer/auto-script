@@ -1224,7 +1224,7 @@ export async function openStore(cfg, log) {
 
   /**
    * @param {number} id
-   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, channelId?: string, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown, progressJson?: unknown }} patch
+   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, channelId?: string, symbol?: string, rawContent?: string, signalAt?: string | null, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown, progressJson?: unknown }} patch
    */
   async function updateSignalCard(id, patch) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
@@ -1243,6 +1243,10 @@ export async function openStore(cfg, log) {
     if (patch.expiresAt !== undefined) {
       sets.push("expires_at = ?");
       params.push(patch.expiresAt ? isoToMysqlDatetime3(patch.expiresAt) : null);
+    }
+    if (patch.signalAt !== undefined) {
+      sets.push("signal_at = ?");
+      params.push(patch.signalAt ? isoToMysqlDatetime3(patch.signalAt) : null);
     }
     if (patch.cardsByStyle != null) {
       sets.push("cards_by_style = ?");

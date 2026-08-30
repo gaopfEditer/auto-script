@@ -14,20 +14,19 @@ WebSocket：`ws://127.0.0.1:3851/ws`（`channel: meta`）
 
 | 目的 | 方法 | 是否写库 | 结果怎么拿 |
 |------|------|----------|------------|
-| **新建一张卡片**（Telegram/X 推送入库） | `POST /api/v1/cards` | 是，需 MySQL | 响应 `201` 返回 `card` |
-| **历史卡片回测**（3 天窗口盈亏统计） | `POST /api/v1/cards/validate` | **否**，客户端传 `signals` | **WebSocket** 推送 + 可选轮询 |
+| **新建一张卡片**（Telegram/X/手动统计入库） | `POST /api/v1/cards` 或本机手动统计 | 是，需 MySQL | 响应返回 `card`；手动统计另跑清算 |
+| **历史信号回测**（真实 K 线） | `POST /api/v1/cards/validate` + `signals` | 默认否 | WebSocket + 轮询 |
+| **库内卡片清算入库** | `POST /api/v1/cards/liquidate` 或 validate + `cardIds` | 是 | 写 `execution` / `progress` / `backtest` |
 
 常见误用：把回测请求发到 `POST /api/v1/cards`（建卡），会 400 并提示改用 `/validate`。
 
-> **当前阶段**：`/validate` **不依赖 MySQL**，按客户端传入的 `signals` 列表返回 **mock 回测结果**；真实 K 线回测尚未启用。
+> **`/validate` 已使用真实 Binance K 线**（不再默认 mock）。`signals[]` 做窗口回测；`cardIds` / `channelId` / `sources` 对库内卡清算并写回。静态样例：`GET .../validate/mock/sample`。
 
 **回测典型流程：**
 
 1. `POST /api/v1/cards/validate` + `signals[]`（币种、方向、帖子时间、可选入场价）
-2. 连接 `ws://127.0.0.1:3851/ws`，监听 `card_validate_started`（总数）、`card_validate_item`（逐条）、`card_validate_done`（汇总）
+2. 连接 `ws://127.0.0.1:3851/ws`，监听 `card_validate_started` / `card_validate_item` / `card_validate_done`
 3. 或轮询 `GET /api/v1/cards/validate/<jobId>`
-
-**无 signals 时**：返回默认 8 条 mock；或 `GET /api/v1/cards/validate/mock/sample` 立即预览。
 
 筛选参数与前端卡片归档页（`/cards`）、评估页（`/eval`）一致。
 
@@ -207,8 +206,7 @@ Body 字段：`days` / `from` / `to`、`channelId`、`sources` / `source`、`sym
 
 ## 历史回测 `POST /api/v1/cards/validate`
 
-> **不是建卡。** 客户端传入待回测信号列表（`signals`），服务端按帖子时间模拟入场，在 **3 天窗口**内统计盈亏。**不读写 MySQL。**  
-> **当前阶段：一律返回 mock 数据**，用于联调 WebSocket / 轮询；真实 Binance K 线回测后续启用。
+> **不是建卡。** `signals`：真实 K 线窗口回测（默认不写库）。`cardIds` / `channelId` / `sources`：库内卡片真实清算并写回 MySQL。
 
 ### 请求 Body
 
@@ -222,12 +220,6 @@ Body 字段：`days` / `from` / `to`、`channelId`、`sources` / `source`、`sym
       "signalAt": "2026-08-21T10:00:00.000Z",
       "entry": "95000",
       "entryMode": "limit"
-    },
-    {
-      "symbol": "PEPE",
-      "direction": "short",
-      "signalAt": "2026-08-22T08:30:00.000Z",
-      "entryMode": "market"
     }
   ]
 }
@@ -235,103 +227,19 @@ Body 字段：`days` / `from` / `to`、`channelId`、`sources` / `source`、`sym
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `signals` | 推荐 | 信号数组（也可用 `items` / `coins` / `list`） |
-| `signals[].symbol` | 是 | 币种，如 `BTC` |
-| `signals[].direction` | 是 | `long` / `short` / `做多` / `做空` |
-| `signals[].signalAt` | 是 | 帖子时间 ISO（也可用 `postTime` / `time`） |
-| `signals[].entry` | 否 | 指定入场价；缺省按 **市价** 在 `signalAt` 入场 |
-| `signals[].entryMode` | 否 | `market`（默认，无 entry 时）/ `limit`（有 entry 时） |
-| `mockCount` | 否 | 未传 `signals` 时生成 mock 条数（默认 8，最大 20） |
+| `signals` | 与库筛二选一 | 信号数组 |
+| `signals[].symbol` / `direction` / `signalAt` | 是 | 币种、方向、时间 |
+| `signals[].entry` / `entryMode` | 否 | 入场价；默认市价 |
+| `cardIds` / `channelId` / `sources` | 与 signals 二选一 | 库内清算入库 |
+| `windowDays` | 否 | 默认 3 |
 
-### 计划中的回测规则（尚未实现，mock 已预留字段）
+### 回测规则（真实 K 线）
 
-1. 在 `signalAt` 按 **市价** 或 **指定 entry** 入场  
-2. 统计 **3 天内**（`windowDays: 3`）：
-   - `maxProfitPct` — 最高盈利百分比  
-   - `minProfitPct` — 最低盈利百分比（可为负）  
-   - `hitProfitThresholdBeforeMax` — 在触及最高点 **之前** 是否曾盈利 ≥ 阈值  
-   - `hitProfitThresholdBeforeMin` — 在触及最低点 **之前** 是否曾盈利 ≥ 阈值  
-3. 盈利阈值：**BTC/ETH 2%**，**山寨 5%**（`profitThresholdPct`）
+1. `signalAt` 市价或限价（12h 内触及）入场  
+2. 窗口内：`maxProfitPct` / `minProfitPct`、阈值触及  
+3. 阈值：BTC/ETH **2%**，山寨 **5%**
 
-### 启动
-
-```bash
-curl -s -X POST "http://127.0.0.1:3851/api/v1/cards/validate" \
-  -H "Content-Type: application/json" \
-  -H "X-Cards-Api-Key: your-secret-key" \
-  -d '{
-    "signals": [
-      {"symbol": "BTC", "direction": "long", "signalAt": "2026-08-21T10:00:00.000Z", "entry": "95000"},
-      {"symbol": "DOGE", "direction": "short", "signalAt": "2026-08-22T12:00:00.000Z", "entryMode": "market"}
-    ]
-  }'
-```
-
-响应 `202`：
-
-```json
-{
-  "ok": true,
-  "jobId": "uuid",
-  "status": "running",
-  "mode": "backtest",
-  "mock": true,
-  "readOnly": true,
-  "windowDays": 3,
-  "note": "当前返回模拟回测结果；真实 K 线回测尚未启用",
-  "signalCount": 2,
-  "ws": { "path": "/ws", "channel": "meta", "events": ["card_validate_started", "..."] },
-  "poll": "/api/v1/cards/validate/uuid"
-}
-```
-
-### 静态 mock 样例
-
-```bash
-curl -s "http://127.0.0.1:3851/api/v1/cards/validate/mock/sample" \
-  -H "X-Cards-Api-Key: your-secret-key"
-```
-
-### WebSocket 事件（`channel: meta`）
-
-| `kind` | 说明 |
-|--------|------|
-| `card_validate_started` | `{ jobId, total, mock: true }` |
-| `card_validate_progress` | `{ jobId, index, total, symbol, signalId }` |
-| `card_validate_item` | `{ jobId, index, item }` 单条 mock 回测结果 |
-| `card_validate_done` | `{ jobId, items[], errors[] }` 全部完成 |
-| `card_validate_error` | `{ jobId, error }` 任务级失败 |
-
-### 单条结果字段（`item`，当前 mock）
-
-| 字段 | 说明 |
-|------|------|
-| `signalId` | 请求中的 id |
-| `symbol` / `direction` | 币种、方向 |
-| `signalAt` | 帖子时间 |
-| `entry` / `entryMode` | 入场价、入场方式 |
-| `windowDays` | 回测窗口（3 天） |
-| `maxProfitPct` / `maxProfitAt` | 最高盈利 % 及时间 |
-| `minProfitPct` / `minProfitAt` | 最低盈利 % 及时间 |
-| `profitThresholdPct` | 阈值（主流 2 / 山寨 5） |
-| `hitProfitThresholdBeforeMax` | 触顶前是否达阈值 |
-| `hitProfitThresholdBeforeMin` | 触底前是否达阈值 |
-| `mock` | 恒为 `true`（当前阶段） |
-
-### 轮询状态
-
-```bash
-curl -s "http://127.0.0.1:3851/api/v1/cards/validate/<jobId>" \
-  -H "X-Cards-Api-Key: your-secret-key"
-```
-
-`status`: `running` → `done`；`done` 时 `items` 含全部 mock 结果。
-
----
-
-## （已废弃）按 MySQL 筛选回测
-
-旧版文档中的 `days` / `sources` / `channelId` 筛选 **不再用于 /validate**；若需查库内卡片请用 `GET /api/v1/cards`。
+响应 `202`：`mock: false`。WS：`card_validate_*`。样例预览：`GET /api/v1/cards/validate/mock/sample`（非行情）。
 
 ---
 

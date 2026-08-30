@@ -134,7 +134,7 @@ export function registerTelegramPromRoutes(app, store, listCache, broadcast, dep
         promCount: promCards.length,
         cards,
         signals,
-        hint: "signals 可直接 POST /api/v1/cards/validate 做回测（当前 mock）",
+        hint: "signals 可直接 POST /api/v1/cards/validate 做真实 K 线回测",
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });

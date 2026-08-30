@@ -1,4 +1,4 @@
-export type OiTimeframe = "15m" | "30m" | "1h" | "4h" | "1d";
+export type OiTimeframe = "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
 
 export interface OiWindowSnapshot {
   delta_usd: number;
@@ -43,6 +43,7 @@ export interface TickerRow {
   delta_15m_usd: number;
   pct_15m: number;
   pct_price_5m?: number;
+  pct_price_15m?: number;
   price_change_pct_24h?: number;
   oi_tier?: OiTier;
   oi_by_tf?: Partial<OiByTf>;
@@ -510,6 +511,8 @@ export interface RadarSnapshot {
   thresholds: {
     oi_usd_limit: number;
     oi_pct_limit: number;
+    price_spike_pct_5m?: number;
+    price_spike_pct_15m?: number;
   };
 }
 
@@ -523,5 +526,10 @@ export const EMPTY_SNAPSHOT: RadarSnapshot = {
   breakout_alerts: [],
   pattern: { scan_ts: 0, watchlist: [], states: [], pattern_alerts: [] },
   pool_size: 0,
-  thresholds: { oi_usd_limit: 1_500_000, oi_pct_limit: 5 },
+  thresholds: {
+    oi_usd_limit: 500_000,
+    oi_pct_limit: 2.5,
+    price_spike_pct_5m: 2,
+    price_spike_pct_15m: 3.5,
+  },
 };

@@ -7,21 +7,18 @@ import { RouterLink } from "vue-router";
     <h1>Discord Collector</h1>
     <p>
       需要两个终端：<code>pnpm run collect:ui</code>（后端 3851）+ <code>pnpm run dev:ui-vue</code>（前端 dev）。
-      请打开 Vite 提示的地址（如 <code>http://localhost:5189/show</code>），顶部应显示 <strong>WS 已连接</strong>。
+      请打开 Vite 提示的地址（如 <code>http://localhost:5178/show</code>），顶部应显示 <strong>WS 已连接</strong>。
     </p>
     <div class="actions">
       <RouterLink class="btn primary" to="/show">Show（群组 / 频道 / 消息）</RouterLink>
       <RouterLink class="btn" to="/eval">卡片评估</RouterLink>
-      <RouterLink class="btn" to="/cards">统一卡片归档（来源/币种/时间）</RouterLink>
-      <RouterLink class="btn" to="/fetch">提交 YouTube URL 拉取文稿</RouterLink>
-      <RouterLink class="btn" to="/archives">YouTube 文稿归档预览</RouterLink>
-      <RouterLink class="btn" to="/trade">Bitget 手动下单</RouterLink>
-      <RouterLink class="btn primary" to="/community">社区（广场 / 签到 / 打赏 / 头衔）</RouterLink>
-      <RouterLink class="btn primary" to="/oi">OI Monitor（行情 / 形态 / 沙盒）</RouterLink>
-      <RouterLink class="btn" to="/debug">Debug（网络 / WS 帧）</RouterLink>
+      <RouterLink class="btn" to="/cards">统一卡片归档</RouterLink>
+      <RouterLink class="btn primary" to="/community">社区</RouterLink>
+      <RouterLink class="btn primary" to="/oi">OI Monitor</RouterLink>
+      <RouterLink class="btn" to="/local">Local 本机工具</RouterLink>
     </div>
     <p class="note">
-      OI 模块需另开终端 <code>pnpm run oi:start</code>（完整）或 <code>oi:dev</code>；顶栏可在 Discord / OI 间切换。部署版已包含 OI，上云需 frp 映射 8765 并配置 <code>OI_PUBLIC_EMBED_URL</code>。
+      顶栏 <strong>Discord | OI Monitor | Local</strong>。Local（Telegram / 推特 / 拉取 / 文稿 / 下单 / Debug）仅本地开发可见，不会打进部署包。
     </p>
   </div>
 </template>

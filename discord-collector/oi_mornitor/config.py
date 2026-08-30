@@ -36,16 +36,19 @@ FALLBACK_MIN_TICKERS = int(os.getenv("OI_FALLBACK_MIN_TICKERS", "30"))
 # 币安 418 / 硬封后，多久内优先走备选所（秒）
 BINANCE_BAN_COOLDOWN_SEC = float(os.getenv("OI_BINANCE_BAN_COOLDOWN_SEC", "300"))
 
-# 候选池：fapi 全市场 ticker/24hr 聚合 + OI 量级分层
-OI_TIER_MID_MIN_USD = float(os.getenv("OI_TIER_MID_MIN_USD", "10000000"))
+# 候选池：fapi 全市场 ticker/24hr 聚合 + OI 量级分层（略降门槛以覆盖更多山寨异动）
+OI_TIER_MID_MIN_USD = float(os.getenv("OI_TIER_MID_MIN_USD", "5000000"))
 OI_TIER_HEAVY_MIN_USD = float(os.getenv("OI_TIER_HEAVY_MIN_USD", "50000000"))
 OI_OI_BATCH_CONCURRENCY = int(os.getenv("OI_OI_BATCH_CONCURRENCY", "20"))
 # 兼容旧配置：0 表示不限制，监控所有符合量级条件的合约
 TOP_N = int(os.getenv("OI_TOP_N", "0"))
 
-# 异动阈值
-OI_USD_LIMIT = float(os.getenv("OI_USD_LIMIT", "1500000"))
-OI_PCT_LIMIT = float(os.getenv("OI_PCT_LIMIT", "5.0"))
+# 异动阈值（偏灵敏：便于发现刚起的热币；可用 env 调严）
+OI_USD_LIMIT = float(os.getenv("OI_USD_LIMIT", "500000"))
+OI_PCT_LIMIT = float(os.getenv("OI_PCT_LIMIT", "2.5"))
+# 价格尖刺（%）：左栏「价格暴涨/暴跌」独立阈值
+PRICE_SPIKE_PCT_5M = float(os.getenv("OI_PRICE_SPIKE_PCT_5M", "2.0"))
+PRICE_SPIKE_PCT_15M = float(os.getenv("OI_PRICE_SPIKE_PCT_15M", "3.5"))
 # 单窗口 OI 变动上限：超过视为口径跳变（备选所单位切换 / 脏样本），丢弃差分并重置缓存
 OI_DELTA_MAX_PCT = float(os.getenv("OI_DELTA_MAX_PCT", "150"))
 
@@ -55,8 +58,8 @@ REQUEST_INTERVAL_SEC = float(os.getenv("OI_REQUEST_INTERVAL_SEC", "0.1"))
 # HTTP 超时（ticker/24hr 体量大，国内走代理时建议 ≥30）
 HTTP_TIMEOUT_SEC = float(os.getenv("OI_HTTP_TIMEOUT_SEC", "30"))
 
-# 扫描周期（秒）
-SCAN_INTERVAL_SEC = int(os.getenv("OI_SCAN_INTERVAL_SEC", "60"))
+# 扫描周期（秒）— 略缩短以更快刷新左栏/榜单
+SCAN_INTERVAL_SEC = int(os.getenv("OI_SCAN_INTERVAL_SEC", "30"))
 
 # HTTP 重试
 MAX_RETRIES = int(os.getenv("OI_MAX_RETRIES", "3"))
@@ -67,15 +70,15 @@ RATE_LIMIT_COOLDOWN_SEC = float(os.getenv("OI_RATE_LIMIT_COOLDOWN_SEC", "10.0"))
 WEB_HOST = os.getenv("OI_WEB_HOST", "127.0.0.1")
 WEB_PORT = int(os.getenv("OI_WEB_PORT", "8765"))
 
-# 双周期轮询（秒）
-POLL_5M_SEC = int(os.getenv("OI_POLL_5M_SEC", "300"))
-POLL_15M_SEC = int(os.getenv("OI_POLL_15M_SEC", "900"))
-ALERT_COOLDOWN_SEC = int(os.getenv("OI_ALERT_COOLDOWN_SEC", "900"))
+# 双周期轮询（秒）— 门控缩短，避免长时间看不到新异动
+POLL_5M_SEC = int(os.getenv("OI_POLL_5M_SEC", "60"))
+POLL_15M_SEC = int(os.getenv("OI_POLL_15M_SEC", "180"))
+ALERT_COOLDOWN_SEC = int(os.getenv("OI_ALERT_COOLDOWN_SEC", "300"))
 
 # OI 分钟级快照缓存长度（支持 1d 窗口差分）
 OI_CACHE_MAXLEN = int(os.getenv("OI_CACHE_MAXLEN", "1440"))
 MATRIX_TOP_N = int(os.getenv("OI_MATRIX_TOP_N", "7"))
-MATRIX_REFRESH_SEC = int(os.getenv("OI_MATRIX_REFRESH_SEC", "60"))
+MATRIX_REFRESH_SEC = int(os.getenv("OI_MATRIX_REFRESH_SEC", "30"))
 OI_ZSCORE_HISTORY_LEN = int(os.getenv("OI_ZSCORE_HISTORY_LEN", "288"))
 OI_ZSCORE_THRESHOLD = float(os.getenv("OI_ZSCORE_THRESHOLD", "3.0"))
 OI_ZSCORE_MIN_SAMPLES = int(os.getenv("OI_ZSCORE_MIN_SAMPLES", "5"))

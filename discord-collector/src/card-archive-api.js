@@ -418,6 +418,72 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
   });
 
   /**
+   * Local 手动统计建卡（博主名 → channelId=manual-<slug>），可选立即清算。
+   * body: { bloggerName, symbol, direction, date|signalAt, entry?, stopLoss?, targets?, note?, liquidate? }
+   */
+  app.post("/api/cards/manual", requireLocalRequest, async (req, res) => {
+    try {
+      const card = await archiveService.createManualStatsCard(req.body ?? {});
+      const afterCreate = await store.getSignalCardById(Number(card.id));
+      if (afterCreate) listCache.onRowChanged(afterCreate);
+      const wantLiquidate = req.body?.liquidate !== false && req.body?.liquidate !== 0;
+      let liquidation = null;
+      if (wantLiquidate && card?.id) {
+        liquidation = await runBatchLiquidation(
+          store,
+          liquidationLog,
+          { cardIds: [Number(card.id)], limit: 1 },
+          liquidationHooks
+        );
+      }
+      const finalRow = await store.getSignalCardById(Number(card.id));
+      if (finalRow) listCache.onRowChanged(finalRow);
+      res.json({
+        ok: true,
+        card: finalRow ? archiveCardToClient(finalRow) : card,
+        liquidation,
+      });
+    } catch (e) {
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      const status = /required|invalid|must be/i.test(msg) ? 400 : 500;
+      res.status(status).json({ ok: false, error: msg });
+    }
+  });
+
+  /** Local 手动统计更新 */
+  app.patch("/api/cards/manual/:id", requireLocalRequest, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const card = await archiveService.updateManualStatsCard(id, req.body ?? {});
+      const row = await store.getSignalCardById(id);
+      if (row) listCache.onRowChanged(row);
+      const wantLiquidate = req.body?.liquidate === true || req.body?.liquidate === 1;
+      let liquidation = null;
+      if (wantLiquidate) {
+        liquidation = await runBatchLiquidation(
+          store,
+          liquidationLog,
+          { cardIds: [id], limit: 1 },
+          liquidationHooks
+        );
+        const refreshed = await store.getSignalCardById(id);
+        if (refreshed) listCache.onRowChanged(refreshed);
+      }
+      const finalRow = await store.getSignalCardById(id);
+      res.json({
+        ok: true,
+        card: finalRow ? archiveCardToClient(finalRow) : card,
+        liquidation,
+      });
+    } catch (e) {
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      const status =
+        msg === "not found" ? 404 : /仅可编辑|required|invalid|must be/i.test(msg) ? 400 : 500;
+      res.status(status).json({ ok: false, error: msg });
+    }
+  });
+
+  /**
    * oi_mornitor / 外部系统回写：自动评价结算（TP1/2/3 或 SL）
    * body: { card_id|uid|id, outcome, best_tp, settlement_price, entry_price, ... }
    */
@@ -579,7 +645,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
         return res.status(503).json({
           ok: false,
           error: "MySQL 未连接，无法创建卡片（collect:ui 离线模式）",
-          hint: "建卡需 MySQL。若目的是历史数据回测，请改用 POST /api/v1/cards/validate（联调可加 mock: true）",
+          hint: "建卡需 MySQL。若目的是历史数据回测，请改用 POST /api/v1/cards/validate（真实 K 线）",
           correctEndpoint: "/api/v1/cards/validate",
         });
       }

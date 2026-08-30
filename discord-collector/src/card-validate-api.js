@@ -1,5 +1,5 @@
 /**
- * 卡片列表验证 API：长时间扫描经 WebSocket 推送进度与结果。
+ * 卡片列表验证 API：真实 K 线回测，经 WebSocket 推送进度与结果。
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -9,13 +9,10 @@ import {
   resolveArchiveBodySourceTypes,
   resolveArchiveListSourceTypes,
 } from "./card-archive-api.js";
-import {
-  buildMockValidateCards,
-  buildMockValidateCardsFromSignals,
-  buildMockValidateItem,
-  buildMockValidateSample,
-} from "./card-validate-mock.js";
+import { buildMockValidateSample } from "./card-validate-mock.js";
 import { BACKTEST_WINDOW_DAYS, parseBacktestSignals } from "./card-validate-signals.js";
+import { backtestSignalReal } from "./card-validate-engine.js";
+import { runBatchLiquidation } from "./card-liquidation-engine.js";
 import { createLogger } from "./logger.js";
 import { requireLocalRequest } from "./local-request.js";
 
@@ -23,7 +20,7 @@ const log = createLogger("card-validate");
 
 const JOB_TTL_MS = 60 * 60 * 1000;
 const MAX_JOBS = 20;
-const MOCK_CARD_DELAY_MS = 350;
+const REAL_CARD_DELAY_MS = 400;
 
 /** @type {Map<string, Record<string, unknown>>} */
 const jobs = new Map();
@@ -64,8 +61,13 @@ function resolveValidateFilters(req) {
   const cardIds = Array.isArray(merged.cardIds)
     ? merged.cardIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
     : [];
-  const mockCount = Math.min(20, Math.max(1, Number(merged.mockCount ?? merged.count) || 8));
   const signals = parseBacktestSignals(merged);
+  const persistRaw = String(merged.persist ?? "").toLowerCase();
+  const persist =
+    merged.persist === true ||
+    merged.persist === 1 ||
+    ["1", "true", "yes", "on"].includes(persistRaw);
+  const windowDays = Number(merged.windowDays ?? merged.window_days) || BACKTEST_WINDOW_DAYS;
   return {
     fromMs,
     toMs,
@@ -75,9 +77,10 @@ function resolveValidateFilters(req) {
     status,
     limit,
     cardIds,
-    mock: true,
-    mockCount,
+    mock: false,
     signals,
+    persist,
+    windowDays,
   };
 }
 
@@ -89,14 +92,14 @@ function emit(broadcast, payload) {
   const kind = String(payload.kind ?? "");
   if (kind === "card_validate_started") {
     log.info(
-      `回测验证开始 jobId=${payload.jobId} 卡片数=${payload.total ?? 0}${payload.mock ? " (mock)" : ""}`
+      `回测验证开始 jobId=${payload.jobId} 条数=${payload.total ?? 0} mock=${Boolean(payload.mock)}`
     );
   } else if (kind === "card_validate_done") {
     const n = Array.isArray(payload.items)
       ? payload.items.length
       : Number(payload.processed ?? payload.total) || 0;
     const errN = Array.isArray(payload.errors) ? payload.errors.length : 0;
-    log.info(`回测验证完成 jobId=${payload.jobId} 卡片数=${n} 错误=${errN}`);
+    log.info(`回测验证完成 jobId=${payload.jobId} 条数=${n} 错误=${errN}`);
   }
   broadcast("meta", payload);
 }
@@ -108,76 +111,86 @@ function emit(broadcast, payload) {
  */
 export function createCardValidateRunner(store, listCache, broadcast) {
   /**
+   * 客户端传入 signals：真实 K 线窗口回测。
    * @param {string} jobId
    * @param {Record<string, unknown>} filters
    */
-  async function runMockJob(jobId, filters) {
+  async function runSignalsJob(jobId, filters) {
     const job = jobs.get(jobId);
     if (!job || job.status !== "running") return;
 
-    const mockCount = Number(filters.mockCount) || 8;
-    const cards = filters.signals?.length
-      ? buildMockValidateCardsFromSignals(filters.signals)
-      : buildMockValidateCards(mockCount);
-    job.total = cards.length;
-    job.mock = true;
-    job.cards = cards.map((c) => ({
-      id: c.id,
-      symbol: c.symbol,
-      channelId: c.channelId,
-      channelName: c.channelName,
-    }));
+    const signals = Array.isArray(filters.signals) ? filters.signals : [];
+    job.total = signals.length;
+    job.mock = false;
     emit(broadcast, {
       kind: "card_validate_started",
       jobId,
-      total: cards.length,
-      mock: true,
+      total: signals.length,
+      mock: false,
+      persist: Boolean(filters.persist),
       filters: job.filters,
     });
 
     /** @type {Record<string, unknown>[]} */
     const items = [];
-    /** @type {Array<{ cardId: number, error: string }>} */
+    /** @type {Array<{ cardId?: number, signalId?: string, error: string }>} */
     const errors = [];
 
-    for (let i = 0; i < cards.length; i++) {
-      const card = cards[i];
-      const symbol = String(card.symbol ?? "").trim() || "—";
+    for (let i = 0; i < signals.length; i++) {
+      const sig = /** @type {import("./card-validate-signals.js").BacktestSignalInput} */ (signals[i]);
+      const symbol = String(sig.symbol ?? "").trim() || "—";
       job.processed = i;
-      job.current = { index: i + 1, total: cards.length, cardId: card.id, symbol };
+      job.current = { index: i + 1, total: signals.length, signalId: sig.id, symbol };
       emit(broadcast, {
         kind: "card_validate_progress",
         jobId,
         index: i + 1,
-        total: cards.length,
-        cardId: card.id,
+        total: signals.length,
+        signalId: sig.id,
         symbol,
-        channelId: card.channelId,
-        channelName: card.channelName,
-        mock: true,
+        mock: false,
       });
 
-      const item = buildMockValidateItem(card, i);
-      if (item.error) errors.push({ cardId: Number(card.id), error: String(item.error) });
-      else items.push(item);
-      job.items = items;
-      job.errors = errors;
-      emit(broadcast, {
-        kind: "card_validate_item",
-        jobId,
-        index: i + 1,
-        total: cards.length,
-        mock: true,
-        item,
-      });
+      try {
+        const item = await backtestSignalReal(sig, {
+          windowDays: Number(filters.windowDays) || BACKTEST_WINDOW_DAYS,
+        });
+        if (item.error) {
+          errors.push({ signalId: String(sig.id), error: String(item.error) });
+        } else {
+          items.push(item);
+        }
+        job.items = items;
+        job.errors = errors;
+        emit(broadcast, {
+          kind: "card_validate_item",
+          jobId,
+          index: i + 1,
+          total: signals.length,
+          mock: false,
+          item,
+        });
+      } catch (e) {
+        const msg = String(/** @type {Error} */ (e).message ?? e);
+        const errItem = { signalId: sig.id, symbol, error: msg, mock: false };
+        errors.push({ signalId: String(sig.id), error: msg });
+        emit(broadcast, {
+          kind: "card_validate_item",
+          jobId,
+          index: i + 1,
+          total: signals.length,
+          mock: false,
+          item: errItem,
+        });
+      }
 
-      if (i + 1 < cards.length) {
-        await new Promise((r) => setTimeout(r, MOCK_CARD_DELAY_MS));
+      if (i + 1 < signals.length) {
+        await new Promise((r) => setTimeout(r, REAL_CARD_DELAY_MS));
       }
     }
 
     job.status = "done";
-    job.processed = cards.length;
+    job.processed = signals.length;
     job.finishedAt = Date.now();
     job.items = items;
     job.errors = errors;
@@ -185,9 +198,9 @@ export function createCardValidateRunner(store, listCache, broadcast) {
     emit(broadcast, {
       kind: "card_validate_done",
       jobId,
-      total: cards.length,
-      processed: cards.length,
-      mock: true,
+      total: signals.length,
+      processed: signals.length,
+      mock: false,
       items,
       errors,
       filters: job.filters,
@@ -195,11 +208,128 @@ export function createCardValidateRunner(store, listCache, broadcast) {
   }
 
   /**
+   * 库内卡片：真实清算并写回 MySQL。
+   * @param {string} jobId
+   * @param {Record<string, unknown>} filters
+   */
+  async function runDbCardsJob(jobId, filters) {
+    const job = jobs.get(jobId);
+    if (!job || job.status !== "running") return;
+
+    job.mock = false;
+    const liquidationLog = createLogger("card-liquidate");
+    /** @param {number} id */
+    async function onCardUpdated(id) {
+      const row = await store.getSignalCardById(id);
+      if (row) listCache?.onRowChanged?.(row);
+    }
+
+    emit(broadcast, {
+      kind: "card_validate_started",
+      jobId,
+      total: 0,
+      mock: false,
+      persist: true,
+      mode: "liquidation",
+      filters: job.filters,
+    });
+
+    const result = await runBatchLiquidation(
+      store,
+      liquidationLog,
+      {
+        fromMs: Number(filters.fromMs),
+        toMs: Number(filters.toMs),
+        channelId: String(filters.channelId ?? ""),
+        sourceTypes: Array.isArray(filters.sourceTypes) ? filters.sourceTypes : [],
+        symbol: String(filters.symbol ?? ""),
+        limit: Number(filters.limit) || 200,
+        cardIds: Array.isArray(filters.cardIds) ? filters.cardIds : [],
+      },
+      { onCardUpdated }
+    );
+
+    const rawItems = Array.isArray(result.items) ? result.items : [];
+    /** @type {Record<string, unknown>[]} */
+    const items = rawItems.map((it) => ({ ...it, mock: false, mode: "liquidation" }));
+    /** @type {Array<{ cardId?: number, error: string }>} */
+    const errors = items
+      .filter((it) => it.error)
+      .map((it) => ({ cardId: Number(it.id) || undefined, error: String(it.error) }));
+
+    job.total = items.length;
+    job.processed = items.length;
+    job.status = "done";
+    job.finishedAt = Date.now();
+    job.items = items;
+    job.errors = errors;
+    job.current = null;
+
+    for (let i = 0; i < items.length; i++) {
+      emit(broadcast, {
+        kind: "card_validate_item",
+        jobId,
+        index: i + 1,
+        total: items.length,
+        mock: false,
+        item: items[i],
+      });
+    }
+
+    emit(broadcast, {
+      kind: "card_validate_done",
+      jobId,
+      total: items.length,
+      processed: Number(result.processed) || items.length,
+      skipped: result.skipped,
+      failed: result.failed,
+      mock: false,
+      persist: true,
+      items,
+      errors,
+      filters: job.filters,
+    });
+  }
+
+  /**
+   * @param {string} jobId
    * @param {Record<string, unknown>} filters
    */
   async function runJob(jobId, filters) {
-    // 当前阶段：一律 mock 回测，不读 MySQL / 不拉 K 线（见 docs/cards-api.md）
-    await runMockJob(jobId, filters);
+    const job = jobs.get(jobId);
+    if (!job) return;
+    try {
+      const signals = Array.isArray(filters.signals) ? filters.signals : [];
+      const cardIds = Array.isArray(filters.cardIds) ? filters.cardIds : [];
+      const hasDbFilter =
+        cardIds.length > 0 ||
+        String(filters.channelId ?? "").trim() ||
+        (Array.isArray(filters.sourceTypes) && filters.sourceTypes.length > 0);
+
+      if (signals.length) {
+        await runSignalsJob(jobId, filters);
+        return;
+      }
+      if (hasDbFilter) {
+        await runDbCardsJob(jobId, filters);
+        return;
+      }
+
+      job.status = "done";
+      job.error = "请传入 signals[]，或 cardIds / channelId / sources 指定库内卡片";
+      job.finishedAt = Date.now();
+      emit(broadcast, {
+        kind: "card_validate_error",
+        jobId,
+        error: job.error,
+      });
+    } catch (e) {
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      job.status = "done";
+      job.error = msg;
+      job.finishedAt = Date.now();
+      emit(broadcast, { kind: "card_validate_error", jobId, error: msg });
+    }
   }
 
   /**
@@ -220,6 +350,7 @@ export function createCardValidateRunner(store, listCache, broadcast) {
       items: [],
       errors: [],
       error: null,
+      mock: false,
     };
     jobs.set(jobId, job);
     void runJob(jobId, filters);
@@ -243,17 +374,33 @@ export function registerCardValidateRoutes(app, store, listCache, broadcast, dep
   async function startHandler(req, res) {
     try {
       const filters = resolveValidateFilters(req);
+      const hasSignals = filters.signals.length > 0;
+      const hasDbFilter =
+        filters.cardIds.length > 0 ||
+        Boolean(filters.channelId) ||
+        filters.sourceTypes.length > 0;
+      if (!hasSignals && !hasDbFilter) {
+        res.status(400).json({
+          ok: false,
+          error: "请传入 signals[]，或 cardIds / channelId / sources 指定库内卡片做真实回测",
+          hint: "signals: [{ symbol, direction, signalAt, entry? }]；库内卡片会走清算并写回 MySQL",
+        });
+        return;
+      }
       const job = runner.startJob(filters);
       res.status(202).json({
         ok: true,
         jobId: job.id,
         status: job.status,
         mode: "backtest",
-        mock: true,
-        readOnly: true,
-        windowDays: BACKTEST_WINDOW_DAYS,
-        note: "当前返回模拟回测结果；真实 K 线回测尚未启用",
-        signalCount: filters.signals.length || filters.mockCount,
+        mock: false,
+        readOnly: hasSignals && !filters.persist,
+        persist: hasDbFilter || Boolean(filters.persist),
+        windowDays: filters.windowDays || BACKTEST_WINDOW_DAYS,
+        note: hasSignals
+          ? "真实 Binance K 线回测（信号列表）；结果经 WS 推送"
+          : "库内卡片真实清算并写回 MySQL",
+        signalCount: filters.signals.length,
         filters,
         ws: {
           path: "/ws",
@@ -284,6 +431,7 @@ export function registerCardValidateRoutes(app, store, listCache, broadcast, dep
       ok: true,
       jobId: job.id,
       status: job.status,
+      mock: false,
       startedAt: job.startedAt,
       finishedAt: job.finishedAt,
       total: job.total,
@@ -297,7 +445,10 @@ export function registerCardValidateRoutes(app, store, listCache, broadcast, dep
   }
 
   function sampleHandler(_req, res) {
-    res.json(buildMockValidateSample());
+    res.json({
+      ...buildMockValidateSample(),
+      note: "此端点仅静态样例预览；正式回测请 POST /api/v1/cards/validate（真实 K 线）",
+    });
   }
 
   app.get("/api/cards/validate/mock/sample", requireLocalRequest, sampleHandler);

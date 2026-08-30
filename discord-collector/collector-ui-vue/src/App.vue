@@ -18,8 +18,8 @@ import {
   getNavPages,
   getUiMode,
   isDeployUi,
+  isLocalModuleEnabled,
   isOiModuleEnabled,
-  isPageEnabled,
   UI_MODULES,
 } from "./lib/uiMode.js";
 
@@ -28,13 +28,19 @@ const { open: openOnboarding } = useOnboardingGuide();
 const { debugMode, setDebugMode } = useDebugMode();
 
 const uiMode = getUiMode();
-const navPages = getNavPages();
 const brandTo = isDeployUi() ? getDefaultDeployPath() : "/";
-const showDebugToggle = !isDeployUi() || isPageEnabled("debug");
 const showOiModule = isOiModuleEnabled();
+const showLocalModule = isLocalModuleEnabled();
 
 const activeModule = computed(() => getModuleFromPath(route.path));
 const isOi = computed(() => activeModule.value === "oi");
+const isLocal = computed(() => activeModule.value === "local");
+/** Discord / Local 共用二级导航；OI 用 spacer */
+const showSubNav = computed(() => !isOi.value);
+const navPages = computed(() =>
+  getNavPages(isLocal.value ? "local" : "discord")
+);
+const showDebugToggle = computed(() => !isOi.value && !isDeployUi());
 /** /content 独立全屏，不共用 Discord/OI 顶栏 */
 const isContentStandalone = computed(() => activeModule.value === "content");
 
@@ -94,11 +100,18 @@ onUnmounted(() => {
 });
 
 const moduleLinks = computed(() => {
-  if (!showOiModule) return UI_MODULES.filter((m) => m.id === "discord");
-  return UI_MODULES.map((m) => ({
-    ...m,
-    to: m.id === "discord" ? (isDeployUi() ? getDefaultDeployPath() : brandTo === "/" ? "/show" : brandTo) : m.to,
-  }));
+  let list = UI_MODULES;
+  if (!showOiModule) list = list.filter((m) => m.id !== "oi");
+  if (!showLocalModule) list = list.filter((m) => m.id !== "local");
+  return list.map((m) => {
+    if (m.id === "discord") {
+      return {
+        ...m,
+        to: isDeployUi() ? getDefaultDeployPath() : brandTo === "/" ? "/show" : brandTo,
+      };
+    }
+    return m;
+  });
 });
 
 const wsStatusLabel = computed(() => {
@@ -139,7 +152,7 @@ async function toggleDebug() {
           {{ m.label }}
         </RouterLink>
       </nav>
-      <nav v-if="!isOi" class="nav-links">
+      <nav v-if="showSubNav" class="nav-links">
         <RouterLink v-for="p in navPages" :key="p.name" :to="p.path">{{ p.label }}</RouterLink>
       </nav>
       <div v-else class="oi-nav-spacer">OI Monitor · 行情 / 形态 / 沙盒</div>
@@ -162,7 +175,7 @@ async function toggleDebug() {
         {{ wsLongDisconnect ? `WS 断线 ${wsDownLabel}` : wsStatusLabel }}
       </button>
       <button
-        v-if="!isOi && showDebugToggle"
+        v-if="showDebugToggle"
         class="debug-toggle"
         :class="{ on: debugMode }"
         @click="toggleDebug"

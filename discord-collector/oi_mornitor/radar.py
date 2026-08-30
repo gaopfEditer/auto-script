@@ -37,6 +37,8 @@ from oi_mornitor.config import (
     OI_ZSCORE_THRESHOLD,
     OPEN_TRADE_SCAN_SEC,
     CARD_PRICE_REFRESH_SEC,
+    PRICE_SPIKE_PCT_15M,
+    PRICE_SPIKE_PCT_5M,
     SANDBOX_SCAN_SEC,
     SANDBOX_KLINE_FETCH_TIMEOUT_SEC,
     POLL_15M_SEC,
@@ -76,8 +78,9 @@ from oi_mornitor.taker_flow import (
 
 logger = logging.getLogger("OI_Radar")
 
-# 前端 tf-btn 对应 OI 差分窗口（分钟）
+# 前端 tf-btn 对应 OI 差分窗口（分钟）— 含 5m 短周期便于抓刚起的热币
 OI_TF_WINDOWS: dict[str, int] = {
+    "5m": 5,
     "15m": 15,
     "30m": 30,
     "1h": 60,
@@ -903,6 +906,7 @@ class BinanceOIRadar:
                     "delta_15m_usd": 0.0,
                     "pct_15m": 0.0,
                     "pct_price_5m": 0.0,
+                    "pct_price_15m": 0.0,
                     "price_change_pct_24h": row.get("price_change_pct_24h", 0.0),
                     "status": "warming",
                     "triggered_windows": [],
@@ -934,6 +938,9 @@ class BinanceOIRadar:
         oi_by_tf = self._build_oi_by_tf(self.cache, symbol, current)
         price_by_tf = self._build_price_by_tf(self.cache, symbol, price)
         pct_price_5m = self._calc_price_pct(price, past_5m.price)
+        pct_price_15m = (
+            self._calc_price_pct(price, past_15m.price) if past_15m is not None else 0.0
+        )
 
         z_score, is_historic = (0.0, False)
         if eval_5m:
@@ -979,6 +986,7 @@ class BinanceOIRadar:
                 "delta_15m_usd": delta_15m_usd,
                 "pct_15m": pct_15m,
                 "pct_price_5m": round(pct_price_5m, 4),
+                "pct_price_15m": round(pct_price_15m, 4),
                 "price_change_pct_24h": row.get("price_change_pct_24h", 0.0),
                 "status": status,
                 "triggered_windows": triggered_windows,
@@ -1512,6 +1520,8 @@ class RadarService:
             "thresholds": {
                 "oi_usd_limit": self.radar.oi_usd_limit,
                 "oi_pct_limit": self.radar.oi_pct_limit,
+                "price_spike_pct_5m": PRICE_SPIKE_PCT_5M,
+                "price_spike_pct_15m": PRICE_SPIKE_PCT_15M,
             },
             "tv_alert": self.tv_alert_sync.get_payload(),
         }

@@ -1,7 +1,11 @@
 import { memo, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import type { TickerRow } from "../types";
-import { deriveOiAlerts, type OiAlertItem } from "../utils/deriveOiAlerts";
+import {
+  deriveOiAlerts,
+  type AlertThresholds,
+  type OiAlertItem,
+} from "../utils/deriveOiAlerts";
 import { fmtDelta, fmtPct } from "../utils/format";
 import { patternsPathForSymbol } from "../utils/patternNav";
 import { coinInitial, displaySymbol } from "../utils/symbol";
@@ -10,7 +14,7 @@ interface Props {
   rows: TickerRow[];
   scanTs: number;
   poolSize: number;
-  thresholds: { oi_usd_limit: number; oi_pct_limit: number };
+  thresholds: AlertThresholds;
 }
 
 function formatClock(ts: number): string {
@@ -26,6 +30,13 @@ function windowLabel(window: OiAlertItem["window"]): string {
   return window === "5m" ? "5分钟内" : "15分钟内";
 }
 
+function typeLabel(item: OiAlertItem): string {
+  if (item.kind === "price") {
+    return item.isPump ? "价格暴涨" : "价格暴跌";
+  }
+  return item.isPump ? "OI 暴增" : "OI 暴跌";
+}
+
 const AlertCard = memo(function AlertCard({
   item,
   timeLabel,
@@ -35,7 +46,7 @@ const AlertCard = memo(function AlertCard({
   timeLabel: string;
   onSelect?: (symbol: string) => void;
 }) {
-  const { row, window, deltaUsd, pct, isPump, isSuppressed } = item;
+  const { row, window, deltaUsd, pct, isPump, isSuppressed, kind, tags } = item;
 
   return (
     <article
@@ -53,23 +64,27 @@ const AlertCard = memo(function AlertCard({
               <span className="alert-symbol">${displaySymbol(row.symbol)}</span>
             </div>
             <span className={`alert-type ${isPump ? "pump" : "dump"}`}>
-              OI {isPump ? "暴涨" : "暴跌"}
+              {typeLabel(item)}
               {isSuppressed ? " · 已抑制" : ""}
             </span>
           </div>
           <p className={`alert-desc ${isPump ? "pos" : "neg"}`}>
-            {windowLabel(window)} oi {fmtDelta(deltaUsd)} ({fmtPct(pct)})
+            {kind === "price" ? (
+              <>
+                {windowLabel(window)} 价格 {fmtPct(pct)}
+              </>
+            ) : (
+              <>
+                {windowLabel(window)} OI {fmtDelta(deltaUsd)} ({fmtPct(pct)})
+              </>
+            )}
           </p>
           <div className="alert-tags">
-            {row.individual_strength_score != null && (
-              <span className="alert-tag">自身强度 #{row.individual_strength_score.toFixed(0)}</span>
-            )}
-            {row.global_intensity_rank != null && (
-              <span className="alert-tag">全场强度 #{row.global_intensity_rank}</span>
-            )}
-            {row.global_volume_rank != null && (
-              <span className="alert-tag">全场量级 #{row.global_volume_rank}</span>
-            )}
+            {tags.map((t) => (
+              <span key={t} className="alert-tag">
+                {t}
+              </span>
+            ))}
           </div>
         </div>
       </div>
@@ -84,11 +99,10 @@ export const AlertFeed = memo(function AlertFeed({
   thresholds,
 }: Props) {
   const navigate = useNavigate();
-  /** 首次见到该异动卡时锁定时间，避免每轮扫描刷新成「当前时间」 */
   const firstSeenRef = useRef<Map<string, number>>(new Map());
 
   const alerts = useMemo(() => {
-    const derived = deriveOiAlerts(rows, thresholds, 40, scanTs);
+    const derived = deriveOiAlerts(rows, thresholds, 60, scanTs);
     const seen = firstSeenRef.current;
     const alive = new Set<string>();
     const out: OiAlertItem[] = derived.map((item) => {
@@ -121,11 +135,16 @@ export const AlertFeed = memo(function AlertFeed({
       <div className="panel-title">
         <span className="alert-feed-title">
           异动监控
-          <span className="alert-feed-info" title="5m / 15m OI 暴涨暴跌实时推送">
+          <span
+            className="alert-feed-info"
+            title="OI 暴增/暴跌 + 价格暴涨/暴跌（5m/15m），实时派生不依赖冷却门控"
+          >
             ⓘ
           </span>
         </span>
-        <span className="panel-count">更新 {scanTimeLabel}</span>
+        <span className="panel-count">
+          LIVE · {alerts.length} · 更新 {scanTimeLabel}
+        </span>
       </div>
 
       <div className="alert-scanner">
@@ -135,7 +154,7 @@ export const AlertFeed = memo(function AlertFeed({
 
       <div className="alert-feed-scroll">
         {alerts.length === 0 ? (
-          <div className="panel-empty">暂无异动 · 持续扫描中</div>
+          <div className="panel-empty">暂无异动 · 持续扫描中（暖机约需数分钟）</div>
         ) : (
           alerts.map((item) => (
             <AlertCard

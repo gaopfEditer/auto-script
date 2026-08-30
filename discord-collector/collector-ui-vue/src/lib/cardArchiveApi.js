@@ -41,14 +41,16 @@ import { buildArchivePeriodQuery, normalizeArchiveSourceList } from "./cardArchi
 
 export { buildArchivePeriodQuery } from "./cardArchiveFilters.js";
 
-/** @param {{ source?: string, sources?: string[], symbol?: string, status?: string, channelId?: string, days?: number, from?: string, to?: string, limit?: number, sinceId?: number, refresh?: boolean }} [opts] */
+/** @param {{ source?: string, sources?: string[], onlySources?: string[], symbol?: string, status?: string, channelId?: string, days?: number, from?: string, to?: string, limit?: number, sinceId?: number, refresh?: boolean }} [opts] */
 export async function fetchArchiveCards(opts = {}) {
   const q = new URLSearchParams();
-  const sources = opts.sources?.length
-    ? normalizeArchiveSourceList(opts.sources)
-    : opts.source
-      ? normalizeArchiveSourceList([opts.source])
-      : [];
+  const sources = opts.onlySources?.length
+    ? [...new Set(opts.onlySources.map((s) => String(s ?? "").trim().toLowerCase()).filter(Boolean))]
+    : opts.sources?.length
+      ? normalizeArchiveSourceList(opts.sources)
+      : opts.source
+        ? normalizeArchiveSourceList([opts.source])
+        : [];
   if (sources.length) q.set("sources", sources.join(","));
   if (opts.symbol) q.set("symbol", opts.symbol);
   if (opts.status) q.set("status", opts.status);
@@ -162,4 +164,49 @@ export async function clearArchiveCardLiquidation(cardIds) {
   });
   const j = await readOkJson(res, "清空结算失败");
   return j;
+}
+
+/**
+ * Local 手动统计建卡
+ * @param {{
+ *   bloggerName: string,
+ *   symbol: string,
+ *   direction: string,
+ *   date?: string,
+ *   signalAt?: string,
+ *   entry?: string,
+ *   stopLoss?: string,
+ *   targets?: string[],
+ *   note?: string,
+ *   liquidate?: boolean,
+ * }} body
+ */
+export async function createManualStatsCard(body) {
+  const res = await fetch("/api/cards/manual", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = await readOkJson(res, "创建手动统计失败");
+  return {
+    card: /** @type {ArchiveCard} */ (j.card),
+    liquidation: j.liquidation ?? null,
+  };
+}
+
+/**
+ * @param {number} id
+ * @param {Record<string, unknown>} body
+ */
+export async function updateManualStatsCard(id, body) {
+  const res = await fetch(`/api/cards/manual/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = await readOkJson(res, "更新手动统计失败");
+  return {
+    card: /** @type {ArchiveCard} */ (j.card),
+    liquidation: j.liquidation ?? null,
+  };
 }

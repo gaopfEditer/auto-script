@@ -8,7 +8,7 @@ import type {
   TickerRow,
 } from "../types";
 
-export const TIMEFRAMES: OiTimeframe[] = ["15m", "30m", "1h", "4h", "1d"];
+export const TIMEFRAMES: OiTimeframe[] = ["5m", "15m", "30m", "1h", "4h", "1d"];
 
 const EMPTY_FLOW = { net_usd: 0, volume_usd: 0 };
 const EMPTY_PRICE = { pct: 0 };
@@ -42,8 +42,9 @@ export function getOiWindow(row: TickerRow, tf: OiTimeframe): { delta_usd: numbe
 export function getPriceWindow(row: TickerRow, tf: OiTimeframe): PriceWindowSnapshot {
   const fromMap = row.price_by_tf?.[tf];
   if (fromMap) return fromMap;
+  if (tf === "5m") return { pct: row.pct_price_5m ?? 0 };
   if (tf === "15m" || tf === "30m") {
-    return { pct: row.pct_price_5m ?? 0 };
+    return { pct: row.pct_price_15m ?? row.pct_price_5m ?? 0 };
   }
   return EMPTY_PRICE;
 }
@@ -85,6 +86,7 @@ export function tfSubtitle(tf: OiTimeframe, suffix: string): string {
 
 export function emptyOiByTf(): OiByTf {
   return {
+    "5m": { delta_usd: 0, pct: 0 },
     "15m": { delta_usd: 0, pct: 0 },
     "30m": { delta_usd: 0, pct: 0 },
     "1h": { delta_usd: 0, pct: 0 },

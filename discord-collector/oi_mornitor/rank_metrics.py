@@ -16,7 +16,7 @@ import pandas as pd
 from oi_mornitor.config import OI_ZSCORE_MIN_SAMPLES
 
 # 与 radar.OI_TF_WINDOWS 对齐
-TF_LABELS: tuple[str, ...] = ("15m", "30m", "1h", "4h", "1d")
+TF_LABELS: tuple[str, ...] = ("5m", "15m", "30m", "1h", "4h", "1d")
 
 DOMAINS: tuple[str, ...] = ("price", "oi", "contract_flow", "spot_flow")
 

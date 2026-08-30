@@ -8,7 +8,13 @@ import {
   extractSymbolFromPayload,
   normalizeSymbol,
 } from "./card-fields.js";
-import { executionFromParsed, normalizeExecution, normalizePriceList } from "./discord-signal-execution.js";
+import {
+  executionFromParsed,
+  formatManualRawContent,
+  normalizeExecution,
+  normalizePriceList,
+} from "./discord-signal-execution.js";
+import { resolveTradeDirection } from "./card-direction.js";
 import { signalCardToClient, resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { getSignalChannelConfig, COIN_ACTION_SIGNAL_CHANNEL_ID, isSignalChannel } from "./discord-signal-config.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
@@ -1240,6 +1246,222 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     return { id, deleted: true, channelId, messageId };
   }
 
+  /**
+   * Local 手动统计：按博主名归档（channelId=manual-<slug>，名称唯一），写入与其它来源同一套卡片表。
+   * @param {Record<string, unknown>} body
+   */
+  async function createManualStatsCard(body) {
+    if (store.offline) {
+      throw new Error("MySQL 未连接，无法入库手动统计卡片。请启动数据库并重启 collect:ui。");
+    }
+    const b = body && typeof body === "object" ? body : {};
+    const bloggerRaw = String(b.bloggerName ?? b.blogger ?? b.channelName ?? b.name ?? "").trim();
+    if (!bloggerRaw) throw new Error("bloggerName required");
+    const blogger = parseManualBloggerInput(bloggerRaw);
+    const channelId = blogger.channelId;
+    const displayName = blogger.displayName;
+    const symbolRaw = String(b.symbol ?? b.coin ?? "").trim();
+    if (!symbolRaw) throw new Error("symbol required");
+    const direction = normalizeManualDirectionLabel(b.direction ?? b.side);
+    const signalAt = parseManualSignalAt(b.signalAt ?? b.date ?? b.time);
+    const entry = String(b.entry ?? b.entryPrice ?? "").trim();
+    const stopLoss = String(b.stopLoss ?? b.stopLossPrice ?? "").trim();
+    const targets = Array.isArray(b.targets ?? b.takeProfits)
+      ? /** @type {unknown[]} */ (b.targets ?? b.takeProfits)
+      : String(b.takeProfit ?? b.tp ?? "")
+          .split(/[,/，\s]+/)
+          .map((x) => x.trim())
+          .filter(Boolean);
+    const note = String(b.note ?? "").trim();
+
+    const execution = normalizeExecution(
+      {
+        symbol: symbolRaw,
+        direction,
+        planned: {
+          entryPrice: entry,
+          takeProfitPrices: targets,
+          stopLossPrice: stopLoss,
+        },
+      },
+      null
+    );
+    const signalLabel = String(b.date ?? b.signalAt ?? "").trim() || signalAt;
+    const rawContent =
+      String(b.rawContent ?? "").trim() ||
+      [
+        `手动统计 · ${displayName}`,
+        formatManualRawContent(execution),
+        `信号时间: ${signalLabel}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+    return archiveCard({
+      sourceType: "manual",
+      source: "manual",
+      channelId,
+      channelName: displayName,
+      guildId: "manual",
+      sourceRef: channelId,
+      symbol: symbolRaw,
+      direction,
+      entry,
+      targets,
+      stopLoss,
+      execution,
+      rawContent,
+      signalAt,
+      note: note || null,
+      parsedJson: {
+        manual: true,
+        manualStats: true,
+        channelName: displayName,
+        bloggerKey: blogger.bloggerKey,
+        bloggerAlias: displayName,
+        symbol: execution.symbol,
+        direction,
+        entry: entry || undefined,
+        targets: targets.length ? targets : undefined,
+        stopLoss: stopLoss || undefined,
+      },
+      cardsByStyle: { manual: rawContent },
+      injectChannelMessage: b.injectChannelMessage === true,
+      messageId: `manual-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+  }
+
+  /**
+   * 更新手动统计条目（仅 sourceType=manual）。
+   * @param {number} cardId
+   * @param {Record<string, unknown>} body
+   */
+  async function updateManualStatsCard(cardId, body) {
+    if (store.offline) {
+      throw new Error("MySQL 未连接，无法更新手动统计卡片。请启动数据库并重启 collect:ui。");
+    }
+    const id = Number(cardId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error("invalid card id");
+    const row = await store.getSignalCardById(id);
+    if (!row) throw new Error("not found");
+    if (!isExternallySourcedCard(row) || normalizeCardSourceType(row.source_type ?? row.sourceType) !== "manual") {
+      throw new Error("仅可编辑手动统计卡片");
+    }
+
+    const b = body && typeof body === "object" ? body : {};
+    const prevParsed =
+      row.parsed_json && typeof row.parsed_json === "object" && !Array.isArray(row.parsed_json)
+        ? /** @type {Record<string, unknown>} */ (row.parsed_json)
+        : row.parsedJson && typeof row.parsedJson === "object"
+          ? /** @type {Record<string, unknown>} */ (row.parsedJson)
+          : {};
+    const prevEx = normalizeExecution(row.execution_json ?? row.executionJson, prevParsed);
+
+    const bloggerRaw = String(
+      b.bloggerName ?? b.blogger ?? b.channelName ?? prevParsed.channelName ?? row.channel_name ?? ""
+    ).trim();
+    if (!bloggerRaw) throw new Error("bloggerName required");
+    const blogger = parseManualBloggerInput(
+      b.bloggerName != null || b.blogger != null || b.channelName != null
+        ? bloggerRaw
+        : prevParsed.bloggerKey
+          ? `${prevParsed.bloggerKey}|${prevParsed.bloggerAlias ?? prevParsed.channelName ?? bloggerRaw}`
+          : bloggerRaw
+    );
+    const channelId = blogger.channelId;
+    const displayName = blogger.displayName;
+
+    const symbolRaw = String(b.symbol ?? b.coin ?? prevEx.symbol ?? row.symbol ?? "").trim();
+    if (!symbolRaw) throw new Error("symbol required");
+    const direction = normalizeManualDirectionLabel(
+      b.direction ?? b.side ?? prevEx.direction ?? prevParsed.direction
+    );
+    const signalAt =
+      b.signalAt != null || b.date != null || b.time != null
+        ? parseManualSignalAt(b.signalAt ?? b.date ?? b.time)
+        : resolveCardSignalAt(row) || new Date().toISOString();
+    const entry = String(
+      b.entry ?? b.entryPrice ?? prevEx.planned?.entryPrice ?? prevParsed.entry ?? ""
+    ).trim();
+    const stopLoss = String(
+      b.stopLoss ?? b.stopLossPrice ?? prevEx.planned?.stopLossPrice ?? prevParsed.stopLoss ?? ""
+    ).trim();
+    const targets = Array.isArray(b.targets ?? b.takeProfits)
+      ? /** @type {unknown[]} */ (b.targets ?? b.takeProfits)
+      : b.takeProfit != null || b.tp != null
+        ? String(b.takeProfit ?? b.tp ?? "")
+            .split(/[,/，\s]+/)
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : prevEx.planned?.takeProfitPrices ?? [];
+    const note =
+      b.note !== undefined ? (String(b.note ?? "").trim() || null) : row.note != null ? String(row.note) : null;
+
+    const execution = normalizeExecution(
+      {
+        ...prevEx,
+        symbol: symbolRaw,
+        direction,
+        planned: {
+          ...prevEx.planned,
+          entryPrice: entry,
+          takeProfitPrices: targets,
+          stopLossPrice: stopLoss,
+        },
+      },
+      null
+    );
+    const rawContent =
+      String(b.rawContent ?? "").trim() ||
+      [
+        `手动统计 · ${displayName}`,
+        formatManualRawContent(execution),
+        `信号时间: ${String(b.date ?? b.signalAt ?? "").trim() || String(signalAt).slice(0, 16)}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+    const parsedJson = {
+      ...prevParsed,
+      manual: true,
+      manualStats: true,
+      channelName: displayName,
+      bloggerKey: blogger.bloggerKey,
+      bloggerAlias: displayName,
+      symbol: execution.symbol,
+      direction,
+      entry: entry || undefined,
+      targets: Array.isArray(targets) && targets.length ? targets : undefined,
+      stopLoss: stopLoss || undefined,
+    };
+    const cardFields = stampCardFieldsUid(
+      buildCardFieldsFromExecution(execution, parsedJson, rawContent, {
+        sourceType: "manual",
+        sourceRef: channelId,
+        note,
+      }),
+      id
+    );
+    const cardsByStyle = stampCardsByStyle({ manual: rawContent }, id);
+
+    const updated = await store.updateSignalCard(id, {
+      channelId,
+      symbol: normalizeSymbol(symbolRaw) || symbolRaw,
+      rawContent,
+      signalAt,
+      note,
+      executionJson: execution,
+      parsedJson,
+      cardFieldsJson: cardFields,
+      cardsByStyle,
+    });
+    if (!updated) throw new Error("update failed");
+    const clientCard = archiveCardToClient(updated);
+    broadcast?.("meta", { kind: "signal_card_updated", card: clientCard });
+    log.info(`手动统计更新 #${id} blogger=${displayName}(${blogger.bloggerKey}) symbol=${symbolRaw} dir=${direction}`);
+    return clientCard;
+  }
+
   async function deleteCards(cardIds) {
     const ids = Array.isArray(cardIds) ? cardIds : [];
     let deleted = 0;
@@ -1273,9 +1495,88 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     archiveCardToClient,
     registerCoinActionWatches,
     publishCardToChannelFeed,
+    createManualStatsCard,
+    updateManualStatsCard,
     deleteCard,
     deleteCards,
   };
+}
+
+/**
+ * 博主输入：`标识|别名`（如 thankUcrypto|熬鹰）→ channelId 用标识，显示用别名。
+ * 无 `|` 时标识与显示同为整串。
+ * @param {unknown} raw
+ * @returns {{ bloggerKey: string, displayName: string, channelId: string, raw: string }}
+ */
+export function parseManualBloggerInput(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) throw new Error("bloggerName required");
+  const pipe = s.indexOf("|");
+  let bloggerKey = s;
+  let displayName = s;
+  if (pipe >= 0) {
+    bloggerKey = s.slice(0, pipe).trim();
+    displayName = s.slice(pipe + 1).trim() || bloggerKey;
+    if (!bloggerKey) throw new Error("博主标识不能为空（格式：标识|别名）");
+  }
+  return {
+    bloggerKey,
+    displayName,
+    channelId: manualBloggerChannelId(bloggerKey),
+    raw: s,
+  };
+}
+
+/**
+ * 博主标识 → 稳定 channelId（manual-<slug>），同标识归同一频道。
+ * @param {unknown} name
+ */
+export function manualBloggerChannelId(name) {
+  const display = String(name ?? "").trim();
+  if (!display) throw new Error("blogger name required");
+  const slug = display
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^\p{L}\p{N}\-_]+/gu, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+  if (slug) return `manual-${slug}`;
+  const fallback = Buffer.from(display, "utf8").toString("base64url").replace(/=+$/g, "").slice(0, 24);
+  return `manual-${fallback || Date.now().toString(36)}`;
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {string} 多 / 空
+ */
+export function normalizeManualDirectionLabel(raw) {
+  const side = resolveTradeDirection(raw);
+  if (side === "short") return "空";
+  if (side === "long") return "多";
+  const s = String(raw ?? "").trim();
+  if (!s) throw new Error("direction required");
+  if (/空|short|sell/i.test(s) && !/多|long|buy/i.test(s)) return "空";
+  if (/多|long|buy/i.test(s)) return "多";
+  throw new Error("direction must be 多/空 (long/short)");
+}
+
+/**
+ * 日期或 ISO / datetime-local → 信号时间。
+ * 仅日期 → 当天 12:00 +08:00；无时区的本地时间按 +08:00。
+ * @param {unknown} raw
+ */
+export function parseManualSignalAt(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return new Date().toISOString();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T12:00:00+08:00`;
+  // datetime-local: YYYY-MM-DDTHH:mm 或带秒
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return `${s}:00+08:00`;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) return `${s}+08:00`;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+$/.test(s)) return `${s}+08:00`;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) throw new Error("invalid date / signalAt");
+  return d.toISOString();
 }
 
 /**

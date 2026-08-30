@@ -131,7 +131,7 @@ async function runValidate() {
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
     jobId.value = String(j.jobId || "");
-    pushLog(`jobId=${j.jobId} mock=${j.mock} · 监听 WS card_validate_*`);
+    pushLog(`jobId=${j.jobId} mock=${j.mock === true} · 真实K线 · 监听 WS card_validate_*`);
   } catch (e) {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {

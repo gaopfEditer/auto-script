@@ -35,7 +35,7 @@ pnpm run oi:dev      # Vite :5173 + API :8765；嵌入可用 OI_EMBED_URL=http:/
 pnpm run oi:start    # 一体托管 :8765（默认嵌入地址）
 ```
 
-卡片外送默认打到本机 8765。部署版默认页面：`VITE_UI_PAGES=show,fetch,oi`（评估页可加 `eval`）。
+卡片外送默认打到本机 8765。部署版默认页面：`VITE_UI_PAGES=show,cards,eval,community,oi`。本机工具在顶栏 **Local**（不进部署包）。
 
 **卡片档位进度 / 评估**：监控每小时（`CARD_LEVEL_CHECK_MS`）按 Binance 永续 K 线推进入场与 1/N 分批止盈；前端 `/eval` 按 Discord 频道看胜率与损益（`GET /api/cards/eval/summary`）。
 

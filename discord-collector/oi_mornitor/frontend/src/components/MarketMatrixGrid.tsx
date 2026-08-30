@@ -158,7 +158,7 @@ export const MarketMatrixGrid = memo(function MarketMatrixGrid({
   return (
     <main className="panel matrix-center">
       <div className="matrix-center-head">
-        <h2>热钱观察榜单</h2>
+        <h2>热点观察榜单</h2>
         <MercuTimeframes timeframe={timeframe} onTimeframeChange={onTimeframeChange} />
       </div>
       {(contractEmpty || spotEmpty) && takerFlowStatus && takerFlowStatus !== "live" ? (
@@ -170,38 +170,38 @@ export const MarketMatrixGrid = memo(function MarketMatrixGrid({
 
       <div className="matrix-quadrants">
         <div className="matrix-quadrant-grid">
-          <RankList title="涨幅榜" subtitle="量级榜" rows={price.gainersMagnitude} valueMode="pct" {...listProps} />
-          <RankList title="跌幅榜" subtitle="量级榜" rows={price.losersMagnitude} valueMode="pct" negativeBoard {...listProps} />
-          <RankList title="涨幅榜" subtitle="强度榜" rows={price.gainersStrength} valueMode="pct" {...listProps} />
-          <RankList title="跌幅榜" subtitle="强度榜" rows={price.losersStrength} valueMode="pct" negativeBoard {...listProps} />
+          <RankList title="涨幅榜" subtitle={`${timeframe} · 量级`} rows={price.gainersMagnitude} valueMode="pct" {...listProps} />
+          <RankList title="跌幅榜" subtitle={`${timeframe} · 量级`} rows={price.losersMagnitude} valueMode="pct" negativeBoard {...listProps} />
+          <RankList title="涨速榜" subtitle={`${timeframe} · 强度`} rows={price.gainersStrength} valueMode="pct" {...listProps} />
+          <RankList title="跌速榜" subtitle={`${timeframe} · 强度`} rows={price.losersStrength} valueMode="pct" negativeBoard {...listProps} />
         </div>
 
         <div className="matrix-quadrant-grid">
-          <RankList title="持仓榜" subtitle="正 · 量级榜" rows={oi.posMagnitude} valueMode="mk" {...listProps} />
-          <RankList title="持仓榜" subtitle="负 · 量级榜" rows={oi.negMagnitude} valueMode="mk" negativeBoard {...listProps} />
-          <RankList title="持仓榜" subtitle="正 · 强度榜" rows={oi.posStrength} valueMode="pct" {...listProps} />
-          <RankList title="持仓榜" subtitle="负 · 强度榜" rows={oi.negStrength} valueMode="pct" negativeBoard {...listProps} />
+          <RankList title="持仓增" subtitle={`${timeframe} · 量级`} rows={oi.posMagnitude} valueMode="mk" {...listProps} />
+          <RankList title="持仓减" subtitle={`${timeframe} · 量级`} rows={oi.negMagnitude} valueMode="mk" negativeBoard {...listProps} />
+          <RankList title="持仓增" subtitle={`${timeframe} · 强度`} rows={oi.posStrength} valueMode="pct" {...listProps} />
+          <RankList title="持仓减" subtitle={`${timeframe} · 强度`} rows={oi.negStrength} valueMode="pct" negativeBoard {...listProps} />
         </div>
 
         <div className="matrix-quadrant-grid">
           <RankList
-            title="主力合约"
-            subtitle="流入 · 量级榜"
+            title="主力合约流入"
+            subtitle={`${timeframe} · 量级`}
             rows={contract.inMagnitude}
             valueMode="mk"
             emptyText={contractEmpty ? flowEmptyHint : undefined}
             {...listProps}
           />
-          <RankList title="主力合约" subtitle="流出 · 量级榜" rows={contract.outMagnitude} valueMode="mk" negativeBoard emptyText={contractEmpty ? flowEmptyHint : undefined} {...listProps} />
-          <RankList title="主力合约" subtitle="流入 · 强度榜" rows={contract.inStrength} valueMode="mk" emptyText={contractEmpty ? flowEmptyHint : undefined} {...listProps} />
-          <RankList title="主力合约" subtitle="流出 · 强度榜" rows={contract.outStrength} valueMode="mk" negativeBoard emptyText={contractEmpty ? flowEmptyHint : undefined} {...listProps} />
+          <RankList title="主力合约流出" subtitle={`${timeframe} · 量级`} rows={contract.outMagnitude} valueMode="mk" negativeBoard emptyText={contractEmpty ? flowEmptyHint : undefined} {...listProps} />
+          <RankList title="主力合约流入" subtitle={`${timeframe} · 强度`} rows={contract.inStrength} valueMode="mk" emptyText={contractEmpty ? flowEmptyHint : undefined} {...listProps} />
+          <RankList title="主力合约流出" subtitle={`${timeframe} · 强度`} rows={contract.outStrength} valueMode="mk" negativeBoard emptyText={contractEmpty ? flowEmptyHint : undefined} {...listProps} />
         </div>
 
         <div className="matrix-quadrant-grid">
-          <RankList title="主力现货" subtitle="流入 · 量级榜" rows={spot.inMagnitude} valueMode="mk" emptyText={spotEmpty ? flowEmptyHint : undefined} {...listProps} />
-          <RankList title="主力现货" subtitle="流出 · 量级榜" rows={spot.outMagnitude} valueMode="mk" negativeBoard emptyText={spotEmpty ? flowEmptyHint : undefined} {...listProps} />
-          <RankList title="主力现货" subtitle="流入 · 强度榜" rows={spot.inStrength} valueMode="mk" emptyText={spotEmpty ? flowEmptyHint : undefined} {...listProps} />
-          <RankList title="主力现货" subtitle="流出 · 强度榜" rows={spot.outStrength} valueMode="mk" negativeBoard emptyText={spotEmpty ? flowEmptyHint : undefined} {...listProps} />
+          <RankList title="主力现货流入" subtitle={`${timeframe} · 量级`} rows={spot.inMagnitude} valueMode="mk" emptyText={spotEmpty ? flowEmptyHint : undefined} {...listProps} />
+          <RankList title="主力现货流出" subtitle={`${timeframe} · 量级`} rows={spot.outMagnitude} valueMode="mk" negativeBoard emptyText={spotEmpty ? flowEmptyHint : undefined} {...listProps} />
+          <RankList title="主力现货流入" subtitle={`${timeframe} · 强度`} rows={spot.inStrength} valueMode="mk" emptyText={spotEmpty ? flowEmptyHint : undefined} {...listProps} />
+          <RankList title="主力现货流出" subtitle={`${timeframe} · 强度`} rows={spot.outStrength} valueMode="mk" negativeBoard emptyText={spotEmpty ? flowEmptyHint : undefined} {...listProps} />
         </div>
       </div>
     </main>

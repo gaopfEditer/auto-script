@@ -11,7 +11,7 @@ import { deriveAllLists } from "../utils/deriveLists";
 
 export function RadarPage() {
   const { snapshot, online } = useRadarSSE();
-  const [timeframe, setTimeframe] = useState<OiTimeframe>("15m");
+  const [timeframe, setTimeframe] = useState<OiTimeframe>("5m");
   const {
     all_tickers: all,
     hot_tickers: hot,

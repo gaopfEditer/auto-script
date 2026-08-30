@@ -1,21 +1,34 @@
 /**
  * 前端界面模式：
- * - local：本地开发，显示全部页面
- * - deploy：打包部署版，仅保留配置的页面（默认 show + cards）
+ * - local：本地开发，显示全部页面（含 Local 模块工具页）
+ * - deploy：打包部署版，仅保留配置的页面（默认 show + cards + eval + community + oi）
  *
  * 顶层模块：
- * - discord：采集 / 卡片 / 下单等（主体）
+ * - discord：Show / 卡片 / 评估 / 社区
  * - oi：OI Monitor（可切换；运行时探测 oi_mornitor 后嵌入）
+ * - local：本机工具（Telegram / 推特 / 拉取 / 文稿 / 下单 / Debug）——仅开发态，不进部署包
  *
  * 环境变量（discord-collector/.env*）：
  *   VITE_UI_MODE=local|deploy
- *   VITE_UI_PAGES=show,cards,eval,community   # deploy 模式白名单（路径名，逗号分隔）
+ *   VITE_UI_PAGES=show,cards,eval,community,oi   # deploy 模式白名单（路径名，逗号分隔）
  *   VITE_OI_EMBED_URL=http://127.0.0.1:5173  # 可选，oi:dev 时指向 Vite
  *
  * 未设置 VITE_UI_MODE 时：开发 → local，生产构建 → deploy
  */
 
-/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" | "content" }} UiPageDef */
+/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" | "local" | "content" }} UiPageDef */
+
+/** 仅本机 Local 模块；deploy 构建一律剔除（即使误写进 VITE_UI_PAGES） */
+export const LOCAL_ONLY_PAGE_NAMES = Object.freeze([
+  "local",
+  "manual-stats",
+  "telegram",
+  "twitter",
+  "fetch",
+  "archives",
+  "trade",
+  "debug",
+]);
 
 /** @type {UiPageDef[]} */
 export const ALL_UI_PAGES = [
@@ -23,22 +36,25 @@ export const ALL_UI_PAGES = [
   { path: "/show", name: "show", label: "Show", nav: true, module: "discord" },
   { path: "/cards", name: "cards", label: "卡片", nav: true, module: "discord" },
   { path: "/eval", name: "eval", label: "评估", nav: true, module: "discord" },
-  { path: "/telegram", name: "telegram", label: "Telegram", nav: true, module: "discord" },
-  { path: "/twitter", name: "twitter", label: "推特", nav: true, module: "discord" },
-  { path: "/fetch", name: "fetch", label: "拉取", nav: true, module: "discord" },
-  { path: "/archives", name: "archives", label: "文稿", nav: true, module: "discord" },
-  { path: "/trade", name: "trade", label: "下单", nav: true, module: "discord" },
   { path: "/community", name: "community", label: "社区", nav: true, module: "discord" },
-  { path: "/debug", name: "debug", label: "Debug", nav: true, module: "discord" },
-  /** 独立页：不进 Discord/OI 顶栏，全屏自管 */
+  { path: "/local", name: "local", label: "概览", nav: true, module: "local" },
+  { path: "/local/manual-stats", name: "manual-stats", label: "手动统计", nav: true, module: "local" },
+  { path: "/telegram", name: "telegram", label: "Telegram", nav: true, module: "local" },
+  { path: "/twitter", name: "twitter", label: "推特", nav: true, module: "local" },
+  { path: "/fetch", name: "fetch", label: "拉取", nav: true, module: "local" },
+  { path: "/archives", name: "archives", label: "文稿", nav: true, module: "local" },
+  { path: "/trade", name: "trade", label: "下单", nav: true, module: "local" },
+  { path: "/debug", name: "debug", label: "Debug", nav: true, module: "local" },
+  /** 独立页：不进 Discord/OI/Local 顶栏，全屏自管 */
   { path: "/content", name: "content", label: "内容", nav: false, module: "content" },
   { path: "/oi", name: "oi", label: "OI", nav: false, module: "oi" },
 ];
 
-/** @type {{ id: "discord" | "oi", label: string, to: string }[]} */
+/** @type {{ id: "discord" | "oi" | "local", label: string, to: string }[]} */
 export const UI_MODULES = [
   { id: "discord", label: "Discord", to: "/show" },
   { id: "oi", label: "OI Monitor", to: "/oi" },
+  { id: "local", label: "Local", to: "/local" },
 ];
 
 const DEFAULT_DEPLOY_PAGES = ["show", "cards", "eval", "community", "oi"];
@@ -71,7 +87,10 @@ export function getEnabledPageNames() {
     : DEFAULT_DEPLOY_PAGES;
   // 允许用路径别名
   const normalized = list.map((s) => s.replace(/^\//, "").replace(/-/g, "_"));
-  return new Set(normalized.length ? normalized : DEFAULT_DEPLOY_PAGES);
+  const set = new Set(normalized.length ? normalized : DEFAULT_DEPLOY_PAGES);
+  // 本机工具页永不进入部署白名单
+  for (const name of LOCAL_ONLY_PAGE_NAMES) set.delete(name);
+  return set;
 }
 
 /**
@@ -81,20 +100,47 @@ export function isPageEnabled(name) {
   return getEnabledPageNames().has(String(name));
 }
 
-/** 顶栏导航项（仅 Discord 模块、nav:true 且已启用） */
-export function getNavPages() {
+/**
+ * 顶栏二级导航。
+ * @param {"discord" | "local"} [moduleId="discord"]
+ */
+export function getNavPages(moduleId = "discord") {
   const enabled = getEnabledPageNames();
-  return ALL_UI_PAGES.filter((p) => (p.module ?? "discord") === "discord" && p.nav && enabled.has(p.name));
+  const mod = moduleId === "local" ? "local" : "discord";
+  return ALL_UI_PAGES.filter((p) => (p.module ?? "discord") === mod && p.nav && enabled.has(p.name));
+}
+
+/** Local 模块是否显示（仅非 deploy） */
+export function isLocalModuleEnabled() {
+  return !isDeployUi();
 }
 
 /**
  * @param {string} path
- * @returns {"discord" | "oi" | "content"}
+ * @returns {"discord" | "oi" | "local" | "content"}
  */
 export function getModuleFromPath(path) {
   const p = String(path ?? "");
   if (p === "/content" || p.startsWith("/content/")) return "content";
   if (p === "/oi" || p.startsWith("/oi/")) return "oi";
+  if (
+    p === "/local" ||
+    p.startsWith("/local/") ||
+    p === "/telegram" ||
+    p.startsWith("/telegram/") ||
+    p === "/twitter" ||
+    p.startsWith("/twitter/") ||
+    p === "/fetch" ||
+    p.startsWith("/fetch/") ||
+    p === "/archives" ||
+    p.startsWith("/archives/") ||
+    p === "/trade" ||
+    p.startsWith("/trade/") ||
+    p === "/debug" ||
+    p.startsWith("/debug/")
+  ) {
+    return "local";
+  }
   return "discord";
 }
 
@@ -106,7 +152,7 @@ export function isOiModuleEnabled() {
 /** 部署版默认落地页 */
 export function getDefaultDeployPath() {
   const enabled = getEnabledPageNames();
-  const prefer = ["show", "cards", "eval", "community", "fetch", "oi"];
+  const prefer = ["show", "cards", "eval", "community", "oi"];
   for (const name of prefer) {
     if (enabled.has(name)) {
       const page = ALL_UI_PAGES.find((p) => p.name === name);
