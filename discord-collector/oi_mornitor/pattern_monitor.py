@@ -19,6 +19,7 @@ from oi_mornitor.config import (
     CANDLE_CARD_MAJOR_SYMBOLS,
     CANDLE_CARD_REFRESH_SEC,
     CANDLE_CARD_TELEGRAM,
+    CARD_PUSH_COOLDOWN_BARS,
     FAPI_BASE_URL,
     MATRIX_TOP_N,
     OI_OI_BATCH_CONCURRENCY,
@@ -90,6 +91,7 @@ _LONG_PATTERN_KINDS = frozenset({
     "continuous_lower_wick",
     "continuous_non_lower_wick",
 })
+_INTERVAL_SECONDS = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 
 
 def _combo_side_hint(kind: str) -> str:
@@ -554,6 +556,8 @@ class PatternMonitorEngine:
         self._combo_seen: set[str] = set()
         # symbol:interval:kind:close_ts → 已推过的蜡烛卡片
         self._card_seen: set[str] = set()
+        # symbol:interval:side → 最近一次实际推送的收盘时间戳（秒），用于同向节流
+        self._card_last_emit: dict[str, int] = {}
         # (symbol, interval) → (fetched_at, klines)
         self._card_kline_cache: dict[tuple[str, str], tuple[float, list]] = {}
 
@@ -1345,6 +1349,19 @@ class PatternMonitorEngine:
 
         return out
 
+    def _card_emit_throttled(self, sym: str, iv: str, side: str, close_ts: int) -> bool:
+        """同币同周期同方向在 CARD_PUSH_COOLDOWN_BARS 根 K 内只推一次。"""
+        if CARD_PUSH_COOLDOWN_BARS <= 0:
+            return False
+        key = f"{sym}:{iv}:{side}"
+        last = self._card_last_emit.get(key)
+        if last is None:
+            return False
+        bar_sec = _INTERVAL_SECONDS.get(iv)
+        if not bar_sec:
+            return False
+        return (int(close_ts) - int(last)) <= CARD_PUSH_COOLDOWN_BARS * bar_sec
+
     async def _scan_candle_pattern_cards(
         self,
         session: aiohttp.ClientSession,
@@ -1488,6 +1505,9 @@ class PatternMonitorEngine:
                 if dedupe in self._card_seen:
                     continue
                 self._card_seen.add(dedupe)
+                side = "bull" if kind == "inverted_hammer" else "bear"
+                if self._card_emit_throttled(sym, iv, side, close_ts):
+                    continue
                 type_label = str(hit.get("type_label") or kind)
                 alert = {
                     "symbol": sym,
@@ -1497,9 +1517,15 @@ class PatternMonitorEngine:
                     "status_label": f"形态卡片 · {type_label}",
                     "signal_kind": str(hit.get("signal_kind") or kind),
                     "kind": kind,
+                    "side": side,
                     "type_label": type_label,
                     "signal_text": str(hit.get("text") or type_label),
                     "oi_anomaly": bool(hit.get("oi_anomaly")),
+                    "bb_mid": hit.get("bb_mid"),
+                    "prior_high": hit.get("prior_high"),
+                    "prior_low": hit.get("prior_low"),
+                    "near_vegas": bool(hit.get("near_vegas")),
+                    "trend_pct": hit.get("trend_pct"),
                     "price": float(hit.get("close") or hit.get("price") or 0),
                     "close": float(hit.get("close") or 0),
                     "high": float(hit.get("high") or 0),
@@ -1514,9 +1540,12 @@ class PatternMonitorEngine:
                 out.append(alert)
                 logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 try:
-                    await send_candle_card_telegram_async(alert)
+                    ok = await send_candle_card_telegram_async(alert)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
+                    ok = False
+                if ok:
+                    self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
             return out
 
         async def _emit_structure(
@@ -1542,6 +1571,9 @@ class PatternMonitorEngine:
                 if dedupe in self._card_seen:
                     continue
                 self._card_seen.add(dedupe)
+                side = str(hit.get("side") or "")
+                if side in ("bull", "bear") and self._card_emit_throttled(sym, iv, side, close_ts):
+                    continue
                 type_label = str(hit.get("type_label") or kind)
                 alert = {
                     "symbol": sym,
@@ -1551,7 +1583,7 @@ class PatternMonitorEngine:
                     "status_label": f"结构卡片 · {type_label}",
                     "signal_kind": kind,
                     "kind": kind,
-                    "side": str(hit.get("side") or ""),
+                    "side": side,
                     "type_label": type_label,
                     "pattern_label": str(hit.get("pattern_label") or type_label),
                     "signal_text": str(hit.get("pattern_label") or type_label),
@@ -1582,9 +1614,12 @@ class PatternMonitorEngine:
                 out.append(alert)
                 logger.info("📩 结构卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 try:
-                    await send_structure_card_telegram_async(alert)
+                    ok = await send_structure_card_telegram_async(alert)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Telegram 结构卡片失败 %s: %s", sym, exc)
+                    ok = False
+                if ok and side in ("bull", "bear"):
+                    self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
             return out
 
         async def _one(sym: str, iv: str, is_major: bool) -> list[dict[str, Any]]:

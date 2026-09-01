@@ -179,6 +179,20 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 - 群：`OI_CANDLE_CARD_TELEGRAM_CHAT_ID`；开关 `OI_CANDLE_CARD_TELEGRAM` / `OI_STRUCTURE_CARD_TELEGRAM`
 - 去重：同币同周期同类型同开盘时间只推一次
 
+**2026-09 准确率调优过滤（均可在 `config.py` 经环境变量开关/调参）**
+
+- 射击之星位置过滤：收盘须在 BB 上轨区（`basis + 0.85×带宽`）或贴近 Vegas A/B 通道，否则不推
+  - `OI_CANDLE_SHOOT_REQUIRE_POSITION`（默认开）
+- 趋势背景：射击之星要求信号前 `OI_CANDLE_SHOOT_TREND_LOOKBACK`(20) 根累计涨幅 ≥
+  `OI_CANDLE_SHOOT_TREND_MIN_PCT`(3%)；倒锤子要求前 `OI_CANDLE_HAMMER_TREND_LOOKBACK`(20) 根
+  累计跌幅 ≥ `OI_CANDLE_HAMMER_TREND_MIN_PCT`(3%)
+- 结构破位量能确认：头肩顶 / M顶 触发 K 成交量 ≥ `OI_STRUCTURE_BREAK_VOL_MULT`(1.3) × MA20
+- 圆弧顶斜率归一化：斜率按窗口均价相对变化（%/根），当前 20 根斜率对比 10 根前窗口；
+  阈值 `OI_STRUCTURE_CURVE_UP_SLOPE`(0.05) / `OI_STRUCTURE_CURVE_DOWN_SLOPE`(0.0) /
+  `OI_STRUCTURE_CURVE_DECEL`(-0.08)，消除主流/山寨价格尺度差异
+- 推送节流：同币同周期同方向在 `OI_CARD_PUSH_COOLDOWN_BARS`(4) 根 K 内只推一次（发送成功才计时）
+- 蜡烛卡片文案补参考位：看跌给「上方防守=前20根高点 / 下方参考=布林中轨」，看涨给「下方防守=前20根低点 / 上方参考=布林中轨」
+
 ---
 
 ## 6. 图表标注图例（形态页）

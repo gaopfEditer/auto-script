@@ -62,25 +62,44 @@ def _fmt_vol_x(v: Any) -> str:
 
 
 def format_candle_card_message(alert: dict[str, Any]) -> str:
-    """射击之星 / 倒锤子卡片文案。"""
+    """射击之星 / 倒锤子卡片文案（含方向与防守/参考位）。"""
     pair = _pair_label(str(alert.get("symbol") or ""))
     type_label = str(
         alert.get("type_label") or alert.get("signal_text") or alert.get("kind") or "—"
     )
+    side = str(alert.get("side") or "")
+    side_label = "看跌" if side == "bear" else ("看涨" if side == "bull" else "")
+    type_head = f"{type_label} ({side_label})" if side_label else type_label
     iv = str(alert.get("interval") or "—")
     t = _fmt_time(alert.get("kline_open_time") or alert.get("time") or 0)
     price = _fmt_price(alert.get("price") if alert.get("price") is not None else alert.get("close"))
     high = _fmt_price(alert.get("high"))
     low = _fmt_price(alert.get("low"))
-    return (
-        f"💰 交易对: {pair}\n"
-        f"📈 类型: {type_label}\n"
-        f"⏰ 周期: {iv}\n"
-        f"⏰ 时间: {t}\n"
-        f"💵 价格: {price}\n"
-        f"📈 最高: {high}\n"
-        f"📉 最低: {low}"
-    )
+    lines = [
+        f"💰 交易对: {pair}",
+        f"📈 类型: {type_head}",
+        f"⏰ 周期: {iv}",
+        f"⏰ 时间: {t}",
+        f"💵 价格: {price}",
+        f"📈 最高: {high}",
+        f"📉 最低: {low}",
+    ]
+    bb_mid = alert.get("bb_mid")
+    prior_high = alert.get("prior_high")
+    prior_low = alert.get("prior_low")
+    if side == "bear" and (prior_high is not None or bb_mid is not None):
+        lines.append("------------------------")
+        if prior_high is not None:
+            lines.append(f"🛡️ 上方防守: {_fmt_price(prior_high)} (前20根高点)")
+        if bb_mid is not None:
+            lines.append(f"🎯 下方参考: {_fmt_price(bb_mid)} (布林中轨)")
+    elif side == "bull" and (prior_low is not None or bb_mid is not None):
+        lines.append("------------------------")
+        if prior_low is not None:
+            lines.append(f"🛡️ 下方防守: {_fmt_price(prior_low)} (前20根低点)")
+        if bb_mid is not None:
+            lines.append(f"🎯 上方参考: {_fmt_price(bb_mid)} (布林中轨)")
+    return "\n".join(lines)
 
 
 def format_structure_top_message(alert: dict[str, Any]) -> str:

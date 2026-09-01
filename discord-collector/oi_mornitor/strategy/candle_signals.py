@@ -7,6 +7,11 @@ from typing import Any
 import pandas as pd
 
 from oi_mornitor.config import (
+    CANDLE_HAMMER_TREND_LOOKBACK,
+    CANDLE_HAMMER_TREND_MIN_PCT,
+    CANDLE_SHOOT_REQUIRE_POSITION,
+    CANDLE_SHOOT_TREND_LOOKBACK,
+    CANDLE_SHOOT_TREND_MIN_PCT,
     PATTERN_WICK_RATIO,
     STRATEGY_SHOOT_WICK_MAX_RATIO,
     STRATEGY_SHOOT_WICK_RATIO,
@@ -21,6 +26,8 @@ OI_TRIM_HIGH = 4
 OI_BAR_MULT = 2.0
 OI_VOL_MULT = 1.1
 OI_VOL_Z = 0.8
+# 卡片参考位回看根数（防守位 = 前 N 根高点/低点）
+CARD_REF_LOOKBACK = 20
 
 
 def _ts_sec(open_time_ms: int) -> int:
@@ -448,6 +455,18 @@ def find_last_closed_pattern_oi_combos(
     return combos
 
 
+def _trend_return(df: pd.DataFrame, idx: int, lookback: int) -> float | None:
+    """信号前 lookback 根（不含信号根）的累计涨跌幅 %；历史不足返回 None。"""
+    start = idx - lookback
+    if start < 0 or idx <= 0:
+        return None
+    base = float(df.iloc[start]["close"])
+    ref = float(df.iloc[idx - 1]["close"])
+    if base <= 0:
+        return None
+    return (ref - base) / base * 100.0
+
+
 def find_last_closed_candle_card_hits(
     df: pd.DataFrame,
     *,
@@ -461,6 +480,8 @@ def find_last_closed_candle_card_hits(
     - 射击之星：不要求 OI
     - 连续走平射击之星：SHOOT_REPEAT_BARS 内再次出现（「射击之星（2）」）
     - 倒锤子：仅柱级 OI 异动时推送
+    - 射击之星位置过滤：收盘须在 BB 上轨区或近 Vegas 通道（CANDLE_SHOOT_REQUIRE_POSITION）
+    - 趋势背景：射击之星前须有上涨、倒锤子前须有下跌（CANDLE_*_TREND_*）
     """
     if df.empty or "open_time" not in df.columns or "bb_basis" not in df.columns:
         return []
@@ -473,6 +494,9 @@ def find_last_closed_candle_card_hits(
     h = float(row["high"])
     l = float(row["low"])
     c = float(row["close"])
+    near_v = near_vegas_channel(row)
+    prior_high = float(df.iloc[max(0, idx - CARD_REF_LOOKBACK) : idx]["high"].max())
+    prior_low = float(df.iloc[max(0, idx - CARD_REF_LOOKBACK) : idx]["low"].min())
     markers = collect_candle_signal_markers(df)
     hits: list[dict[str, Any]] = []
     seen_kinds: set[str] = set()
@@ -494,8 +518,21 @@ def find_last_closed_candle_card_hits(
                 card_kind = "shooting_star"
             else:
                 continue
+            if CANDLE_SHOOT_REQUIRE_POSITION:
+                basis = float(row["bb_basis"])
+                upper = float(row["bb_upper"])
+                upper_zone = basis + (upper - basis) * 0.85
+                in_upper_zone = float(row["close"]) >= upper_zone
+                if not (in_upper_zone or near_v):
+                    continue
+            trend = _trend_return(df, idx, CANDLE_SHOOT_TREND_LOOKBACK)
+            if trend is None or trend < CANDLE_SHOOT_TREND_MIN_PCT:
+                continue
         elif kind == "inverted_hammer":
             if not (allow_inverted_hammer_oi and oi_on):
+                continue
+            trend = _trend_return(df, idx, CANDLE_HAMMER_TREND_LOOKBACK)
+            if trend is None or trend > -CANDLE_HAMMER_TREND_MIN_PCT:
                 continue
             type_label = "倒锤子"
             card_kind = "inverted_hammer"
@@ -505,6 +542,7 @@ def find_last_closed_candle_card_hits(
         if card_kind in seen_kinds:
             continue
         seen_kinds.add(card_kind)
+        side = "bull" if card_kind == "inverted_hammer" else "bear"
         hits.append({
             "time": closed_ts,
             "kind": card_kind,
@@ -517,5 +555,11 @@ def find_last_closed_candle_card_hits(
             "low": l,
             "close": c,
             "price": c,
+            "side": side,
+            "bb_mid": float(row["bb_basis"]),
+            "prior_high": prior_high,
+            "prior_low": prior_low,
+            "near_vegas": bool(near_v),
+            "trend_pct": trend,
         })
     return hits

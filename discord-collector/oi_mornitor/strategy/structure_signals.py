@@ -10,6 +10,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from oi_mornitor.config import (
+    STRUCTURE_BREAK_VOL_MULT,
+    STRUCTURE_CURVE_DECEL,
+    STRUCTURE_CURVE_DOWN_SLOPE,
+    STRUCTURE_CURVE_UP_SLOPE,
+)
 from oi_mornitor.strategy.candle_signals import closed_bar_index
 
 # 与用户规格对齐的可调默认
@@ -207,6 +213,8 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
             if not crossed and not (broke_neck and float(row["close"]) < mid):
                 continue
             vr = _vol_ratio(row)
+            if vr is None or vr < STRUCTURE_BREAK_VOL_MULT:
+                continue
             out.append({
                 "kind": "hs_vegas_break",
                 "side": "bear",
@@ -261,6 +269,8 @@ def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
             if not (float(row["close"]) < mid and float(prev["close"]) >= prev_mid):
                 continue
             vr = _vol_ratio(row)
+            if vr is None or vr < STRUCTURE_BREAK_VOL_MULT:
+                continue
             out.append({
                 "kind": "m_top_vegas_break",
                 "side": "bear",
@@ -452,7 +462,11 @@ def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def _detect_curvature_decay(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """圆弧顶/动量衰竭：近 N 根斜率由正转负且二阶为负，未破布林上轨新高。"""
+    """圆弧顶/动量衰竭：当前 20 根斜率对比 10 根前转为下行/走平，未破布林上轨新高。
+
+    斜率按窗口均价相对变化（%/根）归一化，避免高价主流/低价山寨尺度失衡。
+    用「10 根前窗口」作对比基准：前段真实上涨 + 当前段转负 → 动量衰竭。
+    """
     n = len(df)
     if n < CURVE_LOOKBACK + 5:
         return []
@@ -467,15 +481,21 @@ def _detect_curvature_decay(df: pd.DataFrame) -> list[dict[str, Any]]:
 
     def _slope(end: int) -> float:
         y = closes[end - CURVE_LOOKBACK : end]
-        y = y - y.mean()
+        scale = float(np.mean(y)) or 1.0
+        y = (y - y.mean()) / scale * 100.0  # 相对价格变化（%/根），消除币种价格尺度差异
         return float((x * y).sum() / denom)
 
-    for i in range(CURVE_LOOKBACK + 5, n):
+    # 需要 i-10 ≥ CURVE_LOOKBACK（对比窗口不越界），故起点 +10
+    for i in range(CURVE_LOOKBACK + 10, n):
         if i - last_emit < 15:
             continue
-        s1 = _slope(i - 2)
-        s0 = _slope(i)
-        if not (s1 > 0.02 and s0 < -0.01 and (s0 - s1) < -0.03):
+        s_now = _slope(i)
+        s_prev = _slope(i - 10)
+        if not (
+            s_prev > STRUCTURE_CURVE_UP_SLOPE
+            and s_now < STRUCTURE_CURVE_DOWN_SLOPE
+            and (s_now - s_prev) < STRUCTURE_CURVE_DECEL
+        ):
             continue
         row = df.iloc[i]
         recent_hi = float(df.iloc[i - 5 : i + 1]["high"].max())

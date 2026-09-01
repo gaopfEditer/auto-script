@@ -171,6 +171,26 @@ STRUCTURE_CARD_TELEGRAM = os.getenv(
     "OI_STRUCTURE_CARD_TELEGRAM", "1"
 ).strip().lower() in ("1", "true", "yes", "on")
 STRUCTURE_KLINE_LIMIT = int(os.getenv("OI_STRUCTURE_KLINE_LIMIT", "250"))
+
+# ---- 卡片推送信号过滤（2026-09 调优，全部可经环境变量开关）----
+# 射击之星位置过滤：收盘须在 BB 上轨区（basis + 0.85×带宽）或贴近 Vegas A/B 通道，否则不推
+CANDLE_SHOOT_REQUIRE_POSITION = os.getenv(
+    "OI_CANDLE_SHOOT_REQUIRE_POSITION", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# 射击之星趋势背景：信号前 N 根（不含信号根）累计涨幅 ≥ 阈值(%) 才推（看跌前提是前期上涨）
+CANDLE_SHOOT_TREND_LOOKBACK = int(os.getenv("OI_CANDLE_SHOOT_TREND_LOOKBACK", "20"))
+CANDLE_SHOOT_TREND_MIN_PCT = float(os.getenv("OI_CANDLE_SHOOT_TREND_MIN_PCT", "3.0"))
+# 倒锤子趋势背景：信号前 N 根累计跌幅 ≥ 阈值(%) 才推（看涨前提是前期下跌）
+CANDLE_HAMMER_TREND_LOOKBACK = int(os.getenv("OI_CANDLE_HAMMER_TREND_LOOKBACK", "20"))
+CANDLE_HAMMER_TREND_MIN_PCT = float(os.getenv("OI_CANDLE_HAMMER_TREND_MIN_PCT", "3.0"))
+# 结构破位量能确认：头肩顶 / M顶 触发 K 成交量 ≥ 该倍数 × MA20，否则不推
+STRUCTURE_BREAK_VOL_MULT = float(os.getenv("OI_STRUCTURE_BREAK_VOL_MULT", "1.3"))
+# 圆弧顶斜率归一化：按窗口均价相对变化（%/根），避免高价主流/低价山寨尺度失衡
+STRUCTURE_CURVE_UP_SLOPE = float(os.getenv("OI_STRUCTURE_CURVE_UP_SLOPE", "0.05"))
+STRUCTURE_CURVE_DOWN_SLOPE = float(os.getenv("OI_STRUCTURE_CURVE_DOWN_SLOPE", "0.0"))
+STRUCTURE_CURVE_DECEL = float(os.getenv("OI_STRUCTURE_CURVE_DECEL", "-0.08"))
+# 推送节流：同币同周期同方向在 N 根 K 内只推一次（0=关闭）
+CARD_PUSH_COOLDOWN_BARS = int(os.getenv("OI_CARD_PUSH_COOLDOWN_BARS", "4"))
 # Telegram：优先 HTTP 网关，否则 Bot API
 TELEGRAM_SEND_URL = os.getenv("TELEGRAM_SEND_URL", "").strip()
 TELEGRAM_PUSH_CHAT_ID = (
