@@ -1,12 +1,15 @@
 import { memo, useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import type { PoolMeta } from "../types";
+import { displaySymbol } from "../utils/symbol";
 
 interface Props {
   online: boolean;
   scanTs: number;
   poolMeta?: PoolMeta;
   poolSize: number;
+  focusSymbols?: string[];
+  onRemoveFocus?: (symbol: string) => void;
 }
 
 const NAV = [
@@ -19,8 +22,11 @@ export const MercuHeader = memo(function MercuHeader({
   scanTs,
   poolMeta,
   poolSize,
+  focusSymbols = [],
+  onRemoveFocus,
 }: Props) {
   const [clock, setClock] = useState("");
+  const navigate = useNavigate();
 
   useEffect(() => {
     const tick = () => {
@@ -75,6 +81,42 @@ export const MercuHeader = memo(function MercuHeader({
           源 {isFallback ? sourceLabel : "Binance"}
         </span>
       </div>
+
+      <div className="mercu-header-focus" title="特别关注 · 信号另推 MAIN 群">
+        <span className="mercu-focus-label">特别关注</span>
+        <div className="mercu-focus-list">
+          {focusSymbols.length === 0 ? (
+            <span className="mercu-focus-empty">暂无</span>
+          ) : (
+            focusSymbols.map((sym) => (
+              <span key={sym} className="mercu-focus-chip">
+                <button
+                  type="button"
+                  className="mercu-focus-sym"
+                  onClick={() =>
+                    navigate(`/patterns?symbol=${encodeURIComponent(sym)}`)
+                  }
+                  title={`打开 ${displaySymbol(sym)} 形态图`}
+                >
+                  {displaySymbol(sym)}
+                </button>
+                <button
+                  type="button"
+                  className="mercu-focus-x"
+                  aria-label={`取消特别关注 ${displaySymbol(sym)}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveFocus?.(sym);
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+
       <div className="mercu-header-right">
         <div className="mercu-status">
           <span className={`live-pill ${online ? "on" : "off"}`}>

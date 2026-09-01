@@ -16,7 +16,13 @@ from oi_mornitor.config import (
     SANDBOX_ABSURD_PNL_PCT,
     SANDBOX_FEE_PCT,
     SANDBOX_HUNTER_ATR_MULT,
+    SANDBOX_HUNTER_HAMMER_BELOW_MID,
+    SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK,
+    SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT,
+    SANDBOX_HUNTER_REQUIRE_POSITION,
     SANDBOX_HUNTER_SL_PAD,
+    SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK,
+    SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT,
     SANDBOX_INTERVAL,
     SANDBOX_INTERVALS,
     SANDBOX_LEVERAGE_ALT,
@@ -40,6 +46,7 @@ from oi_mornitor.config import (
     SANDBOX_TREND_TRAIL_PCT,
     SANDBOX_VEGAS_DIRECTION_GATE,
 )
+from oi_mornitor.strategy.candle_signals import near_vegas_channel
 from oi_mornitor.strategy.indicators import (
     detect_inverted_hammer,
     detect_shooting_star,
@@ -525,13 +532,46 @@ def _near(price: float, level: float, tol: float = 0.004) -> bool:
     return abs(price - level) / price <= tol or abs(price - level) / level <= tol
 
 
+def hunter_trend_return(df: pd.DataFrame, lookback: int) -> float | None:
+    """信号 K 前 lookback 根（不含信号根）的累计涨跌幅 %；历史不足返回 None。"""
+    idx = len(df) - 1
+    start = idx - int(lookback)
+    if start < 0 or idx <= 0:
+        return None
+    base = float(df.iloc[start]["close"])
+    ref = float(df.iloc[idx - 1]["close"])
+    if base <= 0:
+        return None
+    return (ref - base) / base * 100.0
+
+
+def close_in_bb_upper_zone(row: pd.Series) -> bool:
+    """收盘位于 BB 上轨区（basis + 0.85×带宽），对齐卡片射击之星位置过滤。"""
+    basis = float(row["bb_basis"]) if pd.notna(row.get("bb_basis")) else 0.0
+    upper = float(row["bb_upper"]) if pd.notna(row.get("bb_upper")) else 0.0
+    width = upper - basis
+    if width <= 0:
+        return False
+    return float(row["close"]) >= basis + width * 0.85
+
+
+def close_below_bb_mid(row: pd.Series) -> bool:
+    """收盘位于布林中轨之下（对齐卡片倒锤子 §4.2 口径）。"""
+    basis = float(row["bb_basis"]) if pd.notna(row.get("bb_basis")) else 0.0
+    return basis > 0 and float(row["close"]) < basis
+
+
 def evaluate_hunter_entry(
     df: pd.DataFrame,
     *,
     structure: dict[str, Any],
     interval: str | None = None,
 ) -> SandboxSignal | None:
-    """模块一：短线猎手 — 布林极限 + 射击之星 / 倒锤·锤子。"""
+    """模块一：短线猎手 — 布林极限 + 射击之星 / 倒锤·锤子。
+
+    2026-09 对齐卡片高胜率调优：射击之星做空须收盘在 BB 上轨区或近 Vegas 通道，
+    且信号前有累计上涨；倒锤/锤子做多须收盘在中轨之下，且信号前有累计下跌。
+    """
     iv = normalize_sandbox_interval(interval)
     last = df.iloc[-1]
     price = float(last["close"])
@@ -550,53 +590,84 @@ def evaluate_hunter_entry(
     touch_hl = hl > 0 and (low <= hl * 1.002 or _near(low, hl, 0.004))
 
     if (touch_up or touch_lh) and detect_shooting_star(last):
-        sl = hunter_sl("SHORT", high, low)
-        msg = f"短线猎手做空 · {iv} · 射击之星 · SL={sl:.6g}"
-        return SandboxSignal(
-            action="enter",
-            side="SHORT",
-            logic="S",
-            price=price,
-            sl=sl,
-            tp1=bb_m if bb_m > 0 else None,
-            message=msg,
-            meta={
-                **entry_meta_common("S", msg, interval=iv),
-                "module": "hunter",
-                "module_label": "短线猎手",
-                "signal_high": high,
-                "signal_low": low,
-                "atr": atr,
-                "bb_mid": bb_m,
-                "initial_sl": sl,
-                "stage": 0,
-            },
+        pos_ok = (not SANDBOX_HUNTER_REQUIRE_POSITION) or (
+            close_in_bb_upper_zone(last) or near_vegas_channel(last)
         )
+        trend_pct = hunter_trend_return(df, SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK)
+        trend_ok = trend_pct is not None and trend_pct >= SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT
+        if pos_ok and trend_ok:
+            sl = hunter_sl("SHORT", high, low)
+            filter_note = []
+            if close_in_bb_upper_zone(last):
+                filter_note.append("上轨区")
+            if near_vegas_channel(last):
+                filter_note.append("近Vegas")
+            if trend_pct is not None:
+                filter_note.append(f"前涨{trend_pct:.1f}%")
+            note = " · ".join(filter_note)
+            msg = f"短线猎手做空 · {iv} · 射击之星({note}) · SL={sl:.6g}"
+            return SandboxSignal(
+                action="enter",
+                side="SHORT",
+                logic="S",
+                price=price,
+                sl=sl,
+                tp1=bb_m if bb_m > 0 else None,
+                message=msg,
+                meta={
+                    **entry_meta_common("S", msg, interval=iv),
+                    "module": "hunter",
+                    "module_label": "短线猎手",
+                    "signal_high": high,
+                    "signal_low": low,
+                    "atr": atr,
+                    "bb_mid": bb_m,
+                    "position_ok": bool(pos_ok),
+                    "near_vegas": bool(near_vegas_channel(last)),
+                    "trend_pct": trend_pct,
+                    "initial_sl": sl,
+                    "stage": 0,
+                },
+            )
 
     hammerish = detect_inverted_hammer(last) or detect_hammer(last)
     if (touch_dn or touch_hl) and hammerish:
-        sl = hunter_sl("LONG", high, low)
-        msg = f"短线猎手做多 · {iv} · 倒锤/锤子 · SL={sl:.6g}"
-        return SandboxSignal(
-            action="enter",
-            side="LONG",
-            logic="S",
-            price=price,
-            sl=sl,
-            tp1=bb_m if bb_m > 0 else None,
-            message=msg,
-            meta={
-                **entry_meta_common("S", msg, interval=iv),
-                "module": "hunter",
-                "module_label": "短线猎手",
-                "signal_high": high,
-                "signal_low": low,
-                "atr": atr,
-                "bb_mid": bb_m,
-                "initial_sl": sl,
-                "stage": 0,
-            },
-        )
+        trend_pct = hunter_trend_return(df, SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK)
+        trend_ok = trend_pct is not None and trend_pct <= -SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT
+        below_mid_check = SANDBOX_HUNTER_HAMMER_BELOW_MID
+        below_mid = close_below_bb_mid(last) if below_mid_check else True
+        if trend_ok and below_mid:
+            sl = hunter_sl("LONG", high, low)
+            filter_note = []
+            if below_mid_check:
+                filter_note.append("中轨下")
+            if trend_pct is not None:
+                filter_note.append(f"前跌{abs(trend_pct):.1f}%")
+            note = " · ".join(filter_note)
+            shape = "倒锤" if detect_inverted_hammer(last) else "锤子"
+            msg = f"短线猎手做多 · {iv} · {shape}({note}) · SL={sl:.6g}"
+            return SandboxSignal(
+                action="enter",
+                side="LONG",
+                logic="S",
+                price=price,
+                sl=sl,
+                tp1=bb_m if bb_m > 0 else None,
+                message=msg,
+                meta={
+                    **entry_meta_common("S", msg, interval=iv),
+                    "module": "hunter",
+                    "module_label": "短线猎手",
+                    "signal_high": high,
+                    "signal_low": low,
+                    "atr": atr,
+                    "bb_mid": bb_m,
+                    "below_mid": bool(below_mid),
+                    "trend_pct": trend_pct,
+                    "initial_sl": sl,
+                    "stage": 0,
+                },
+            )
     return None
 
 

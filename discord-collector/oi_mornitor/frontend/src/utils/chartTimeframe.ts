@@ -257,5 +257,9 @@ export async function fetchPatternChart(
 /** 最早一根 K 线的 open_time（毫秒），用于向左分页。 */
 export function oldestCandleOpenMs(candles: PatternCandle[]): number | null {
   if (!candles.length) return null;
-  return candles[0].time * 1000;
+  let minSec = candles[0].time;
+  for (let i = 1; i < candles.length; i++) {
+    if (candles[i].time < minSec) minSec = candles[i].time;
+  }
+  return minSec * 1000;
 }

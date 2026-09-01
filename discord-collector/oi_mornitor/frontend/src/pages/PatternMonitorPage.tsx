@@ -4,12 +4,13 @@ import type { PatternAlert, PatternPayload, PatternState, PatternWatchItem } fro
 import { coinInitial, displaySymbol } from "../utils/symbol";
 import { MercuHeader } from "../components/MercuHeader";
 import { PatternChartPanel } from "../components/PatternChartPanel";
-import { PatternToastStack } from "../components/PatternToastStack";
+import { PatternAlertTicker } from "../components/PatternAlertTicker";
 import { SandboxToastStack } from "../components/SandboxToastStack";
 import { CardLifecyclePanel } from "../components/CardLifecyclePanel";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useOiOnboardBridge } from "../hooks/useOiOnboardBridge";
 import { useSandboxTradeHistory } from "../hooks/useSandboxTradeHistory";
+import { useSpecialFocus } from "../hooks/useSpecialFocus";
 import { fmtMetaPrice, fmtTs } from "../utils/format";
 import { resolveSandboxCardAuthor } from "../utils/cardAuthor";
 import {
@@ -525,6 +526,9 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     }
   }, []);
 
+  const { symbols: focusSymbols, add: addFocus, remove: removeFocus, has: hasFocus } =
+    useSpecialFocus();
+
   const autoPickCount = pattern?.auto_pick_count ?? 50;
   const heavyPool = pattern?.heavyweight_pool_size ?? 0;
   const selectedState = states.find((s) => s.symbol === selectedSymbol);
@@ -539,6 +543,8 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         scanTs={scanTs}
         poolMeta={snapshot.pool_meta}
         poolSize={snapshot.pool_size}
+        focusSymbols={focusSymbols}
+        onRemoveFocus={(sym) => void removeFocus(sym)}
       />
 
       <div className="pattern-layout">
@@ -694,6 +700,14 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                 </button>
               )}
             </div>
+            <PatternAlertTicker
+              alerts={alerts}
+              scanTs={scanTs}
+              onOpen={(sym) => {
+                setSelectedSymbol(sym);
+                setMainTab("pattern");
+              }}
+            />
             <span className="pattern-scan">
               {selectedSymbol
                 ? `K 线 · $${displaySymbol(selectedSymbol)}`
@@ -1454,14 +1468,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         refreshing={cardPriceBusy}
       />
 
-      <PatternToastStack
-        alerts={alerts}
-        scanTs={scanTs}
-        onOpen={(sym) => {
-          setSelectedSymbol(sym);
-          setMainTab("pattern");
-        }}
-      />
       <SandboxToastStack
         alerts={sandboxAlerts}
         scanTs={sandboxScanTs}
@@ -1481,17 +1487,32 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
           {(() => {
             const item = watchlist.find((w) => w.symbol === ctxMenu.symbol);
             const pinned = Boolean(item?.pinned);
+            const focused = hasFocus(ctxMenu.symbol);
             return (
-              <button
-                type="button"
-                role="menuitem"
-                disabled={busy}
-                onClick={() => void pinSymbolToTop(ctxMenu.symbol, !pinned)}
-              >
-                {pinned
-                  ? `取消置顶 $${displaySymbol(ctxMenu.symbol)}`
-                  : `置顶 $${displaySymbol(ctxMenu.symbol)}（至少 1 天）`}
-              </button>
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={busy}
+                  onClick={() => void pinSymbolToTop(ctxMenu.symbol, !pinned)}
+                >
+                  {pinned
+                    ? `取消置顶 $${displaySymbol(ctxMenu.symbol)}`
+                    : `置顶 $${displaySymbol(ctxMenu.symbol)}（至少 1 天）`}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setCtxMenu(null);
+                    void (focused ? removeFocus(ctxMenu.symbol) : addFocus(ctxMenu.symbol));
+                  }}
+                >
+                  {focused
+                    ? `取消特别关注 $${displaySymbol(ctxMenu.symbol)}`
+                    : `特别关注 $${displaySymbol(ctxMenu.symbol)}`}
+                </button>
+              </>
             );
           })()}
         </div>

@@ -187,6 +187,53 @@ async def handle_patterns_watch_pin(request: web.Request) -> web.Response:
     return _json_response({"ok": True, "watchlist": svc.pattern_engine.get_watchlist()})
 
 
+async def handle_focus_symbols_get(_request: web.Request) -> web.Response:
+    from oi_mornitor.config import MAIN_CARD_TELEGRAM_CHAT_ID
+    from oi_mornitor.focus_symbols import list_focus_symbols
+
+    return _json_response({
+        "ok": True,
+        "symbols": list_focus_symbols(),
+        "main_chat_id": MAIN_CARD_TELEGRAM_CHAT_ID or "",
+    })
+
+
+async def handle_focus_symbols_put(request: web.Request) -> web.Response:
+    from oi_mornitor.focus_symbols import (
+        add_focus_symbol,
+        list_focus_symbols,
+        remove_focus_symbol,
+        set_focus_symbols,
+    )
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+
+    action = str(body.get("action") or "").strip().lower()
+    symbol = str(body.get("symbol") or "").strip().upper()
+    if action == "add":
+        if not symbol:
+            return _json_response({"ok": False, "error": "symbol required"}, status=400)
+        symbols = add_focus_symbol(symbol)
+    elif action in ("remove", "delete"):
+        if not symbol:
+            return _json_response({"ok": False, "error": "symbol required"}, status=400)
+        symbols = remove_focus_symbol(symbol)
+    elif "symbols" in body:
+        raw = body.get("symbols")
+        if not isinstance(raw, list):
+            return _json_response({"ok": False, "error": "symbols must be list"}, status=400)
+        symbols = set_focus_symbols([str(x) for x in raw])
+    else:
+        return _json_response(
+            {"ok": False, "error": "action=add|remove or symbols=[] required"},
+            status=400,
+        )
+    return _json_response({"ok": True, "symbols": symbols})
+
+
 async def handle_patterns_random(_request: web.Request) -> web.Response:
     svc = get_service()
     rows = svc.radar.last_all_rows
@@ -519,6 +566,12 @@ def create_app() -> web.Application:
     app.router.add_delete("/api/patterns/watch", handle_patterns_watch_delete)
 
     app.router.add_post("/api/patterns/watch/pin", handle_patterns_watch_pin)
+
+    app.router.add_get("/api/focus-symbols", handle_focus_symbols_get)
+
+    app.router.add_put("/api/focus-symbols", handle_focus_symbols_put)
+
+    app.router.add_post("/api/focus-symbols", handle_focus_symbols_put)
 
     app.router.add_post("/api/patterns/random", handle_patterns_random)
 

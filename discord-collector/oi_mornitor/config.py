@@ -141,6 +141,17 @@ CANDLE_CARD_TELEGRAM = os.getenv(
 CANDLE_CARD_TELEGRAM_CHAT_ID = os.getenv(
     "OI_CANDLE_CARD_TELEGRAM_CHAT_ID", "-1004364826383"
 ).strip()
+# 特别关注币种专属推送群（默认与 MAIN_CARD_TELEGRAM_CHAT_ID / OI_MAIN_CARD_TELEGRAM_CHAT_ID）
+MAIN_CARD_TELEGRAM_CHAT_ID = (
+    os.getenv("MAIN_CARD_TELEGRAM_CHAT_ID")
+    or os.getenv("OI_MAIN_CARD_TELEGRAM_CHAT_ID")
+    or ""
+).strip()
+MAIN_CARD_DEFAULT_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_MAIN_CARD_DEFAULT_SYMBOLS", "BTCUSDT,ETHUSDT").split(",")
+    if s.strip()
+)
 CANDLE_CARD_MAJOR_SYMBOLS = tuple(
     s.strip().upper()
     for s in os.getenv("OI_CANDLE_CARD_MAJORS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
@@ -268,6 +279,29 @@ SANDBOX_MAX_CONCURRENT = int(os.getenv("OI_SANDBOX_MAX_CONCURRENT", "20"))
 # —— 短线猎手 S ——
 SANDBOX_HUNTER_SL_PAD = float(os.getenv("OI_SANDBOX_HUNTER_SL_PAD", "0.001"))  # 0.1%
 SANDBOX_HUNTER_ATR_MULT = float(os.getenv("OI_SANDBOX_HUNTER_ATR_MULT", "2"))
+# —— 猎手高胜率过滤（2026-09 对齐卡片准确率调优，默认值与 OI_CANDLE_* 一致）——
+# 射击之星做空：收盘须在 BB 上轨区（basis + 0.85×带宽）或贴近 Vegas A/B 通道，否则不开
+SANDBOX_HUNTER_REQUIRE_POSITION = os.getenv(
+    "OI_SANDBOX_HUNTER_REQUIRE_POSITION", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# 射击之星做空：信号前 N 根（不含信号根）累计涨幅 ≥ 阈值(%) 才开（看跌前提是前期上涨）
+SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK = int(
+    os.getenv("OI_SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK", "20")
+)
+SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT = float(
+    os.getenv("OI_SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT", "3.0")
+)
+# 倒锤/锤子做多：信号前 N 根累计跌幅 ≥ 阈值(%) 才开（看涨前提是前期下跌）
+SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK = int(
+    os.getenv("OI_SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK", "20")
+)
+SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT = float(
+    os.getenv("OI_SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT", "3.0")
+)
+# 倒锤/锤子做多：收盘须在布林中轨之下（对齐卡片倒锤子 §4.2 口径）
+SANDBOX_HUNTER_HAMMER_BELOW_MID = os.getenv(
+    "OI_SANDBOX_HUNTER_HAMMER_BELOW_MID", "1"
+).strip().lower() in ("1", "true", "yes", "on")
 # —— 长线维加斯 T（价变阈值为设计基准；ROE≈价变%×杠杆）——
 SANDBOX_TREND_SLOPE_MIN = float(os.getenv("OI_SANDBOX_TREND_SLOPE_MIN", "0.0003"))
 SANDBOX_TREND_SL_PAD = float(os.getenv("OI_SANDBOX_TREND_SL_PAD", "0.002"))  # EMA169 外 0.2%

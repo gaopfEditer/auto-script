@@ -6,11 +6,13 @@ import { MarketMatrixGrid } from "../components/MarketMatrixGrid";
 import { MercuHeader } from "../components/MercuHeader";
 import { ToastStack } from "../components/ToastStack";
 import { useRadarSSE } from "../hooks/useRadarSSE";
+import { useSpecialFocus } from "../hooks/useSpecialFocus";
 import type { OiTimeframe } from "../types";
 import { deriveAllLists } from "../utils/deriveLists";
 
 export function RadarPage() {
   const { snapshot, online } = useRadarSSE();
+  const { symbols: focusSymbols, remove: removeFocus } = useSpecialFocus();
   const [timeframe, setTimeframe] = useState<OiTimeframe>("5m");
   const {
     all_tickers: all,
@@ -31,6 +33,8 @@ export function RadarPage() {
         scanTs={scanTs}
         poolMeta={snapshot.pool_meta}
         poolSize={snapshot.pool_size}
+        focusSymbols={focusSymbols}
+        onRemoveFocus={(sym) => void removeFocus(sym)}
       />
       <div className="mercu-body">
         <AlertFeed rows={all} scanTs={scanTs} poolSize={poolSize} thresholds={thresholds} />

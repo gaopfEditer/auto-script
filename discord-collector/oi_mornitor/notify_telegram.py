@@ -9,6 +9,7 @@ from typing import Any
 from oi_mornitor.config import (
     CANDLE_CARD_TELEGRAM,
     CANDLE_CARD_TELEGRAM_CHAT_ID,
+    MAIN_CARD_TELEGRAM_CHAT_ID,
     PATTERN_OI_COMBO_TELEGRAM,
     STRUCTURE_CARD_TELEGRAM,
     TELEGRAM_BOT_TOKEN,
@@ -202,25 +203,43 @@ def _resolve_chat_id(override: str | None = None) -> str:
     ).strip()
 
 
-def _send_via_bot_api(text: str, chat_id: str) -> bool:
+def _post_json(url: str, payload: dict[str, Any], *, timeout: float = 20.0) -> tuple[int, str]:
+    """stdlib JSON POST，避免依赖 requests（oi venv 默认未装）。"""
+    import json
+    import urllib.error
+    import urllib.request
+
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
     try:
-        import requests
-    except ImportError:
-        logger.warning("Telegram: 缺少 requests")
-        return False
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            return int(resp.status), body
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        return int(exc.code), body
+
+
+def _send_via_bot_api(text: str, chat_id: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not chat_id:
         return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        r = requests.post(
-            url,
-            json={"chat_id": chat_id, "text": text},
-            timeout=20,
-        )
-        body = r.json() if r.content else {}
-        ok = bool(isinstance(body, dict) and body.get("ok"))
+        status, body = _post_json(url, {"chat_id": chat_id, "text": text})
+        try:
+            import json
+
+            parsed = json.loads(body) if body else {}
+        except Exception:  # noqa: BLE001
+            parsed = {}
+        ok = bool(isinstance(parsed, dict) and parsed.get("ok"))
         if not ok:
-            logger.warning("Telegram bot API 失败: %s", body)
+            logger.warning("Telegram bot API 失败 HTTP %s: %s", status, body[:300])
         return ok
     except Exception as exc:  # noqa: BLE001
         logger.warning("Telegram bot API 异常: %s", exc)
@@ -231,17 +250,11 @@ def _send_via_http_gateway(text: str, chat_id: str) -> bool:
     if not TELEGRAM_SEND_URL or not chat_id:
         return False
     try:
-        import requests
-    except ImportError:
-        return False
-    try:
-        r = requests.post(
-            TELEGRAM_SEND_URL,
-            json={"chat_id": chat_id, "text": text},
-            timeout=20,
+        status, body = _post_json(
+            TELEGRAM_SEND_URL, {"chat_id": chat_id, "text": text}
         )
-        if r.status_code >= 400:
-            logger.warning("Telegram gateway HTTP %s: %s", r.status_code, r.text[:200])
+        if status >= 400:
+            logger.warning("Telegram gateway HTTP %s: %s", status, body[:200])
             return False
         return True
     except Exception as exc:  # noqa: BLE001
@@ -252,32 +265,54 @@ def _send_via_http_gateway(text: str, chat_id: str) -> bool:
 def send_telegram_text(text: str, *, chat_id: str | None = None) -> bool:
     chat = _resolve_chat_id(chat_id)
     if not chat:
-        logger.debug("Telegram 未配置 chat_id，跳过")
+        logger.warning("Telegram 未配置 chat_id，跳过")
         return False
     if TELEGRAM_SEND_URL and chat:
         if _send_via_http_gateway(text, chat):
             return True
+        logger.warning("Telegram gateway 发送失败，尝试 Bot API 兜底")
     if TELEGRAM_BOT_TOKEN and chat:
         return _send_via_bot_api(text, chat)
-    logger.debug("Telegram 未配置 SEND_URL/BOT_TOKEN，跳过")
+    logger.warning(
+        "Telegram 发送失败：gateway=%s bot_token=%s chat=%s",
+        bool(TELEGRAM_SEND_URL),
+        bool(TELEGRAM_BOT_TOKEN),
+        chat,
+    )
     return False
 
 
 def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
-    """射击之星 / 倒锤子卡片 → Telegram 群。"""
+    """射击之星 / 倒锤子卡片 → Telegram 群；特别关注币另推 MAIN 群。"""
     if not CANDLE_CARD_TELEGRAM:
         return False
     text = format_candle_card_message(alert)
-    return send_telegram_text(text)
+    ok = send_telegram_text(text)
+    ok_main = _maybe_send_main_card(alert, text)
+    return ok or ok_main
 
 
 def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
-    """顶部/底部结构 → Telegram 群。"""
+    """顶部/底部结构 → Telegram 群；特别关注币另推 MAIN 群。"""
     if not STRUCTURE_CARD_TELEGRAM:
         return False
     text = format_structure_card_message(alert)
-    return send_telegram_text(text)
+    ok = send_telegram_text(text)
+    ok_main = _maybe_send_main_card(alert, text)
+    return ok or ok_main
 
+
+def _maybe_send_main_card(alert: dict[str, Any], text: str) -> bool:
+    if not MAIN_CARD_TELEGRAM_CHAT_ID:
+        return False
+    try:
+        from oi_mornitor.focus_symbols import is_focus_symbol
+    except Exception:  # noqa: BLE001
+        return False
+    sym = str(alert.get("symbol") or "")
+    if not is_focus_symbol(sym):
+        return False
+    return send_telegram_text(text, chat_id=MAIN_CARD_TELEGRAM_CHAT_ID)
 
 def send_pattern_oi_telegram(alert: dict[str, Any]) -> bool:
     """同步发送；未配置或关闭时返回 False。

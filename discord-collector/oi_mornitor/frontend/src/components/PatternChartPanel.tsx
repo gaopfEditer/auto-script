@@ -39,23 +39,42 @@ import {
 import { chartLocalization, chartTimeScaleOptions, formatCandleLocalTime } from "../utils/chartLocale";
 
 /** 视口左缘距数据起点少于此根数时触发续载 */
-const LEFT_HISTORY_PAD = 120;
+const LEFT_HISTORY_PAD = 80;
 /** 可见跨度覆盖已加载数据达到该比例，视为「滚轮缩到看全图」 */
-const ZOOM_OUT_COVER_RATIO = 0.72;
+const ZOOM_OUT_COVER_RATIO = 0.65;
 /** 自动向左续载的上限，避免一次缩放过载 */
 const CHART_HISTORY_MAX = 5000;
 
 function isZoomedOutFullView(range: LogicalRange, len: number): boolean {
   if (len <= 0) return false;
   const span = range.to - range.from;
-  return (range.from < 10 || range.from < 0) && span >= len * ZOOM_OUT_COVER_RATIO;
+  return (range.from < 15 || range.from < 0) && span >= len * ZOOM_OUT_COVER_RATIO;
 }
 
 /** 左滑接近尽头，或滚轮横轴收缩看全图时，需要继续拉更早 K 线 */
 function needsLeftHistory(range: LogicalRange, len: number): boolean {
   if (len <= 0 || len >= CHART_HISTORY_MAX) return false;
   if (range.from < LEFT_HISTORY_PAD || range.from < 0) return true;
+  const span = range.to - range.from;
+  // 缩放过宽且左缘已进入前 30%：提前续载，不必等到贴边
+  if (span >= Math.min(len * 0.45, 180) && range.from < len * 0.3) return true;
   return isZoomedOutFullView(range, len);
+}
+
+function restoreLogicalRange(chart: IChartApi, range: LogicalRange) {
+  // setData 后同步改 range 常被 LWC 内部布局冲掉，下一帧再设一次
+  const apply = () => {
+    try {
+      chart.timeScale().setVisibleLogicalRange(range);
+    } catch {
+      /* chart disposed */
+    }
+  };
+  apply();
+  requestAnimationFrame(() => {
+    apply();
+    requestAnimationFrame(apply);
+  });
 }
 
 interface Props {
@@ -610,20 +629,33 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           const shiftedTo = prevRange.to + prepended;
           // 滚轮缩到看全图时：左侧新数据直接露出来（不要只平移视口），才能继续触发续载
           if (isZoomedOutFullView(prevRange, prevLen)) {
-            chart.timeScale().setVisibleLogicalRange({
-              from: 0,
+            restoreLogicalRange(chart, {
+              from: Math.min(0, prevRange.from),
               to: shiftedTo,
             });
           } else {
-            chart.timeScale().setVisibleLogicalRange({
+            restoreLogicalRange(chart, {
               from: prevRange.from + prepended,
               to: shiftedTo,
             });
           }
+        } else if (prevRange && prevLen > 0) {
+          // setData 会重置视口；非 prepend（refresh/live 合并）必须原样恢复，否则左滑历史被打回
+          const stickRight = prevRange.to >= prevLen - 8;
+          if (stickRight) {
+            const span = Math.max(20, prevRange.to - prevRange.from);
+            const to = sortedCandles.length + 2;
+            restoreLogicalRange(chart, {
+              from: Math.max(0, to - span),
+              to,
+            });
+          } else {
+            restoreLogicalRange(chart, prevRange);
+          }
         } else if (!prevRange || prevLen === 0) {
           const to = sortedCandles.length;
           const from = Math.max(0, to - CHART_VISIBLE_BARS);
-          chart.timeScale().setVisibleLogicalRange({ from, to: to + 2 });
+          restoreLogicalRange(chart, { from, to: to + 2 });
         }
       } catch (e) {
         setErr(e instanceof Error ? e.message : "图表渲染失败");
@@ -649,6 +681,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     let shouldChain = false;
     try {
       const prevLen = candlesRef.current.length;
+      const prevRange = chartApi.current?.timeScale().getVisibleLogicalRange() ?? null;
       const chunk = await fetchPatternChart(symbol, timeframeRef.current, {
         limit: CHART_LOAD_CHUNK,
         endTimeMs: oldestMs - 1,
@@ -666,6 +699,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         setHasMore(false);
         return;
       }
+      const prepended = merged.length - prevLen;
       hasMoreRef.current = chunk.has_more !== false && merged.length < CHART_HISTORY_MAX;
       setHasMore(hasMoreRef.current);
 
@@ -697,19 +731,26 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         { isPrepend: true },
       );
 
-      // 加载期间 range 回调被挡住；缩全图/左缘仍紧时在 finally 里接着拉
-      const range = chartApi.current?.timeScale().getVisibleLogicalRange();
-      const len = candlesRef.current.length;
-      shouldChain = Boolean(hasMoreRef.current && range && needsLeftHistory(range, len));
-    } catch {
-      /* 静默 */
+      // 用「续载后应有的视口」判断是否接着拉（此时 setData 后的 getVisibleRange 尚不可靠）
+      const len = merged.length;
+      if (hasMoreRef.current && prevRange) {
+        const shiftedTo = prevRange.to + prepended;
+        const intended: LogicalRange = isZoomedOutFullView(prevRange, prevLen)
+          ? { from: Math.min(0, prevRange.from), to: shiftedTo }
+          : { from: prevRange.from + prepended, to: shiftedTo };
+        shouldChain = needsLeftHistory(intended, len);
+      } else if (hasMoreRef.current) {
+        shouldChain = true;
+      }
+    } catch (e) {
+      console.warn("[chart] 左侧历史续载失败", e);
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);
       if (shouldChain) {
         window.setTimeout(() => {
           void loadMoreHistoryRef.current();
-        }, 0);
+        }, 50);
       }
     }
   }, [symbol, applyChartSeries]);
@@ -1120,6 +1161,17 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       };
       chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
 
+      // 滚轮缩放/平移后 LWC 有时不立刻抛 range 事件；下一帧再探一次左缘
+      const onWheel = () => {
+        window.requestAnimationFrame(() => {
+          if (loadingMoreRef.current || !hasMoreRef.current) return;
+          const range = chart.timeScale().getVisibleLogicalRange();
+          const len = candlesRef.current.length;
+          if (range && needsLeftHistory(range, len)) void loadMoreHistoryRef.current();
+        });
+      };
+      el.addEventListener("wheel", onWheel, { passive: true });
+
       const onResize = () => {
         if (chartRef.current && chartApi.current) {
           chartApi.current.applyOptions({
@@ -1132,6 +1184,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
       return () => {
         window.removeEventListener("resize", onResize);
+        el.removeEventListener("wheel", onWheel);
         chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
         chart.unsubscribeCrosshairMove(onCrosshairMove);
         hideCrosshairPrice();

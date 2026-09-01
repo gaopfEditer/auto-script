@@ -297,10 +297,12 @@ Vegas 蓝红方向门控（`OI_SANDBOX_VEGAS_DIRECTION_GATE`，默认开）：
 
 | 方向 | 开单条件（当根已收盘 K，需同时满足） |
 |------|--------------------------------------|
-| **空** | 触及布林**上轨**或结构 **LH**，且当根为标准**射击之星** |
-| **多** | 触及布林**下轨**或结构 **HL**，且当根为**倒锤子 / 锤子** |
+| **空** | 触及布林**上轨**或结构 **LH**，且当根为标准**射击之星**；再加 2026-09 高胜率过滤：① 收盘须在 **BB 上轨区**（`basis + 0.85×带宽`）或贴近 **Vegas A/B 通道**（`OI_SANDBOX_HUNTER_REQUIRE_POSITION`，默认开）；② 信号前 `OI_SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK`(20) 根累计涨幅 ≥ `OI_SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT`(3%) |
+| **多** | 触及布林**下轨**或结构 **HL**，且当根为**倒锤子 / 锤子**；再加 2026-09 高胜率过滤：① 收盘须在**布林中轨之下**（`OI_SANDBOX_HUNTER_HAMMER_BELOW_MID`，默认开，对齐卡片倒锤子 §4.2）；② 信号前 `OI_SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK`(20) 根累计跌幅 ≥ `OI_SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT`(3%) |
 
 入场价 = 该根**收盘价**。
+
+过滤与上午卡片准确率调优（§5.4）同口径：**只在关键位置 + 有趋势背景时才做反转**，减少震荡里乱做。入场 `meta` 记 `trend_pct` / `position_ok` / `near_vegas` / `below_mid` 便于复盘。长线 T 本身已有 BULL/BEAR 趋势门控，不再叠加。
 
 #### 9.1.2 长线维加斯 T — 开多 / 开空
 
@@ -410,6 +412,12 @@ if low <= trail_sl:
 | `OI_SANDBOX_FEE_PCT` | 0.04 | 单边手续费 %（名义） |
 | `OI_SANDBOX_HUNTER_SL_PAD` | 0.001 | S：信号 K 极值外垫 |
 | `OI_SANDBOX_HUNTER_ATR_MULT` | 2 | S：ATR 止盈倍数 |
+| `OI_SANDBOX_HUNTER_REQUIRE_POSITION` | 1 | S：射击之星做空须收盘在 BB 上轨区或近 Vegas 通道 |
+| `OI_SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK` | 20 | S：做空前趋势背景回看根数 |
+| `OI_SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT` | 3.0 | S：做空前累计涨幅门槛 % |
+| `OI_SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK` | 20 | S：做多前趋势背景回看根数 |
+| `OI_SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT` | 3.0 | S：做多前累计跌幅门槛 % |
+| `OI_SANDBOX_HUNTER_HAMMER_BELOW_MID` | 1 | S：倒锤/锤子做多须收盘在中轨之下 |
 | `OI_SANDBOX_SL_ATR_MULT` | 2.5 | 初始止损距离上限 = 该值 × ATR(14) |
 | `OI_SANDBOX_TREND_SL_PAD` | 0.002 | T：EMA169 外垫 |
 | `OI_SANDBOX_TREND_BE_PRICE_PCT` | 0.75 | T：保本触发价变% |

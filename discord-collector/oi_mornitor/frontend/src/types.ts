@@ -198,7 +198,13 @@ export interface PatternAlert {
   exit_time?: number;
   leverage?: number;
   side?: string;
+  side_hint?: string;
   logic?: string;
+  kind?: string;
+  signal_kind?: string;
+  signal_text?: string;
+  type_label?: string;
+  pattern_label?: string;
   pnl_usd?: number;
   pnl_pct?: number;
   roe_pct?: number;
