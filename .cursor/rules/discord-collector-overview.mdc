@@ -1,13 +1,13 @@
 ---
-description: discord-collector 总览：目录边界、入口、硬约束。后续开发先读 docs/development.md
+description: discord-collector 总览：目录边界、入口、硬约束、规则索引
 alwaysApply: true
 ---
 
 # discord-collector 总览
 
-本仓库是多项目工作区；**当前主项目是 `discord-collector/`**。改功能时不要动 `stream-collector/`、`telegram/`、`youtube-fetch/`、`workflow/`，除非用户明确点名。
+本仓库是多项目工作区；**日常主项目是 `discord-collector/`**。未点名不要改 `stream-collector/`、`telegram/`、`youtube-fetch/`、`workflow/`。
 
-完整地图与加功能清单：[`discord-collector/docs/development.md`](discord-collector/docs/development.md)
+地图：[`discord-collector/docs/development.md`](discord-collector/docs/development.md)
 
 ## 入口
 
@@ -15,7 +15,7 @@ alwaysApply: true
 |------|------|------|------|
 | Discord 后台 | `pnpm run collect:ui` | `3851` | `src/collector-ui-server.js` |
 | Discord 前端 | `pnpm run dev:ui-vue` | `5178` | `collector-ui-vue/` |
-| OI Monitor | `pnpm run oi:start` | `8765` | `oi_mornitor/`（Python，独立） |
+| OI Monitor | `pnpm run oi:start` / `oi:dev` | `8765` | `oi_mornitor/`（Python） |
 
 配置只读 `discord-collector/.env`（`src/load-env.js`），不要用上级目录 `.env`。
 
@@ -24,7 +24,19 @@ alwaysApply: true
 - ESM（`"type": "module"`），新文件用 `import`。
 - 本机 CDP / `127.0.0.1` **禁止走 HTTP(S)_PROXY**（Playwright 会 400）。
 - 卡片现价/K 线走 Node `card-price-fetch.js`（Binance），**不要经 oi_mornitor 取价**。
+- OI 只做雷达/形态/沙盒；经 `CARD_SINK_*` **接收**卡片，不是行情源。
 - 新环境变量：同步 `src/config.js` + `.env.example`。
 - 新表/列：`store.js` 的 CREATE/ALTER、return、`createOfflineStore` 三处一起改。
 - 默认不 commit、不改 `.cursor/plans/`。
 - 对用户用中文。
+
+## `.cursor/rules` 索引（按打开文件自动带上）
+
+| 规则 | 何时 |
+|------|------|
+| `oi-mornitor.mdc` | 改 OI：形态/沙盒/**TG 推送** |
+| `discord-collector-cards.mdc` | 卡片管线 / 评估 / 下单 |
+| `discord-collector-backend.mdc` | `src/**/*.js` API/store |
+| `discord-collector-frontend.mdc` | Vue 加页/路由 |
+| `discord-collector-cdp.mdc` | Discord/X CDP |
+| `telegram-listen.mdc` | 根目录 `telegram/`、`#prom` 建卡 |

@@ -1,14 +1,92 @@
 ---
-description: OI Monitor 与 Discord 采集的边界（Python :8765）
+description: OI Monitor 形态/沙盒规则、Telegram 推送、与 Discord 边界
 globs: discord-collector/oi_mornitor/**/*
 alwaysApply: false
 ---
 
-# OI Monitor 边界
+# OI Monitor（`oi_mornitor/`）
 
-`oi_mornitor/` 是 **独立 Python 服务**（默认 `:8765`），Discord UI 只做模块切换 + iframe。不要把 OI 逻辑搬进 `collector-ui-server.js`。
+独立 **Python :8765** 服务。Discord UI 只 iframe；**禁止**把 OI 逻辑搬进 `collector-ui-server.js`。  
+详文：`oi_mornitor/SIGNAL_LOGIC.md`、`oi_mornitor/README.md`。配置集中在 `config.py`。
 
-- 卡片 **计价/档位进度** 在 Node（`card-price-monitor` / `card-level-progress`）。
-- OI 通过 `CARD_SINK_WS_URL` / `CARD_SINK_HTTP_URL` **接收**卡片，做雷达/沙盒，不是行情源。
-- 前端在 `oi_mornitor/frontend`（React + Vite）；产物进 `static/dist`。
-- 改信号口径先读 `oi_mornitor/SIGNAL_LOGIC.md` 与 `oi_mornitor/README.md`。
+## 与 Discord 边界
+
+| 事项 | 在哪 |
+|------|------|
+| 卡片现价 / K 线 / 档位进度 / 清算 | Node `card-price-*.js` / `card-level-progress.js` |
+| OI 雷达 / 形态 / 沙盒 / TG 形态卡片 | 本目录 |
+| Discord→OI 卡片外送 | Node `CARD_SINK_WS_URL`/`HTTP` → OI `/ws/cards`、`POST /api/cards` |
+| 形态图 K 线 | 默认浏览器直连币安；`chart-meta` 只叠状态/沙盒标记 |
+
+## 扫描链路（`RadarService.scan_once`）
+
+```
+OI 热钱 → hot_tickers（雷达 Toast）
+矩阵突破回踩 → breakout_alerts（BreakoutToast；Stage1 不弹，Stage2 弹）
+形态 LH→HL→扳机 → pattern.pattern_alerts（形态 Toast）
+形态∩柱级 OI → candle_pattern_oi（Toast；TG 旧文案默认让位卡片）
+多周期蜡烛/结构卡片 → candle_pattern_card / structure_pattern_card → Telegram
+沙盒 S/T/C → sandbox_alerts（形态 Toast）
+```
+
+## 形态拐点（勿改语义）
+
+状态机：`SEARCHING_TOP` → `STAGE_1_LH` → `WAITING_FOR_HL` → `TRIGGER_SIGNAL`（或超时 `EXPIRED`）。
+
+| 位 | 含义 |
+|----|------|
+| H_max / LH | 两 pivot high，后高 < 前高 |
+| L₁ / HL | LH 后 pivot low，HL > L₁ |
+| 扳机线 | L₁～HL 区间最高价；收盘带量突破 + MACD 金叉放大 → 爆发 |
+
+Pivot 窗默认 11。DB：`data/pattern_state.db`；`trigger_emitted` 后同币不再扫。
+
+## 蜡烛形态（对齐 BB-Wicks Pine）
+
+- 射击之星：上影 ∈ [1.5×实体, max]；近下轨须收阴。
+- 倒锤子：下影 ≥ 1.5×实体，上影 < 下影/3；须在中轨下。
+- 「V」前缀：贴近 Vegas A/B（144/169/576/676），过滤线 EMA12 不参与 V。
+- 扫荡持续性：`strategy/sweep_momentum.py` ↔ 前端 `sweepMomentum.ts`（Pinbar + 量能 + ΔOI）。
+
+## Telegram 推送规则（改推送必看）
+
+实现：`notify_telegram.py`；扫描：`pattern_monitor._scan_candle_pattern_cards`。
+
+| 类型 | 开关 | 群 | 内容 |
+|------|------|-----|------|
+| 蜡烛卡片 | `OI_CANDLE_CARD_TELEGRAM`（默认开） | `OI_CANDLE_CARD_TELEGRAM_CHAT_ID` | 射击之星；连续走平射击之星（主流）；柱级 OI 异动倒锤子 |
+| 结构卡片 | `OI_STRUCTURE_CARD_TELEGRAM` | 同上 | 头肩/M顶+Vegas 破位；二次探底；2B；Sweep；圆弧动量 |
+| 形态+OI 旧短文 | `OI_PATTERN_OI_COMBO_TELEGRAM` | 同通道 | **若已开蜡烛卡片，不再发旧文案** |
+
+周期池：
+
+- **主流**（`OI_CANDLE_CARD_MAJORS` 默认 BTC/ETH/SOL）：`15m,30m,1h,4h`
+- **山寨**：15m「价格幅度 TopN ∪ 合约流入 TopN」（`OI_CANDLE_CARD_ALT_TOP_N=7`）→ 扫 `15m,30m,1h`
+
+去重：同币同周期同类型同 K 开盘时间只推一次。通道优先 `TELEGRAM_SEND_URL`，否则 Bot API。  
+**主雷达 OI / 突破 / 形态扳机默认不发 TG。**
+
+## 沙盒纸面（S / T / C）
+
+| logic | 何时开 | 出场摘要 |
+|-------|--------|----------|
+| **S** 短线 | 市场 RANGE + 上轨/LH 射击之星空，或下轨/HL 倒锤多 | 中轨或 2×ATR 全平；硬 SL；阶梯锁利 |
+| **T** 长线 | BULL/BEAR 顺势回踩 Vegas + 反包/HL·LH | 保本→减仓→回撤全平 |
+| **C** 卡片 | WS/HTTP 收 Discord 卡；市价立即入，限价近场挂（主流≤0.2%，山寨≤1%） | 卡片多级 TP；**TP1 后 SL→开仓价** |
+
+- 杠杆：BTC/ETH 100x，山寨 30x；保证金 1U；双边费默认 0.04%。
+- Vegas 蓝红门控默认开（自动单）；手动进场不门控。
+- 自动：同币同周期单仓；15m 与 1h 可并存。
+
+## 改代码落点
+
+| 意图 | 文件 |
+|------|------|
+| 形态状态机 / watchlist / 卡片扫描 | `pattern_monitor.py` |
+| 图表 payload / 拐点 | `pattern_detector.py` |
+| 蜡烛 markers / OI 异动 / 卡片命中 | `strategy/candle_signals.py` |
+| 结构信号 | `strategy/structure_signals.py`（若有） |
+| TG 文案与发送 | `notify_telegram.py` |
+| 沙盒规则 | `sandbox/logics.py` + `engine.py` |
+| 收 Discord 卡 | `sandbox/card_ws.py` / `card_parser.py` |
+| 前端形态图 | `frontend/src/components/PatternChartPanel.tsx` |

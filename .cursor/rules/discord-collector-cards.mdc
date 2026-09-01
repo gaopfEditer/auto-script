@@ -1,16 +1,17 @@
 ---
-description: 信号卡片、档位进度、评估、自动交易边界
-globs: discord-collector/src/{card-*,discord-signal-*,trade-*,bitget-*,weex-*}.js
+description: 信号卡片、开放 API、档位进度、评估、自动交易、外送 OI
+globs: discord-collector/src/{card-*,discord-signal-*,trade-*,bitget-*,weex-*,telegram-prom-*}.js
 alwaysApply: false
 ---
 
 # 卡片管线
 
 ```
-Gateway 消息 → ingest → signal-card-service（解析/去重/AI 风格）
+Gateway / 开放 API / Telegram#prom
+  → signal-card / archiveCard（解析、去重、30min 或 #prom 10min 合并）
   → 入库 discord_signal_cards
-  → Telegram / Webhook / CARD_SINK(oi :8765)
-  → card-price-monitor：接近推送 + 每小时档位进度 + 窗口到期 autoEval
+  → Telegram / Webhook / CARD_SINK → oi_mornitor :8765
+  → card-price-monitor：接近推送 + 档位进度 + 窗口 autoEval
 ```
 
 ## 改哪里
@@ -18,16 +19,25 @@ Gateway 消息 → ingest → signal-card-service（解析/去重/AI 风格）
 | 意图 | 文件 |
 |------|------|
 | 新博主/频道 | `discord-signal-config.js` + `discord-signal-parsers.js` |
-| 卡片字段/UID | `card-fields.js` / `card-uid.js` |
-| 入场/TP/SL 进度 | `card-level-progress.js`（1/N 分批；同 K 线先 SL） |
-| 杠杆/主流山寨 | `card-backtest-policy.js` |
-| 现价与 K 线 | `card-price-fetch.js` only |
-| 批量清算（Binance K 线） | `card-liquidation-engine.js`（12h 入场窗；`POST /api/cards/liquidate`） |
-| Bitget/WEEX 下单 | `*-order-service.js`，频道开关 `trade-platform-toggles.js` |
+| 同卡合并窗 | `card-signal-merge.js`（默认 30min；`#prom`/`mergeWindowMs` → 10min） |
+| 开放 CRUD/列表 | `card-archive-api.js` · 文档 `docs/cards-api.md` |
+| 历史回测 validate | `card-validate-*.js`（客户端传 `signals`；当前可 mock，不依赖 MySQL） |
+| TG 检查/回测 API | `telegram-prom-api.js` → 前端 `/telegram` |
+| 入场/TP/SL 进度 | `card-level-progress.js`（1/N；同 K 先 SL） |
+| 杠杆主流/山寨 | `card-backtest-policy.js` |
+| 现价与 K 线 | **仅** `card-price-fetch.js` |
+| 批量清算 | `card-liquidation-engine.js` · `POST /api/cards/liquidate` |
+| Bitget/WEEX | `*-order-service.js` · `trade-platform-toggles.js` |
 
-## 评估口径（已定，不要改语义）
+## 开放 API 要点
 
-- 未入场：不进胜率分母；清算限价单 **12 小时内未触及** 判未入场，写入后不再重复匹配。
+- **建卡** `POST /api/v1/cards`（需 MySQL；可合并更新）。
+- **回测** `POST /api/v1/cards/validate`（只读/`signals`；结果经 `ws://…/ws` `meta`/`card_validate_*`）。
+- **无** 开放 PATCH；更新靠再 POST 合并或本机 `PATCH /api/discord/signal-cards/:id`。
+
+## 评估口径（已定，勿改语义）
+
+- 未入场：不进胜率；清算限价 **12h 未触** = 未入场。
 - 任意 TP = 赢；先 SL = 输。
-- N 个 TP 各平 `1/N`；`pnlPct` 按仓位加权累加。
-- `runAutoEval` 只做窗口到期兜底，盘中档位由 `progress_json` 状态机负责。
+- N 个 TP 各平 `1/N`；`pnlPct` 仓位加权。
+- `runAutoEval` 只做窗口到期兜底；盘中靠 `progress_json`。

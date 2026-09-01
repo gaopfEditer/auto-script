@@ -9,7 +9,19 @@
 - [开放建卡 API](./cards-api.md)
 - [OI Monitor](../oi_mornitor/README.md)
 
-Cursor 规则在仓库根 `.cursor/rules/`（按打开的文件自动带上对应模块）。
+Cursor 规则在仓库根 `.cursor/rules/`（按打开的文件自动带上对应模块）：
+
+| 文件 | 内容 |
+|------|------|
+| `discord-collector-overview.mdc` | 总览 / 硬约束（always） |
+| `oi-mornitor.mdc` | **形态状态机、沙盒 S/T/C、Telegram 卡片推送周期与去重** |
+| `discord-collector-cards.mdc` | 卡片管线、开放 API、评估口径 |
+| `discord-collector-backend.mdc` | Node API / store |
+| `discord-collector-frontend.mdc` | Vue 加页四处 |
+| `discord-collector-cdp.mdc` | Discord / X CDP |
+| `telegram-listen.mdc` | `telegram/` · `#prom` 10 分钟合并 |
+
+OI 推送与拐点完整说明仍以 [`oi_mornitor/SIGNAL_LOGIC.md`](../oi_mornitor/SIGNAL_LOGIC.md) 为准。
 
 ---
 
