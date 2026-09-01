@@ -129,10 +129,48 @@ PATTERN_STATE_DB = _PKG_ROOT / "data" / "pattern_state.db"
 PATTERN_CHART_DEFAULT_LIMIT = int(os.getenv("OI_PATTERN_CHART_LIMIT", "500"))
 PATTERN_CHART_MAX_LIMIT = int(os.getenv("OI_PATTERN_CHART_MAX_LIMIT", "1500"))
 PATTERN_CHART_LOAD_CHUNK = int(os.getenv("OI_PATTERN_CHART_LOAD_CHUNK", "300"))
-# 形态+OI 同现 → Toast + Telegram 推荐短线（默认开）
+# 形态+OI 同现 → Toast + Telegram 推荐短线（默认开；开了卡片推送后 combo 不再发旧文案）
 PATTERN_OI_COMBO_TELEGRAM = os.getenv(
     "OI_PATTERN_OI_COMBO_TELEGRAM", "1"
 ).strip().lower() in ("1", "true", "yes", "on")
+# 射击之星 / OI异动倒锤子 → Telegram 卡片（多周期规则，默认开）
+CANDLE_CARD_TELEGRAM = os.getenv(
+    "OI_CANDLE_CARD_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# 卡片推送群（默认指定形态卡片群；可改 OI_CANDLE_CARD_TELEGRAM_CHAT_ID）
+CANDLE_CARD_TELEGRAM_CHAT_ID = os.getenv(
+    "OI_CANDLE_CARD_TELEGRAM_CHAT_ID", "-1004364826383"
+).strip()
+CANDLE_CARD_MAJOR_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_CANDLE_CARD_MAJORS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
+    if s.strip()
+)
+CANDLE_CARD_MAJOR_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_CANDLE_CARD_MAJOR_INTERVALS", "15m,30m,1h,4h").split(",")
+    if x.strip()
+)
+CANDLE_CARD_ALT_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_CANDLE_CARD_ALT_INTERVALS", "15m,30m,1h").split(",")
+    if x.strip()
+)
+# 山寨：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN
+CANDLE_CARD_ALT_TOP_N = int(os.getenv("OI_CANDLE_CARD_ALT_TOP_N", "7"))
+CANDLE_CARD_ALT_RANK_TF = os.getenv("OI_CANDLE_CARD_ALT_RANK_TF", "15m").strip() or "15m"
+# 各周期 K 线刷新间隔（秒），避免每轮雷达都打满高周期接口
+_CANDLE_CARD_REFRESH_DEFAULTS = {"15m": 45, "30m": 90, "1h": 180, "4h": 600}
+CANDLE_CARD_REFRESH_SEC: dict[str, int] = {}
+for _iv, _sec in _CANDLE_CARD_REFRESH_DEFAULTS.items():
+    CANDLE_CARD_REFRESH_SEC[_iv] = int(
+        os.getenv(f"OI_CANDLE_CARD_REFRESH_{_iv.upper()}", str(_sec))
+    )
+# 顶部/底部结构（头肩+Vegas、二次探底、2B、流动性掠夺）→ 同群 Telegram
+STRUCTURE_CARD_TELEGRAM = os.getenv(
+    "OI_STRUCTURE_CARD_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+STRUCTURE_KLINE_LIMIT = int(os.getenv("OI_STRUCTURE_KLINE_LIMIT", "250"))
 # Telegram：优先 HTTP 网关，否则 Bot API
 TELEGRAM_SEND_URL = os.getenv("TELEGRAM_SEND_URL", "").strip()
 TELEGRAM_PUSH_CHAT_ID = (

@@ -7,10 +7,12 @@
 ## 1. 总览：业务链路 + 形态图 + 沙盒交易
 
 ```
-RadarService.scan_once (~60s)
+RadarService.scan_once (~30–60s)
   ├─ OI 热钱异动           → hot_tickers（Toast + AlertFeed）
   ├─ 矩阵突破回踩           → breakout_alerts（BreakoutToast）
   ├─ 形态 LH→HL→扳机        → pattern.pattern_alerts（PatternToast）
+  ├─ 形态∩柱级OI           → pattern_alerts type=candle_pattern_oi（Toast；TG 旧文案默认让位卡片）
+  ├─ 多周期形态卡片         → pattern_alerts type=candle_pattern_card → Telegram 卡片群
   ├─ 回踩/Vegas/射击之星    → pattern.pullback_alerts（后端有、前端 Toast 未接）
   └─ 沙盒纸面交易 S/T       → pattern.sandbox_*（SandboxToast + 列表 + localStorage 历史）
 
@@ -25,6 +27,8 @@ RadarService.scan_once (~60s)
 | OI 热钱 | `hot_tickers` | 雷达页 ✅ | ❌ |
 | 矩阵突破扳机 | `breakout_alerts` | 雷达页 ✅ | ❌ |
 | 形态多头爆发 | `pattern.pattern_alerts` | 形态页 ✅ | ❌ |
+| 形态卡片（射击之星/OI倒锤子） | `pattern.pattern_alerts` `candle_pattern_card` | 形态页 ✅ | ✅ `OI_CANDLE_CARD_TELEGRAM_CHAT_ID` |
+| 结构卡片（头肩/探底/2B/Sweep） | `pattern.pattern_alerts` `structure_pattern_card` | 形态页 ✅ | ✅ 同群 · `OI_STRUCTURE_CARD_TELEGRAM` |
 | 回踩/射击之星 | `pattern.pullback_*` | ❌ 未接 | 仅 `run_coin_monitor --telegram` |
 | 沙盒入场/移止损/减仓/平仓 | `pattern.sandbox_alerts` | 形态页 ✅ | ❌ |
 
@@ -162,6 +166,18 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 - Stage1：`is_valid_breakout` 或反转背景  
 - Stage2：缩量贴 wall / BB 中轨 / Vegas 中线 → 多；或顶部射击之星 → 空  
 - 可选：`python -m oi_mornitor.scripts.run_coin_monitor --telegram`
+
+### 5.4 多周期形态 / 结构 Telegram 卡片
+
+- 引擎：`PatternMonitorEngine._scan_candle_pattern_cards`
+  - 蜡烛：`candle_signals.find_last_closed_candle_card_hits` + `notify_telegram.format_candle_card_message`
+  - 结构：`structure_signals.find_last_closed_structure_hits` + 顶部/底部模板
+- **主流**（默认 BTC/ETH/SOL）：`15m/30m/1h/4h`
+- **山寨**：`15m` 榜「价格幅度 Top7 ∪ 合约流入(流动性)幅度 Top7」→ 扫 `15m/30m/1h`
+- 蜡烛：射击之星；连续走平射击之星（主流）；柱级 OI 异动倒锤子
+- 结构：头肩顶/M顶 + Vegas 破位；恐慌放量 + 二次阳线探底；2B Spring；流动性掠夺；圆弧动量衰竭
+- 群：`OI_CANDLE_CARD_TELEGRAM_CHAT_ID`；开关 `OI_CANDLE_CARD_TELEGRAM` / `OI_STRUCTURE_CARD_TELEGRAM`
+- 去重：同币同周期同类型同开盘时间只推一次
 
 ---
 

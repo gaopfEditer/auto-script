@@ -12,6 +12,13 @@ import aiohttp
 
 from oi_mornitor.config import (
     BREAKOUT_MATRIX_TF,
+    CANDLE_CARD_ALT_INTERVALS,
+    CANDLE_CARD_ALT_RANK_TF,
+    CANDLE_CARD_ALT_TOP_N,
+    CANDLE_CARD_MAJOR_INTERVALS,
+    CANDLE_CARD_MAJOR_SYMBOLS,
+    CANDLE_CARD_REFRESH_SEC,
+    CANDLE_CARD_TELEGRAM,
     FAPI_BASE_URL,
     MATRIX_TOP_N,
     OI_OI_BATCH_CONCURRENCY,
@@ -27,6 +34,8 @@ from oi_mornitor.config import (
     PATTERN_SEARCHING_STALE_SEC,
     PATTERN_WATCHLIST_REFRESH_SEC,
     PATTERN_WATCHLIST_REFRESH_TF,
+    STRUCTURE_CARD_TELEGRAM,
+    STRUCTURE_KLINE_LIMIT,
 )
 from oi_mornitor.exchange_sources import fetch_klines_with_fallback
 from oi_mornitor.market_snapshot import TIER_HEAVY
@@ -52,10 +61,17 @@ from oi_mornitor.pattern_state_tracker import MAX_WATCH_SYMBOLS, PatternStateTra
 from oi_mornitor.rank_metrics import TF_LABELS
 from oi_mornitor.strategy.candle_signals import (
     PATTERN_MARKER_KINDS,
+    closed_bar_index,
     collect_candle_signal_markers,
+    find_last_closed_candle_card_hits,
     find_last_closed_pattern_oi_combos,
 )
-from oi_mornitor.notify_telegram import send_pattern_oi_telegram_async
+from oi_mornitor.strategy.structure_signals import find_last_closed_structure_hits
+from oi_mornitor.notify_telegram import (
+    send_candle_card_telegram_async,
+    send_pattern_oi_telegram_async,
+    send_structure_card_telegram_async,
+)
 from oi_mornitor.tv_alert_sync import symbols_on_n_boards
 
 logger = logging.getLogger("OI_Radar")
@@ -296,6 +312,73 @@ def pick_hot_flow_and_oi(
     return out[:count]
 
 
+def _abs_amplitude_score(row: dict[str, Any], tf: str, domain: str) -> float:
+    """幅度分：价格用 |涨跌幅|；流动性(合约流入)/OI 用 |magnitude_usd|。"""
+    m = _rank_metric(row, tf, domain)
+    if domain == "price":
+        return abs(float(m.get("change_rate") or 0.0))
+    return abs(float(m.get("magnitude_usd") or 0.0))
+
+
+def _top_amplitude_symbols(
+    rows: list[dict[str, Any]],
+    tf: str,
+    domain: str,
+    *,
+    top_n: int,
+    exclude: set[str] | None = None,
+) -> list[str]:
+    exclude = {s.upper() for s in (exclude or set())}
+    ranked = sorted(
+        rows,
+        key=lambda r: _abs_amplitude_score(r, tf, domain),
+        reverse=True,
+    )
+    out: list[str] = []
+    for row in ranked:
+        if _abs_amplitude_score(row, tf, domain) <= 0:
+            continue
+        sym = str(row.get("symbol") or "").upper()
+        if not sym or sym in exclude:
+            continue
+        out.append(sym)
+        if len(out) >= top_n:
+            break
+    return out
+
+
+def pick_candle_card_alt_symbols(
+    pool_rows: list[dict[str, Any]],
+    *,
+    majors: set[str] | None = None,
+    top_n: int = CANDLE_CARD_ALT_TOP_N,
+    tf: str = CANDLE_CARD_ALT_RANK_TF,
+) -> list[str]:
+    """山寨推送池：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN。"""
+    majors = {s.upper() for s in (majors or CANDLE_CARD_MAJOR_SYMBOLS)}
+    eligible = [
+        r
+        for r in pool_rows
+        if r.get("status") != "warming"
+        and str(r.get("symbol") or "").upper() not in majors
+    ]
+    price_top = _top_amplitude_symbols(
+        eligible, tf, "price", top_n=top_n, exclude=majors
+    )
+    # 流动性幅度 ≈ 合约主动流入量级（与矩阵「合约流入」榜一致）
+    flow_top = _top_amplitude_symbols(
+        eligible, tf, "contract_flow", top_n=top_n, exclude=majors
+    )
+    out: list[str] = []
+    seen: set[str] = set()
+    for sym in price_top + flow_top:
+        if sym in seen:
+            continue
+        seen.add(sym)
+        out.append(sym)
+    return out
+
+
 def _rank_score(row: dict[str, Any], tf: str, domain: str, *, mode: str) -> float:
     m = _rank_metric(row, tf, domain)
     rate = float(m.get("change_rate") or 0.0)
@@ -469,6 +552,10 @@ class PatternMonitorEngine:
         self._last_watchlist_refresh_ts: float = 0.0
         # symbol:close_ts → 已推过的形态+OI 短线推荐
         self._combo_seen: set[str] = set()
+        # symbol:interval:kind:close_ts → 已推过的蜡烛卡片
+        self._card_seen: set[str] = set()
+        # (symbol, interval) → (fetched_at, klines)
+        self._card_kline_cache: dict[tuple[str, str], tuple[float, list]] = {}
 
     @property
     def last_alerts(self) -> list[dict[str, Any]]:
@@ -1110,6 +1197,27 @@ class PatternMonitorEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态+OI 短线扫描失败: %s", exc)
 
+        if CANDLE_CARD_TELEGRAM or STRUCTURE_CARD_TELEGRAM:
+            try:
+                card_alerts = await asyncio.wait_for(
+                    self._scan_candle_pattern_cards(
+                        session,
+                        base_url=base_url,
+                        klines_map=klines_map,
+                        watchlist=watchlist,
+                        pool_rows=self._last_pool_rows,
+                        scan_ts=self._last_scan_ts,
+                    ),
+                    timeout=120,
+                )
+                if card_alerts:
+                    self._last_alerts = card_alerts + self._last_alerts
+                    alerts = self._last_alerts
+            except asyncio.TimeoutError:
+                logger.warning("形态/结构卡片扫描超时（120s），跳过")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("形态/结构卡片扫描失败: %s", exc)
+
         return alerts
 
     async def _scan_candle_oi_combos(
@@ -1229,12 +1337,299 @@ class PatternMonitorEngine:
             }
             out.append(alert)
             logger.info("⚡ 形态+OI短线 %s %s %s", sym, text, side_hint)
-            try:
-                await send_pattern_oi_telegram_async(alert)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Telegram 短线推荐失败 %s: %s", sym, exc)
+            if not CANDLE_CARD_TELEGRAM:
+                try:
+                    await send_pattern_oi_telegram_async(alert)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Telegram 短线推荐失败 %s: %s", sym, exc)
 
         return out
+
+    async def _scan_candle_pattern_cards(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        base_url: str,
+        klines_map: dict[str, list],
+        watchlist: list[Any],
+        pool_rows: list[dict[str, Any]] | None = None,
+        scan_ts: float,
+    ) -> list[dict[str, Any]]:
+        """多周期蜡烛形态 + 顶部/底部结构 → Telegram 卡片。
+
+        主流 BTC/ETH/SOL：15m/30m/1h/4h。
+        山寨：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN → 15m/30m/1h。
+        """
+        if not CANDLE_CARD_TELEGRAM and not STRUCTURE_CARD_TELEGRAM:
+            return []
+
+        majors = {s.upper() for s in CANDLE_CARD_MAJOR_SYMBOLS}
+        rows = pool_rows if pool_rows is not None else self._last_pool_rows
+        alt_syms = pick_candle_card_alt_symbols(rows or [], majors=majors)
+        # 池子尚未暖好时，短暂回退形态 watchlist（排除主流）
+        if not alt_syms and watchlist:
+            alt_syms = [
+                str(w.symbol).upper()
+                for w in watchlist
+                if str(w.symbol).upper() not in majors
+            ][: CANDLE_CARD_ALT_TOP_N * 2]
+
+        jobs: list[tuple[str, str, bool]] = []
+        for sym in sorted(majors):
+            for iv in CANDLE_CARD_MAJOR_INTERVALS:
+                jobs.append((sym, iv, True))
+        for sym in sorted(set(alt_syms)):
+            for iv in CANDLE_CARD_ALT_INTERVALS:
+                jobs.append((sym, iv, False))
+
+        logger.debug(
+            "形态卡片任务 majors=%s alts=%s jobs=%d",
+            sorted(majors),
+            alt_syms,
+            len(jobs),
+        )
+        now = time.time()
+        now_ms = int(now * 1000)
+        sem = asyncio.Semaphore(max(4, min(OI_OI_BATCH_CONCURRENCY, 10)))
+        fetch_limit = min(
+            max(
+                STRUCTURE_KLINE_LIMIT if STRUCTURE_CARD_TELEGRAM else 120,
+                PATTERN_KLINE_LIMIT,
+            ),
+            PATTERN_CHART_MAX_LIMIT,
+        )
+
+        async def _klines_for(sym: str, iv: str) -> list:
+            key = (sym, iv)
+            cached = self._card_kline_cache.get(key)
+            refresh = CANDLE_CARD_REFRESH_SEC.get(iv, 180)
+            if (
+                cached
+                and (now - cached[0]) < refresh
+                and cached[1]
+                and (not STRUCTURE_CARD_TELEGRAM or len(cached[1]) >= min(180, fetch_limit - 20))
+            ):
+                return cached[1]
+            # 主扫描 15m 可复用（结构关闭或条数够用时）
+            if (
+                not STRUCTURE_CARD_TELEGRAM
+                and iv == PATTERN_KLINE_INTERVAL
+                and sym in klines_map
+                and klines_map[sym]
+            ):
+                return klines_map[sym]
+            async with sem:
+                rows = await fetch_pattern_klines(
+                    session,
+                    base_url=base_url,
+                    symbol=sym,
+                    interval=iv,
+                    limit=fetch_limit,
+                )
+            if rows:
+                self._card_kline_cache[key] = (now, rows)
+                if len(self._card_kline_cache) > 400:
+                    items = sorted(self._card_kline_cache.items(), key=lambda x: x[1][0])
+                    for k, _ in items[: len(items) // 2]:
+                        self._card_kline_cache.pop(k, None)
+            return rows or []
+
+        async def _emit_candle(
+            sym: str, iv: str, is_major: bool, df: Any, closed_ts: int
+        ) -> list[dict[str, Any]]:
+            if not CANDLE_CARD_TELEGRAM:
+                return []
+            try:
+                preview = collect_candle_signal_markers(df)
+            except Exception:  # noqa: BLE001
+                return []
+            kinds_on_bar = {
+                str(m.get("kind") or "")
+                for m in preview
+                if int(m.get("time") or 0) == closed_ts
+            }
+            need_shoot = "shooting_star" in kinds_on_bar
+            need_hammer = "inverted_hammer" in kinds_on_bar
+            if not need_shoot and not need_hammer:
+                return []
+
+            work = df
+            if need_hammer:
+                async with sem:
+                    oi_map = await fetch_open_interest_hist(
+                        session,
+                        base_url=base_url,
+                        symbol=sym,
+                        interval=iv,
+                        limit=min(fetch_limit, 500),
+                    )
+                if oi_map:
+                    work = df.copy()
+                    work["oi"] = [
+                        oi_map.get(int(ot // 1000), float("nan"))
+                        for ot in work["open_time"].tolist()
+                    ]
+            try:
+                hits = find_last_closed_candle_card_hits(
+                    work,
+                    now_ms=now_ms,
+                    allow_shooting_star=True,
+                    allow_consecutive_shoot=is_major,
+                    allow_inverted_hammer_oi=True,
+                )
+            except Exception:  # noqa: BLE001
+                return []
+
+            out: list[dict[str, Any]] = []
+            for hit in hits:
+                close_ts = int(hit["time"])
+                kind = str(hit.get("kind") or "")
+                dedupe = f"{sym}:{iv}:{kind}:{close_ts}"
+                if dedupe in self._card_seen:
+                    continue
+                self._card_seen.add(dedupe)
+                type_label = str(hit.get("type_label") or kind)
+                alert = {
+                    "symbol": sym,
+                    "type": "candle_pattern_card",
+                    "interval": iv,
+                    "status": "CANDLE_CARD",
+                    "status_label": f"形态卡片 · {type_label}",
+                    "signal_kind": str(hit.get("signal_kind") or kind),
+                    "kind": kind,
+                    "type_label": type_label,
+                    "signal_text": str(hit.get("text") or type_label),
+                    "oi_anomaly": bool(hit.get("oi_anomaly")),
+                    "price": float(hit.get("close") or hit.get("price") or 0),
+                    "close": float(hit.get("close") or 0),
+                    "high": float(hit.get("high") or 0),
+                    "low": float(hit.get("low") or 0),
+                    "open": float(hit.get("open") or 0),
+                    "kline_open_time": close_ts,
+                    "time": close_ts,
+                    "message": f"{type_label} · {iv}",
+                    "scan_ts": scan_ts,
+                    "kline_close_time": close_ts * 1000,
+                }
+                out.append(alert)
+                logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
+                try:
+                    await send_candle_card_telegram_async(alert)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
+            return out
+
+        async def _emit_structure(
+            sym: str, iv: str, df: Any
+        ) -> list[dict[str, Any]]:
+            if not STRUCTURE_CARD_TELEGRAM:
+                return []
+            try:
+                hits = find_last_closed_structure_hits(df, now_ms=now_ms)
+            except Exception:  # noqa: BLE001
+                return []
+            kinds = {str(h.get("kind") or "") for h in hits}
+            if "hs_vegas_break" in kinds:
+                hits = [h for h in hits if str(h.get("kind")) != "m_top_vegas_break"]
+            if "bottom_secondary_test" in kinds:
+                hits = [h for h in hits if str(h.get("kind")) != "spring_2b"]
+
+            out: list[dict[str, Any]] = []
+            for hit in hits:
+                close_ts = int(hit["time"])
+                kind = str(hit.get("kind") or "")
+                dedupe = f"{sym}:{iv}:struct:{kind}:{close_ts}"
+                if dedupe in self._card_seen:
+                    continue
+                self._card_seen.add(dedupe)
+                type_label = str(hit.get("type_label") or kind)
+                alert = {
+                    "symbol": sym,
+                    "type": "structure_pattern_card",
+                    "interval": iv,
+                    "status": "STRUCTURE_CARD",
+                    "status_label": f"结构卡片 · {type_label}",
+                    "signal_kind": kind,
+                    "kind": kind,
+                    "side": str(hit.get("side") or ""),
+                    "type_label": type_label,
+                    "pattern_label": str(hit.get("pattern_label") or type_label),
+                    "signal_text": str(hit.get("pattern_label") or type_label),
+                    "price": float(hit.get("close") or hit.get("price") or 0),
+                    "close": float(hit.get("close") or 0),
+                    "high": float(hit.get("high") or 0),
+                    "low": float(hit.get("low") or 0),
+                    "open": float(hit.get("open") or 0),
+                    "head_high": hit.get("head_high"),
+                    "left_shoulder": hit.get("left_shoulder"),
+                    "right_shoulder": hit.get("right_shoulder"),
+                    "neckline": hit.get("neckline"),
+                    "vegas_mid": hit.get("vegas_mid"),
+                    "vol_ratio": hit.get("vol_ratio"),
+                    "defense": hit.get("defense"),
+                    "support_ref": hit.get("support_ref"),
+                    "resistance_ref": hit.get("resistance_ref"),
+                    "l1": hit.get("l1"),
+                    "l2": hit.get("l2"),
+                    "climax_vol_ratio": hit.get("climax_vol_ratio"),
+                    "close_pct": hit.get("close_pct"),
+                    "kline_open_time": close_ts,
+                    "time": close_ts,
+                    "message": f"{type_label} · {iv}",
+                    "scan_ts": scan_ts,
+                    "kline_close_time": close_ts * 1000,
+                }
+                out.append(alert)
+                logger.info("📩 结构卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
+                try:
+                    await send_structure_card_telegram_async(alert)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Telegram 结构卡片失败 %s: %s", sym, exc)
+            return out
+
+        async def _one(sym: str, iv: str, is_major: bool) -> list[dict[str, Any]]:
+            klines = await _klines_for(sym, iv)
+            min_bars = 80 if STRUCTURE_CARD_TELEGRAM else 30
+            if not klines or len(klines) < min_bars:
+                return []
+            try:
+                df = enrich_indicators(klines_to_df(klines))
+            except Exception:  # noqa: BLE001
+                return []
+            if df.empty or "bb_basis" not in df.columns:
+                return []
+
+            closed_ts = None
+            try:
+                cidx = closed_bar_index(df, now_ms=now_ms)
+                if cidx >= 0:
+                    closed_ts = int(df.iloc[cidx]["open_time"] // 1000)
+            except Exception:  # noqa: BLE001
+                closed_ts = None
+            if closed_ts is None:
+                return []
+
+            out: list[dict[str, Any]] = []
+            if CANDLE_CARD_TELEGRAM:
+                out.extend(await _emit_candle(sym, iv, is_major, df, closed_ts))
+            if STRUCTURE_CARD_TELEGRAM:
+                out.extend(await _emit_structure(sym, iv, df))
+            if len(self._card_seen) > 1200:
+                self._card_seen = set(list(self._card_seen)[-600:])
+            return out
+
+        results = await asyncio.gather(
+            *[_one(s, iv, maj) for s, iv, maj in jobs],
+            return_exceptions=True,
+        )
+        alerts: list[dict[str, Any]] = []
+        for item in results:
+            if isinstance(item, Exception):
+                logger.debug("形态/结构卡片单任务异常: %s", item)
+                continue
+            if item:
+                alerts.extend(item)
+        return alerts
 
     async def _fetch_mtf_context(
         self,

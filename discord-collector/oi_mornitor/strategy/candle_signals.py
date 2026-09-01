@@ -400,16 +400,11 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
     return markers
 
 
-def find_last_closed_pattern_oi_combos(
-    df: pd.DataFrame,
-    *,
-    now_ms: int | None = None,
-) -> list[dict[str, Any]]:
-    """最近一根已收盘 K 上「形态 ∩ OI异动」→ 短线推荐信号。"""
-    if df.empty or "open_time" not in df.columns:
-        return []
+def closed_bar_index(df: pd.DataFrame, *, now_ms: int | None = None) -> int:
+    """最近一根已收盘 K 的行下标。"""
+    if df.empty:
+        return -1
     now = int(now_ms if now_ms is not None else time.time() * 1000)
-    # 未收盘柱（close_time 在未来）跳过，取上一根
     idx = len(df) - 1
     if "close_time" in df.columns:
         try:
@@ -418,6 +413,20 @@ def find_last_closed_pattern_oi_combos(
                 idx -= 1
         except (TypeError, ValueError):
             pass
+    return idx
+
+
+def find_last_closed_pattern_oi_combos(
+    df: pd.DataFrame,
+    *,
+    now_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    """最近一根已收盘 K 上「形态 ∩ OI异动」→ 短线推荐信号。"""
+    if df.empty or "open_time" not in df.columns:
+        return []
+    idx = closed_bar_index(df, now_ms=now_ms)
+    if idx < 0:
+        return []
     closed_ts = _ts_sec(int(df.iloc[idx]["open_time"]))
     markers = collect_candle_signal_markers(df)
     combos: list[dict[str, Any]] = []
@@ -437,3 +446,76 @@ def find_last_closed_pattern_oi_combos(
             "position": str(m.get("position") or ""),
         })
     return combos
+
+
+def find_last_closed_candle_card_hits(
+    df: pd.DataFrame,
+    *,
+    now_ms: int | None = None,
+    allow_shooting_star: bool = True,
+    allow_consecutive_shoot: bool = True,
+    allow_inverted_hammer_oi: bool = True,
+) -> list[dict[str, Any]]:
+    """最近收盘柱上的 Telegram 卡片信号。
+
+    - 射击之星：不要求 OI
+    - 连续走平射击之星：SHOOT_REPEAT_BARS 内再次出现（「射击之星（2）」）
+    - 倒锤子：仅柱级 OI 异动时推送
+    """
+    if df.empty or "open_time" not in df.columns or "bb_basis" not in df.columns:
+        return []
+    idx = closed_bar_index(df, now_ms=now_ms)
+    if idx < 0:
+        return []
+    closed_ts = _ts_sec(int(df.iloc[idx]["open_time"]))
+    row = df.iloc[idx]
+    o = float(row["open"])
+    h = float(row["high"])
+    l = float(row["low"])
+    c = float(row["close"])
+    markers = collect_candle_signal_markers(df)
+    hits: list[dict[str, Any]] = []
+    seen_kinds: set[str] = set()
+
+    for m in markers:
+        if int(m.get("time") or 0) != closed_ts:
+            continue
+        kind = str(m.get("kind") or "")
+        text = str(m.get("text") or "")
+        oi_on = bool(m.get("oi_anomaly"))
+
+        if kind == "shooting_star":
+            is_consec = "射击之星（2）" in text or "（2）" in text
+            if is_consec and allow_consecutive_shoot:
+                type_label = "连续走平射击之星"
+                card_kind = "consecutive_flat_shooting_star"
+            elif allow_shooting_star:
+                type_label = "射击之星"
+                card_kind = "shooting_star"
+            else:
+                continue
+        elif kind == "inverted_hammer":
+            if not (allow_inverted_hammer_oi and oi_on):
+                continue
+            type_label = "倒锤子"
+            card_kind = "inverted_hammer"
+        else:
+            continue
+
+        if card_kind in seen_kinds:
+            continue
+        seen_kinds.add(card_kind)
+        hits.append({
+            "time": closed_ts,
+            "kind": card_kind,
+            "signal_kind": kind,
+            "type_label": type_label,
+            "text": text,
+            "oi_anomaly": oi_on,
+            "open": o,
+            "high": h,
+            "low": l,
+            "close": c,
+            "price": c,
+        })
+    return hits
