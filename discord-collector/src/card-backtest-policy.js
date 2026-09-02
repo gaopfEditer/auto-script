@@ -1,5 +1,5 @@
 /**
- * 分层回测策略：BTC/ETH 主流 vs 山寨。
+ * 分层回测策略：BTC/ETH 主流 vs 山寨；OI Telegram 推送另见 card-telegram-oi-backtest.js。
  */
 
 /** @typedef {'major' | 'altcoin'} SymbolTier */

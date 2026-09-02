@@ -390,4 +390,18 @@ export const config = {
   ),
   twitterCdpLists: parseIdList(process.env.TWITTER_CDP_LISTS ?? ""),
   twitterCdpMaxPerList: Math.min(50, Math.max(5, Number(process.env.TWITTER_CDP_MAX_PER_LIST ?? 20) || 20)),
+  /** OI → Telegram 形态卡片回测（validate backtestPolicy=telegram_oi） */
+  tgSignalBacktestMajorStepPct: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_STEP_PCT ?? 0.5),
+  tgSignalBacktestMajorInitialH: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_INITIAL_H ?? 3),
+  tgSignalBacktestMajorExtendH: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_EXTEND_H ?? 3),
+  tgSignalBacktestMajorExtendOnStep: ["1", "true", "yes", "on"].includes(
+    String(process.env.TG_SIGNAL_BACKTEST_MAJOR_EXTEND_ON_STEP ?? "0").toLowerCase()
+  ),
+  tgSignalBacktestAltStepPct: Number(process.env.TG_SIGNAL_BACKTEST_ALT_STEP_PCT ?? 3),
+  tgSignalBacktestAltInitialH: Number(process.env.TG_SIGNAL_BACKTEST_ALT_INITIAL_H ?? 3),
+  tgSignalBacktestAltExtendH: Number(process.env.TG_SIGNAL_BACKTEST_ALT_EXTEND_H ?? 3),
+  tgSignalBacktestAltExtendOnStep: !["0", "false", "no", "off"].includes(
+    String(process.env.TG_SIGNAL_BACKTEST_ALT_EXTEND_ON_STEP ?? "1").toLowerCase()
+  ),
+  tgSignalBacktestMaxH: Number(process.env.TG_SIGNAL_BACKTEST_MAX_H ?? 24),
 };

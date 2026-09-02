@@ -364,7 +364,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         const res = await fetch("/api/patterns/watch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol: sym }),
+          body: JSON.stringify({ symbol: sym, manual: true }),
         });
         const data = await res.json();
         if (!data.ok) {
@@ -375,7 +375,12 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         setSelectedSymbol(sym);
         setMainTab("pattern");
         if (Array.isArray(data.watchlist)) {
-          patchPattern({ watchlist: data.watchlist });
+          patchPattern({
+            watchlist: data.watchlist,
+            ...(data.manual_slot_symbol !== undefined
+              ? { manual_slot_symbol: data.manual_slot_symbol }
+              : {}),
+          });
         }
         return true;
       } catch {
@@ -567,19 +572,24 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
           <div className="pattern-add">
             <input
               type="text"
-              placeholder="如 BTCUSDT"
+              placeholder="手动看盘 · 如 BTCUSDT"
               value={input}
               onChange={(e) => setInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => e.key === "Enter" && addSymbol()}
+              onKeyDown={(e) => e.key === "Enter" && void addSymbol()}
               disabled={busy}
+              title="占用 1 个手动专用槽；再次输入会替换上一个手动币，列表满也可添加"
             />
-            <button type="button" onClick={addSymbol} disabled={busy || !input.trim()}>
+            <button type="button" onClick={() => void addSymbol()} disabled={busy || !input.trim()}>
               添加
             </button>
           </div>
           {err && <p className="pattern-err">{err}</p>}
           <p className="pattern-meta">
-            已监听 {watchlist.length} / {maxWatchSymbols}（排序：置顶 → 持仓 → 其他）
+            已监听 {watchlist.length} / {maxWatchSymbols}
+            {(pattern?.manual_reserved_slots ?? 1) > 0
+              ? `（含手动槽 1 · 当前 ${pattern?.manual_slot_symbol || "空"}）`
+              : ""}
+            ；排序：置顶 → 持仓 → 其他
           </p>
 
           <ul className="pattern-watchlist">
@@ -591,6 +601,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                 const cls = STATUS_CLASS[st?.status ?? "SEARCHING_TOP"] ?? "pat-search";
                 const active = selectedSymbol === w.symbol;
                 const pinned = Boolean(w.pinned);
+                const isManual = Boolean(w.manual) || w.slot === "manual";
                 const entered = enteredSymbols.has(String(w.symbol || "").trim().toUpperCase());
                 const pinHours =
                   pinned && (w.pin_remaining_sec ?? 0) > 0
@@ -599,16 +610,19 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                 return (
                   <li
                     key={w.symbol}
-                    className={`pattern-watch-item ${cls}${active ? " active" : ""}${pinned ? " pinned" : ""}${entered ? " entered" : ""}`}
+                    className={`pattern-watch-item ${cls}${active ? " active" : ""}${pinned ? " pinned" : ""}${entered ? " entered" : ""}${isManual ? " manual-slot" : ""}`}
                     data-entered={entered ? "1" : undefined}
+                    data-manual={isManual ? "1" : undefined}
                     role="button"
                     tabIndex={0}
                     title={
-                      entered
-                        ? "沙盒持仓中"
-                        : pinned
-                          ? `已置顶，约剩 ${pinHours} 小时`
-                          : "点击查看 K 线"
+                      isManual
+                        ? "手动输入槽 · 再次添加其他币会替换此项"
+                        : entered
+                          ? "沙盒持仓中"
+                          : pinned
+                            ? `已置顶，约剩 ${pinHours} 小时`
+                            : "点击查看 K 线"
                     }
                     onClick={() => {
                       setSelectedSymbol(w.symbol);
@@ -620,6 +634,11 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     <div className="pattern-watch-head">
                       <span className="coin-avatar sm">{coinInitial(w.symbol)}</span>
                       <span className="pattern-sym">${displaySymbol(w.symbol)}</span>
+                      {isManual ? (
+                        <span className="pattern-manual-badge" title="手动输入专用槽">
+                          手动
+                        </span>
+                      ) : null}
                       {entered ? (
                         <span className="pattern-entered-badge" title="沙盒持仓中">
                           持仓

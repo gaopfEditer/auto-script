@@ -162,6 +162,9 @@ export interface PatternWatchItem {
   pinned?: boolean;
   pinned_until?: number;
   pin_remaining_sec?: number;
+  /** 手动输入专用槽 */
+  slot?: string;
+  manual?: boolean;
 }
 
 export interface PatternState {
@@ -358,6 +361,8 @@ export interface PatternPayload {
   max_watch_symbols?: number;
   multi_board_min?: number;
   card_reserved_slots?: number;
+  manual_reserved_slots?: number;
+  manual_slot_symbol?: string | null;
   watchlist_refresh_sec?: number;
   watchlist_refresh_tf?: string;
   last_watchlist_refresh_ts?: number;

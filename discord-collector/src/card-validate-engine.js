@@ -13,6 +13,10 @@ import { resolveLiquidationLeverage } from "./card-liquidation-engine.js";
 import { isCardEnteredForEval, resolveCardEvalOutcome } from "./card-eval-outcome.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { BACKTEST_WINDOW_DAYS } from "./card-validate-signals.js";
+import {
+  evaluateTelegramOiRollingWindow,
+  getTelegramOiRollingSpec,
+} from "./card-telegram-oi-backtest.js";
 
 /**
  * 未完结（止盈/止损/手动平仓前）的卡片：只返回当前盈亏率。
@@ -171,7 +175,7 @@ export async function validateCardMetrics(card) {
  * @param {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }>} klines
  * @param {number} signalMs
  */
-function marketPriceAtOrAfter(klines, signalMs) {
+export function marketPriceAtOrAfter(klines, signalMs) {
   const sorted = [...klines].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
   const bar = sorted.find((k) => (k.ts ?? 0) >= signalMs) ?? sorted[0];
   if (!bar) return null;
@@ -180,50 +184,18 @@ function marketPriceAtOrAfter(klines, signalMs) {
 }
 
 /**
- * 真实 K 线回测：信号时刻入场，窗口内最大/最小盈亏与阈值触及（文档 planned 规则）。
  * @param {import("./card-validate-signals.js").BacktestSignalInput} sig
- * @param {{ windowDays?: number }} [opts]
+ * @param {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }>} klines
+ * @param {number} signalMs
  */
-export async function backtestSignalReal(sig, opts = {}) {
-  const windowDays = Number(opts.windowDays) > 0 ? Number(opts.windowDays) : BACKTEST_WINDOW_DAYS;
-  const symbol = String(sig.symbol ?? "").trim().toUpperCase();
-  const signalMs = Date.parse(String(sig.signalAt ?? ""));
+export function resolveBacktestEntry(sig, klines, signalMs) {
   const isShort = sig.direction === "short";
-  const leverage = resolveLiquidationLeverage(symbol, "crypto");
-  const profitThresholdPct = Number(sig.profitThresholdPct) || (sig.tier === "major" ? 2 : 5);
-  const entryMode = sig.entryMode === "limit" && sig.entry != null ? "limit" : "market";
-
-  /** @type {Record<string, unknown>} */
-  const base = {
-    signalId: sig.id,
-    symbol,
-    signalAt: sig.signalAt,
-    direction: sig.direction,
-    entryMode,
-    leverage,
-    tier: sig.tier,
-    windowDays,
-    profitThresholdPct,
-    mock: false,
-  };
-
-  if (!symbol) return { ...base, error: "missing_symbol" };
-  if (!Number.isFinite(signalMs)) return { ...base, error: "invalid_signal_time" };
-
-  const endMs = Math.min(Date.now(), signalMs + windowDays * 86400_000);
-  /** @type {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }>} */
-  let klines;
-  try {
-    klines = await fetchKlinesForCard(symbol, "crypto", signalMs, endMs, "5m");
-  } catch (e) {
-    return { ...base, error: String(/** @type {Error} */ (e).message ?? e) };
-  }
-
   const marketAtSignal = marketPriceAtOrAfter(klines, signalMs);
   if (marketAtSignal == null) {
-    return { ...base, error: "no_market_price", klineCount: klines.length };
+    return { error: "no_market_price", marketAtSignal: null, entry: null, entryHitAt: null };
   }
 
+  const entryMode = sig.entryMode === "limit" && sig.entry != null ? "limit" : "market";
   /** @type {number | null} */
   let entry = null;
   /** @type {string | null} */
@@ -259,17 +231,78 @@ export async function backtestSignalReal(sig, opts = {}) {
 
   if (entry == null || !entryHitAt) {
     return {
+      error: "not_entered",
+      marketAtSignal,
+      entry: sig.entry,
+      entryHitAt: null,
+    };
+  }
+
+  return { entry, entryHitAt, marketAtSignal, entryMode };
+}
+
+/**
+ * 真实 K 线回测：信号时刻入场，窗口内最大/最小盈亏与阈值触及。
+ * @param {import("./card-validate-signals.js").BacktestSignalInput} sig
+ * @param {{ windowDays?: number }} [opts]
+ */
+export async function backtestSignalReal(sig, opts = {}) {
+  const policy = sig.backtestPolicy ?? "window_days";
+  const symbol = String(sig.symbol ?? "").trim().toUpperCase();
+  const signalMs = Date.parse(String(sig.signalAt ?? ""));
+  const isShort = sig.direction === "short";
+  const leverage = resolveLiquidationLeverage(symbol, "crypto");
+
+  if (policy === "telegram_oi") {
+    return backtestSignalTelegramOi(sig, { leverage, signalMs, symbol, isShort });
+  }
+
+  const windowDays = Number(opts.windowDays) > 0 ? Number(opts.windowDays) : BACKTEST_WINDOW_DAYS;
+  const profitThresholdPct = Number(sig.profitThresholdPct) || (sig.tier === "major" ? 2 : 5);
+  const entryMode = sig.entryMode === "limit" && sig.entry != null ? "limit" : "market";
+
+  /** @type {Record<string, unknown>} */
+  const base = {
+    signalId: sig.id,
+    symbol,
+    signalAt: sig.signalAt,
+    direction: sig.direction,
+    entryMode,
+    leverage,
+    tier: sig.tier,
+    backtestPolicy: policy,
+    windowDays,
+    profitThresholdPct,
+    mock: false,
+  };
+
+  if (!symbol) return { ...base, error: "missing_symbol" };
+  if (!Number.isFinite(signalMs)) return { ...base, error: "invalid_signal_time" };
+
+  const endMs = Math.min(Date.now(), signalMs + windowDays * 86400_000);
+  /** @type {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }>} */
+  let klines;
+  try {
+    klines = await fetchKlinesForCard(symbol, "crypto", signalMs, endMs, "5m");
+  } catch (e) {
+    return { ...base, error: String(/** @type {Error} */ (e).message ?? e) };
+  }
+
+  const entryRes = resolveBacktestEntry(sig, klines, signalMs);
+  if (entryRes.error || entryRes.entry == null || !entryRes.entryHitAt) {
+    return {
       ...base,
       mode: "backtest_window",
       entered: false,
       entry: sig.entry,
-      marketAtSignal,
+      marketAtSignal: entryRes.marketAtSignal,
       klineCount: klines.length,
-      note: "窗口内未入场",
-      error: "not_entered",
+      note: entryRes.error === "not_entered" ? "窗口内未入场" : undefined,
+      error: entryRes.error ?? "not_entered",
     };
   }
 
+  const { entry, entryHitAt, marketAtSignal } = entryRes;
   const entryMs = Date.parse(entryHitAt);
   const sorted = [...klines]
     .filter((k) => (k.ts ?? 0) >= entryMs - 1)
@@ -333,5 +366,83 @@ export async function backtestSignalReal(sig, opts = {}) {
     currentPnlPct: currentPnl?.pnlPctOnMargin ?? null,
     klineCount: klines.length,
     windowEndAt: last?.ts ? new Date(last.ts).toISOString() : new Date(endMs).toISOString(),
+  };
+}
+
+/**
+ * OI Telegram 形态推送回测：阶梯触达延时窗口。
+ * @param {import("./card-validate-signals.js").BacktestSignalInput} sig
+ * @param {{ leverage: number, signalMs: number, symbol: string, isShort: boolean }} ctx
+ */
+async function backtestSignalTelegramOi(sig, ctx) {
+  const { leverage, signalMs, symbol, isShort } = ctx;
+  const rolling = getTelegramOiRollingSpec(sig.tier, sig.rollingOverrides ?? {});
+  const entryMode = sig.entryMode === "limit" && sig.entry != null ? "limit" : "market";
+
+  /** @type {Record<string, unknown>} */
+  const base = {
+    signalId: sig.id,
+    symbol,
+    signalAt: sig.signalAt,
+    direction: sig.direction,
+    entryMode,
+    leverage,
+    tier: sig.tier,
+    backtestPolicy: "telegram_oi",
+    profitThresholdPct: rolling.stepPct,
+    source: sig.source,
+    interval: sig.interval,
+    signalKind: sig.signalKind,
+    typeLabel: sig.typeLabel,
+    mock: false,
+  };
+
+  if (!symbol) return { ...base, error: "missing_symbol" };
+  if (!Number.isFinite(signalMs)) return { ...base, error: "invalid_signal_time" };
+
+  const endMs = Math.min(Date.now(), signalMs + rolling.maxWindowMs + 3600_000);
+  let klines;
+  try {
+    klines = await fetchKlinesForCard(symbol, "crypto", signalMs, endMs, "5m");
+  } catch (e) {
+    return { ...base, error: String(/** @type {Error} */ (e).message ?? e) };
+  }
+
+  const entryRes = resolveBacktestEntry(sig, klines, signalMs);
+  if (entryRes.error || entryRes.entry == null || !entryRes.entryHitAt) {
+    return {
+      ...base,
+      mode: "telegram_oi_rolling",
+      entered: false,
+      entry: sig.entry,
+      marketAtSignal: entryRes.marketAtSignal,
+      rollingSpec: rolling,
+      klineCount: klines.length,
+      note: entryRes.error === "not_entered" ? "窗口内未入场" : undefined,
+      error: entryRes.error ?? "not_entered",
+    };
+  }
+
+  const { entry, entryHitAt, marketAtSignal } = entryRes;
+  const entryMs = Date.parse(entryHitAt);
+  const rollingResult = evaluateTelegramOiRollingWindow(
+    klines,
+    entry,
+    isShort,
+    leverage,
+    rolling,
+    entryMs
+  );
+
+  return {
+    ...base,
+    mode: "telegram_oi_rolling",
+    entered: true,
+    entry,
+    entryHitAt,
+    marketAtSignal,
+    ...rollingResult,
+    klineCount: klines.length,
+    windowEndAt: rollingResult.windowEndAt,
   };
 }

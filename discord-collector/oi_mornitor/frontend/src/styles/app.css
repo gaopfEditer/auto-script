@@ -1188,6 +1188,23 @@ button {
   box-shadow: inset 2px 0 0 rgba(255, 193, 7, 0.7);
 }
 
+.pattern-watch-item.manual-slot {
+  border-color: rgba(100, 180, 255, 0.5);
+  box-shadow: inset 2px 0 0 rgba(100, 180, 255, 0.75);
+}
+
+.pattern-manual-badge {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  color: #9ecbff;
+  background: rgba(70, 130, 220, 0.22);
+  border: 1px solid rgba(100, 180, 255, 0.35);
+}
+
 /* 沙盒持仓：强于状态色/置顶/选中，保证左侧一眼可见 */
 .pattern-watch-item.entered,
 .pattern-watch-item.entered.pat-search,

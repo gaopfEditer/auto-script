@@ -110,6 +110,8 @@ PATTERN_WATCH_MAX = int(os.getenv("OI_PATTERN_WATCH_MAX", "50"))
 PATTERN_AUTO_PICK_COUNT = int(os.getenv("OI_PATTERN_AUTO_PICK", "50"))
 # 为卡片预留槽位；热榜最多占 总上限 − 预留
 PATTERN_CARD_RESERVED = int(os.getenv("OI_PATTERN_CARD_RESERVED", "10"))
+# 形态页手动输入币种专用槽（固定 1 个；新输入替换旧手动币）
+PATTERN_MANUAL_RESERVED = max(0, int(os.getenv("OI_PATTERN_MANUAL_RESERVED", "1")))
 # 形态 watchlist：每隔 N 秒用合约流入榜 + OI 爆发榜刷新（未进场币可替换）
 PATTERN_WATCHLIST_REFRESH_SEC = int(os.getenv("OI_PATTERN_WATCHLIST_REFRESH_SEC", "7200"))
 PATTERN_WATCHLIST_REFRESH_TF = os.getenv("OI_PATTERN_WATCHLIST_REFRESH_TF", "15m").strip() or "15m"

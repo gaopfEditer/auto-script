@@ -8,11 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from oi_mornitor.config import (
+    PATTERN_MANUAL_RESERVED,
     PATTERN_PIN_TTL_SEC,
     PATTERN_STATE_DB,
     PATTERN_WATCH_MAX,
     PATTERN_WATCH_MAX_SEC,
 )
+
+SLOT_MANUAL = "manual"
+SLOT_DEFAULT = ""
 from oi_mornitor.pattern_detector import (
     STATUS_EXPIRED,
     STATUS_LH,
@@ -48,10 +52,15 @@ class PatternWatchItem:
     interval: str
     added_at: float
     pinned_until: float = 0.0
+    slot: str = SLOT_DEFAULT
 
     @property
     def is_pinned(self) -> bool:
         return self.pinned_until > time.time()
+
+    @property
+    def is_manual_slot(self) -> bool:
+        return (self.slot or "").strip().lower() == SLOT_MANUAL
 
 
 @dataclass
@@ -89,7 +98,8 @@ class PatternStateTracker:
                     symbol TEXT PRIMARY KEY,
                     interval TEXT NOT NULL DEFAULT '15m',
                     added_at REAL NOT NULL,
-                    pinned_until REAL NOT NULL DEFAULT 0
+                    pinned_until REAL NOT NULL DEFAULT 0,
+                    slot TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -100,6 +110,10 @@ class PatternStateTracker:
             if "pinned_until" not in cols:
                 conn.execute(
                     "ALTER TABLE pattern_watchlist ADD COLUMN pinned_until REAL NOT NULL DEFAULT 0"
+                )
+            if "slot" not in cols:
+                conn.execute(
+                    "ALTER TABLE pattern_watchlist ADD COLUMN slot TEXT NOT NULL DEFAULT ''"
                 )
             conn.execute(
                 """
@@ -176,30 +190,112 @@ class PatternStateTracker:
                 interval=r["interval"],
                 added_at=_safe_float(r["added_at"]),
                 pinned_until=_safe_float(r["pinned_until"] if "pinned_until" in r.keys() else 0),
+                slot=str(r["slot"] if "slot" in r.keys() else SLOT_DEFAULT or ""),
             )
             for r in rows
         ]
 
-    def add_watch(self, symbol: str, interval: str = "15m") -> bool:
+    def get_manual_slot_symbol(self) -> str | None:
+        """当前手动输入槽占用的币种（最多一个）。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT symbol FROM pattern_watchlist WHERE slot = ? LIMIT 1",
+                (SLOT_MANUAL,),
+            ).fetchone()
+        return str(row["symbol"]).upper() if row else None
+
+    def set_watch_slot(self, symbol: str, slot: str = SLOT_DEFAULT) -> bool:
         sym = symbol.strip().upper()
         if not sym:
             return False
+        slot_v = (slot or SLOT_DEFAULT).strip().lower()
+        if slot_v not in (SLOT_DEFAULT, SLOT_MANUAL):
+            slot_v = SLOT_DEFAULT
+        with self._connect() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM pattern_watchlist WHERE symbol = ?", (sym,)
+            ).fetchone()
+            if not exists:
+                return False
+            if slot_v == SLOT_MANUAL:
+                # 保证全局最多一个 manual 槽
+                conn.execute(
+                    "UPDATE pattern_watchlist SET slot = ? WHERE slot = ? AND symbol != ?",
+                    (SLOT_DEFAULT, SLOT_MANUAL, sym),
+                )
+            conn.execute(
+                "UPDATE pattern_watchlist SET slot = ? WHERE symbol = ?",
+                (slot_v, sym),
+            )
+            conn.commit()
+        return True
+
+    def clear_manual_slots_except(self, keep_symbol: str | None = None) -> list[str]:
+        """清除其他手动槽标记；返回被移出列表的币种。"""
+        keep = (keep_symbol or "").strip().upper()
+        removed: list[str] = []
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT symbol FROM pattern_watchlist WHERE slot = ?",
+                (SLOT_MANUAL,),
+            ).fetchall()
+            for row in rows:
+                sym = str(row["symbol"]).upper()
+                if keep and sym == keep:
+                    continue
+                conn.execute("DELETE FROM pattern_watchlist WHERE symbol = ?", (sym,))
+                conn.execute("DELETE FROM pattern_state WHERE symbol = ?", (sym,))
+                removed.append(sym)
+            conn.commit()
+        return removed
+
+    def watchlist_count(self) -> int:
+        with self._connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM pattern_watchlist").fetchone()[0])
+
+    def add_watch(
+        self,
+        symbol: str,
+        interval: str = "15m",
+        *,
+        slot: str = SLOT_DEFAULT,
+        allow_over_max: bool = False,
+    ) -> bool:
+        sym = symbol.strip().upper()
+        if not sym:
+            return False
+        slot_v = (slot or SLOT_DEFAULT).strip().lower()
+        if slot_v not in (SLOT_DEFAULT, SLOT_MANUAL):
+            slot_v = SLOT_DEFAULT
         now = time.time()
+        hard_max = MAX_WATCH_SYMBOLS + (
+            max(0, int(PATTERN_MANUAL_RESERVED)) if allow_over_max or slot_v == SLOT_MANUAL else 0
+        )
         with self._connect() as conn:
             count = conn.execute("SELECT COUNT(*) FROM pattern_watchlist").fetchone()[0]
             exists = conn.execute(
                 "SELECT 1 FROM pattern_watchlist WHERE symbol = ?", (sym,)
             ).fetchone()
-            if not exists and count >= MAX_WATCH_SYMBOLS:
+            if not exists and count >= hard_max:
                 return False
-            conn.execute(
-                """
-                INSERT INTO pattern_watchlist (symbol, interval, added_at, pinned_until)
-                VALUES (?, ?, ?, 0)
-                ON CONFLICT(symbol) DO NOTHING
-                """,
-                (sym, interval, now),
-            )
+            if slot_v == SLOT_MANUAL:
+                conn.execute(
+                    "UPDATE pattern_watchlist SET slot = ? WHERE slot = ? AND symbol != ?",
+                    (SLOT_DEFAULT, SLOT_MANUAL, sym),
+                )
+            if exists:
+                conn.execute(
+                    "UPDATE pattern_watchlist SET slot = ?, interval = ? WHERE symbol = ?",
+                    (slot_v, interval, sym),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO pattern_watchlist (symbol, interval, added_at, pinned_until, slot)
+                    VALUES (?, ?, ?, 0, ?)
+                    """,
+                    (sym, interval, now, slot_v),
+                )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO pattern_state
@@ -304,8 +400,8 @@ class PatternStateTracker:
             for sym in unique:
                 conn.execute(
                     """
-                    INSERT INTO pattern_watchlist (symbol, interval, added_at, pinned_until)
-                    VALUES (?, ?, ?, 0)
+                    INSERT INTO pattern_watchlist (symbol, interval, added_at, pinned_until, slot)
+                    VALUES (?, ?, ?, 0, '')
                     """,
                     (sym, interval, now),
                 )

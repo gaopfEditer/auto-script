@@ -235,9 +235,43 @@ Body 字段：`days` / `from` / `to`、`channelId`、`sources` / `source`、`sym
 
 ### 回测规则（真实 K 线）
 
+**默认 `backtestPolicy=window_days`（卡片归档通用）：**
+
 1. `signalAt` 市价或限价（12h 内触及）入场  
 2. 窗口内：`maxProfitPct` / `minProfitPct`、阈值触及  
 3. 阈值：BTC/ETH **2%**，山寨 **5%**
+
+**OI → Telegram 形态推送 `backtestPolicy=telegram_oi`：**
+
+| 档位 | 初始窗口 | 阶梯阈值（价格 %） | 延时 | 最长 |
+|------|----------|-------------------|------|------|
+| 主流 BTC/ETH | 3h | ±0.5% | 默认关 | 24h |
+| 山寨 | 3h | ±3% | 每达阶梯 +3h | 24h |
+
+参数经 env `TG_SIGNAL_BACKTEST_*` 或请求 `rolling: { stepPct, initialWindowH, extendWindowH, maxWindowH }` 覆盖。
+
+```json
+{
+  "backtestPolicy": "telegram_oi",
+  "signals": [
+    {
+      "symbol": "SOL",
+      "direction": "short",
+      "signalAt": "2026-08-21T10:00:00.000Z",
+      "price": 145.2,
+      "side": "bear",
+      "interval": "15m",
+      "source": "oi_telegram"
+    }
+  ]
+}
+```
+
+OI 专用快捷接口：
+
+- `GET /api/v1/oi/telegram/backtest/policy` — 当前分档参数  
+- `POST /api/v1/oi/telegram/backtest/parse` — `alerts[]` → `signals[]`  
+- `POST /api/v1/oi/telegram/backtest` — 直接启动回测任务  
 
 响应 `202`：`mock: false`。WS：`card_validate_*`。样例预览：`GET /api/v1/cards/validate/mock/sample`（非行情）。
 

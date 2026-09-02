@@ -30,6 +30,7 @@ from oi_mornitor.config import (
     PATTERN_INACTIVE_PURGE_SEC,
     PATTERN_KLINE_INTERVAL,
     PATTERN_KLINE_LIMIT,
+    PATTERN_MANUAL_RESERVED,
     PATTERN_MULTI_BOARD_MIN,
     PATTERN_OI_AMPLIFY_PCT,
     PATTERN_SEARCHING_STALE_SEC,
@@ -58,7 +59,7 @@ from oi_mornitor.derivatives_metrics import (
     build_mtf_context,
     fetch_premium_index,
 )
-from oi_mornitor.pattern_state_tracker import MAX_WATCH_SYMBOLS, PatternStateTracker
+from oi_mornitor.pattern_state_tracker import MAX_WATCH_SYMBOLS, PatternStateTracker, SLOT_MANUAL
 from oi_mornitor.rank_metrics import TF_LABELS
 from oi_mornitor.strategy.candle_signals import (
     PATTERN_MARKER_KINDS,
@@ -576,6 +577,63 @@ class PatternMonitorEngine:
     def add_symbol(self, symbol: str) -> bool:
         return self.tracker.add_watch(symbol)
 
+    def add_manual_symbol(self, symbol: str) -> dict[str, Any]:
+        """
+        手动输入专用槽：全局最多 1 个。
+        新币替换旧手动币；列表满时仍优先腾位加入（预留 PATTERN_MANUAL_RESERVED）。
+        """
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return {"ok": False, "error": "symbol required"}
+        if PATTERN_MANUAL_RESERVED <= 0:
+            ok = self.tracker.add_watch(sym)
+            return {
+                "ok": ok,
+                "symbol": sym,
+                "replaced": None,
+                "error": None if ok else "add failed or watchlist full",
+            }
+
+        prev = self.tracker.get_manual_slot_symbol()
+        replaced: str | None = None
+        if prev and prev != sym:
+            # 旧手动币若仍是「仅手动槽」占用，直接踢出；已转正式监听则只清 slot 标记
+            self.tracker.remove_watch(prev)
+            replaced = prev
+
+        # 清掉残留 manual 标记（防御）
+        for other in self.tracker.clear_manual_slots_except(sym):
+            if other != replaced:
+                replaced = replaced or other
+
+        watch = {w.symbol.upper() for w in self.tracker.list_watchlist()}
+        if sym in watch:
+            self.tracker.set_watch_slot(sym, SLOT_MANUAL)
+            self.tracker.bump_watch_to_top(sym)
+            return {"ok": True, "symbol": sym, "replaced": replaced, "already": True}
+
+        # 列表满：先腾可替换位，再允许手动预留溢出 1 格
+        while len(self.tracker.list_watchlist()) >= MAX_WATCH_SYMBOLS:
+            evicted = self._evict_one_replaceable()
+            if not evicted:
+                break
+
+        ok = self.tracker.add_watch(sym, slot=SLOT_MANUAL, allow_over_max=True)
+        if not ok:
+            return {
+                "ok": False,
+                "symbol": sym,
+                "replaced": replaced,
+                "error": "add failed or watchlist full (no free slot)",
+            }
+        self.tracker.bump_watch_to_top(sym)
+        logger.info(
+            "⌨️ 手动槽加入 %s%s",
+            sym,
+            f"（替换 {replaced}）" if replaced else "",
+        )
+        return {"ok": True, "symbol": sym, "replaced": replaced, "already": False}
+
     def remove_symbol(self, symbol: str) -> bool:
         return self.tracker.remove_watch(symbol)
 
@@ -637,9 +695,10 @@ class PatternMonitorEngine:
     ) -> list[str]:
         """列表未满时立即用热钱补到 MAX_WATCH_SYMBOLS（升级上限后无需等 2h 刷新）。"""
         current = {w.symbol.upper() for w in self.tracker.list_watchlist()}
-        if len(current) >= MAX_WATCH_SYMBOLS:
+        fill_cap = max(0, MAX_WATCH_SYMBOLS - self._manual_reserve_free())
+        if len(current) >= fill_cap:
             return []
-        need = MAX_WATCH_SYMBOLS - len(current)
+        need = fill_cap - len(current)
         picked = pick_hot_flow_and_oi(
             pool_rows,
             count=max(need * 2, need),
@@ -647,7 +706,7 @@ class PatternMonitorEngine:
         )
         added: list[str] = []
         for sym in picked:
-            if len(current) >= MAX_WATCH_SYMBOLS:
+            if len(current) >= fill_cap:
                 break
             sym_u = str(sym).upper()
             if not sym_u or sym_u in current:
@@ -657,8 +716,9 @@ class PatternMonitorEngine:
                 added.append(sym_u)
         if added:
             logger.info(
-                "📈 形态池补齐到 %d：+%d → %s",
-                MAX_WATCH_SYMBOLS,
+                "📈 形态池补齐到 %d（手动预留 %d）：+%d → %s",
+                fill_cap,
+                self._manual_reserve_free(),
                 len(added),
                 ", ".join(added[:8]) + ("…" if len(added) > 8 else ""),
             )
@@ -691,7 +751,15 @@ class PatternMonitorEngine:
         for w in self.tracker.list_watchlist():
             if w.is_pinned:
                 protected.add(w.symbol.upper())
+            if w.is_manual_slot:
+                protected.add(w.symbol.upper())
         return protected
+
+    def _manual_reserve_free(self) -> int:
+        """热榜/补齐应预留的空位数（已有手动币则不再额外占空位）。"""
+        if PATTERN_MANUAL_RESERVED <= 0:
+            return 0
+        return 0 if self.tracker.get_manual_slot_symbol() else int(PATTERN_MANUAL_RESERVED)
 
     def refresh_watchlist_from_hot(
         self,
@@ -715,8 +783,9 @@ class PatternMonitorEngine:
         # 只保护仍在 watchlist 内的
         protected &= set(current)
 
-        # 热榜最多占用「总槽 - 卡片预留」；卡片置顶币始终保留
-        hot_cap = max(0, MAX_WATCH_SYMBOLS - PATTERN_CARD_RESERVED)
+        # 热榜最多占用「总槽 - 卡片预留 - 手动预留空位」；手动/卡片置顶币始终保留
+        manual_free = self._manual_reserve_free()
+        hot_cap = max(0, MAX_WATCH_SYMBOLS - PATTERN_CARD_RESERVED - manual_free)
         hot_pick_n = min(PATTERN_AUTO_PICK_COUNT, hot_cap) if hot_cap else 0
 
         hot = pick_hot_flow_and_oi(
@@ -979,6 +1048,8 @@ class PatternMonitorEngine:
                 "pinned": w.is_pinned,
                 "pinned_until": w.pinned_until if w.is_pinned else 0,
                 "pin_remaining_sec": max(0, int(w.pinned_until - now)) if w.is_pinned else 0,
+                "slot": w.slot or "",
+                "manual": w.is_manual_slot,
             }
             for w in self.tracker.list_watchlist()
         ]
@@ -1004,6 +1075,8 @@ class PatternMonitorEngine:
             "heavyweight_pool_size": heavy_count,
             "auto_pick_count": PATTERN_AUTO_PICK_COUNT,
             "card_reserved_slots": PATTERN_CARD_RESERVED,
+            "manual_reserved_slots": PATTERN_MANUAL_RESERVED,
+            "manual_slot_symbol": self.tracker.get_manual_slot_symbol(),
             "max_watch_symbols": MAX_WATCH_SYMBOLS,
             "multi_board_min": PATTERN_MULTI_BOARD_MIN,
             "watchlist_refresh_sec": PATTERN_WATCHLIST_REFRESH_SEC,

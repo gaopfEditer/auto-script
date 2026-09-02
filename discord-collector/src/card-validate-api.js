@@ -11,10 +11,12 @@ import {
 } from "./card-archive-api.js";
 import { buildMockValidateSample } from "./card-validate-mock.js";
 import { BACKTEST_WINDOW_DAYS, parseBacktestSignals } from "./card-validate-signals.js";
+import { resolveBacktestPolicy } from "./card-telegram-oi-backtest.js";
 import { backtestSignalReal } from "./card-validate-engine.js";
 import { runBatchLiquidation } from "./card-liquidation-engine.js";
 import { createLogger } from "./logger.js";
 import { requireLocalRequest } from "./local-request.js";
+import { registerOiTelegramBacktestRoutes } from "./oi-telegram-backtest-api.js";
 
 const log = createLogger("card-validate");
 
@@ -61,7 +63,17 @@ function resolveValidateFilters(req) {
   const cardIds = Array.isArray(merged.cardIds)
     ? merged.cardIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
     : [];
+  const backtestPolicyRaw = String(
+    merged.backtestPolicy ?? merged.backtest_policy ?? merged.policy ?? ""
+  ).trim();
   const signals = parseBacktestSignals(merged);
+  if (backtestPolicyRaw && signals.length) {
+    for (const sig of signals) {
+      if (!sig.backtestPolicy || sig.backtestPolicy === "window_days") {
+        sig.backtestPolicy = resolveBacktestPolicy({}, { backtestPolicy: backtestPolicyRaw });
+      }
+    }
+  }
   const persistRaw = String(merged.persist ?? "").toLowerCase();
   const persist =
     merged.persist === true ||
@@ -81,6 +93,7 @@ function resolveValidateFilters(req) {
     signals,
     persist,
     windowDays,
+    backtestPolicy: backtestPolicyRaw || undefined,
   };
 }
 
@@ -397,6 +410,7 @@ export function registerCardValidateRoutes(app, store, listCache, broadcast, dep
         readOnly: hasSignals && !filters.persist,
         persist: hasDbFilter || Boolean(filters.persist),
         windowDays: filters.windowDays || BACKTEST_WINDOW_DAYS,
+        backtestPolicy: filters.backtestPolicy || undefined,
         note: hasSignals
           ? "真实 Binance K 线回测（信号列表）；结果经 WS 推送"
           : "库内卡片真实清算并写回 MySQL",
@@ -457,4 +471,6 @@ export function registerCardValidateRoutes(app, store, listCache, broadcast, dep
   app.get("/api/cards/validate/:jobId", requireLocalRequest, statusHandler);
   app.post("/api/v1/cards/validate", openAuth, startHandler);
   app.get("/api/v1/cards/validate/:jobId", openAuth, statusHandler);
+
+  registerOiTelegramBacktestRoutes(app, runner, { requireOpenApiKey: openAuth });
 }

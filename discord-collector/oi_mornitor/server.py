@@ -120,31 +120,54 @@ async def handle_patterns(_request: web.Request) -> web.Response:
 
 
 async def handle_patterns_watch_post(request: web.Request) -> web.Response:
-
     try:
-
         body = await request.json()
-
     except json.JSONDecodeError:
-
         return _json_response({"ok": False, "error": "invalid json"}, status=400)
 
     symbol = str(body.get("symbol", "")).strip().upper()
-
     if not symbol:
-
         return _json_response({"ok": False, "error": "symbol required"}, status=400)
 
-    ok = get_service().pattern_engine.add_symbol(symbol)
+    # 默认视为手动输入（形态页输入框 / 图表「添加到列表」）；auto=1 走普通加池（满则失败）
+    mode = str(body.get("mode") or body.get("slot") or "").strip().lower()
+    auto_flag = body.get("auto")
+    is_manual = True
+    if mode in ("auto", "hot", "system"):
+        is_manual = False
+    elif auto_flag is True or str(auto_flag).lower() in ("1", "true", "yes", "on"):
+        is_manual = False
+    elif body.get("manual") is False:
+        is_manual = False
 
+    eng = get_service().pattern_engine
+    if is_manual:
+        result = eng.add_manual_symbol(symbol)
+        if not result.get("ok"):
+            return _json_response(
+                {
+                    "ok": False,
+                    "error": result.get("error") or "add failed or watchlist full",
+                    "replaced": result.get("replaced"),
+                },
+                status=400,
+            )
+        return _json_response(
+            {
+                "ok": True,
+                "symbol": result.get("symbol"),
+                "replaced": result.get("replaced"),
+                "already": bool(result.get("already")),
+                "manual": True,
+                "watchlist": eng.get_watchlist(),
+                "manual_slot_symbol": eng.tracker.get_manual_slot_symbol(),
+            }
+        )
+
+    ok = eng.add_symbol(symbol)
     if not ok:
-
         return _json_response({"ok": False, "error": "add failed or watchlist full"}, status=400)
-
-    return _json_response({"ok": True, "watchlist": get_service().pattern_engine.get_watchlist()})
-
-
-
+    return _json_response({"ok": True, "watchlist": eng.get_watchlist()})
 
 
 async def handle_patterns_watch_delete(request: web.Request) -> web.Response:
