@@ -1,17 +1,4 @@
-.env
-# Python
-__pycache__/
-*.py[cod]
-# Telethon 登录态，勿提交
-*.session
-*.session-journal
-*.session.runlock
-telegram/monitored_groups.txt
-telegram/channel_profiles.json
-telegram/.poll_state.json
-telegram/media/
-
-
+﻿# 工作区索引范围：discord-collector/ + telegram/
 # 其余兄弟项目、根目录杂项脚本不进入 Cursor 索引
 
 # —— 兄弟项目（与主开发无关）——
@@ -82,4 +69,3 @@ youtube-fetch/archives/
 
 # —— Git / IDE 缓存 ——
 .git/
-
