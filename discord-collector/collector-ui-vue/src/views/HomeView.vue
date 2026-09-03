@@ -15,7 +15,7 @@ import { RouterLink } from "vue-router";
       <RouterLink class="btn" to="/cards">统一卡片归档</RouterLink>
       <RouterLink class="btn primary" to="/community">社区</RouterLink>
       <RouterLink class="btn primary" to="/oi">OI Monitor</RouterLink>
-      <RouterLink class="btn" to="/local">Local 本机工具</RouterLink>
+      <RouterLink class="btn" to="/local/manual-stats">Local 本机工具</RouterLink>
     </div>
     <p class="note">
       顶栏 <strong>Discord | OI Monitor | Local</strong>。Local（Telegram / 推特 / 拉取 / 文稿 / 下单 / Debug）仅本地开发可见，不会打进部署包。

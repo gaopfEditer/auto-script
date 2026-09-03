@@ -369,22 +369,39 @@ export function parsePrice(price) {
 }
 
 /**
- * 从 actual 解析入场/出场：统一 buy=入场、sell=出场。
- * 兼容旧清算数据（空单曾把 buy/sell 按开平方向反存）。
- * @param {{ buyPrice?: string, sellPrice?: string }} actual
+ * 从 actual 解析入场/出场：标准约定 buy=入场、sell=出场。
+ * 旧数据若反存，用 planned.entry 贴近的一侧判定。
+ * @param {{ buyPrice?: string, sellPrice?: string, entryPrice?: string }} actual
  * @param {string} [direction]
+ * @param {{ entryHint?: unknown, plannedEntry?: unknown }} [opts]
  */
-export function resolveActualEntryExit(actual, direction) {
+export function resolveActualEntryExit(actual, direction, opts) {
   const buy = parsePrice(actual?.buyPrice);
   const sell = parsePrice(actual?.sellPrice);
   const side = resolveTradeDirection(direction);
   if (buy == null || sell == null || !side) {
     return { entry: buy, exit: sell, side };
   }
-  if (side === "short" && buy < sell) {
+  const entryHint = parsePrice(
+    opts?.entryHint ?? opts?.plannedEntry ?? actual?.entryPrice
+  );
+  if (entryHint != null) {
+    const buyDist = Math.abs(buy - entryHint);
+    const sellDist = Math.abs(sell - entryHint);
+    if (buyDist <= sellDist) return { entry: buy, exit: sell, side };
     return { entry: sell, exit: buy, side };
   }
   return { entry: buy, exit: sell, side };
+}
+
+/** 结算结果与盈亏符号对齐：止损不为正、止盈不为负 */
+export function alignPnlWithOutcome(outcome, pnlPct) {
+  if (pnlPct == null || !Number.isFinite(Number(pnlPct))) return pnlPct ?? null;
+  const p = Number(pnlPct);
+  const o = String(outcome ?? "").trim();
+  if (o === "stop_loss" && p > 0) return -Math.abs(p);
+  if (o === "take_profit" && p < 0) return Math.abs(p);
+  return p;
 }
 
 /**
@@ -406,12 +423,17 @@ export function hasEvaluatedYield(ex) {
  * @param {string} [direction]
  * @param {number} [leverage] 不传则按 symbol 推断（需配合第 5 参）
  * @param {unknown} [symbol]
+ * @param {unknown} [entryHint] 计划入场价，用于分辨旧数据反存的 buy/sell
  * @returns {{ spot: number, leveragePct: number, leverage: number, side: "long" | "short" } | null}
  */
-export function calcProfitPercents(buy, sell, direction, leverage, symbol) {
+export function calcProfitPercents(buy, sell, direction, leverage, symbol, entryHint) {
   const side = resolveTradeDirection(direction);
   if (!side) return null;
-  const { entry, exit } = resolveActualEntryExit({ buyPrice: buy, sellPrice: sell }, direction);
+  const { entry, exit } = resolveActualEntryExit(
+    { buyPrice: buy, sellPrice: sell },
+    direction,
+    { entryHint }
+  );
   if (entry == null || exit == null) return null;
   const spot = side === "short"
     ? ((entry - exit) / entry) * 100
@@ -442,31 +464,34 @@ function parseCardJsonBlob(raw) {
  */
 export function resolveCardPnlPct(card) {
   const ex = cardExecution(/** @type {import("./discordSignalApi.js").SignalCard} */ (card));
+  const entryHint = ex.planned?.entryPrice ?? ex.actual?.buyPrice;
+  const outcome = resolveCardEvalOutcome(card);
   const profit = calcProfitPercents(
     ex.actual.buyPrice,
     ex.actual.sellPrice,
     ex.direction,
     undefined,
-    ex.symbol || card.symbol
+    ex.symbol || card.symbol,
+    entryHint
   );
-  if (profit) return profit.leveragePct;
+  if (profit) return alignPnlWithOutcome(outcome, profit.leveragePct);
 
   const progress = parseCardJsonBlob(card.progress ?? card.progress_json);
   if (progress && Number.isFinite(Number(progress.pnlPct))) {
-    return Number(progress.pnlPct);
+    return alignPnlWithOutcome(outcome, Number(progress.pnlPct));
   }
 
   const bt = parseCardJsonBlob(card.backtest ?? card.backtest_json);
   if (bt) {
     const p = Number(bt.pnlPct ?? bt.pnl);
-    if (Number.isFinite(p)) return p;
+    if (Number.isFinite(p)) return alignPnlWithOutcome(outcome, p);
   }
 
   const rawEx = card.execution;
   if (rawEx && typeof rawEx === "object") {
     const auto = /** @type {Record<string, unknown>} */ (rawEx).autoEval;
     if (auto && typeof auto === "object" && Number.isFinite(Number(auto.pnlPct))) {
-      return Number(auto.pnlPct);
+      return alignPnlWithOutcome(outcome, Number(auto.pnlPct));
     }
   }
   return null;
@@ -614,7 +639,8 @@ export function resolveCardProfitDisplay(card) {
     ex.actual.sellPrice,
     ex.direction,
     undefined,
-    ex.symbol || card.symbol
+    ex.symbol || card.symbol,
+    ex.planned?.entryPrice ?? ex.actual?.buyPrice
   );
   if (profit) return profit;
   const levPct = resolveCardPnlPct(card);

@@ -20,13 +20,10 @@ export default defineConfig(({ mode }) => {
     uiMode !== "full";
   /** 本机工具页：deploy 构建强制关闭，避免误写入 VITE_UI_PAGES 后打进包 */
   const LOCAL_ONLY = new Set([
-    "local",
     "manual-stats",
     "telegram",
-    "twitter",
     "fetch",
     "archives",
-    "trade",
     "debug",
   ]);
   const pagesCsv =
@@ -59,13 +56,10 @@ export default defineConfig(({ mode }) => {
       __UI_PAGE_CARDS__: JSON.stringify(pageOn("cards")),
       __UI_PAGE_EVAL__: JSON.stringify(pageOn("eval")),
       __UI_PAGE_TELEGRAM__: JSON.stringify(pageOn("telegram")),
-      __UI_PAGE_TWITTER__: JSON.stringify(pageOn("twitter")),
       __UI_PAGE_ARCHIVES__: JSON.stringify(pageOn("archives")),
-      __UI_PAGE_TRADE__: JSON.stringify(pageOn("trade")),
       __UI_PAGE_COMMUNITY__: JSON.stringify(pageOn("community")),
       __UI_PAGE_DEBUG__: JSON.stringify(pageOn("debug")),
       __UI_PAGE_CONTENT__: JSON.stringify(pageOn("content")),
-      __UI_PAGE_LOCAL__: JSON.stringify(pageOn("local")),
       __UI_PAGE_MANUAL_STATS__: JSON.stringify(pageOn("manual-stats")),
       __UI_PAGE_HOME__: JSON.stringify(pageOn("home") || !isDeployBuild),
     },

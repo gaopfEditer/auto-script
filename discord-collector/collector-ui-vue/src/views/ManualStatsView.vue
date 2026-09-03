@@ -9,6 +9,7 @@ import {
   updateManualStatsCard,
 } from "../lib/cardArchiveApi.js";
 import { outcomeLabel, resolveCardPnlPct } from "../lib/signalExecution.js";
+import BloggerCombobox from "../components/BloggerCombobox.vue";
 
 defineOptions({ name: "ManualStatsView" });
 
@@ -568,30 +569,50 @@ onMounted(() => {
   <div class="manual-stats">
     <header class="head">
       <div>
-        <h1>手动统计</h1>
+        <div class="title-row">
+          <h1>手动统计</h1>
+          <span class="rules-info" tabindex="0" aria-label="清算与回测规则">
+            <svg class="rules-info-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.75" />
+              <path
+                fill="currentColor"
+                d="M11 10.5h2V17h-2v-6.5zm0-3.5h2V8h-2V7z"
+              />
+            </svg>
+            <span class="rules-tooltip" role="tooltip">
+              <strong>清算 / 回测规则</strong>
+              <span>BTC / ETH / SOL 按 100x 计盈亏，其余山寨 20x。</span>
+              <span>入场价留空 → 信号时刻市价入场；12 小时内未触达计划入场价 → 未入场。</span>
+              <span>未设止盈止损时，默认 ±5% 生成止盈止损价再清算。</span>
+              <span>按 K 线时间序先触达止损或止盈即结算；任意 TP 命中算赢，先触 SL 算亏。</span>
+            </span>
+          </span>
+        </div>
         <p>
           表格多行录入：回车新增空行；归档时跳过空行，不完整行会提示。博主格式
-          <code>标识|别名</code>；入场价留空按市价清算。可在
+          <code>标识|别名</code>；可在
           <RouterLink to="/cards">卡片</RouterLink> /
           <RouterLink to="/eval">评估</RouterLink>
           筛选。
         </p>
       </div>
-      <RouterLink class="link-back" to="/local">← Local</RouterLink>
     </header>
 
     <section class="panel">
       <div class="list-head">
         <h2>录入表</h2>
         <div class="filters">
-          <label class="check inline">
-            <input v-model="autoLiquidate" type="checkbox" />
-            归档后自动清算
+          <label class="toggle-pill">
+            <input v-model="autoLiquidate" type="checkbox" class="toggle-input" />
+            <span class="toggle-track" aria-hidden="true"></span>
+            <span class="toggle-label">归档后自动清算</span>
           </label>
-          <button type="button" class="btn" @click="addEmptyRow()">+ 行</button>
-          <button type="button" class="btn primary" :disabled="saving" @click="onArchive">
-            {{ saving ? "归档中…" : `归档（${draftStats.complete}）` }}
-          </button>
+          <div class="filter-actions">
+            <button type="button" class="btn" @click="addEmptyRow()">+ 行</button>
+            <button type="button" class="btn primary" :disabled="saving" @click="onArchive">
+              {{ saving ? "归档中…" : `归档（${draftStats.complete}）` }}
+            </button>
+          </div>
         </div>
       </div>
       <p class="summary muted">
@@ -623,14 +644,13 @@ onMounted(() => {
                 editing: row.editCardId,
               }"
             >
-              <td>
-                <input
+              <td class="col-blogger-cell">
+                <BloggerCombobox
                   v-model="row.blogger"
-                  type="text"
-                  list="manual-blogger-list"
-                  placeholder="thankUcrypto|熬鹰"
-                  :data-draft-lid="row.lid"
-                  data-field="blogger"
+                  :options="bloggerOptions"
+                  :draft-lid="row.lid"
+                  field="blogger"
+                  @remember="rememberBlogger"
                   @keydown="onCellKeydown($event, idx, 'blogger')"
                 />
               </td>
@@ -638,6 +658,7 @@ onMounted(() => {
                 <input
                   v-model="row.symbol"
                   type="text"
+                  class="field-input"
                   list="manual-symbol-list"
                   placeholder="BTC"
                   :data-draft-lid="row.lid"
@@ -648,6 +669,7 @@ onMounted(() => {
               <td>
                 <select
                   v-model="row.direction"
+                  class="field-input field-select"
                   :data-draft-lid="row.lid"
                   data-field="direction"
                   @keydown="onCellKeydown($event, idx, 'direction')"
@@ -661,6 +683,7 @@ onMounted(() => {
                   v-model="row.signalAt"
                   type="datetime-local"
                   step="60"
+                  class="field-input field-datetime"
                   :data-draft-lid="row.lid"
                   data-field="signalAt"
                   @keydown="onCellKeydown($event, idx, 'signalAt')"
@@ -670,6 +693,7 @@ onMounted(() => {
                 <input
                   v-model="row.entry"
                   type="text"
+                  class="field-input"
                   placeholder="市价"
                   :data-draft-lid="row.lid"
                   data-field="entry"
@@ -680,6 +704,7 @@ onMounted(() => {
                 <input
                   v-model="row.stopLoss"
                   type="text"
+                  class="field-input"
                   :data-draft-lid="row.lid"
                   data-field="stopLoss"
                   @keydown="onCellKeydown($event, idx, 'stopLoss')"
@@ -689,6 +714,7 @@ onMounted(() => {
                 <input
                   v-model="row.takeProfit"
                   type="text"
+                  class="field-input"
                   placeholder="70000,72000"
                   :data-draft-lid="row.lid"
                   data-field="takeProfit"
@@ -699,6 +725,7 @@ onMounted(() => {
                 <input
                   v-model="row.note"
                   type="text"
+                  class="field-input"
                   :data-draft-lid="row.lid"
                   data-field="note"
                   @keydown="onCellKeydown($event, idx, 'note')"
@@ -715,11 +742,6 @@ onMounted(() => {
         </table>
       </div>
 
-      <datalist id="manual-blogger-list">
-        <option v-for="b in bloggerOptions" :key="b.key" :value="b.label">
-          {{ b.alias }}（{{ b.key }}）
-        </option>
-      </datalist>
       <datalist id="manual-symbol-list">
         <option value="BTC" />
         <option value="ETH" />
@@ -733,12 +755,28 @@ onMounted(() => {
     <section class="panel">
       <div class="list-head">
         <h2>已归档</h2>
-        <div class="filters">
-          <input v-model="fromDate" type="date" title="起始" />
-          <span class="muted">→</span>
-          <input v-model="toDate" type="date" title="结束" />
-          <input v-model="filterBlogger" type="text" placeholder="筛博主" class="filter-blogger" />
-          <button type="button" class="btn" :disabled="loading" @click="loadList">
+        <div class="filters filters-bar">
+          <div class="filter-group date-range">
+            <label class="filter-field">
+              <span class="filter-label">起始</span>
+              <input v-model="fromDate" type="date" class="field-input field-date" />
+            </label>
+            <span class="range-sep" aria-hidden="true">—</span>
+            <label class="filter-field">
+              <span class="filter-label">结束</span>
+              <input v-model="toDate" type="date" class="field-input field-date" />
+            </label>
+          </div>
+          <label class="filter-field filter-blogger-field">
+            <span class="filter-label">博主</span>
+            <BloggerCombobox
+              v-model="filterBlogger"
+              :options="bloggerOptions"
+              placeholder="标识或别名"
+              :remember-on-commit="false"
+            />
+          </label>
+          <button type="button" class="btn btn-refresh" :disabled="loading" @click="loadList">
             {{ loading ? "加载中…" : "刷新" }}
           </button>
         </div>
@@ -817,8 +855,67 @@ onMounted(() => {
   gap: 1rem;
   margin-bottom: 1.25rem;
 }
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+}
+.rules-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #949ba4;
+  cursor: help;
+  outline: none;
+}
+.rules-info:hover,
+.rules-info:focus-visible {
+  color: #dbdee1;
+}
+.rules-info-icon {
+  display: block;
+}
+.rules-tooltip {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.45rem);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(22rem, calc(100vw - 2rem));
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #3f4147;
+  background: #1e1f22;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  color: #dbdee1;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease, visibility 0.12s ease;
+}
+.rules-tooltip strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #f2f3f5;
+  font-size: 0.85rem;
+}
+.rules-tooltip span {
+  display: block;
+}
+.rules-tooltip span + span {
+  margin-top: 0.3rem;
+}
+.rules-info:hover .rules-tooltip,
+.rules-info:focus-visible .rules-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
 h1 {
-  margin: 0 0 0.35rem;
+  margin: 0;
   font-size: 1.35rem;
   color: #f2f3f5;
 }
@@ -843,15 +940,6 @@ code {
 a {
   color: #00a8fc;
 }
-.link-back {
-  flex-shrink: 0;
-  color: #949ba4;
-  text-decoration: none;
-  font-size: 0.9rem;
-}
-.link-back:hover {
-  color: #fff;
-}
 .panel {
   background: #2b2d31;
   border: 1px solid #3f4147;
@@ -869,11 +957,189 @@ a {
 .filters {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem;
+  align-items: flex-end;
+  gap: 0.55rem;
 }
-.filter-blogger {
-  width: 7.5rem;
+.filters-bar {
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid #3f4147;
+  background: linear-gradient(180deg, rgba(30, 31, 34, 0.92) 0%, rgba(24, 25, 28, 0.96) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+.filter-group {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  min-width: 0;
+}
+.filter-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #7c8490;
+  line-height: 1;
+  padding-left: 0.1rem;
+}
+.filter-blogger-field {
+  flex: 1 1 9rem;
+  max-width: 12rem;
+}
+.range-sep {
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-bottom: 0.55rem;
+  color: #5c6370;
+  font-size: 0.82rem;
+  user-select: none;
+}
+.field-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 2.05rem;
+  background: #111214;
+  border: 1px solid #404249;
+  border-radius: 8px;
+  color: #f2f3f5;
+  padding: 0.42rem 0.62rem;
+  font-size: 0.84rem;
+  line-height: 1.2;
+  font-family: inherit;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
+}
+.field-input::placeholder {
+  color: #6d737c;
+}
+.field-input:hover:not(:disabled) {
+  border-color: #52565e;
+  background: #151619;
+}
+.field-input:focus {
+  border-color: #5865f2;
+  background: #12131a;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.22);
+}
+.field-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.field-date,
+.field-datetime {
+  color-scheme: dark;
+  font-variant-numeric: tabular-nums;
+}
+.field-date {
+  min-width: 9.5rem;
+}
+.field-datetime {
+  min-width: 10.5rem;
+}
+.field-date::-webkit-calendar-picker-indicator,
+.field-datetime::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.72;
+  filter: invert(0.82);
+  transition: opacity 0.15s ease;
+}
+.field-date:hover::-webkit-calendar-picker-indicator,
+.field-datetime:hover::-webkit-calendar-picker-indicator,
+.field-date:focus::-webkit-calendar-picker-indicator,
+.field-datetime:focus::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+.field-select {
+  cursor: pointer;
+  padding-right: 1.75rem;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #949ba4 50%),
+    linear-gradient(135deg, #949ba4 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) calc(50% + 2px),
+    calc(100% - 9px) calc(50% + 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+  user-select: none;
+  padding: 0.35rem 0.55rem 0.35rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid #3f4147;
+  background: #1a1b1f;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.toggle-pill:hover {
+  border-color: #52565e;
+  background: #202226;
+}
+.toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.toggle-track {
+  position: relative;
+  width: 2.1rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background: #404249;
+  flex-shrink: 0;
+  transition: background 0.18s ease;
+}
+.toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 50%;
+  background: #f2f3f5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.18s ease;
+}
+.toggle-input:checked + .toggle-track {
+  background: #5865f2;
+}
+.toggle-input:checked + .toggle-track::after {
+  transform: translateX(0.9rem);
+}
+.toggle-input:focus-visible + .toggle-track {
+  box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.28);
+}
+.toggle-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #b5bac1;
+}
+.toggle-input:checked ~ .toggle-label {
+  color: #e3e5e8;
+}
+.btn-refresh {
+  align-self: flex-end;
+  min-height: 2.05rem;
 }
 .summary {
   margin: 0.65rem 0 0.85rem;
@@ -885,27 +1151,25 @@ a {
 .tiny {
   font-size: 0.72rem;
 }
-.check.inline {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.8rem;
-  color: #b5bac1;
-  margin-right: 0.5rem;
-}
 .btn {
-  border: 1px solid #3f4147;
-  background: #1e1f22;
-  color: #dbdee1;
+  border: 1px solid #404249;
+  background: #25262b;
+  color: #e3e5e8;
   border-radius: 8px;
-  padding: 0.45rem 0.85rem;
+  padding: 0.45rem 0.9rem;
+  min-height: 2.05rem;
   font-weight: 600;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: 0.84rem;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .btn:hover:not(:disabled) {
   border-color: #5865f2;
+  background: #2b2d35;
   color: #fff;
 }
 .btn:disabled {
@@ -963,29 +1227,30 @@ th {
   z-index: 1;
 }
 .draft-table td {
-  padding: 0.25rem;
+  padding: 0.28rem;
 }
-.draft-table input,
-.draft-table select {
-  width: 100%;
-  box-sizing: border-box;
-  background: #1e1f22;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: #f2f3f5;
-  padding: 0.4rem 0.45rem;
-  font-size: 0.85rem;
+.draft-table .field-input {
+  min-height: 1.95rem;
+  padding: 0.36rem 0.5rem;
+  font-size: 0.82rem;
+  border-color: #35373c;
+  background: #18191c;
 }
-.draft-table input:focus,
-.draft-table select:focus {
+.draft-table .field-input:focus {
   border-color: #5865f2;
-  outline: none;
+  background: #14151a;
 }
 .draft-table tr.partial td {
   background: rgba(237, 66, 69, 0.08);
 }
 .draft-table tr.editing td {
   background: rgba(88, 101, 242, 0.1);
+}
+.filter-blogger-field :deep(.field-input) {
+  min-height: 2.05rem;
+}
+.col-blogger-cell {
+  min-width: 10rem;
 }
 .col-blogger {
   min-width: 10rem;

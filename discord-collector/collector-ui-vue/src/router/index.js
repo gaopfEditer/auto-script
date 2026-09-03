@@ -6,8 +6,8 @@ import { createRouter, createWebHistory } from "vue-router";
  * 白名单见 discord-collector/.env.production → VITE_UI_PAGES。
  */
 /* global __UI_DEPLOY__, __UI_PAGE_SHOW__, __UI_PAGE_FETCH__, __UI_PAGE_OI__,
-   __UI_PAGE_CARDS__,    __UI_PAGE_EVAL__, __UI_PAGE_TELEGRAM__, __UI_PAGE_TWITTER__, __UI_PAGE_ARCHIVES__, __UI_PAGE_TRADE__, __UI_PAGE_COMMUNITY__,
-   __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__, __UI_PAGE_LOCAL__, __UI_PAGE_MANUAL_STATS__ */
+   __UI_PAGE_CARDS__,    __UI_PAGE_EVAL__, __UI_PAGE_TELEGRAM__, __UI_PAGE_ARCHIVES__, __UI_PAGE_COMMUNITY__,
+   __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__, __UI_PAGE_MANUAL_STATS__ */
 
 const IS_DEPLOY = __UI_DEPLOY__;
 const DEFAULT_PATH = __UI_PAGE_SHOW__
@@ -77,19 +77,13 @@ function buildRoutes() {
   }
 
   // —— Local 模块（仅非 deploy；构建期 __UI_PAGE_* = false 时整段 DCE）——
-  if (__UI_PAGE_LOCAL__) {
-    routes.push({
-      path: "/local",
-      name: "local",
-      component: () => import("../views/LocalHubView.vue"),
-    });
-  }
   if (__UI_PAGE_MANUAL_STATS__) {
     routes.push({
       path: "/local/manual-stats",
       name: "manual-stats",
       component: () => import("../views/ManualStatsView.vue"),
     });
+    routes.push({ path: "/local", redirect: "/local/manual-stats" });
   }
   if (__UI_PAGE_FETCH__) {
     routes.push({
@@ -105,25 +99,11 @@ function buildRoutes() {
       component: () => import("../views/TelegramPromView.vue"),
     });
   }
-  if (__UI_PAGE_TWITTER__) {
-    routes.push({
-      path: "/twitter",
-      name: "twitter",
-      component: () => import("../views/TwitterCdpView.vue"),
-    });
-  }
   if (__UI_PAGE_ARCHIVES__) {
     routes.push({
       path: "/archives",
       name: "archives",
       component: () => import("../views/YoutubeArchivesView.vue"),
-    });
-  }
-  if (__UI_PAGE_TRADE__) {
-    routes.push({
-      path: "/trade",
-      name: "trade",
-      component: () => import("../views/BitgetTradeView.vue"),
     });
   }
   if (__UI_PAGE_DEBUG__) {

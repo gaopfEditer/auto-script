@@ -205,18 +205,26 @@ function parseEvalPrice(v) {
 }
 
 /**
- * buy=入场、sell=出场；兼容旧清算空单反存。
- * @param {{ buyPrice?: string, sellPrice?: string }} actual
+ * buy/sell → 入场/出场。标准约定 buy=入场、sell=出场（清算/OI 回写均如此）。
+ * 旧数据若反存，用 planned.entry 或 actual.entryPrice 贴近的一侧判定。
+ * @param {{ buyPrice?: string, sellPrice?: string, entryPrice?: string }} actual
  * @param {string} [direction]
+ * @param {{ entryHint?: unknown, plannedEntry?: unknown }} [opts]
  */
-export function resolveActualEntryExit(actual, direction) {
+export function resolveActualEntryExit(actual, direction, opts) {
   const buy = parseEvalPrice(actual?.buyPrice);
   const sell = parseEvalPrice(actual?.sellPrice);
   const side = resolveTradeDirection(direction);
   if (buy == null || sell == null || !side) {
     return { entry: buy, exit: sell, side };
   }
-  if (side === "short" && buy < sell) {
+  const entryHint = parseEvalPrice(
+    opts?.entryHint ?? opts?.plannedEntry ?? actual?.entryPrice
+  );
+  if (entryHint != null) {
+    const buyDist = Math.abs(buy - entryHint);
+    const sellDist = Math.abs(sell - entryHint);
+    if (buyDist <= sellDist) return { entry: buy, exit: sell, side };
     return { entry: sell, exit: buy, side };
   }
   return { entry: buy, exit: sell, side };

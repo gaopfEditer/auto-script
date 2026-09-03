@@ -465,6 +465,20 @@ export function calcLeveragePnl(entry, exitPrice, isShort, leverage = DEFAULT_LE
 }
 
 /**
+ * 结算结果与盈亏符号对齐：止损不为正、止盈不为负。
+ * @param {unknown} outcome
+ * @param {number | null | undefined} pnlPct
+ */
+export function alignPnlWithOutcome(outcome, pnlPct) {
+  if (pnlPct == null || !Number.isFinite(Number(pnlPct))) return pnlPct ?? null;
+  const p = Number(pnlPct);
+  const o = String(outcome ?? "").trim();
+  if (o === "stop_loss" && p > 0) return -Math.abs(p);
+  if (o === "take_profit" && p < 0) return Math.abs(p);
+  return p;
+}
+
+/**
  * 按 K 线时间顺序：先触达止损或任一止盈即停止；入场区间取均价。
  * @param {{
  *   direction?: string,

@@ -2,6 +2,7 @@
  * 卡片批量清算：按信号时间查交易所 K 线，模拟入场与严格止盈止损结算。
  */
 import {
+  alignPnlWithOutcome,
   calcLeveragePnl,
   fetchKlinesForCard,
   parseEntryPrice,
@@ -441,15 +442,12 @@ export function evaluateLiquidation(card, klines, opts) {
     }
     const strictPnl = calcLeveragePnl(entryPriceUsed, settlementPrice, isShort, leverage);
     if (strictPnl) {
-      roundedPnl = Math.round(strictPnl.pnlPctOnMargin * 100) / 100;
-      pnlLabel = strictPnl.pnlLabel;
-      if (outcome === "stop_loss" && strictPnl.pnlPctOnMargin > 0) {
-        outcome = classifyOutcomeByExit(entryPriceUsed, settlementPrice, isShort, sl, tps);
-        if (outcome === "pending") outcome = "take_profit";
-      }
-      if (outcome === "take_profit" && strictPnl.pnlPctOnMargin < 0) {
-        outcome = "stop_loss";
-      }
+      roundedPnl = alignPnlWithOutcome(
+        outcome,
+        Math.round(strictPnl.pnlPctOnMargin * 100) / 100
+      );
+      const signed = /** @type {number} */ (roundedPnl);
+      pnlLabel = `${signed >= 0 ? "+" : ""}${signed.toFixed(2)}% (@${leverage}x)`;
     }
   }
 

@@ -6,7 +6,7 @@
  * 顶层模块：
  * - discord：Show / 卡片 / 评估 / 社区
  * - oi：OI Monitor（可切换；运行时探测 oi_mornitor 后嵌入）
- * - local：本机工具（Telegram / 推特 / 拉取 / 文稿 / 下单 / Debug）——仅开发态，不进部署包
+ * - local：本机工具（Telegram / 拉取 / 文稿 / Debug）——仅开发态，不进部署包
  *
  * 环境变量（discord-collector/.env*）：
  *   VITE_UI_MODE=local|deploy
@@ -20,13 +20,10 @@
 
 /** 仅本机 Local 模块；deploy 构建一律剔除（即使误写进 VITE_UI_PAGES） */
 export const LOCAL_ONLY_PAGE_NAMES = Object.freeze([
-  "local",
   "manual-stats",
   "telegram",
-  "twitter",
   "fetch",
   "archives",
-  "trade",
   "debug",
 ]);
 
@@ -37,13 +34,10 @@ export const ALL_UI_PAGES = [
   { path: "/cards", name: "cards", label: "卡片", nav: true, module: "discord" },
   { path: "/eval", name: "eval", label: "评估", nav: true, module: "discord" },
   { path: "/community", name: "community", label: "社区", nav: true, module: "discord" },
-  { path: "/local", name: "local", label: "概览", nav: true, module: "local" },
   { path: "/local/manual-stats", name: "manual-stats", label: "手动统计", nav: true, module: "local" },
   { path: "/telegram", name: "telegram", label: "Telegram", nav: true, module: "local" },
-  { path: "/twitter", name: "twitter", label: "推特", nav: true, module: "local" },
   { path: "/fetch", name: "fetch", label: "拉取", nav: true, module: "local" },
   { path: "/archives", name: "archives", label: "文稿", nav: true, module: "local" },
-  { path: "/trade", name: "trade", label: "下单", nav: true, module: "local" },
   { path: "/debug", name: "debug", label: "Debug", nav: true, module: "local" },
   /** 独立页：不进 Discord/OI/Local 顶栏，全屏自管 */
   { path: "/content", name: "content", label: "内容", nav: false, module: "content" },
@@ -54,7 +48,7 @@ export const ALL_UI_PAGES = [
 export const UI_MODULES = [
   { id: "discord", label: "Discord", to: "/show" },
   { id: "oi", label: "OI Monitor", to: "/oi" },
-  { id: "local", label: "Local", to: "/local" },
+  { id: "local", label: "Local", to: "/local/manual-stats" },
 ];
 
 const DEFAULT_DEPLOY_PAGES = ["show", "cards", "eval", "community", "oi"];
@@ -128,14 +122,10 @@ export function getModuleFromPath(path) {
     p.startsWith("/local/") ||
     p === "/telegram" ||
     p.startsWith("/telegram/") ||
-    p === "/twitter" ||
-    p.startsWith("/twitter/") ||
     p === "/fetch" ||
     p.startsWith("/fetch/") ||
     p === "/archives" ||
     p.startsWith("/archives/") ||
-    p === "/trade" ||
-    p.startsWith("/trade/") ||
     p === "/debug" ||
     p.startsWith("/debug/")
   ) {
