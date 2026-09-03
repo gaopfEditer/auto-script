@@ -1,11 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { PatternPayload, RadarSnapshot } from "../types";
 import { EMPTY_SNAPSHOT } from "../types";
 
 const SILENT_REFRESH_FIRST_MS = 30_000;
 const SILENT_REFRESH_EVERY_MS = 5 * 60_000;
 
-export function useRadarSSE(intervalMs = 5000) {
+type RadarSSEValue = {
+  snapshot: RadarSnapshot;
+  online: boolean;
+  patchPattern: (partial: Partial<PatternPayload>) => void;
+};
+
+const RadarSSEContext = createContext<RadarSSEValue | null>(null);
+
+function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
   const [snapshot, setSnapshot] = useState<RadarSnapshot>(EMPTY_SNAPSHOT);
   const [online, setOnline] = useState(false);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -14,7 +31,32 @@ export function useRadarSSE(intervalMs = 5000) {
   const [reconnectEpoch, setReconnectEpoch] = useState(0);
 
   const apply = useCallback((data: RadarSnapshot) => {
-    setSnapshot(data);
+    setSnapshot((prev) => {
+      // 防止空/残缺包把雷达列表冲掉（切页重连瞬间偶发）
+      const incomingEmpty =
+        !data.all_tickers?.length &&
+        !data.hot_tickers?.length &&
+        !data.market_matrix;
+      const hadRadar =
+        (prev.all_tickers?.length ?? 0) > 0 ||
+        (prev.hot_tickers?.length ?? 0) > 0 ||
+        !!prev.market_matrix;
+      if (incomingEmpty && hadRadar) {
+        return {
+          ...data,
+          all_tickers: prev.all_tickers,
+          hot_tickers: prev.hot_tickers,
+          market_matrix: prev.market_matrix,
+          pool_meta: data.pool_meta ?? prev.pool_meta,
+          pool_size: data.pool_size || prev.pool_size,
+          breakout_alerts: data.breakout_alerts?.length
+            ? data.breakout_alerts
+            : prev.breakout_alerts,
+          pattern: data.pattern ?? prev.pattern,
+        };
+      }
+      return data;
+    });
   }, []);
 
   /** 本地补丁：watch/pin/remove 等 API 成功后立刻反映，不必等下一轮 SSE */
@@ -83,7 +125,6 @@ export function useRadarSSE(intervalMs = 5000) {
         console.info("[radar-sse] silent refresh · rebootstrap + reconnect");
         void bootstrap().finally(() => {
           if (cancelled) return;
-          // bootstrap 成功会 markUp 清掉标记；保持「已做过首次」以免又变回 30s
           didFirstSilentRef.current = true;
           if (!onlineNow) setReconnectEpoch((n) => n + 1);
         });
@@ -123,5 +164,30 @@ export function useRadarSSE(intervalMs = 5000) {
     };
   }, [apply, intervalMs, reconnectEpoch]);
 
-  return { snapshot, online, patchPattern };
+  return useMemo(
+    () => ({ snapshot, online, patchPattern }),
+    [snapshot, online, patchPattern],
+  );
+}
+
+/** App 级挂载一次：雷达/形态切页不断开 SSE、不清空 snapshot */
+export function RadarSSEProvider({
+  children,
+  intervalMs = 5000,
+}: {
+  children: ReactNode;
+  intervalMs?: number;
+}) {
+  const value = useRadarSSEState(intervalMs);
+  return (
+    <RadarSSEContext.Provider value={value}>{children}</RadarSSEContext.Provider>
+  );
+}
+
+export function useRadarSSE(): RadarSSEValue {
+  const ctx = useContext(RadarSSEContext);
+  if (!ctx) {
+    throw new Error("useRadarSSE must be used within RadarSSEProvider");
+  }
+  return ctx;
 }
