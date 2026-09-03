@@ -235,6 +235,19 @@ Body 字段：`days` / `from` / `to`、`channelId`、`sources` / `source`、`sym
 
 ### 回测规则（真实 K 线）
 
+**行情源路由：**
+
+1. `symbol` 为 `0x…` 合约地址，或 `ALPHA_123` / `assetClass: "alpha"` → **直接走 Binance Alpha**
+2. 其它币种先查 **U 本位合约**（Binance → Bybit/OKX）
+3. 合约搜不到（无效交易对 / 全源失败）→ 在 Alpha 代币列表按 ticker / alphaId 再搜
+
+Alpha 源：
+
+- Token List：`/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list`
+- Klines：`/bapi/defi/v1/public/alpha-trade/klines`（交易对形如 `ALPHA_1121USDT`）
+
+回测仍按卡片 `signalAt` 入场，窗口内用后续 K 线算 `maxProfitPct` / `minProfitPct`；结果带 `market: "futures"|"alpha"`，Alpha 时另有 `alpha: { alphaId, tradingSymbol, contractAddress, … }`。
+
 **默认 `backtestPolicy=window_days`（卡片归档通用）：**
 
 1. `signalAt` 市价或限价（12h 内触及）入场  
@@ -267,6 +280,23 @@ Body 字段：`days` / `from` / `to`、`channelId`、`sources` / `source`、`sym
 }
 ```
 
+Alpha 合约地址示例：
+
+```json
+{
+  "signals": [
+    {
+      "symbol": "0xf40592daacb3e5abf358789f5688c0b4f64d7777",
+      "direction": "long",
+      "signalAt": "2026-08-21T10:00:00.000Z",
+      "entryMode": "market"
+    }
+  ]
+}
+```
+
+或显式：`{ "symbol": "FLORK", "assetClass": "alpha", … }` / `{ "symbol": "ALPHA_1121USDT", … }`。
+
 OI 专用快捷接口：
 
 - `GET /api/v1/oi/telegram/backtest/policy` — 当前分档参数  
@@ -294,5 +324,7 @@ curl -s -X DELETE "http://127.0.0.1:3851/api/v1/cards/123" \
 |----------|------|
 | `CARDS_API_KEY` | 开放 API 密钥（默认 `Gpf123456`；置空关闭） |
 | `CARD_API_INJECT_CHANNEL_MESSAGE` | `0` 关闭写入频道时间线 |
+| `BINANCE_ALPHA_BASE_URL` | Alpha bapi 源站（默认 `https://www.binance.com`） |
+| `BINANCE_ALPHA_TOKEN_LIST_TTL_MS` | Alpha 代币列表缓存（默认 600000） |
 
-实现：`src/card-validate-signals.js`、`src/card-validate-mock.js`、`src/card-validate-api.js`、`src/card-archive-api.js`。
+实现：`src/card-validate-signals.js`、`src/card-validate-mock.js`、`src/card-validate-api.js`、`src/card-archive-api.js`、`src/card-alpha-market.js`、`src/card-price-fetch.js`。

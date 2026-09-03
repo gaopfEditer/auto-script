@@ -6,6 +6,12 @@ import { fetch as undiciFetch, ProxyAgent } from "undici";
 import { config } from "./config.js";
 import { isShortDirection } from "./card-direction.js";
 import { createLogger } from "./logger.js";
+import {
+  fetchAlphaKlinesForQuery,
+  fetchAlphaPrice,
+  isAlphaContractAddress,
+  isAlphaTradingSymbol,
+} from "./card-alpha-market.js";
 
 const log = createLogger("card-price");
 
@@ -121,7 +127,10 @@ async function fetchBinanceFuturesKlines(symbol, startMs, endMs, interval = "5m"
     });
     const url = `${base}/fapi/v1/klines?${params}`;
     const res = await marketFetch(url);
-    if (!res.ok) throw new Error(`Binance klines HTTP ${res.status}`);
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      throw new Error(`Binance klines HTTP ${res.status}${bodyText ? `: ${bodyText.slice(0, 160)}` : ""}`);
+    }
     const rows = await res.json();
     if (!Array.isArray(rows) || !rows.length) break;
     for (const r of rows) {
@@ -262,6 +271,13 @@ export async function fetchFuturesKlines(symbol, startMs, endMs, interval = "5m"
         log.warn(
           `币安 K 线 ${msg.slice(0, 60)}（代理 ${config.binanceProxy || "未配置"}），改走 Bybit/OKX 兜底`
         );
+      } else if (/400|Invalid symbol|invalid symbol|-1121/i.test(msg)) {
+        /** 合约不存在：交给上层走 Alpha，不抛成「全部失败」 */
+        const err = /** @type {Error & { code?: string }} */ (
+          new Error(`futures_symbol_not_found ${sym}: ${msg}`)
+        );
+        err.code = "FUTURES_NOT_FOUND";
+        throw err;
       } else {
         throw e;
       }
@@ -286,14 +302,26 @@ export async function fetchFuturesKlines(symbol, startMs, endMs, interval = "5m"
   const proxyHint = config.binanceProxy
     ? `已配置代理 ${config.binanceProxy}，但币安仍 418（出口 IP 被封）`
     : "请配置 COMMON_PROXY 或 BINANCE_PROXY";
-  throw new Error(
-    `K线全部来源失败 ${sym}：${proxyHint}；Bybit/OKX 兜底亦未返回数据`
+  const err = /** @type {Error & { code?: string }} */ (
+    new Error(`K线全部来源失败 ${sym}：${proxyHint}；Bybit/OKX 兜底亦未返回数据`)
   );
+  err.code = "FUTURES_ALL_FAILED";
+  throw err;
+}
+
+/**
+ * @param {unknown} symbol
+ * @param {unknown} [assetClass]
+ */
+export function shouldPreferAlphaMarket(symbol, assetClass) {
+  const ac = String(assetClass ?? "").toLowerCase();
+  if (ac === "alpha") return true;
+  return isAlphaContractAddress(symbol) || isAlphaTradingSymbol(symbol);
 }
 
 /**
  * @param {string} symbol
- * @param {'crypto' | 'stock'} assetClass
+ * @param {'crypto' | 'stock' | 'alpha' | string} assetClass
  * @param {number} startMs
  * @param {number} endMs
  * @param {string} interval
@@ -302,7 +330,84 @@ export async function fetchKlinesForCard(symbol, assetClass, startMs, endMs, int
   if (assetClass === "stock") {
     throw new Error("股票行情源未配置（请设置 assetClass=crypto 或接入股票 K 线 API）");
   }
-  return fetchFuturesKlines(symbol, startMs, endMs, interval);
+
+  const preferAlpha = shouldPreferAlphaMarket(symbol, assetClass);
+
+  if (preferAlpha) {
+    const { token, klines } = await fetchAlphaKlinesForQuery(symbol, startMs, endMs, interval);
+    log.info(
+      `Alpha K线 ${token.tradingSymbol} (${token.symbol || token.contractAddress}) ${interval} n=${klines.length}`
+    );
+    Object.assign(klines, {
+      market: "alpha",
+      alpha: {
+        alphaId: token.alphaId,
+        tradingSymbol: token.tradingSymbol,
+        contractAddress: token.contractAddress,
+        chainId: token.chainId,
+        ticker: token.symbol,
+      },
+    });
+    return klines;
+  }
+
+  try {
+    const rows = await fetchFuturesKlines(symbol, startMs, endMs, interval);
+    Object.assign(rows, { market: "futures" });
+    return rows;
+  } catch (e) {
+    const msg = String(/** @type {Error} */ (e).message ?? e);
+    const code = /** @type {{ code?: string }} */ (e).code;
+    const tryAlpha =
+      code === "FUTURES_NOT_FOUND" ||
+      code === "FUTURES_ALL_FAILED" ||
+      /futures_symbol_not_found|Invalid symbol|invalid symbol|-1121|全部来源失败/i.test(msg);
+    if (!tryAlpha) throw e;
+    try {
+      const { token, klines } = await fetchAlphaKlinesForQuery(symbol, startMs, endMs, interval);
+      if (!klines.length) throw e;
+      log.info(
+        `K线合约不可用，改走 Alpha ${token.tradingSymbol} ← ${String(symbol)} n=${klines.length}`
+      );
+      Object.assign(klines, {
+        market: "alpha",
+        alpha: {
+          alphaId: token.alphaId,
+          tradingSymbol: token.tradingSymbol,
+          contractAddress: token.contractAddress,
+          chainId: token.chainId,
+          ticker: token.symbol,
+        },
+      });
+      return klines;
+    } catch (alphaErr) {
+      log.warn(
+        `Alpha 兜底失败 ${String(symbol)}: ${String(/** @type {Error} */ (alphaErr).message ?? alphaErr)}`
+      );
+      throw e;
+    }
+  }
+}
+
+/**
+ * 现价：合约优先；0x / Alpha 交易对直连 Alpha；合约失败再试 Alpha。
+ * @param {string} symbol
+ * @param {string} [assetClass]
+ */
+export async function fetchPriceForCard(symbol, assetClass) {
+  if (shouldPreferAlphaMarket(symbol, assetClass)) {
+    return fetchAlphaPrice(symbol);
+  }
+  try {
+    const p = await fetchFuturesPrice(symbol);
+    return { ...p, market: /** @type {const} */ ("futures") };
+  } catch (e) {
+    try {
+      return await fetchAlphaPrice(symbol);
+    } catch {
+      throw e;
+    }
+  }
 }
 
 /** @param {unknown} v */

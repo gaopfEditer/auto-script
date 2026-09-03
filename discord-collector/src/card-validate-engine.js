@@ -154,7 +154,9 @@ export async function validateCardMetrics(card) {
     const endMs = Date.now();
     const klines = await fetchKlinesForCard(
       sym,
-      "crypto",
+      plan.assetClass === "alpha" || String(card.assetClass ?? "").toLowerCase() === "alpha"
+        ? "alpha"
+        : "crypto",
       signalMs,
       endMs,
       plan.spec.klineInterval
@@ -164,6 +166,8 @@ export async function validateCardMetrics(card) {
       ...base,
       mode: "full",
       signalMs,
+      market: /** @type {{ market?: string }} */ (klines).market || "futures",
+      alpha: /** @type {{ alpha?: Record<string, unknown> }} */ (klines).alpha || undefined,
       ...metrics,
     };
   } catch (e) {
@@ -248,10 +252,13 @@ export function resolveBacktestEntry(sig, klines, signalMs) {
  */
 export async function backtestSignalReal(sig, opts = {}) {
   const policy = sig.backtestPolicy ?? "window_days";
-  const symbol = String(sig.symbol ?? "").trim().toUpperCase();
+  const rawSymbol = String(sig.symbol ?? "").trim();
+  const symbol = /^0x[a-fA-F0-9]{20,}$/i.test(rawSymbol)
+    ? rawSymbol.toLowerCase()
+    : rawSymbol.toUpperCase();
   const signalMs = Date.parse(String(sig.signalAt ?? ""));
   const isShort = sig.direction === "short";
-  const leverage = resolveLiquidationLeverage(symbol, "crypto");
+  const leverage = resolveLiquidationLeverage(symbol, sig.assetClass === "alpha" ? "crypto" : "crypto");
 
   if (policy === "telegram_oi") {
     return backtestSignalTelegramOi(sig, { leverage, signalMs, symbol, isShort });
@@ -270,6 +277,7 @@ export async function backtestSignalReal(sig, opts = {}) {
     entryMode,
     leverage,
     tier: sig.tier,
+    assetClass: sig.assetClass || ( /^0x/i.test(symbol) || /^ALPHA_/i.test(symbol) ? "alpha" : "crypto"),
     backtestPolicy: policy,
     windowDays,
     profitThresholdPct,
@@ -280,18 +288,25 @@ export async function backtestSignalReal(sig, opts = {}) {
   if (!Number.isFinite(signalMs)) return { ...base, error: "invalid_signal_time" };
 
   const endMs = Math.min(Date.now(), signalMs + windowDays * 86400_000);
-  /** @type {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }>} */
+  /** @type {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }> & { market?: string, alpha?: Record<string, unknown> }} */
   let klines;
   try {
-    klines = await fetchKlinesForCard(symbol, "crypto", signalMs, endMs, "5m");
+    const assetClass = sig.assetClass === "alpha" ? "alpha" : "crypto";
+    klines = await fetchKlinesForCard(symbol, assetClass, signalMs, endMs, "5m");
   } catch (e) {
     return { ...base, error: String(/** @type {Error} */ (e).message ?? e) };
   }
+
+  const marketMeta = {
+    market: klines.market || "futures",
+    alpha: klines.alpha || undefined,
+  };
 
   const entryRes = resolveBacktestEntry(sig, klines, signalMs);
   if (entryRes.error || entryRes.entry == null || !entryRes.entryHitAt) {
     return {
       ...base,
+      ...marketMeta,
       mode: "backtest_window",
       entered: false,
       entry: sig.entry,
@@ -350,6 +365,7 @@ export async function backtestSignalReal(sig, opts = {}) {
 
   return {
     ...base,
+    ...marketMeta,
     mode: "backtest_window",
     entered: true,
     entry,
@@ -403,15 +419,21 @@ async function backtestSignalTelegramOi(sig, ctx) {
   const endMs = Math.min(Date.now(), signalMs + rolling.maxWindowMs + 3600_000);
   let klines;
   try {
-    klines = await fetchKlinesForCard(symbol, "crypto", signalMs, endMs, "5m");
+    const assetClass = sig.assetClass === "alpha" ? "alpha" : "crypto";
+    klines = await fetchKlinesForCard(symbol, assetClass, signalMs, endMs, "5m");
   } catch (e) {
     return { ...base, error: String(/** @type {Error} */ (e).message ?? e) };
   }
+  const marketMeta = {
+    market: /** @type {{ market?: string }} */ (klines).market || "futures",
+    alpha: /** @type {{ alpha?: Record<string, unknown> }} */ (klines).alpha || undefined,
+  };
 
   const entryRes = resolveBacktestEntry(sig, klines, signalMs);
   if (entryRes.error || entryRes.entry == null || !entryRes.entryHitAt) {
     return {
       ...base,
+      ...marketMeta,
       mode: "telegram_oi_rolling",
       entered: false,
       entry: sig.entry,
@@ -436,6 +458,7 @@ async function backtestSignalTelegramOi(sig, ctx) {
 
   return {
     ...base,
+    ...marketMeta,
     mode: "telegram_oi_rolling",
     entered: true,
     entry,

@@ -23,6 +23,7 @@ import {
  *   tier: "major" | "altcoin",
  *   profitThresholdPct: number,
  *   backtestPolicy: BacktestPolicyId,
+ *   assetClass?: "crypto" | "alpha" | "stock",
  *   source?: string,
  *   interval?: string,
  *   signalKind?: string,
@@ -56,11 +57,24 @@ function pickRollingOverrides(body, row) {
 export function normalizeBacktestSignal(row, index, body = {}) {
   if (!row || typeof row !== "object") return null;
   const r = /** @type {Record<string, unknown>} */ (row);
-  const symbol = String(r.symbol ?? r.coin ?? "")
-    .trim()
-    .toUpperCase()
-    .replace(/USDT$|USDC$|BUSD$/, "");
+  const rawSym = String(r.symbol ?? r.coin ?? r.contractAddress ?? r.contract ?? "").trim();
+  if (!rawSym) return null;
+
+  /** 0x 合约地址 / ALPHA_* 保留原形态，其余按合约 ticker 规范化 */
+  let symbol;
+  let assetClass =
+    String(r.assetClass ?? r.market ?? body.assetClass ?? "").toLowerCase() || undefined;
+  if (/^0x[a-fA-F0-9]{20,}$/i.test(rawSym)) {
+    symbol = rawSym.toLowerCase();
+    assetClass = "alpha";
+  } else if (/^ALPHA_\d+(USDT|USDC)?$/i.test(rawSym)) {
+    symbol = rawSym.toUpperCase().replace(/USDC$/, "USDT");
+    assetClass = "alpha";
+  } else {
+    symbol = rawSym.toUpperCase().replace(/USDT$|USDC$|BUSD$/, "");
+  }
   if (!symbol) return null;
+  if (assetClass && !["crypto", "alpha", "stock"].includes(assetClass)) assetClass = undefined;
 
   const dir = resolveTradeDirection(r.direction ?? r.side ?? r.type) ?? "long";
   const signalAtRaw =
@@ -109,6 +123,7 @@ export function normalizeBacktestSignal(row, index, body = {}) {
     tier,
     profitThresholdPct,
     backtestPolicy,
+    assetClass: /** @type {'crypto'|'alpha'|'stock'|undefined} */ (assetClass),
     source: r.source != null ? String(r.source) : undefined,
     interval: r.interval != null ? String(r.interval) : undefined,
     signalKind: r.signalKind ?? r.kind != null ? String(r.signalKind ?? r.kind) : undefined,

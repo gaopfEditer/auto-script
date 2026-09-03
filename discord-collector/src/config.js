@@ -208,6 +208,9 @@ export const config = {
   binanceRequestTimeoutMs: Number(process.env.BINANCE_REQUEST_TIMEOUT_MS ?? 15_000),
   /** 币安 API 代理（国内直连常失败；默认 COMMON_PROXY） */
   binanceProxy: envProxy("BINANCE_PROXY", "COMMON_PROXY", "DISCORD_WEBHOOK_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
+  /** Binance Alpha（bapi）源站；回测合约找不到或 0x 地址时走 Alpha */
+  binanceAlphaBaseUrl: (process.env.BINANCE_ALPHA_BASE_URL ?? "https://www.binance.com").trim(),
+  binanceAlphaTokenListTtlMs: Number(process.env.BINANCE_ALPHA_TOKEN_LIST_TTL_MS ?? 600_000),
   cardPriceMonitorIntervalMs: Number(process.env.CARD_PRICE_MONITOR_INTERVAL_MS ?? 300_000),
   /** 加密接近推送：每 5min 检查，距入场 ±5% */
   cardProximityCryptoCheckMs: Number(process.env.CARD_PROXIMITY_CRYPTO_CHECK_MS ?? 300_000),

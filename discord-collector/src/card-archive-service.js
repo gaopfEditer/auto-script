@@ -637,7 +637,9 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     const channelId = String(input.channelId ?? input.sourceRef ?? sourceType).trim() || sourceType;
     const textHash = signalTextHash(rawContent || JSON.stringify(cardFields));
     const assetClass =
-      input.assetClass === "stock" || input.assetClass === "crypto"
+      input.assetClass === "stock" ||
+      input.assetClass === "crypto" ||
+      input.assetClass === "alpha"
         ? input.assetClass
         : detectAssetClass(symbol, parsedJson, execution, rawContent);
     const verifyMode = resolveVerifyMode(assetClass, input.verifyMode);

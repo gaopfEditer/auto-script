@@ -55,9 +55,10 @@ export function getCardBacktestPlan(symbol, assetClass) {
   if (ac === "stock") {
     return { skip: true, reason: "stock" };
   }
+  // alpha 与合约同走加密回测规则（山寨档）；K 线源由 card-price-fetch 路由
   const tier = detectSymbolTier(symbol);
   const spec = getBacktestSpec(tier);
-  return { skip: false, tier, spec };
+  return { skip: false, tier, spec, assetClass: ac === "alpha" ? "alpha" : "crypto" };
 }
 
 /**
