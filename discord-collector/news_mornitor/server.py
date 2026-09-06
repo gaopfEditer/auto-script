@@ -710,6 +710,8 @@ def _normalize_event(item: dict[str, Any], *, source: str) -> dict[str, Any] | N
         "phase": item.get("phase") or "",
         "bias": bias,
         "bias_label": bias_label,
+        # 热榜特有字段
+        "platform": item.get("platform") or "",
     }
 
 

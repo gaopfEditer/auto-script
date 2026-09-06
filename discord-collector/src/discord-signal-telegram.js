@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import {
   formatTelegramWithChannelLabel,
   stripTelegramAtUsernameMentions,
+  isSpamMessage,
 } from "./discord-telegram-push-config.js";
 
 /**
@@ -27,6 +28,11 @@ export function createDiscordSignalTelegramPush(log) {
     // 卡片推送：去掉 (@telegram_username)，避免标题里带句柄
     if (meta.cardId != null) {
       body = stripTelegramAtUsernameMentions(body);
+    }
+    // 过滤"引导私聊/转账"类垃圾消息
+    if (isSpamMessage(body)) {
+      log.debug(`[telegram] 过滤垃圾消息 cardId=${meta.cardId ?? "?"} kind=${meta.kind ?? ""}`);
+      return { skipped: "spam" };
     }
     if (!body) return { skipped: "empty" };
 

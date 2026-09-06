@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import {
   isTelegramPushChannel,
   isTelegramRealtimeChannel,
+  isSpamMessage,
   telegramPushChannelLabel,
   getTelegramRealtimeChannelIds,
 } from "./discord-telegram-push-config.js";
@@ -106,6 +107,11 @@ export function createDiscordTelegramMessagePush(log) {
     const channelId = String(row.channelId ?? "").trim();
     const content = String(row.content ?? "").trim();
     if (!channelId || !content || !isTelegramPushChannel(channelId)) return;
+    // 过滤"引导私聊/转账"类垃圾消息
+    if (isSpamMessage(content)) {
+      log.debug(`[telegram-push] 过滤垃圾消息 channel=${channelId} content=${content.slice(0, 60)}`);
+      return;
+    }
 
     if (isTelegramRealtimeChannel(channelId)) {
       void sendImmediate(row);

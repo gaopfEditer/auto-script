@@ -88,6 +88,7 @@
 | `phase` | string | `past`（已过）/ `upcoming`（即将） |
 | `bias` | string | 偏向：`bullish`（利好）/ `bearish`（利空）/ `neutral`（中性） |
 | `bias_label` | string | 偏向中文标签：`利好` / `利空` / `中性` |
+| `platform` | string | 来源平台（热榜事件有值：`binance` / `okx` / `foresight` / `coindesk` / `blockbeats`；宏观日历事件为空） |
 
 #### items 示例
 
@@ -115,7 +116,35 @@
   "country": "美国",
   "phase": "upcoming",
   "bias": "neutral",
-  "bias_label": "中性"
+  "bias_label": "中性",
+  "platform": ""
+}
+```
+
+> **热榜事件示例**（platform 非空）：
+```json
+{
+  "id": "b7e2d4a6c8f0e123",
+  "title": "HYPE 突破 88 美元创历史新高",
+  "description": "Hyperliquid 生态爆发，24 小时销毁 8730 枚，衍生品 DEX 板块资金极度 FOMO。",
+  "category_id": "crypto_eco_meme",
+  "category": {
+    "id": "crypto_eco_meme",
+    "name": "生态与山寨 Meme 动向",
+    "star": 3
+  },
+  "child": {
+    "id": "crypto_defi_l2_meme",
+    "name": "DeFi / L2 / Meme 生态"
+  },
+  "source": "hotlist-binance",
+  "url": "https://www.binance.com/zh-CN/square/post/123456",
+  "publish_at": "2026-09-06T10:00:00Z",
+  "star": 3,
+  "phase": "upcoming",
+  "bias": "neutral",
+  "bias_label": "中性",
+  "platform": "binance"
 }
 ```
 

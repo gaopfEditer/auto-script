@@ -68,16 +68,48 @@ export function telegramPushChannelLabel(channelId, fallbackName = "") {
 }
 
 /**
- * 去掉文案中的 Telegram 用户名括号标记，如 ` (@hysqxx)` / `(@CoinGlassZhBot)`。
+ * 去掉文案中的 Telegram 用户名括号标记。
+ *
+ * 处理三种括号形式：
+ *   半角：(hysqxx) /  (@hysqxx)
+ *   全角：（hysqxx）/（@hysqxx）
+ *
  * 用户名规则：以字母开头，后接 4–31 位字母数字下划线（总长 5–32）。
+ *
  * @param {string} text
  */
 export function stripTelegramAtUsernameMentions(text) {
   return String(text ?? "")
+    // 半角括号
     .replace(/\s*\(@[A-Za-z][A-Za-z0-9_]{4,31}\)/g, "")
+    // 全角括号
+    .replace(/\s*（@[A-Za-z][A-Za-z0-9_]{4,31}）/g, "")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
+}
+
+/**
+ * 判断消息是否疑似"引导私聊/转账"类垃圾内容，
+ * 这类消息不应推送到 Telegram。
+ *
+ * 典型特征：
+ *   - 带 Telegram 句柄 (@username) 的用户名标记
+ *   - 包含"私信"、"进群"、"DM"、"无任何资金往来" 等引导词
+ *
+ * @param {string} text
+ * @returns {boolean} true = 疑似垃圾，应过滤
+ */
+export function isSpamMessage(text) {
+  const t = String(text ?? "");
+  // 全角/半角括号用户名标记（任意位置出现）
+  if (/\([（]?@[A-Za-z][A-Za-z0-9_]{4,31}[）]?\)/.test(t)) {
+    // 若同时含引导词 → 垃圾
+    if (/私信|DM|进.*群|无.*资金|跟我|带单|开户|入群/.test(t)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
