@@ -17,6 +17,7 @@
     "oi:start": "oi_mornitor/venv/bin/python oi_mornitor/run.py",
     "oi:dev": "oi_mornitor/venv/bin/python oi_mornitor/run.py --dev",
     "oi:rebuild": "oi_mornitor/venv/bin/python oi_mornitor/run.py --rebuild",
+    "news:start": "PYTHONPATH=. ${NEWS_PYTHON:-../../auto-deal-eth/news_mornitor/venv/bin/python} news_mornitor/run.py web",
     "content:start": "PYTHONPATH=. oi_mornitor/venv/bin/python -m content_board"
   },
   "devDependencies": {

@@ -7,11 +7,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from oi_mornitor.config import (
-    CANDLE_CARD_TELEGRAM,
     CANDLE_CARD_TELEGRAM_CHAT_ID,
     MAIN_CARD_TELEGRAM_CHAT_ID,
     PATTERN_OI_COMBO_TELEGRAM,
-    STRUCTURE_CARD_TELEGRAM,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
     TELEGRAM_PUSH_CHAT_ID,
@@ -24,13 +22,11 @@ _TZ_CN = timezone(timedelta(hours=8))
 
 
 def _pair_label(symbol: str) -> str:
-    """BTCUSDT → BTCUSD（展示用）。"""
-    s = str(symbol or "").upper().strip()
-    if s.endswith("USDT"):
-        return s[:-1]  # USDT → USD
-    if s.endswith("BUSD"):
-        return s[:-4] + "USD"
-    return s
+    """1000PEPEUSDT → PEPEUSD（展示用；去掉千倍前缀）。"""
+    from oi_mornitor.symbol_aliases import human_base_asset
+
+    base = human_base_asset(symbol)
+    return f"{base}USD" if base else str(symbol or "").upper()
 
 
 def _fmt_price(v: Any) -> str:
@@ -284,26 +280,60 @@ def send_telegram_text(text: str, *, chat_id: str | None = None) -> bool:
 
 def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
     """射击之星 / 倒锤子卡片 → Telegram 群；特别关注币另推 MAIN 群。"""
-    if not CANDLE_CARD_TELEGRAM:
+    from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
+
+    if not is_candle_push_enabled():
         return False
     text = format_candle_card_message(alert)
     ok = send_telegram_text(text)
     ok_main = _maybe_send_main_card(alert, text)
-    return ok or ok_main
+    pushed = ok or ok_main
+    if pushed:
+        try:
+            from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+            record_alert_from_push(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("形态信号胜率入库失败: %s", exc)
+        try:
+            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
+
+            record_ticker_from_alert(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("形态 ticker 入库失败: %s", exc)
+    return pushed
 
 
 def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     """顶部/底部结构 → Telegram 群；特别关注币另推 MAIN 群。"""
-    if not STRUCTURE_CARD_TELEGRAM:
+    from oi_mornitor.telegram_push_toggles import is_structure_push_enabled
+
+    if not is_structure_push_enabled():
         return False
     text = format_structure_card_message(alert)
     ok = send_telegram_text(text)
     ok_main = _maybe_send_main_card(alert, text)
-    return ok or ok_main
+    pushed = ok or ok_main
+    if pushed:
+        try:
+            from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+            record_alert_from_push(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("形态信号胜率入库失败: %s", exc)
+        try:
+            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
+
+            record_ticker_from_alert(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("形态 ticker 入库失败: %s", exc)
+    return pushed
 
 
 def _maybe_send_main_card(alert: dict[str, Any], text: str) -> bool:
-    if not MAIN_CARD_TELEGRAM_CHAT_ID:
+    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
         return False
     try:
         from oi_mornitor.focus_symbols import is_focus_symbol
@@ -319,7 +349,9 @@ def send_pattern_oi_telegram(alert: dict[str, Any]) -> bool:
 
     若已开启蜡烛卡片推送，改用卡片文案，避免两套格式并存。
     """
-    if CANDLE_CARD_TELEGRAM:
+    from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
+
+    if is_candle_push_enabled():
         if not PATTERN_OI_COMBO_TELEGRAM:
             return False
         if alert.get("high") is not None and alert.get("low") is not None:

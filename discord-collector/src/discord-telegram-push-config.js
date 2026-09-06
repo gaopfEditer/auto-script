@@ -68,6 +68,19 @@ export function telegramPushChannelLabel(channelId, fallbackName = "") {
 }
 
 /**
+ * 去掉文案中的 Telegram 用户名括号标记，如 ` (@hysqxx)` / `(@CoinGlassZhBot)`。
+ * 用户名规则：以字母开头，后接 4–31 位字母数字下划线（总长 5–32）。
+ * @param {string} text
+ */
+export function stripTelegramAtUsernameMentions(text) {
+  return String(text ?? "")
+    .replace(/\s*\(@[A-Za-z][A-Za-z0-9_]{4,31}\)/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+/**
  * @param {string} text
  * @param {string} [channelId]
  * @param {string} [fallbackName]
@@ -77,7 +90,9 @@ export function formatTelegramWithChannelLabel(text, channelId, fallbackName = "
   if (!body) return "";
   const id = String(channelId ?? "").trim();
   if (!id) return body;
-  const label = telegramPushChannelLabel(id, fallbackName);
+  const label = stripTelegramAtUsernameMentions(
+    telegramPushChannelLabel(id, fallbackName),
+  );
   if (!label || body.startsWith(`【${label}】`)) return body;
   return `【${label}】\n${body}`;
 }

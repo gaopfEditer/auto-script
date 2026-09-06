@@ -127,6 +127,35 @@ export function createCardArchiveListCache(store, log) {
   /** @type {Map<string, { channels: Array<{ channelId: string, channelName: string, count: number }>, builtAt: number }>} */
   const channelBuckets = new Map();
 
+  const MAX_BUCKETS = 48;
+  const BUCKET_TTL_MS = 30 * 60 * 1000;
+
+  /** @param {Map<string, { builtAt: number }>} map @param {number} max */
+  function pruneMap(map, max) {
+    const now = Date.now();
+    for (const [k, b] of map) {
+      if (now - (b.builtAt || 0) > BUCKET_TTL_MS) map.delete(k);
+    }
+    while (map.size > max) {
+      let oldestK = null;
+      let oldestT = Infinity;
+      for (const [k, b] of map) {
+        const t = b.builtAt || 0;
+        if (t < oldestT) {
+          oldestT = t;
+          oldestK = k;
+        }
+      }
+      if (oldestK == null) break;
+      map.delete(oldestK);
+    }
+  }
+
+  function pruneBuckets() {
+    pruneMap(buckets, MAX_BUCKETS);
+    pruneMap(channelBuckets, MAX_BUCKETS);
+  }
+
   /**
    * @param {{
    *   channelId?: string,
@@ -162,6 +191,7 @@ export function createCardArchiveListCache(store, log) {
    * }} filters
    */
   function upsertInBucket(card, filters) {
+    pruneBuckets();
     const key = archiveListFilterKey(filters);
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -239,6 +269,7 @@ export function createCardArchiveListCache(store, log) {
    * @param {{ sinceId?: number, force?: boolean }} [opts]
    */
   async function list(filters, opts = {}) {
+    pruneBuckets();
     const lim = Math.min(500, Math.max(1, Number(filters.limit) || 50));
     const normalized = { ...filters, limit: lim };
     const key = archiveListFilterKey(normalized);
@@ -350,6 +381,7 @@ export function createCardArchiveListCache(store, log) {
    * @param {{ force?: boolean }} [opts]
    */
   async function listChannels(filters, opts = {}) {
+    pruneBuckets();
     const key = channelFilterKey(filters);
     if (opts.force) channelBuckets.delete(key);
     const hit = channelBuckets.get(key);

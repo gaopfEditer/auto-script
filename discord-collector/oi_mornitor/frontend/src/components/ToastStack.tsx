@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import type { TickerRow } from "../types";
 import { fmtDelta, fmtPct } from "../utils/format";
 import { patternsPathForSymbol } from "../utils/patternNav";
-import { coinInitial, displaySymbol } from "../utils/symbol";
+import { displaySymbol } from "../utils/symbol";
+import { CoinAvatar } from "./CoinAvatar";
 
 interface ToastItem {
   id: string;
@@ -75,7 +76,7 @@ export const ToastStack = memo(function ToastStack({ hot, scanTs }: Props) {
               ×
             </button>
             <div className="toast-head">
-              <span className="coin-avatar">{coinInitial(row.symbol)}</span>
+              <CoinAvatar symbol={row.symbol} />
               <div>
                 <div className="toast-title">
                   ${displaySymbol(row.symbol)} · 全场强度榜第 {row.global_intensity_rank ?? "—"} 名

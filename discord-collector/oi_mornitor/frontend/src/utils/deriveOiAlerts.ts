@@ -25,10 +25,25 @@ export interface AlertThresholds {
   price_spike_pct_15m?: number;
 }
 
-/** 与后端 OI_DELTA_MAX_PCT 对齐：超过视为脏数据，不进异动流 */
-const OI_DELTA_MAX_PCT = 150;
+/** 与后端短窗上限对齐：5m/15m 超过即脏数据 */
+const OI_DELTA_MAX_PCT_5M = 25;
+const OI_DELTA_MAX_PCT_15M = 40;
 const DEFAULT_PRICE_SPIKE_5M = 2;
 const DEFAULT_PRICE_SPIKE_15M = 3.5;
+
+export function oiDeltaMaxPct(window: OiAlertWindow): number {
+  return window === "5m" ? OI_DELTA_MAX_PCT_5M : OI_DELTA_MAX_PCT_15M;
+}
+
+export function isPlausibleOiAlert(item: Pick<OiAlertItem, "kind" | "window" | "deltaUsd" | "pct" | "row">): boolean {
+  if (item.kind !== "oi") return true;
+  return isPlausibleOiDelta(
+    item.deltaUsd,
+    item.pct,
+    item.row?.current_oi_usd ?? 0,
+    item.window,
+  );
+}
 
 function isTriggered(
   deltaUsd: number,
@@ -43,12 +58,18 @@ function isPlausibleOiDelta(
   deltaUsd: number,
   pct: number,
   currentOiUsd: number,
+  window: OiAlertWindow,
 ): boolean {
   if (!Number.isFinite(deltaUsd) || !Number.isFinite(pct)) return false;
-  if (Math.abs(pct) > OI_DELTA_MAX_PCT) return false;
-  if (currentOiUsd > 0 && Math.abs(deltaUsd) > currentOiUsd * (1 + OI_DELTA_MAX_PCT / 100)) {
+  const maxPct = oiDeltaMaxPct(window);
+  if (Math.abs(pct) > maxPct) return false;
+  // |Δ| 不应接近/超过当前全部 OI（5m 翻倍级）
+  if (currentOiUsd > 0 && Math.abs(deltaUsd) > currentOiUsd * (maxPct / 100)) {
     return false;
   }
+  // Δ 与 pct 应大致同号且同量级
+  if (Math.abs(pct) >= 1 && Math.abs(deltaUsd) < 1) return false;
+  if (deltaUsd !== 0 && pct !== 0 && Math.sign(deltaUsd) !== Math.sign(pct)) return false;
   return true;
 }
 
@@ -134,7 +155,7 @@ export function deriveOiAlerts(
 
     for (const w of oiWindows) {
       if (!isTriggered(w.deltaUsd, w.pct, usdLimit, pctLimit)) continue;
-      if (!isPlausibleOiDelta(w.deltaUsd, w.pct, row.current_oi_usd ?? 0)) continue;
+      if (!isPlausibleOiDelta(w.deltaUsd, w.pct, row.current_oi_usd ?? 0, w.window)) continue;
 
       const rawWins = row.raw_triggered_windows ?? [];
       const trigWins = row.triggered_windows ?? [];

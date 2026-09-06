@@ -2,7 +2,8 @@ import { memo, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { BreakoutAlert } from "../types";
 import { patternsPathForSymbol } from "../utils/patternNav";
-import { coinInitial, displaySymbol } from "../utils/symbol";
+import { displaySymbol } from "../utils/symbol";
+import { CoinAvatar } from "./CoinAvatar";
 
 interface ToastItem {
   id: string;
@@ -73,7 +74,7 @@ export const BreakoutToastStack = memo(function BreakoutToastStack({ alerts, sca
               ×
             </button>
             <div className="toast-head">
-              <span className="coin-avatar">{coinInitial(alert.symbol)}</span>
+              <CoinAvatar symbol={alert.symbol} />
               <div>
                 <div className="toast-title">
                   ${displaySymbol(alert.symbol)} · 回踩扳机

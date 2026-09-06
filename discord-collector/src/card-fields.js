@@ -4,6 +4,7 @@
  */
 
 import { isShortDirection } from "./card-direction.js";
+import { humanBaseAsset, humanUsdtSymbol, toUsdtSymbol } from "./symbol-aliases.js";
 
 /** @typedef {{ name: string, value: string, inline?: boolean }} DiscordEmbedField */
 /** @typedef {{
@@ -21,11 +22,20 @@ const COLOR_NEUTRAL = 0x5865f2;
 
 /** @param {unknown} v */
 export function normalizeSymbol(v) {
-  const raw = String(v ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (!raw) return "";
-  if (raw.endsWith("USDT")) return raw;
-  if (raw.length <= 10) return `${raw}USDT`;
-  return raw;
+  return toUsdtSymbol(String(v ?? ""));
+}
+
+/**
+ * Bitget / 人类常用名：1000PEPEUSDT → PEPEUSDT
+ * @param {unknown} v
+ */
+export function normalizeHumanSymbol(v) {
+  return humanUsdtSymbol(String(v ?? "")) || normalizeSymbol(v);
+}
+
+/** @param {unknown} v */
+export function displayBaseSymbol(v) {
+  return humanBaseAsset(String(v ?? ""));
 }
 
 /** @param {unknown} parsed @param {unknown} execution */
@@ -59,7 +69,7 @@ export function buildDiscordCardFields(input) {
 
   /** @type {DiscordEmbedField[]} */
   const fields = [];
-  if (symbol) fields.push({ name: "币种", value: symbol.replace("USDT", ""), inline: true });
+  if (symbol) fields.push({ name: "币种", value: displayBaseSymbol(symbol) || symbol.replace("USDT", ""), inline: true });
   if (direction) fields.push({ name: "方向", value: direction, inline: true });
   if (entry) fields.push({ name: "入场", value: entry, inline: true });
   if (targets.length) fields.push({ name: "止盈", value: targets.join(" / "), inline: false });
@@ -75,7 +85,9 @@ export function buildDiscordCardFields(input) {
 
   const title =
     String(input.title ?? "").trim() ||
-    (symbol ? `${symbol.replace("USDT", "")} ${direction || "信号"}` : "交易信号");
+    (symbol
+      ? `${displayBaseSymbol(symbol) || symbol.replace("USDT", "")} ${direction || "信号"}`
+      : "交易信号");
 
   return {
     title,

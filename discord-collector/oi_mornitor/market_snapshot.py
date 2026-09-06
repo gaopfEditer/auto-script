@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from oi_mornitor.symbol_aliases import is_stablecoin_symbol
 from oi_mornitor.config import (
     FALLBACK_SOURCE_ORDER,
     OI_TIER_HEAVY_MIN_USD,
@@ -39,6 +40,8 @@ def filter_usdt_perpetuals(tickers: list[dict[str, Any]]) -> list[dict[str, Any]
         if not sym.endswith("USDT"):
             continue
         if "UPUSDT" in sym or "DOWNUSDT" in sym:
+            continue
+        if is_stablecoin_symbol(sym):
             continue
         out.append(item)
     return out

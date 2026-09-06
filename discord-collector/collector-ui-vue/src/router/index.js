@@ -5,7 +5,7 @@ import { createRouter, createWebHistory } from "vue-router";
  * 未启用页面的 `import()` 会被 Rollup DCE，不会打进产物。
  * 白名单见 discord-collector/.env.production → VITE_UI_PAGES。
  */
-/* global __UI_DEPLOY__, __UI_PAGE_SHOW__, __UI_PAGE_FETCH__, __UI_PAGE_OI__,
+/* global __UI_DEPLOY__, __UI_PAGE_SHOW__, __UI_PAGE_FETCH__, __UI_PAGE_OI__, __UI_PAGE_NEWS__,
    __UI_PAGE_CARDS__,    __UI_PAGE_EVAL__, __UI_PAGE_TELEGRAM__, __UI_PAGE_ARCHIVES__, __UI_PAGE_COMMUNITY__,
    __UI_PAGE_DEBUG__, __UI_PAGE_HOME__, __UI_PAGE_CONTENT__, __UI_PAGE_MANUAL_STATS__ */
 
@@ -20,7 +20,9 @@ const DEFAULT_PATH = __UI_PAGE_SHOW__
         ? "/community"
         : __UI_PAGE_OI__
           ? "/oi"
-          : "/show";
+          : __UI_PAGE_NEWS__
+            ? "/news"
+            : "/show";
 
 /**
  * @returns {import('vue-router').RouteRecordRaw[]}
@@ -51,6 +53,13 @@ function buildRoutes() {
       path: "/oi",
       name: "oi",
       component: () => import("../views/OiMonitorView.vue"),
+    });
+  }
+  if (__UI_PAGE_NEWS__) {
+    routes.push({
+      path: "/news",
+      name: "news",
+      component: () => import("../views/NewsHotView.vue"),
     });
   }
   if (__UI_PAGE_CARDS__) {

@@ -3,7 +3,7 @@ import zlib from "node:zlib";
 import { chromium } from "playwright";
 
 import { isBlockedWsPayload, isDiscordGatewayPayload, isUnforwardableWsRawText } from "./ws-noise-filter.js";
-import { formatGatewayRealtimeLog } from "./discord-gateway.js";
+import { formatGatewayRealtimeLog, isDiscordApiUrl, isDiscordNoiseApiUrl } from "./discord-gateway.js";
 import { config } from "./config.js";
 import {
   createDiscordGatewayZlibHub,
@@ -261,6 +261,15 @@ const NET_TRACE_RESOURCE_TYPES = new Set([
   "EventSource",
 ]);
 
+/** 仅对这些类型拉响应体（Document HTML 无采集价值且体积大） */
+const NET_BODY_RESOURCE_TYPES = new Set(["XHR", "Fetch"]);
+
+/** 同时 in-flight 的 getResponseBody 上限 */
+const MAX_BODY_FETCH_INFLIGHT = 4;
+
+/** WS URL map 上限 */
+const MAX_WS_URL_BY_REQUEST = 512;
+
 /** @param {Record<string, unknown> | undefined} h @param {number} maxKeys @param {number} maxValLen */
 function truncateHeaders(h, maxKeys = 36, maxValLen = 240) {
   if (!h || typeof h !== "object") return h;
@@ -322,14 +331,24 @@ function wireNetworkAndPageDiagnostics(cdp, page, log, diag, wsMeta) {
     if (logEvents) log[level](msg);
   };
 
-  /** @type {Map<string, { url: string, method: string }>} */
+  /** @type {Map<string, { url: string, method: string, resourceType: string }>} */
   const pendingByRequestId = new Map();
+  let bodyFetchInflight = 0;
 
   const trimPending = () => {
     while (pendingByRequestId.size > 4000) {
       const k = pendingByRequestId.keys().next().value;
       if (k === undefined) break;
       pendingByRequestId.delete(k);
+    }
+  };
+
+  /** @param {Map<string, string>} map */
+  const trimWsUrls = (map) => {
+    while (map.size > MAX_WS_URL_BY_REQUEST) {
+      const k = map.keys().next().value;
+      if (k === undefined) break;
+      map.delete(k);
     }
   };
 
@@ -377,7 +396,7 @@ function wireNetworkAndPageDiagnostics(cdp, page, log, diag, wsMeta) {
     const method = String(req.method ?? "?");
     const id = evt.requestId ?? "";
     if (id) {
-      pendingByRequestId.set(id, { url, method });
+      pendingByRequestId.set(id, { url, method, resourceType: String(type) });
       trimPending();
     }
     logLine("info", `[net→] ${type} ${method} ${shortenUrl(url)}`);
@@ -440,16 +459,28 @@ function wireNetworkAndPageDiagnostics(cdp, page, log, diag, wsMeta) {
 
   cdp.on("Network.loadingFinished", (evt) => {
     const id = evt.requestId ?? "";
+    const meta = id ? pendingByRequestId.get(id) : undefined;
     if (id) pendingByRequestId.delete(id);
     emit({
       kind: "net_finished",
       requestId: id,
       encodedDataLength: evt.encodedDataLength != null ? Number(evt.encodedDataLength) : 0,
       cdpTimestamp: evt.timestamp,
+      url: meta?.url,
+      method: meta?.method,
+      resourceType: meta?.resourceType,
     });
 
-    if (!sink || !id) return;
+    if (!sink || !id || !meta) return;
 
+    const url = String(meta.url ?? "");
+    const rtype = String(meta.resourceType ?? "");
+    // 只拉 Discord API 的 XHR/Fetch；噪声路径跳过；Document 与并发超限直接放弃
+    if (!NET_BODY_RESOURCE_TYPES.has(rtype)) return;
+    if (!isDiscordApiUrl(url) || isDiscordNoiseApiUrl(url)) return;
+    if (bodyFetchInflight >= MAX_BODY_FETCH_INFLIGHT) return;
+
+    bodyFetchInflight += 1;
     void (async () => {
       try {
         /** @type {{ body: string, base64Encoded: boolean }} */
@@ -506,6 +537,9 @@ function wireNetworkAndPageDiagnostics(cdp, page, log, diag, wsMeta) {
         emit({
           kind: "net_response_body",
           requestId: id,
+          url,
+          method: meta.method,
+          resourceType: rtype,
           bodyJson,
           bodyRawText: bodyJson == null ? slice : undefined,
           responseBodyTruncated: truncated,
@@ -516,8 +550,13 @@ function wireNetworkAndPageDiagnostics(cdp, page, log, diag, wsMeta) {
         emit({
           kind: "net_response_body",
           requestId: id,
+          url,
+          method: meta.method,
+          resourceType: rtype,
           bodyError: err.message || String(e),
         });
+      } finally {
+        bodyFetchInflight = Math.max(0, bodyFetchInflight - 1);
       }
     })();
   });
@@ -525,7 +564,10 @@ function wireNetworkAndPageDiagnostics(cdp, page, log, diag, wsMeta) {
   cdp.on("Network.webSocketCreated", (evt) => {
     const id = String(evt.requestId ?? "");
     const url = String(evt.url ?? "");
-    if (id && url) wsMeta?.urlByRequestId.set(id, url);
+    if (id && url && wsMeta?.urlByRequestId) {
+      wsMeta.urlByRequestId.set(id, url);
+      trimWsUrls(wsMeta.urlByRequestId);
+    }
     logLine("info", `[ws] 已创建 | ${shortenUrl(url)}`);
     emit({
       kind: "ws_created",
@@ -539,7 +581,10 @@ function wireNetworkAndPageDiagnostics(cdp, page, log, diag, wsMeta) {
     const req = evt.request ?? {};
     const url = String(req.url ?? "");
     const id = String(evt.requestId ?? "");
-    if (id && url) wsMeta?.urlByRequestId.set(id, url);
+    if (id && url && wsMeta?.urlByRequestId) {
+      wsMeta.urlByRequestId.set(id, url);
+      trimWsUrls(wsMeta.urlByRequestId);
+    }
     logLine("info", `[ws] 握手请求 → ${shortenUrl(url)}`);
     emit({
       kind: "ws_handshake_request",
@@ -938,7 +983,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
   const networkTrace = Boolean(opts.networkTrace);
   const wantDiag = networkTrace || typeof opts.diagnosticSink === "function";
   const connectUrl = (opts.cdpConnectUrl ?? "").trim();
-  /** @type {{ cdp: import('playwright').CDPSession, page: import('playwright').Page }[]} */
+  /** @type {{ cdp: import('playwright').CDPSession, page: import('playwright').Page, wsMeta?: { zlibHub: ReturnType<typeof createDiscordGatewayZlibHub>, urlByRequestId: Map<string, string>, gatewayRequestIds: Set<string>, zlibProbeFrames: Map<string, number> } }[]} */
   const mounted = [];
   /** @type {WeakSet<import('playwright').Page>} */
   const attached = new WeakSet();
@@ -980,7 +1025,22 @@ export async function startCdpWebSocketMonitor(opts, log) {
         `已挂载页面/网络诊断${networkTrace ? "（控制台日志）" : ""}${opts.diagnosticSink ? "（实时 sink）" : ""}: ${page.url() || "(about:blank)"}`
       );
     }
-    mounted.push({ cdp, page });
+    const entry = { cdp, page, wsMeta };
+    mounted.push(entry);
+    page.once("close", () => {
+      const idx = mounted.indexOf(entry);
+      if (idx >= 0) mounted.splice(idx, 1);
+      try {
+        wsMeta.zlibHub.clear?.();
+      } catch {
+        /* ignore */
+      }
+      wsMeta.urlByRequestId.clear();
+      wsMeta.gatewayRequestIds.clear();
+      wsMeta.zlibProbeFrames.clear();
+      void cdp.detach().catch(() => {});
+      log.info("页面关闭，已释放 CDP/zlib 会话");
+    });
     log.info(`已挂载 Network.webSocketFrameReceived: ${page.url() || "(about:blank)"}`);
   }
 
@@ -1094,8 +1154,13 @@ export async function startCdpWebSocketMonitor(opts, log) {
   }
 
   async function detachMountedSessions() {
-    for (const { cdp } of mounted) {
-      await cdp.detach().catch(() => {});
+    for (const entry of mounted) {
+      try {
+        entry.wsMeta?.zlibHub.clear?.();
+      } catch {
+        /* ignore */
+      }
+      await entry.cdp.detach().catch(() => {});
     }
     mounted.length = 0;
   }

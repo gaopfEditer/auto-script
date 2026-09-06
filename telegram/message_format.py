@@ -91,6 +91,14 @@ async def media_download_paths(client: TelegramClient, message) -> list[str]:
     """在 TELEGRAM_DOWNLOAD_MEDIA=1 时把图片类消息存到 TELEGRAM_MEDIA_DIR。"""
     if not media_download_enabled():
         return []
+    return await download_message_images(client, message)
+
+
+async def download_message_images(client: TelegramClient, message) -> list[str]:
+    """
+    下载消息中的图片到 telegram/media/（或 TELEGRAM_MEDIA_DIR）。
+    供控制台落盘与 UI 实时页展示；不依赖 TELEGRAM_DOWNLOAD_MEDIA 开关。
+    """
     want = bool(getattr(message, "photo", None)) or bool(getattr(message, "sticker", None))
     if not want and getattr(message, "document", None):
         mime = getattr(message.document, "mime_type", None) or ""
@@ -100,17 +108,28 @@ async def media_download_paths(client: TelegramClient, message) -> list[str]:
 
     root = media_download_dir()
     root.mkdir(parents=True, exist_ok=True)
+    chat_id = getattr(message, "chat_id", None) or getattr(message, "peer_id", "") or "x"
+    msg_id = getattr(message, "id", 0) or 0
     if getattr(message, "photo", None):
         ext = ".jpg"
     elif getattr(message, "sticker", None):
         ext = ".webp"
     else:
-        ext = ".jpg"
-    dest = root / f"{message.chat_id}_{message.id}{ext}"
+        mime = getattr(getattr(message, "document", None), "mime_type", None) or ""
+        if "png" in mime:
+            ext = ".png"
+        elif "webp" in mime:
+            ext = ".webp"
+        elif "gif" in mime:
+            ext = ".gif"
+        else:
+            ext = ".jpg"
+    dest = root / f"{chat_id}_{msg_id}{ext}"
     try:
         path = await client.download_media(message, file=str(dest))
         return [str(path)] if path else []
-    except Exception:
+    except Exception as e:
+        print(f"[!] 下载媒体失败 chat={chat_id} id={msg_id}: {e}", flush=True)
         return []
 
 

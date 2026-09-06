@@ -18,7 +18,6 @@ from oi_mornitor.config import (
     CANDLE_CARD_MAJOR_INTERVALS,
     CANDLE_CARD_MAJOR_SYMBOLS,
     CANDLE_CARD_REFRESH_SEC,
-    CANDLE_CARD_TELEGRAM,
     CARD_PUSH_COOLDOWN_BARS,
     FAPI_BASE_URL,
     MATRIX_TOP_N,
@@ -36,10 +35,9 @@ from oi_mornitor.config import (
     PATTERN_SEARCHING_STALE_SEC,
     PATTERN_WATCHLIST_REFRESH_SEC,
     PATTERN_WATCHLIST_REFRESH_TF,
-    STRUCTURE_CARD_TELEGRAM,
     STRUCTURE_KLINE_LIMIT,
 )
-from oi_mornitor.exchange_sources import fetch_klines_with_fallback
+from oi_mornitor.exchange_sources import fetch_klines_with_fallback, klines_page_has_more
 from oi_mornitor.market_snapshot import TIER_HEAVY
 from oi_mornitor.matrix_breakout import collect_matrix_leaderboard
 from oi_mornitor.pattern_detector import (
@@ -69,6 +67,11 @@ from oi_mornitor.strategy.candle_signals import (
     find_last_closed_pattern_oi_combos,
 )
 from oi_mornitor.strategy.structure_signals import find_last_closed_structure_hits
+from oi_mornitor.symbol_aliases import is_stablecoin_symbol
+from oi_mornitor.telegram_push_toggles import (
+    is_candle_push_enabled,
+    is_structure_push_enabled,
+)
 from oi_mornitor.notify_telegram import (
     send_candle_card_telegram_async,
     send_pattern_oi_telegram_async,
@@ -113,9 +116,30 @@ async def fetch_pattern_klines(
     end_time: int | None = None,
 ) -> list[list[Any]]:
     """拉取单币种 K 线；币安 418/失败时自动走 Bybit/OKX 等备选所。"""
+    rows, _src = await fetch_pattern_klines_with_source(
+        session,
+        base_url=base_url,
+        symbol=symbol,
+        interval=interval,
+        limit=limit,
+        end_time=end_time,
+    )
+    return rows
+
+
+async def fetch_pattern_klines_with_source(
+    session: aiohttp.ClientSession,
+    *,
+    base_url: str,
+    symbol: str,
+    interval: str = PATTERN_KLINE_INTERVAL,
+    limit: int = PATTERN_KLINE_LIMIT,
+    end_time: int | None = None,
+) -> tuple[list[list[Any]], str]:
+    """同 fetch_pattern_klines，额外返回来源 id（binance/okx/…）。"""
     sym = symbol.strip().upper()
     cap = min(max(limit, 1), PATTERN_CHART_MAX_LIMIT)
-    rows, _src = await fetch_klines_with_fallback(
+    return await fetch_klines_with_fallback(
         session,
         symbol=sym,
         interval=interval,
@@ -123,7 +147,6 @@ async def fetch_pattern_klines(
         end_time=end_time,
         binance_base_url=base_url,
     )
-    return rows
 
 
 async def fetch_open_interest_hist(
@@ -187,6 +210,10 @@ async def fetch_pattern_klines_batch(
     async def _one(sym: str) -> None:
         nonlocal skip_binance
         async with sem:
+            from oi_mornitor import http_backoff
+
+            if http_backoff.is_cooling():
+                skip_binance = True
             rows, src = await fetch_klines_with_fallback(
                 session,
                 symbol=sym,
@@ -196,6 +223,8 @@ async def fetch_pattern_klines_batch(
                 skip_binance=skip_binance,
             )
             if src and src != "binance":
+                skip_binance = True
+            if http_backoff.is_cooling():
                 skip_binance = True
             out[sym] = rows
 
@@ -209,6 +238,7 @@ def heavyweight_symbols(pool_rows: list[dict[str, Any]]) -> list[str]:
         str(r["symbol"])
         for r in pool_rows
         if r.get("oi_tier") == TIER_HEAVY
+        and not is_stablecoin_symbol(str(r.get("symbol") or ""))
     ]
 
 
@@ -268,6 +298,7 @@ def pick_hot_flow_and_oi(
         for r in pool_rows
         if r.get("status") != "warming"
         and str(r.get("symbol") or "").upper() not in exclude
+        and not is_stablecoin_symbol(str(r.get("symbol") or ""))
     ]
 
     contract_ranked = sorted(
@@ -364,6 +395,7 @@ def pick_candle_card_alt_symbols(
         for r in pool_rows
         if r.get("status") != "warming"
         and str(r.get("symbol") or "").upper() not in majors
+        and not is_stablecoin_symbol(str(r.get("symbol") or ""))
     ]
     price_top = _top_amplitude_symbols(
         eligible, tf, "price", top_n=top_n, exclude=majors
@@ -575,7 +607,10 @@ class PatternMonitorEngine:
         return self._last_scan_ts
 
     def add_symbol(self, symbol: str) -> bool:
-        return self.tracker.add_watch(symbol)
+        sym = (symbol or "").strip().upper()
+        if not sym or is_stablecoin_symbol(sym):
+            return False
+        return self.tracker.add_watch(sym)
 
     def add_manual_symbol(self, symbol: str) -> dict[str, Any]:
         """
@@ -585,6 +620,8 @@ class PatternMonitorEngine:
         sym = (symbol or "").strip().upper()
         if not sym:
             return {"ok": False, "error": "symbol required"}
+        if is_stablecoin_symbol(sym):
+            return {"ok": False, "error": "stablecoin excluded", "symbol": sym}
         if PATTERN_MANUAL_RESERVED <= 0:
             ok = self.tracker.add_watch(sym)
             return {
@@ -1142,6 +1179,14 @@ class PatternMonitorEngine:
         # 扫描后再次清理刚标为 EXPIRED 的币（下一轮也会清；此处加速腾位给 OI 放大）
         self.prune_inactive_watch(protect_extra=protect_symbols)
         watchlist = self.tracker.list_watchlist()
+        # 踢掉稳定币（历史 watchlist / 误入）
+        stale = [w.symbol for w in watchlist if is_stablecoin_symbol(w.symbol)]
+        for sym in stale:
+            try:
+                self.tracker.remove_watch(str(sym).upper())
+            except Exception:
+                pass
+        watchlist = [w for w in watchlist if not is_stablecoin_symbol(w.symbol)]
         symbols = [w.symbol for w in watchlist]
         klines_map = await fetch_pattern_klines_batch(
             session, base_url=base_url, symbols=symbols
@@ -1274,7 +1319,7 @@ class PatternMonitorEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态+OI 短线扫描失败: %s", exc)
 
-        if CANDLE_CARD_TELEGRAM or STRUCTURE_CARD_TELEGRAM:
+        if is_candle_push_enabled() or is_structure_push_enabled():
             try:
                 card_alerts = await asyncio.wait_for(
                     self._scan_candle_pattern_cards(
@@ -1294,6 +1339,15 @@ class PatternMonitorEngine:
                 logger.warning("形态/结构卡片扫描超时（120s），跳过")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("形态/结构卡片扫描失败: %s", exc)
+
+        try:
+            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alerts
+
+            n = record_ticker_from_alerts(self._last_alerts)
+            if n:
+                logger.info("形态 ticker 落盘 %d 条", n)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("形态 ticker 落盘失败: %s", exc)
 
         return alerts
 
@@ -1414,7 +1468,7 @@ class PatternMonitorEngine:
             }
             out.append(alert)
             logger.info("⚡ 形态+OI短线 %s %s %s", sym, text, side_hint)
-            if not CANDLE_CARD_TELEGRAM:
+            if not is_candle_push_enabled():
                 try:
                     await send_pattern_oi_telegram_async(alert)
                 except Exception as exc:  # noqa: BLE001
@@ -1450,7 +1504,7 @@ class PatternMonitorEngine:
         主流 BTC/ETH/SOL：15m/30m/1h/4h。
         山寨：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN → 15m/30m/1h。
         """
-        if not CANDLE_CARD_TELEGRAM and not STRUCTURE_CARD_TELEGRAM:
+        if not is_candle_push_enabled() and not is_structure_push_enabled():
             return []
 
         majors = {s.upper() for s in CANDLE_CARD_MAJOR_SYMBOLS}
@@ -1483,7 +1537,7 @@ class PatternMonitorEngine:
         sem = asyncio.Semaphore(max(4, min(OI_OI_BATCH_CONCURRENCY, 10)))
         fetch_limit = min(
             max(
-                STRUCTURE_KLINE_LIMIT if STRUCTURE_CARD_TELEGRAM else 120,
+                STRUCTURE_KLINE_LIMIT if is_structure_push_enabled() else 120,
                 PATTERN_KLINE_LIMIT,
             ),
             PATTERN_CHART_MAX_LIMIT,
@@ -1497,12 +1551,12 @@ class PatternMonitorEngine:
                 cached
                 and (now - cached[0]) < refresh
                 and cached[1]
-                and (not STRUCTURE_CARD_TELEGRAM or len(cached[1]) >= min(180, fetch_limit - 20))
+                and (not is_structure_push_enabled() or len(cached[1]) >= min(180, fetch_limit - 20))
             ):
                 return cached[1]
             # 主扫描 15m 可复用（结构关闭或条数够用时）
             if (
-                not STRUCTURE_CARD_TELEGRAM
+                not is_structure_push_enabled()
                 and iv == PATTERN_KLINE_INTERVAL
                 and sym in klines_map
                 and klines_map[sym]
@@ -1527,7 +1581,7 @@ class PatternMonitorEngine:
         async def _emit_candle(
             sym: str, iv: str, is_major: bool, df: Any, closed_ts: int
         ) -> list[dict[str, Any]]:
-            if not CANDLE_CARD_TELEGRAM:
+            if not is_candle_push_enabled():
                 return []
             try:
                 preview = collect_candle_signal_markers(df)
@@ -1624,7 +1678,7 @@ class PatternMonitorEngine:
         async def _emit_structure(
             sym: str, iv: str, df: Any
         ) -> list[dict[str, Any]]:
-            if not STRUCTURE_CARD_TELEGRAM:
+            if not is_structure_push_enabled():
                 return []
             try:
                 hits = find_last_closed_structure_hits(df, now_ms=now_ms)
@@ -1697,7 +1751,7 @@ class PatternMonitorEngine:
 
         async def _one(sym: str, iv: str, is_major: bool) -> list[dict[str, Any]]:
             klines = await _klines_for(sym, iv)
-            min_bars = 80 if STRUCTURE_CARD_TELEGRAM else 30
+            min_bars = 80 if is_structure_push_enabled() else 30
             if not klines or len(klines) < min_bars:
                 return []
             try:
@@ -1718,9 +1772,9 @@ class PatternMonitorEngine:
                 return []
 
             out: list[dict[str, Any]] = []
-            if CANDLE_CARD_TELEGRAM:
+            if is_candle_push_enabled():
                 out.extend(await _emit_candle(sym, iv, is_major, df, closed_ts))
-            if STRUCTURE_CARD_TELEGRAM:
+            if is_structure_push_enabled():
                 out.extend(await _emit_structure(sym, iv, df))
             if len(self._card_seen) > 1200:
                 self._card_seen = set(list(self._card_seen)[-600:])
@@ -1784,7 +1838,7 @@ class PatternMonitorEngine:
             req_limit = max(req_limit, PATTERN_CHART_DEFAULT_LIMIT)
         req_limit = min(req_limit, PATTERN_CHART_MAX_LIMIT)
 
-        klines = await fetch_pattern_klines(
+        klines, kline_src = await fetch_pattern_klines_with_source(
             session,
             base_url=base_url,
             symbol=sym,
@@ -1792,6 +1846,7 @@ class PatternMonitorEngine:
             limit=req_limit,
             end_time=end_time,
         )
+        page_has_more = klines_page_has_more(len(klines), req_limit, kline_src)
 
         partial = end_time is not None
         row = self.tracker.get_state(sym)
@@ -1851,7 +1906,8 @@ class PatternMonitorEngine:
                 "bb": chart["bb"],
                 "vegas": chart.get("vegas") or {},
                 "macd": chart.get("macd") or {"line": [], "signal": [], "hist": []},
-                "has_more": len(klines) >= req_limit,
+                "has_more": page_has_more,
+                "kline_source": kline_src,
             }
 
         ticker: dict[str, Any] = {}
@@ -1875,7 +1931,8 @@ class PatternMonitorEngine:
             "symbol": sym,
             "interval": tf,
             "partial": False,
-            "has_more": len(klines) >= req_limit,
+            "has_more": page_has_more,
+            "kline_source": kline_src,
             "ticker": ticker,
             "state": state_dict,
             **chart,

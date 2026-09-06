@@ -22,6 +22,14 @@ from oi_mornitor.config import (
     HTTP_TIMEOUT_SEC,
     OKX_BASE_URL,
 )
+from oi_mornitor import http_backoff
+from oi_mornitor.symbol_aliases import (
+    human_base_asset,
+    human_usdt_symbol,
+    is_stablecoin_symbol,
+    normalize_usdt_symbol,
+    symbol_lookup_candidates,
+)
 
 logger = logging.getLogger("OI_Radar")
 
@@ -47,6 +55,8 @@ def _is_usdt_perp_symbol(sym: str) -> bool:
     if not sym.endswith("USDT"):
         return False
     if "UPUSDT" in sym or "DOWNUSDT" in sym:
+        return False
+    if is_stablecoin_symbol(sym):
         return False
     return True
 
@@ -76,16 +86,19 @@ async def _get_json(
     source: str,
 ) -> Any | None:
     timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SEC)
-    try:
-        async with session.get(url, timeout=timeout) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning("%s HTTP %s — %s", source, resp.status, body[:200])
-                return None
-            return await resp.json()
-    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
-        logger.warning("%s 请求失败: %s", source, exc)
-        return None
+    status, data = await http_backoff.get_json(
+        session,
+        url,
+        timeout=timeout,
+        max_attempts=3,
+        label=source,
+    )
+    if status == 200:
+        return data
+    if status not in (429, 418) and status != 0:
+        # get_json 已打过日志；非限频失败保持 None
+        pass
+    return None
 
 
 async def fetch_bybit(session: aiohttp.ClientSession) -> ExchangeFeed | None:
@@ -363,12 +376,12 @@ def _binance_row(
 
 
 def _symbol_to_okx_swap(symbol: str) -> str:
-    base = symbol.upper().removesuffix("USDT")
+    base = human_base_asset(symbol)
     return f"{base}-USDT-SWAP"
 
 
 def _symbol_to_gate_contract(symbol: str) -> str:
-    base = symbol.upper().removesuffix("USDT")
+    base = human_base_asset(symbol)
     return f"{base}_USDT"
 
 
@@ -381,6 +394,9 @@ async def _fetch_binance_klines(
     limit: int,
     end_time: int | None,
 ) -> list[list[Any]]:
+    # 全局冷却中直接跳过，避免 418 刷屏
+    if http_backoff.is_cooling():
+        return []
     url = (
         f"{base_url.rstrip('/')}/fapi/v1/klines"
         f"?symbol={symbol}&interval={interval}&limit={limit}"
@@ -388,20 +404,18 @@ async def _fetch_binance_klines(
     if end_time is not None and end_time > 0:
         url += f"&endTime={int(end_time)}"
     timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SEC)
-    try:
-        async with session.get(url, timeout=timeout) as resp:
-            if resp.status == 418:
-                logger.warning("Binance klines 418（IP 硬封）%s", symbol)
-                return []
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning("Binance klines HTTP %s %s — %s", resp.status, symbol, body[:160])
-                return []
-            data = await resp.json()
-            return data if isinstance(data, list) else []
-    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError) as exc:
-        logger.warning("Binance klines 失败 %s: %s", symbol, exc)
+    status, data = await http_backoff.get_json(
+        session,
+        url,
+        timeout=timeout,
+        max_attempts=3,
+        label=f"Binance-klines:{symbol}",
+    )
+    if status in (429, 418):
         return []
+    if status != 200 or not isinstance(data, list):
+        return []
+    return data
 
 
 async def _fetch_bybit_klines(
@@ -556,6 +570,29 @@ _KLINE_FETCHERS: dict[str, Callable[..., Awaitable[list[list[Any]]]]] = {
     "gate": _fetch_gate_klines,
 }
 
+# 各所单页实际上限（请求更大 limit 时仍可能只返回这么多）
+KLINE_SOURCE_PAGE_CAPS: dict[str, int] = {
+    "binance": 1500,
+    "bybit": 1000,
+    "okx": 300,
+    "bitget": 200,
+    "gate": 2000,
+}
+
+
+def klines_page_has_more(count: int, requested: int, source: str = "") -> bool:
+    """本页是否可能还有更早 K 线。
+
+    不能只用 ``count >= requested``：备选所（OKX≤300、Bitget≤200）在
+    requested=500 时只会返回满页上限，若据此判无更多，图表左滑会空白。
+    """
+    if count <= 0:
+        return False
+    if count >= requested:
+        return True
+    soft = KLINE_SOURCE_PAGE_CAPS.get((source or "").lower(), 200)
+    return count >= min(requested, soft)
+
 
 async def fetch_klines_with_fallback(
     session: aiohttp.ClientSession,
@@ -571,39 +608,57 @@ async def fetch_klines_with_fallback(
     """
     拉单币种 K 线，币安失败/418 时按 FALLBACK_SOURCE_ORDER 轮询。
     返回 (klines, source_id)；source_id 为 binance / bybit / okx / …
+    千倍合约（1000PEPE）在 OKX/Bitget 上按 PEPE 查找。
     """
-    sym = symbol.strip().upper()
-    if not skip_binance and binance_base_url:
-        rows = await _fetch_binance_klines(
-            session,
-            base_url=binance_base_url,
-            symbol=sym,
-            interval=interval,
-            limit=limit,
-            end_time=end_time,
-        )
-        if rows:
-            return rows, "binance"
+    sym = normalize_usdt_symbol(symbol)
+    if not skip_binance and binance_base_url and not http_backoff.is_cooling():
+        for cand in symbol_lookup_candidates(sym, "binance"):
+            rows = await _fetch_binance_klines(
+                session,
+                base_url=binance_base_url,
+                symbol=cand,
+                interval=interval,
+                limit=limit,
+                end_time=end_time,
+            )
+            if rows:
+                return rows, "binance"
+            # 一旦进入冷却（刚撞 429/418），立刻改备选所
+            if http_backoff.is_cooling():
+                break
 
     chain = order or FALLBACK_SOURCE_ORDER
     for sid in chain:
         fn = _KLINE_FETCHERS.get(sid)
         if not fn:
             continue
-        try:
-            rows = await fn(
-                session,
-                symbol=sym,
-                interval=interval,
-                limit=limit,
-                end_time=end_time,
-            )
-        except Exception as exc:  # noqa: BLE001 — 单源失败继续
-            logger.warning("K线备选 %s 异常 %s: %s", sid, sym, exc)
-            continue
-        if rows:
-            logger.info("K线备选命中 %s · %s · %s · n=%d", sid, sym, interval, len(rows))
-            return rows, sid
+        for cand in symbol_lookup_candidates(sym, sid):
+            try:
+                rows = await fn(
+                    session,
+                    symbol=cand,
+                    interval=interval,
+                    limit=limit,
+                    end_time=end_time,
+                )
+            except Exception as exc:  # noqa: BLE001 — 单源失败继续
+                logger.warning("K线备选 %s 异常 %s: %s", sid, cand, exc)
+                continue
+            if rows:
+                if cand != sym:
+                    logger.info(
+                        "K线备选命中 %s · %s→%s · %s · n=%d",
+                        sid,
+                        sym,
+                        cand,
+                        interval,
+                        len(rows),
+                    )
+                else:
+                    logger.info(
+                        "K线备选命中 %s · %s · %s · n=%d", sid, sym, interval, len(rows)
+                    )
+                return rows, sid
 
     logger.warning("K线全部来源失败 %s %s", sym, interval)
     return [], ""

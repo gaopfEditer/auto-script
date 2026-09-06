@@ -1,6 +1,7 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import type { PoolMeta } from "../types";
+import { isOiOperator } from "../utils/oiOperator";
 import { displaySymbol } from "../utils/symbol";
 
 interface Props {
@@ -27,6 +28,7 @@ export const MercuHeader = memo(function MercuHeader({
 }: Props) {
   const [clock, setClock] = useState("");
   const navigate = useNavigate();
+  const canEditFocus = useMemo(() => isOiOperator(), []);
 
   useEffect(() => {
     const tick = () => {
@@ -56,7 +58,6 @@ export const MercuHeader = memo(function MercuHeader({
   return (
     <header className="mercu-header">
       <div className="mercu-header-left">
-        <div className="mercu-logo">MERCU</div>
         <nav className="mercu-nav">
           {NAV.map(({ to, label, end }) => (
             <NavLink
@@ -100,17 +101,19 @@ export const MercuHeader = memo(function MercuHeader({
                 >
                   {displaySymbol(sym)}
                 </button>
-                <button
-                  type="button"
-                  className="mercu-focus-x"
-                  aria-label={`取消特别关注 ${displaySymbol(sym)}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemoveFocus?.(sym);
-                  }}
-                >
-                  ×
-                </button>
+                {canEditFocus ? (
+                  <button
+                    type="button"
+                    className="mercu-focus-x"
+                    aria-label={`取消特别关注 ${displaySymbol(sym)}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveFocus?.(sym);
+                    }}
+                  >
+                    ×
+                  </button>
+                ) : null}
               </span>
             ))
           )}

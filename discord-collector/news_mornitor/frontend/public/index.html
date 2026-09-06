@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>平台热点 — 金十/PANews · 多源热榜</title>
+  <link rel="stylesheet" href="/static/styles.css?v=15" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>平台热点</h1>
+      <p class="tag">金十+PANews · 币安 / OKX / Foresight / CoinDesk / BlockBeats</p>
+    </div>
+    <div class="actions">
+      <span id="status" class="status">…</span>
+      <button type="button" id="btnRefresh">立即刷新</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="macro" aria-label="宏观日历">
+      <div class="pane-head">
+        <h2>宏观时间轴</h2>
+        <p id="macroHint" class="hint">经济事件 · ≥3★ · 北京时间 ±3 天</p>
+      </div>
+      <div class="macro-tabs" role="tablist" aria-label="宏观事件类型">
+        <button type="button" class="macro-tab active" role="tab" aria-selected="true" data-channel="economy">经济事件</button>
+        <button type="button" class="macro-tab" role="tab" aria-selected="false" data-channel="crypto">币圈事件</button>
+      </div>
+      <div id="timeline" class="timeline">
+        <p class="empty">加载中…</p>
+      </div>
+    </aside>
+
+    <section class="hot" aria-label="平台热榜">
+      <div class="pane-head">
+        <div class="pane-head-row">
+          <div>
+            <h2>多源热榜</h2>
+            <p id="hotHint" class="hint">币安 · OKX · Foresight · CoinDesk · BlockBeats</p>
+          </div>
+          <button type="button" id="btnSourceAll" class="src-all" title="全部显示">全选</button>
+        </div>
+        <div id="sourceFilters" class="source-filters" role="group" aria-label="热榜源开关"></div>
+      </div>
+      <div id="boards" class="boards">
+        <p class="empty">加载中…</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="itemModal" class="modal" hidden aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <button type="button" class="modal-x" data-close-modal aria-label="关闭">×</button>
+      <p id="modalMeta" class="modal-meta"></p>
+      <h3 id="modalTitle" class="modal-title"></h3>
+      <p id="modalSummary" class="modal-summary" hidden></p>
+      <p id="modalTags" class="modal-tags" hidden></p>
+      <div class="modal-actions">
+        <button type="button" id="modalOpen" class="modal-open">访问源站</button>
+        <button type="button" class="modal-cancel" data-close-modal>关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=16"></script>
+</body>
+</html>

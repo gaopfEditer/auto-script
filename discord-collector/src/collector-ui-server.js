@@ -3,13 +3,14 @@
  * Discord CDP 采集 + HTTP 静态 UI + WebSocket 实时推送。
  */
 import "./load-env.js";
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer } from "ws";
 
-import { buildFrameChannelPayload } from "./collect-ws-decode.js";
+import { buildFrameChannelPayload, jsonWire } from "./collect-ws-decode.js";
 import { config } from "./config.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { startCdpChannelRotate } from "./cdp-channel-rotate.js";
@@ -31,6 +32,7 @@ import { hashBuffer, tryOpenStore } from "./store.js";
 import { findFreePortNear, killListenersOnPort } from "../scripts/kill-port.mjs";
 import { startOiSupervisor } from "../scripts/oi-supervisor.mjs";
 import { startContentSupervisor } from "../scripts/content-supervisor.mjs";
+import { startNewsSupervisor } from "../scripts/news-supervisor.mjs";
 import { registerContentBoardProxy } from "./content-board-proxy.js";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
@@ -42,6 +44,7 @@ import { createCommunityFeedService } from "./community-feed-service.js";
 import { registerCardEvalRoutes } from "./card-eval-api.js";
 import { registerCardValidateRoutes } from "./card-validate-api.js";
 import { registerTelegramPromRoutes } from "./telegram-prom-api.js";
+import { registerTelegramLiveRoutes } from "./telegram-live-api.js";
 import { registerCommunityRoutes } from "./community-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
 import { createCardExternalSink } from "./card-external-sink.js";
@@ -59,6 +62,44 @@ import {
   getTradePlatformToggles,
   setTradePlatformToggles,
 } from "./trade-platform-toggles.js";
+
+/** 慢客户端：超过 soft 跳过 diag/frame；超过 hard 断开（防 WS 发送队列撑爆堆） */
+const WS_SEND_BUFFER_SOFT = 2 * 1024 * 1024;
+const WS_SEND_BUFFER_HARD = 16 * 1024 * 1024;
+
+/**
+ * Debug 页只需要摘要；完整对象走 ingest，勿经 WS 扇出。
+ * @param {Record<string, unknown>} evt
+ */
+function summarizeDiagForBroadcast(evt) {
+  /** @type {Record<string, unknown>} */
+  const out = { ...evt, debugMode: isDebugMode() };
+  if (out.parsedJson != null) {
+    const w = jsonWire(out.parsedJson, 32_000);
+    if (w.truncated) {
+      out.parsedJson = null;
+      out.parsedSnippet = w.snippet ?? null;
+      out.parsedJsonTruncated = true;
+    } else {
+      out.parsedJson = w.json;
+    }
+  }
+  if (out.bodyJson != null) {
+    const w = jsonWire(out.bodyJson, 48_000);
+    if (w.truncated) {
+      out.bodyJson = null;
+      out.bodySnippet = w.snippet ?? null;
+      out.responseBodyTruncated = true;
+    } else {
+      out.bodyJson = w.json;
+    }
+  }
+  if (typeof out.bodyRawText === "string" && out.bodyRawText.length > 8_000) {
+    out.bodyRawText = `${out.bodyRawText.slice(0, 8_000)}…`;
+    out.responseBodyTruncated = true;
+  }
+  return out;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public", "collector-ui");
@@ -118,8 +159,24 @@ async function main() {
       }
     }
     const msg = JSON.stringify({ v: 1, ts: Date.now(), channel, ...payload });
+    const dropHeavy = channel === "diag" || channel === "frame";
     for (const client of wss.clients) {
-      if (client.readyState === 1) client.send(msg);
+      if (client.readyState !== 1) continue;
+      const buffered = Number(client.bufferedAmount) || 0;
+      if (buffered > WS_SEND_BUFFER_HARD) {
+        try {
+          client.terminate();
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+      if (dropHeavy && buffered > WS_SEND_BUFFER_SOFT) continue;
+      try {
+        client.send(msg);
+      } catch {
+        /* ignore broken socket */
+      }
     }
   }
 
@@ -177,10 +234,12 @@ async function main() {
   );
 
   const diagnosticSink = /** @param {Record<string, unknown>} evt */ (evt) => {
-    broadcast("diag", { ...evt, debugMode: isDebugMode() });
+    // 采集路径始终走 ingest；WS diag 仅 debug 模式，且做体积截断 + 背压
     void discordIngest.onDiag(evt).catch((e) => {
       log.warn(`discord ingest diag: ${/** @type {Error} */ (e).message}`);
     });
+    if (!isDebugMode()) return;
+    broadcast("diag", summarizeDiagForBroadcast(evt));
   };
 
   app.use(express.json({ limit: "512kb" }));
@@ -193,6 +252,7 @@ async function main() {
   registerCardEvalRoutes(app, store, { requireOpenApiKey });
   registerCardValidateRoutes(app, store, cardArchiveListCacheRef, broadcast, { requireOpenApiKey });
   registerTelegramPromRoutes(app, store, cardArchiveListCacheRef, broadcast, { requireOpenApiKey });
+  registerTelegramLiveRoutes(app, broadcast);
   registerTwitterCdpRoutes(app, twitterCdp);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
@@ -258,7 +318,7 @@ async function main() {
     /** 浏览器可访问的嵌入地址（上云时用公网 / frp 口，勿把 127.0.0.1 给访客） */
     const publicEmbed =
       config.oiPublicEmbedUrl || config.oiEmbedUrl || apiBase;
-    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, latencyMs?: number, error?: string, hint?: string }} */
+    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, latencyMs?: number, error?: string, hint?: string, uiBuild?: string }} */
     const out = {
       ok: true,
       active: false,
@@ -274,12 +334,41 @@ async function main() {
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
         const r = await fetch(url, { signal: ctrl.signal });
-        if (!r.ok) return false;
-        // 读一小段即可；避免旧探活拉满 /api/snapshot（数 MB）被超时截断
+        if (!r.ok) return { ok: false, uiBuild: "" };
         const text = await r.text();
-        return text.trim().length > 0;
+        if (!text.trim()) return { ok: false, uiBuild: "" };
+        let uiBuild = "";
+        try {
+          const j = JSON.parse(text);
+          if (j && typeof j.ui_build === "string") uiBuild = j.ui_build;
+        } catch {
+          /* patterns 等非 JSON 探活 */
+        }
+        return { ok: true, uiBuild };
       } catch {
-        return false;
+        return { ok: false, uiBuild: "" };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    /** 读 OI index.html 的 JS hash（服务端无 CORS；Python 未重启也能拿到） */
+    async function peekIndexAssetBuild(base) {
+      const root = String(base || "").replace(/\/$/, "");
+      if (!root) return "";
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const r = await fetch(`${root}/?_=${Date.now()}`, {
+          signal: ctrl.signal,
+          headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+        });
+        if (!r.ok) return "";
+        const html = await r.text();
+        const m = html.match(/\/assets\/(index-[A-Za-z0-9_-]+\.js)/);
+        return m ? m[1] : "";
+      } catch {
+        return "";
       } finally {
         clearTimeout(timer);
       }
@@ -289,28 +378,115 @@ async function main() {
     try {
       // 优先轻量 /api/health；旧实例无此路由时回退 /api/patterns
       let up = await probe(`${apiBase}/api/health`);
-      if (!up) up = await probe(`${apiBase}/api/patterns`);
+      if (!up.ok) up = await probe(`${apiBase}/api/patterns`);
       out.latencyMs = Date.now() - t0;
-      if (!up) {
+      if (!up.ok) {
         out.error = `无法连接 ${apiBase}（/api/health 或 /api/patterns）`;
         res.json(out);
         return;
       }
       out.active = true;
       out.hint = undefined;
-      // 仅本地开发且未配公网嵌入时：优先 Vite 热更新
-      if (!config.oiPublicEmbedUrl && !config.oiEmbedUrl) {
-        const viteDev = "http://127.0.0.1:5173";
-        if (await probe(viteDev + "/")) {
-          out.embedUrl = viteDev;
-          out.publicEmbedUrl = viteDev;
-        }
-      }
+      const assetBuild = await peekIndexAssetBuild(apiBase);
+      const uiBuild = assetBuild || up.uiBuild || "";
+      if (uiBuild) out.uiBuild = uiBuild;
+      // iframe 固定用 OI_WEB_BASE_URL；带 ?v= 打破浏览器对旧文档的强缓存
+      const embedBase = String(publicEmbed || apiBase).replace(/\/$/, "");
+      out.embedUrl = uiBuild
+        ? `${embedBase}/?v=${encodeURIComponent(uiBuild)}`
+        : `${embedBase}/`;
+      out.publicEmbedUrl = out.embedUrl;
       res.json(out);
     } catch (e) {
       out.latencyMs = Date.now() - t0;
       out.error = String(/** @type {Error} */ (e).message ?? e);
       res.json(out);
+    }
+  });
+
+  /** 平台热点（news_mornitor）：探测后端并返回 iframe 嵌入地址 */
+  app.get("/api/news/status", async (_req, res) => {
+    const apiBase = config.newsWebBaseUrl;
+    const timeoutMs = Number.isFinite(config.newsHealthTimeoutMs)
+      ? config.newsHealthTimeoutMs
+      : 3_000;
+    const publicEmbed = config.newsPublicEmbedUrl || config.newsEmbedUrl || apiBase;
+    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, latencyMs?: number, error?: string, hint?: string, uiBuild?: string, service?: string }} */
+    const out = {
+      ok: true,
+      active: false,
+      apiBase,
+      embedUrl: publicEmbed,
+      publicEmbedUrl: publicEmbed,
+      hint: "news_mornitor（金十+PANews）由 collect:ui 自动守护；也可：pnpm run news:start",
+    };
+
+    /** @param {string} root */
+    async function peekNewsUiBuild(root) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const r = await fetch(`${root}/?_=${Date.now()}`, {
+          signal: ctrl.signal,
+          headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+        });
+        if (!r.ok) return "";
+        const html = await r.text();
+        if (/华尔街见闻|CryptoPulse|AkShare/i.test(html)) {
+          return "WRONG_CRYPTOPULSE";
+        }
+        const m = html.match(/\/static\/app\.js\?v=([^"'&\s]+)/);
+        return m ? m[1] : "";
+      } catch {
+        return "";
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    const t0 = Date.now();
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(`${apiBase}/api/v1/health`, { signal: ctrl.signal });
+      out.latencyMs = Date.now() - t0;
+      if (!r.ok) {
+        out.error = `无法连接 ${apiBase}/api/v1/health (HTTP ${r.status})`;
+        res.json(out);
+        return;
+      }
+      const health = await r.json().catch(() => null);
+      const service = health && typeof health.service === "string" ? health.service : "";
+      out.service = service || undefined;
+      if (service && service !== "news_mornitor") {
+        out.error = `:8770 当前是 ${service}（华尔街见闻/AkShare），不是金十/PANews 版；请停掉 auto-deal-eth CryptoPulse，或等 collect:ui 守护替换`;
+        out.hint =
+          "两端都默认占用 8770。保留 discord-collector 的 news:start；不要同时跑 auto-deal-eth news_mornitor";
+        res.json(out);
+        return;
+      }
+      const embedBase = String(publicEmbed || apiBase).replace(/\/$/, "");
+      const uiBuild = await peekNewsUiBuild(embedBase || apiBase);
+      if (uiBuild === "WRONG_CRYPTOPULSE") {
+        out.error =
+          "嵌入页仍是 CryptoPulse（华尔街见闻），币圈日历 tab 不会出现；请重启 collect:ui 让守护换回本仓 news_mornitor";
+        res.json(out);
+        return;
+      }
+      out.active = true;
+      out.hint = undefined;
+      if (uiBuild) out.uiBuild = uiBuild;
+      out.embedUrl = uiBuild
+        ? `${embedBase}/?v=${encodeURIComponent(uiBuild)}`
+        : `${embedBase}/`;
+      out.publicEmbedUrl = out.embedUrl;
+      res.json(out);
+    } catch (e) {
+      out.latencyMs = Date.now() - t0;
+      out.error = String(/** @type {Error} */ (e).message ?? e);
+      res.json(out);
+    } finally {
+      clearTimeout(timer);
     }
   });
 
@@ -434,6 +610,87 @@ async function main() {
     });
     log.info(`[debug] trade platforms bitget=${platforms.bitget} weex=${platforms.weex}`);
     res.json({ ok: true, platforms, requiredChannelIds: getAutoTradeChannelIds() });
+  });
+
+  /** OI 形态卡片 Telegram 推送开关（代理到 oi_mornitor） */
+  async function proxyOiJson(path, opts = {}) {
+    const base = config.oiWebBaseUrl;
+    const timeoutMs = Number.isFinite(config.oiHealthTimeoutMs) ? config.oiHealthTimeoutMs : 3_000;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(`${base}${path}`, {
+        ...opts,
+        signal: ctrl.signal,
+        headers: {
+          Accept: "application/json",
+          ...(opts.body ? { "Content-Type": "application/json" } : {}),
+          ...(opts.headers || {}),
+        },
+      });
+      const text = await r.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = { ok: false, error: text.slice(0, 200) };
+      }
+      return { status: r.status, data, online: true };
+    } catch (e) {
+      return {
+        status: 503,
+        online: false,
+        data: {
+          ok: false,
+          error: String(/** @type {Error} */ (e).message ?? e),
+          hint: "oi_mornitor 未启动；collect:ui 会自动守护，或手动 pnpm run oi:start",
+          oiBase: base,
+        },
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  app.get("/api/debug/oi-telegram-push", async (_req, res) => {
+    const { status, data, online } = await proxyOiJson("/api/telegram-push-toggles");
+    res.status(online ? status : 200).json({
+      ...(data && typeof data === "object" ? data : {}),
+      oiOnline: online,
+      oiBase: config.oiWebBaseUrl,
+    });
+  });
+
+  app.post("/api/debug/oi-telegram-push", async (req, res) => {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const { status, data, online } = await proxyOiJson("/api/telegram-push-toggles", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (online && data?.ok !== false) {
+      const t = data?.toggles ?? body;
+      log.info(
+        `[debug] oi telegram push candle=${t?.candle} structure=${t?.structure} main=${t?.main}`
+      );
+    }
+    res.status(online ? status : 200).json({
+      ...(data && typeof data === "object" ? data : {}),
+      oiOnline: online,
+      oiBase: config.oiWebBaseUrl,
+    });
+  });
+
+  app.post("/api/debug/oi-telegram-push-test", async (req, res) => {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const { status, data, online } = await proxyOiJson("/api/telegram-push-test", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    res.status(online ? status : 200).json({
+      ...(data && typeof data === "object" ? data : {}),
+      oiOnline: online,
+      oiBase: config.oiWebBaseUrl,
+    });
   });
 
   app.get("/api/debug/simulate-signal", (_req, res) => {
@@ -733,6 +990,11 @@ async function main() {
   const telegramAvatarsDir = path.join(__dirname, "..", "..", "telegram", "avatar");
   app.use("/telegram-avatars", express.static(telegramAvatarsDir, { fallthrough: false, index: false }));
 
+  // Telegram 消息图片：telegram/media/{chatId}_{msgId}.jpg → GET /telegram-media/...
+  const telegramMediaDir = path.join(__dirname, "..", "..", "telegram", "media");
+  fs.mkdirSync(telegramMediaDir, { recursive: true });
+  app.use("/telegram-media", express.static(telegramMediaDir, { fallthrough: false, index: false }));
+
   app.use(express.static(publicDir));
 
   app.use((req, res, next) => {
@@ -740,6 +1002,7 @@ async function main() {
     if (req.path.startsWith("/api")) return next();
     if (req.path.startsWith("/community-avatars")) return next();
     if (req.path.startsWith("/telegram-avatars")) return next();
+    if (req.path.startsWith("/telegram-media")) return next();
     if (/\.\w+$/.test(req.path)) return next();
     res.sendFile(path.join(publicDir, "index.html"), (err) => (err ? next(err) : undefined));
   });
@@ -828,6 +1091,12 @@ async function main() {
     enabled: config.oiAutoStart,
     checkIntervalMs: config.oiSupervisorIntervalMs,
   });
+  const newsSupervisor = startNewsSupervisor({
+    log: createLogger("news-supervisor"),
+    baseUrl: config.newsWebBaseUrl,
+    enabled: config.newsAutoStart,
+    checkIntervalMs: config.newsSupervisorIntervalMs,
+  });
   const contentSupervisor = startContentSupervisor({
     log: createLogger("content-supervisor"),
     baseUrl: config.contentBoardBaseUrl,
@@ -836,10 +1105,12 @@ async function main() {
   });
   process.once("SIGINT", () => {
     oiSupervisor.stop();
+    newsSupervisor.stop();
     contentSupervisor.stop();
   });
   process.once("SIGTERM", () => {
     oiSupervisor.stop();
+    newsSupervisor.stop();
     contentSupervisor.stop();
   });
 

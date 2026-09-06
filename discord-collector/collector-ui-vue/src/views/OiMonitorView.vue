@@ -5,12 +5,18 @@ import {
   getPendingOiEmbedPath,
 } from "../composables/useOnboardingGuide.js";
 
+defineOptions({ name: "OiMonitorView" });
+
 const active = ref(false);
 const loading = ref(true);
 const embedUrl = ref("");
 const error = ref("");
 const hint = ref("");
 const latencyMs = ref(null);
+/** OI 前端构建戳：变化时强制重载 iframe（KeepAlive 否则仍跑旧 JS） */
+const uiBuild = ref("");
+/** 一旦激活过就保留 iframe，避免 status 抖动拆掉页面状态 */
+const iframeReady = ref(false);
 /** 新手指引要求的嵌入子路径，如 /patterns */
 const forcedEmbedPath = ref(/** @type {string | null} */ (getPendingOiEmbedPath()));
 
@@ -18,41 +24,73 @@ let pollTimer = null;
 
 /** @param {string} raw */
 function normalizeEmbed(raw) {
-  const s = String(raw || "").trim().replace(/\/$/, "");
-  return s ? `${s}/` : "";
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  try {
+    const u = new URL(s);
+    if (!u.pathname.endsWith("/")) u.pathname = `${u.pathname}/`;
+    return u.href;
+  } catch {
+    return s.replace(/\/?$/, "/");
+  }
 }
 
 /**
  * @param {string} base
  * @param {string | null} path
+ * @param {string} build
  */
-function withEmbedPath(base, path) {
-  const root = normalizeEmbed(base);
+function buildIframeSrc(base, path, build) {
+  const root = String(base || "").trim();
   if (!root) return "";
-  const p = String(path || "").trim();
-  if (!p || p === "/") return root;
-  const clean = p.replace(/^\//, "").replace(/\/$/, "");
-  return `${root}${clean}`;
+  try {
+    const u = new URL(normalizeEmbed(root));
+    const p = String(path || "").trim();
+    if (p && p !== "/") {
+      const clean = p.replace(/^\//, "").replace(/\/$/, "");
+      u.pathname = `${u.pathname.replace(/\/?$/, "/")}${clean}`;
+    }
+    if (build) u.searchParams.set("v", build);
+    return u.href;
+  } catch {
+    return root;
+  }
 }
 
-const iframeSrc = computed(() => withEmbedPath(embedUrl.value, forcedEmbedPath.value));
+const iframeSrc = computed(() =>
+  buildIframeSrc(embedUrl.value, forcedEmbedPath.value, uiBuild.value),
+);
+const iframeKey = computed(
+  () => `oi-${uiBuild.value || "0"}-${forcedEmbedPath.value || ""}`,
+);
 
 /**
- * 上云时 API 若仍返回 127.0.0.1，改用构建期公网地址。
+ * 本机固定嵌 OI_WEB_BASE_URL（默认 :8766）；上云才用公网地址。
  * @param {Record<string, unknown>} j
  */
 function pickEmbedUrl(j) {
-  const fromApi = normalizeEmbed(String(j.publicEmbedUrl || j.embedUrl || ""));
-  const fromEnv = normalizeEmbed(String(import.meta.env.VITE_OI_PUBLIC_EMBED_URL || ""));
   const host = typeof location !== "undefined" ? location.hostname : "";
   const pageIsLocal = host === "localhost" || host === "127.0.0.1";
+  const apiBase = normalizeEmbed(String(j.apiBase || ""));
+  const fromApiRaw = String(j.publicEmbedUrl || j.embedUrl || "").trim();
+  const fromApi = normalizeEmbed(fromApiRaw.replace(/[?&]v=[^&]*/g, "").replace(/\?$/, ""));
+  const fromEnv = normalizeEmbed(String(import.meta.env.VITE_OI_PUBLIC_EMBED_URL || ""));
+
+  // 本机：优先 apiBase（避免误嵌公网）；?v= 由 uiBuild 单独加，不依赖 embed 上的 query
+  if (pageIsLocal) {
+    if (apiBase && !/:5173\/?$/i.test(apiBase)) return apiBase;
+    if (fromApi && !/:5173\/?$/i.test(fromApi)) return fromApi;
+    return "http://127.0.0.1:8766/";
+  }
+
   const apiIsLocal = /^(https?:\/\/)?(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(
-    fromApi.replace(/\/$/, "")
+    fromApi.replace(/\/$/, ""),
   );
-  if (!pageIsLocal && apiIsLocal && fromEnv) return fromEnv;
+  if (apiIsLocal && fromEnv) return fromEnv;
   if (fromApi) return fromApi;
   if (fromEnv) return fromEnv;
-  return "http://127.0.0.1:8765/";
+  if (apiBase) return apiBase;
+  return "http://127.0.0.1:8766/";
 }
 
 async function refreshStatus() {
@@ -79,6 +117,8 @@ async function refreshStatus() {
     error.value = j.error ? String(j.error) : "";
     hint.value = j.hint ? String(j.hint) : "";
     latencyMs.value = Number.isFinite(j.latencyMs) ? j.latencyMs : null;
+    // 同源 /api/oi/status 已代读 OI index hash（避免浏览器跨域 peek 8766 失败）
+    if (j.uiBuild) uiBuild.value = String(j.uiBuild);
   } catch (e) {
     active.value = false;
     error.value = String(e?.message ?? e);
@@ -89,6 +129,12 @@ async function refreshStatus() {
   } finally {
     loading.value = false;
   }
+}
+
+/** 手动打穿缓存：换 iframe key + 强制 status */
+async function forceReloadOiFrame() {
+  uiBuild.value = `force-${Date.now()}`;
+  await refreshStatus();
 }
 
 /** @param {Event} ev */
@@ -110,13 +156,16 @@ onUnmounted(() => {
 });
 
 watch(active, (ok) => {
-  if (ok) loading.value = false;
+  if (ok) {
+    loading.value = false;
+    iframeReady.value = true;
+  }
 });
 </script>
 
 <template>
   <div class="oi-shell" data-onboard="oi-frame">
-    <div v-if="!active" class="oi-gate">
+    <div v-if="!iframeReady" class="oi-gate">
       <div class="oi-card">
         <h2>OI Monitor</h2>
         <p class="lead">模块已切换；等待 OI 后端就绪后自动嵌入。</p>
@@ -135,13 +184,23 @@ watch(active, (ok) => {
         <button type="button" class="retry" @click="refreshStatus">重新探测</button>
       </div>
     </div>
-    <iframe
-      v-else
-      class="oi-frame"
-      :src="iframeSrc"
-      title="OI Monitor"
-      allow="clipboard-read; clipboard-write"
-    />
+    <div v-else class="oi-frame-wrap">
+      <button
+        type="button"
+        class="oi-reload"
+        title="OI 页面缓存卡住时点这里强制重载嵌入"
+        @click="forceReloadOiFrame"
+      >
+        重载 OI
+      </button>
+      <iframe
+        :key="iframeKey"
+        class="oi-frame"
+        :src="iframeSrc"
+        title="OI Monitor"
+        allow="clipboard-read; clipboard-write"
+      />
+    </div>
   </div>
 </template>
 
@@ -150,6 +209,12 @@ watch(active, (ok) => {
   height: 100%;
   min-height: 0;
   background: #0b0d10;
+  position: relative;
+}
+.oi-frame-wrap {
+  position: relative;
+  height: 100%;
+  min-height: 0;
 }
 .oi-frame {
   display: block;
@@ -157,6 +222,25 @@ watch(active, (ok) => {
   height: 100%;
   border: 0;
   background: #0b0d10;
+}
+.oi-reload {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 5;
+  appearance: none;
+  border: 1px solid #3f4147;
+  background: rgba(30, 31, 34, 0.92);
+  color: #dbdee1;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.oi-reload:hover {
+  border-color: #b8ff3c;
+  color: #fff;
 }
 .oi-gate {
   height: 100%;

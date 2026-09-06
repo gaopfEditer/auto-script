@@ -1,6 +1,7 @@
 /** 浏览器直连币安 U 本位 REST（分散服务端压力）。可用 VITE_BINANCE_FAPI_BASE 覆盖。 */
 import type { ChartTimeframe } from "./chartTimeframe";
 import type { PatternCandle } from "../types";
+import { symbolLookupCandidates, toUsdtSymbol } from "./symbol";
 
 const DEFAULT_FAPI =
   (import.meta.env.VITE_BINANCE_FAPI_BASE as string | undefined)?.replace(/\/$/, "") ||
@@ -22,18 +23,20 @@ export function binanceKlineRowToCandle(row: unknown[]): PatternCandle {
   };
 }
 
-export async function fetchBinanceFuturesKlines(
-  symbol: string,
+async function fetchBinanceFuturesKlinesOnce(
+  sym: string,
   interval: ChartTimeframe,
-  opts?: { limit?: number; endTimeMs?: number },
+  opts?: { limit?: number; endTimeMs?: number; startTimeMs?: number },
 ): Promise<{ candles: PatternCandle[]; rawCount: number }> {
-  const sym = symbol.trim().toUpperCase();
   const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 1500);
   const params = new URLSearchParams({
     symbol: sym,
     interval,
     limit: String(limit),
   });
+  if (opts?.startTimeMs != null && opts.startTimeMs > 0) {
+    params.set("startTime", String(opts.startTimeMs));
+  }
   if (opts?.endTimeMs != null && opts.endTimeMs > 0) {
     params.set("endTime", String(opts.endTimeMs));
   }
@@ -51,6 +54,99 @@ export async function fetchBinanceFuturesKlines(
     .filter((row) => Array.isArray(row) && row.length >= 6)
     .map((row) => binanceKlineRowToCandle(row as unknown[]));
   return { candles, rawCount: data.length };
+}
+
+function isInvalidSymbolError(err: Error): boolean {
+  return /Invalid symbol|invalid symbol|-1121/i.test(err.message);
+}
+
+/** 服务端代拉（代理 + 跨所兜底），与 /api/patterns/oi-hist 同口径 */
+async function fetchKlinesViaBackend(
+  symbol: string,
+  interval: ChartTimeframe,
+  opts?: { limit?: number; endTimeMs?: number; startTimeMs?: number },
+): Promise<{ candles: PatternCandle[]; rawCount: number; resolvedSymbol: string }> {
+  const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 1500);
+  const params = new URLSearchParams({
+    symbol: toUsdtSymbol(symbol) || symbol,
+    interval,
+    limit: String(limit),
+  });
+  if (opts?.endTimeMs != null && opts.endTimeMs > 0) {
+    params.set("endTime", String(opts.endTimeMs));
+  }
+  const res = await fetch(`/api/patterns/klines?${params.toString()}`);
+  const body = (await res.json().catch(() => null)) as {
+    ok?: boolean;
+    error?: string;
+    candles?: PatternCandle[];
+    rawCount?: number;
+    symbol?: string;
+  } | null;
+  if (!res.ok || !body?.ok || !Array.isArray(body.candles) || !body.candles.length) {
+    throw new Error(body?.error || `服务端 K 线失败 HTTP ${res.status}`);
+  }
+  let candles = body.candles.filter(
+    (c) =>
+      c &&
+      Number.isFinite(c.time) &&
+      Number.isFinite(c.high) &&
+      Number.isFinite(c.low) &&
+      Number.isFinite(c.close),
+  );
+  if (opts?.startTimeMs != null && opts.startTimeMs > 0) {
+    const startSec = Math.floor(opts.startTimeMs / 1000);
+    candles = candles.filter((c) => c.time >= startSec - 60);
+  }
+  if (!candles.length) {
+    throw new Error(`服务端 K 线为空 (${symbol})`);
+  }
+  return {
+    candles,
+    rawCount: body.rawCount ?? candles.length,
+    resolvedSymbol: body.symbol || toUsdtSymbol(symbol) || symbol,
+  };
+}
+
+async function fetchBinanceFuturesKlinesDirect(
+  symbol: string,
+  interval: ChartTimeframe,
+  opts?: { limit?: number; endTimeMs?: number; startTimeMs?: number },
+): Promise<{ candles: PatternCandle[]; rawCount: number; resolvedSymbol: string }> {
+  const candidates = symbolLookupCandidates(toUsdtSymbol(symbol) || symbol, "binance");
+  let lastErr: Error | null = null;
+  for (const sym of candidates) {
+    try {
+      const got = await fetchBinanceFuturesKlinesOnce(sym, interval, opts);
+      if (got.candles.length) return { ...got, resolvedSymbol: sym };
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      // 仅「真·无效合约」试下一候选；网络/封禁立刻抛出走服务端兜底
+      if (!isInvalidSymbolError(lastErr)) throw lastErr;
+    }
+  }
+  const tried = candidates.join("/");
+  throw lastErr
+    ? new Error(`${lastErr.message}（已试 ${tried}）`)
+    : new Error(`币安 K 线为空（已试 ${tried}）`);
+}
+
+export async function fetchBinanceFuturesKlines(
+  symbol: string,
+  interval: ChartTimeframe,
+  opts?: { limit?: number; endTimeMs?: number; startTimeMs?: number },
+): Promise<{ candles: PatternCandle[]; rawCount: number; resolvedSymbol: string }> {
+  try {
+    return await fetchBinanceFuturesKlinesDirect(symbol, interval, opts);
+  } catch (directErr) {
+    try {
+      return await fetchKlinesViaBackend(symbol, interval, opts);
+    } catch (backendErr) {
+      const a = directErr instanceof Error ? directErr.message : String(directErr);
+      const b = backendErr instanceof Error ? backendErr.message : String(backendErr);
+      throw new Error(`${a}；服务端兜底：${b}`);
+    }
+  }
 }
 
 function oiPointsToMap(

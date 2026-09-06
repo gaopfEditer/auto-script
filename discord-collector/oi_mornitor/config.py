@@ -50,7 +50,10 @@ OI_PCT_LIMIT = float(os.getenv("OI_PCT_LIMIT", "2.5"))
 PRICE_SPIKE_PCT_5M = float(os.getenv("OI_PRICE_SPIKE_PCT_5M", "2.0"))
 PRICE_SPIKE_PCT_15M = float(os.getenv("OI_PRICE_SPIKE_PCT_15M", "3.5"))
 # 单窗口 OI 变动上限：超过视为口径跳变（备选所单位切换 / 脏样本），丢弃差分并重置缓存
-OI_DELTA_MAX_PCT = float(os.getenv("OI_DELTA_MAX_PCT", "150"))
+# 旧默认 150% 允许 5m 内翻倍多，假暴增会进异动栏；短窗单独收紧
+OI_DELTA_MAX_PCT = float(os.getenv("OI_DELTA_MAX_PCT", "80"))
+OI_DELTA_MAX_PCT_5M = float(os.getenv("OI_DELTA_MAX_PCT_5M", "25"))
+OI_DELTA_MAX_PCT_15M = float(os.getenv("OI_DELTA_MAX_PCT_15M", "40"))
 
 # 网络限频：每次请求后休眠秒数
 REQUEST_INTERVAL_SEC = float(os.getenv("OI_REQUEST_INTERVAL_SEC", "0.1"))
@@ -65,6 +68,12 @@ SCAN_INTERVAL_SEC = int(os.getenv("OI_SCAN_INTERVAL_SEC", "30"))
 MAX_RETRIES = int(os.getenv("OI_MAX_RETRIES", "3"))
 RETRY_BACKOFF_SEC = float(os.getenv("OI_RETRY_BACKOFF_SEC", "1.0"))
 RATE_LIMIT_COOLDOWN_SEC = float(os.getenv("OI_RATE_LIMIT_COOLDOWN_SEC", "10.0"))
+# HTTP 429/418：无 Retry-After 时指数退避基数（秒）；实现见 http_backoff.py
+HTTP_BACKOFF_BASE_SEC = float(os.getenv("OI_HTTP_BACKOFF_BASE_SEC", "60"))
+HTTP_BACKOFF_MAX_SEC = float(os.getenv("OI_HTTP_BACKOFF_MAX_SEC", "900"))
+HTTP_BACKOFF_MAX_ATTEMPTS = int(os.getenv("OI_HTTP_BACKOFF_MAX_ATTEMPTS", "4"))
+HTTP_RETRY_AFTER_MAX_SEC = float(os.getenv("OI_HTTP_RETRY_AFTER_MAX_SEC", str(2 * 3600)))
+
 
 # Web 服务
 WEB_HOST = os.getenv("OI_WEB_HOST", "127.0.0.1")

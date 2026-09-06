@@ -18,6 +18,7 @@ from typing import Any, Deque, Optional
 import aiohttp
 
 from oi_mornitor.exchange_sources import fetch_fallback_feed
+from oi_mornitor import http_backoff
 from oi_mornitor.config import (
     ALERT_COOLDOWN_SEC,
     BINANCE_BAN_COOLDOWN_SEC,
@@ -27,6 +28,8 @@ from oi_mornitor.config import (
     OI_5M_RECORD_INTERVAL_SEC,
     OI_CACHE_MAXLEN,
     OI_DELTA_MAX_PCT,
+    OI_DELTA_MAX_PCT_5M,
+    OI_DELTA_MAX_PCT_15M,
     OI_OI_BATCH_CONCURRENCY,
     OI_PCT_LIMIT,
     OI_TIER_HEAVY_MIN_USD,
@@ -43,9 +46,7 @@ from oi_mornitor.config import (
     SANDBOX_KLINE_FETCH_TIMEOUT_SEC,
     POLL_15M_SEC,
     POLL_5M_SEC,
-    RATE_LIMIT_COOLDOWN_SEC,
     REQUEST_INTERVAL_SEC,
-    RETRY_BACKOFF_SEC,
     SPOT_BASE_URL,
     TOP_N,
     proxy_url,
@@ -87,6 +88,16 @@ OI_TF_WINDOWS: dict[str, int] = {
     "4h": 240,
     "1d": 1440,
 }
+
+
+def oi_delta_max_pct_for_minutes(minutes: int) -> float:
+    """短窗口用更严上限，避免 5m +100% 这种口径脏点进异动栏。"""
+    if minutes <= 5:
+        return OI_DELTA_MAX_PCT_5M
+    if minutes <= 15:
+        return OI_DELTA_MAX_PCT_15M
+    return OI_DELTA_MAX_PCT
+
 
 _C = {
     "reset": "\033[0m",
@@ -473,15 +484,35 @@ class BinanceOIRadar:
     _taker_flow_status: str = "unavailable"  # live | cached | unavailable
 
     def _mark_binance_banned(self, reason: str = "418") -> None:
-        self._binance_ban_until = time.time() + BINANCE_BAN_COOLDOWN_SEC
+        # 优先用响应头 Retry-After 精确解封秒数
+        ra = http_backoff.last_retry_after_sec()
+        if ra is not None and ra > 0:
+            delay = min(float(ra), http_backoff.RETRY_AFTER_MAX_SEC)
+        else:
+            delay = max(BINANCE_BAN_COOLDOWN_SEC, http_backoff.BACKOFF_BASE_SEC)
+        self._binance_ban_until = time.time() + delay
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                http_backoff.mark_cooldown(delay, f"binance_ban:{reason}", scope="binance")
+            )
+        except RuntimeError:
+            pass
+        self.request_interval = min(
+            2.0,
+            max(REQUEST_INTERVAL_SEC, REQUEST_INTERVAL_SEC + http_backoff.throttle_extra_interval()),
+        )
         logger.error(
-            "币安暂时绕过 %.0fs（原因 %s）→ 将改用备选所并标注数据源",
-            BINANCE_BAN_COOLDOWN_SEC,
+            "币安暂时绕过 %.0fs≈%.1fmin（原因 %s%s）→ 改备选所；request_interval=%.2fs",
+            delay,
+            delay / 60.0,
             reason,
+            f", Retry-After={ra:.0f}s" if ra else "",
+            self.request_interval,
         )
 
     def _binance_banned(self) -> bool:
-        return time.time() < self._binance_ban_until
+        return time.time() < self._binance_ban_until or http_backoff.is_cooling("binance")
 
     def proxy_disabled(self) -> bool:
         return time.time() < self._proxy_disabled_until
@@ -529,50 +560,35 @@ class BinanceOIRadar:
         session: aiohttp.ClientSession,
         url: str,
     ) -> Any | None:
-        """带重试、429 冷却与请求间隔的异步网关。"""
+        """带 429/418 Retry-After + 指数退避、请求间隔的异步网关。"""
+        if self._binance_banned() and "binance.com" in url:
+            return None
         timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SEC)
-        for attempt in range(MAX_RETRIES):
-            try:
-                async with session.get(url, timeout=timeout) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        await asyncio.sleep(self.request_interval)
-                        self._consecutive_errors = 0
-                        return data
-                    if resp.status == 429:
-                        logger.warning("触发限频 429，冷却 %.0fs …", RATE_LIMIT_COOLDOWN_SEC)
-                        await asyncio.sleep(RATE_LIMIT_COOLDOWN_SEC)
-                        continue
-                    if resp.status == 418:
-                        # 418 = 币安/WAF 封 IP，不是普通限频；多刷只会更糟
-                        self._mark_binance_banned("418")
-                        logger.error("IP 被币安硬封 418，停止重试本轮，改备选所")
-                        return None
-                    body = await resp.text()
-                    logger.warning("HTTP %s %s — %s", resp.status, url, body[:200])
-            except asyncio.TimeoutError:
-                hint = ""
-                if not proxy_url():
-                    hint = "（未配置代理：请在 .env 设置 HTTPS_PROXY=http://127.0.0.1:7890）"
-                logger.warning(
-                    "请求超时 (%s/%s): %s%s",
-                    attempt + 1,
-                    MAX_RETRIES,
-                    url,
-                    hint,
-                )
-            except aiohttp.ClientError as exc:
-                err = str(exc)
-                logger.warning("网络异常 (%s/%s): %s — %s", attempt + 1, MAX_RETRIES, url, err)
-                px = proxy_url()
-                if px and ("7890" in err or "Connect call failed" in err or "Cannot connect to host 127.0.0.1" in err):
-                    self.mark_proxy_down(reason="rest_proxy")
-            except ValueError as exc:
-                logger.error("JSON 解析失败: %s — %s", url, exc)
-                return None
-            await asyncio.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
+        status, data = await http_backoff.get_json(
+            session,
+            url,
+            timeout=timeout,
+            max_attempts=max(MAX_RETRIES, http_backoff.BACKOFF_MAX_ATTEMPTS),
+            label=url.split("?", 1)[0][-56:],
+        )
+        if status == 200 and data is not None:
+            base = REQUEST_INTERVAL_SEC + http_backoff.throttle_extra_interval()
+            self.request_interval = min(2.0, max(REQUEST_INTERVAL_SEC, base))
+            await asyncio.sleep(self.request_interval)
+            self._consecutive_errors = 0
+            return data
+        if status in (429, 418):
+            self._mark_binance_banned(str(status))
+            return None
+        if status == 0:
+            self._consecutive_errors += 1
+            px = proxy_url()
+            if px:
+                # 保持原有：代理连不上时标记直连
+                pass
+            return None
         self._consecutive_errors += 1
-        logger.error("请求失败，已放弃: %s", url)
+        logger.error("请求失败，已放弃: %s (HTTP %s)", url, status)
         return None
 
     async def fetch_futures_ticker_24h_all(
@@ -594,6 +610,8 @@ class BinanceOIRadar:
         """并发拉取持仓量（用于量级分层；ticker/24hr 不含 openInterest）。"""
         if not symbols:
             return {}
+        if self._binance_banned():
+            return {}
 
         sem = asyncio.Semaphore(OI_OI_BATCH_CONCURRENCY)
         timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SEC)
@@ -602,25 +620,30 @@ class BinanceOIRadar:
 
         async def _one(sym: str) -> None:
             nonlocal banned
-            if banned:
+            if banned or self._binance_banned():
                 return
             url = f"{self.base_url}/fapi/v1/openInterest?symbol={sym}"
             async with sem:
-                if banned:
+                if banned or self._binance_banned():
                     return
-                try:
-                    async with session.get(url, timeout=timeout) as resp:
-                        if resp.status == 418:
-                            banned = True
-                            self._mark_binance_banned("418_oi_batch")
-                            return
-                        if resp.status != 200:
-                            return
-                        data = await resp.json()
-                        if isinstance(data, dict) and "openInterest" in data:
-                            out[sym] = float(data["openInterest"])
-                except (asyncio.TimeoutError, aiohttp.ClientError, ValueError, TypeError):
+                status, data = await http_backoff.get_json(
+                    session,
+                    url,
+                    timeout=timeout,
+                    max_attempts=2,
+                    label=f"oi:{sym}",
+                )
+                if status in (429, 418):
+                    banned = True
+                    self._mark_binance_banned(f"{status}_oi_batch")
                     return
+                if status != 200 or not isinstance(data, dict):
+                    return
+                if "openInterest" in data:
+                    try:
+                        out[sym] = float(data["openInterest"])
+                    except (TypeError, ValueError):
+                        return
 
         await asyncio.gather(*[_one(s) for s in symbols])
         if banned:
@@ -759,23 +782,42 @@ class BinanceOIRadar:
         }
 
     @staticmethod
-    def _calc_delta(current: OISnapshot, past: Optional[OISnapshot]) -> tuple[float, float, float]:
+    def _calc_delta(
+        current: OISnapshot,
+        past: Optional[OISnapshot],
+        *,
+        max_pct: float | None = None,
+    ) -> tuple[float, float, float]:
         if past is None or past.oi_base <= 0:
             return 0.0, 0.0, 0.0
         delta_base = current.oi_base - past.oi_base
         pct = (delta_base / past.oi_base) * 100.0
-        # 短窗口内 OI 不可能暴涨数百/数千倍；多半是脏样本或跨所单位不一致
-        if abs(pct) > OI_DELTA_MAX_PCT:
+        cap = OI_DELTA_MAX_PCT if max_pct is None else max_pct
+        # 短窗口内 OI 不可能暴涨翻倍级；多半是脏样本或跨所单位不一致
+        if abs(pct) > cap:
             return 0.0, 0.0, 0.0
+        # 用「合约数变化 × 现价」估 USD 变动（不计价格自身涨跌）
         delta_usd = delta_base * current.price
+        # 自洽：|ΔUSD| 不应远超「按 pct 推回的过去 OI×现价」
+        past_mark_usd = past.oi_base * current.price
+        if past_mark_usd > 0:
+            expected = abs(past_mark_usd * (pct / 100.0))
+            if expected > 0 and abs(delta_usd) > expected * 1.15:
+                return 0.0, 0.0, 0.0
         return delta_base, delta_usd, pct
 
     @staticmethod
-    def _is_oi_discontinuity(current: OISnapshot, past: Optional[OISnapshot]) -> bool:
+    def _is_oi_discontinuity(
+        current: OISnapshot,
+        past: Optional[OISnapshot],
+        *,
+        max_pct: float | None = None,
+    ) -> bool:
         if past is None or past.oi_base <= 0 or current.oi_base <= 0:
             return False
         ratio = current.oi_base / past.oi_base
-        max_ratio = 1.0 + OI_DELTA_MAX_PCT / 100.0
+        cap = OI_DELTA_MAX_PCT if max_pct is None else max_pct
+        max_ratio = 1.0 + cap / 100.0
         return ratio > max_ratio or ratio < (1.0 / max_ratio)
 
     @classmethod
@@ -785,12 +827,15 @@ class BinanceOIRadar:
         symbol: str,
         current: OISnapshot,
         past: Optional[OISnapshot],
+        *,
+        max_pct: float | None = None,
     ) -> Optional[OISnapshot]:
         """丢弃相对当前值跳变过大的基线；并清掉同类脏历史点。"""
         if past is None:
             return None
-        if cls._is_oi_discontinuity(current, past):
-            dropped = cache.prune_incompatible(symbol, current.oi_base, OI_DELTA_MAX_PCT)
+        cap = OI_DELTA_MAX_PCT if max_pct is None else max_pct
+        if cls._is_oi_discontinuity(current, past, max_pct=cap):
+            dropped = cache.prune_incompatible(symbol, current.oi_base, cap)
             if dropped:
                 logger.warning(
                     "OI 脏历史剔除 %s · dropped=%d · past=%.6g now=%.6g",
@@ -824,7 +869,11 @@ class BinanceOIRadar:
             if past is None:
                 out[label] = {"delta_usd": 0.0, "pct": 0.0}
                 continue
-            _, delta_usd, pct = BinanceOIRadar._calc_delta(current, past)
+            _, delta_usd, pct = BinanceOIRadar._calc_delta(
+                current,
+                past,
+                max_pct=oi_delta_max_pct_for_minutes(minutes),
+            )
             out[label] = {"delta_usd": round(delta_usd, 2), "pct": round(pct, 4)}
         return out
 
@@ -874,14 +923,18 @@ class BinanceOIRadar:
                 past_5m = self.cache.get_historical(symbol, 5)
                 past_15m = self.cache.get_historical(symbol, 15)
 
-        past_5m = self._sanitize_past(self.cache, symbol, current, past_5m)
-        past_15m = self._sanitize_past(self.cache, symbol, current, past_15m)
+        past_5m = self._sanitize_past(
+            self.cache, symbol, current, past_5m, max_pct=OI_DELTA_MAX_PCT_5M
+        )
+        past_15m = self._sanitize_past(
+            self.cache, symbol, current, past_15m, max_pct=OI_DELTA_MAX_PCT_15M
+        )
 
-        # 相对近期锚点仍跳变 → 整段重置重采
+        # 相对近期锚点仍跳变 → 整段重置重采（用短窗上限，避免 5m 假翻倍残留）
         anchor = self.cache.recent_anchor_oi(symbol)
         if anchor and current.oi_base > 0:
             ratio = current.oi_base / anchor
-            max_ratio = 1.0 + OI_DELTA_MAX_PCT / 100.0
+            max_ratio = 1.0 + OI_DELTA_MAX_PCT_5M / 100.0
             if ratio > max_ratio or ratio < (1.0 / max_ratio):
                 logger.warning(
                     "OI 口径跳变，重置缓存 %s · anchor=%.6g → now=%.6g · src=%s",
@@ -931,9 +984,13 @@ class BinanceOIRadar:
             )
             return row
 
-        _, delta_5m_usd, pct_5m = self._calc_delta(current, past_5m)
+        _, delta_5m_usd, pct_5m = self._calc_delta(
+            current, past_5m, max_pct=OI_DELTA_MAX_PCT_5M
+        )
         _, delta_15m_usd, pct_15m = (
-            self._calc_delta(current, past_15m) if past_15m else (0.0, 0.0, 0.0)
+            self._calc_delta(current, past_15m, max_pct=OI_DELTA_MAX_PCT_15M)
+            if past_15m
+            else (0.0, 0.0, 0.0)
         )
         oi_by_tf = self._build_oi_by_tf(self.cache, symbol, current)
         price_by_tf = self._build_price_by_tf(self.cache, symbol, price)

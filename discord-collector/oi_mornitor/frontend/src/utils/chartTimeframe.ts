@@ -1,9 +1,25 @@
 import type { PatternCandle, PatternChartData, PatternState } from "../types";
-import { fetchBinanceFuturesKlines, fetchBinanceOpenInterestHist } from "./binanceKlines";
+import { fetchBinanceFuturesKlines } from "./binanceKlines";
 import { buildChartFromCandles } from "./chartIndicators";
 
 export const CHART_TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h", "1d"] as const;
 export type ChartTimeframe = (typeof CHART_TIMEFRAMES)[number];
+
+/** 把信号 interval 规范成图表可用周期；无法识别则 null */
+export function coerceChartTimeframe(raw?: string | null): ChartTimeframe | null {
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  if ((CHART_TIMEFRAMES as readonly string[]).includes(s)) {
+    return s as ChartTimeframe;
+  }
+  // 常见别名
+  if (s === "60m" || s === "60") return "1h";
+  if (s === "240m" || s === "240") return "4h";
+  if (s === "1day" || s === "d1") return "1d";
+  return null;
+}
 
 export const CHART_DEFAULT_LIMIT = 500;
 export const CHART_LOAD_CHUNK = 300;
@@ -91,6 +107,21 @@ export function mergeOiSeries(
   return mergeBbSeries(existing ?? [], incoming ?? []);
 }
 
+/**
+ * 是否还有更早 K 线可续载。
+ * 备选所单页常卡在 200~300，即使 has_more=false / 未拉满 limit 也应继续试。
+ */
+export function resolveChartHasMore(
+  payload: { has_more?: boolean; candles?: { length: number } | null },
+  requestedLimit: number,
+): boolean {
+  const n = payload.candles?.length ?? 0;
+  if (n <= 0) return false;
+  const fullHint = Math.min(Math.max(requestedLimit, 1), 200);
+  if (n >= fullHint) return true;
+  return payload.has_more !== false;
+}
+
 export function chartApiUrl(
   symbol: string,
   interval: ChartTimeframe,
@@ -170,53 +201,45 @@ async function fetchPatternChartFromClient(
   }
 
   let meta: ChartMetaPayload = {};
-  let oiByTime = new Map<number, number>();
   if (!partial) {
-    const [metaRes, oiRes] = await Promise.all([
-      fetchChartMeta(symbol, interval),
-      fetchBinanceOpenInterestHist(symbol, interval, {
-        limit: opts?.limit ?? CHART_DEFAULT_LIMIT,
-      }),
-    ]);
-    meta = metaRes;
-    oiByTime = oiRes;
+    meta = await fetchChartMeta(symbol, interval);
   }
 
   const built = buildChartFromCandles(
     candles,
     meta.state as unknown as Record<string, unknown> | undefined,
-    { oiByTime, symbol: symbol.toUpperCase() },
+    { symbol: symbol.toUpperCase() },
   );
   const sandboxMarkers = meta.sandbox_markers || [];
   const markers = [...built.markers, ...sandboxMarkers];
-  const metaLines = meta.price_lines && meta.price_lines.length ? meta.price_lines : [];
-  const price_lines = [...built.price_lines, ...metaLines.filter(
-    (l) => !built.price_lines.some((b) => b.kind === l.kind && b.price === l.price),
-  )];
+  // 清算区图层已下线：不合并 meta 里的 liq 价线
+  const metaLines = (meta.price_lines || []).filter(
+    (l) => l.kind !== "liq_short" && l.kind !== "liq_long",
+  );
+  const price_lines = [
+    ...built.price_lines,
+    ...metaLines.filter(
+      (l) => !built.price_lines.some((b) => b.kind === l.kind && b.price === l.price),
+    ),
+  ];
   const derivatives = meta.derivatives || meta.analysis?.derivatives;
 
   const last = candles[candles.length - 1];
   const ticker = meta.ticker || { last_price: last.close };
-
-  const oiSeries = oiByTime.size
-    ? [...oiByTime.entries()]
-        .map(([time, value]) => ({ time, value }))
-        .sort((a, b) => a.time - b.time)
-    : [];
 
   return {
     ok: true,
     symbol: symbol.toUpperCase(),
     interval,
     partial,
-    has_more: rawCount >= (opts?.limit ?? CHART_DEFAULT_LIMIT),
+    has_more: rawCount >= Math.min(opts?.limit ?? CHART_DEFAULT_LIMIT, 200),
     candles,
     markers,
     price_lines,
     bb: built.bb,
     vegas: built.vegas,
     macd: built.macd,
-    oi: oiSeries,
+    oi: [],
     analysis: {
       ...built.analysis,
       ...(derivatives ? { derivatives } : {}),
@@ -237,13 +260,18 @@ async function fetchPatternChartFromClient(
  * 拉取形态图表数据。
  * 默认：浏览器 → 币安 K 线 + 本地指标；状态/沙盒标记仍走本机轻量 API。
  * `VITE_CHART_KLINES_SOURCE=backend` 时整包走服务端（兼容内网无法直连币安）。
+ * 左侧历史分页（带 endTimeMs）默认走服务端，避免浏览器直连币安失败后误判无更多。
  */
 export async function fetchPatternChart(
   symbol: string,
   interval: ChartTimeframe,
-  opts?: { limit?: number; endTimeMs?: number },
+  opts?: { limit?: number; endTimeMs?: number; forceBackend?: boolean },
 ): Promise<PatternChartData> {
-  if (chartKlinesSource() === "backend") {
+  const wantBackend =
+    opts?.forceBackend ||
+    chartKlinesSource() === "backend" ||
+    (opts?.endTimeMs != null && opts.endTimeMs > 0);
+  if (wantBackend) {
     return fetchPatternChartFromBackend(symbol, interval, opts);
   }
   try {

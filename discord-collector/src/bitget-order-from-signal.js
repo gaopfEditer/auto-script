@@ -1,7 +1,7 @@
 /**
  * 信号卡片 → Bitget 合约下单计划。
  */
-import { normalizeSymbol } from "./card-fields.js";
+import { normalizeHumanSymbol } from "./card-fields.js";
 import { isShortDirection, resolveTradeDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { detectSymbolTier } from "./card-backtest-policy.js";
@@ -234,7 +234,7 @@ export function directionToSide(direction) {
 export function buildBitgetOrderPlan(input) {
   const parsed = input.parsed ?? {};
   const ex = normalizeExecution(input.executionJson, parsed);
-  const symbol = normalizeSymbol(ex.symbol || parsed.symbol || parsed.asset);
+  const symbol = normalizeHumanSymbol(ex.symbol || parsed.symbol || parsed.asset);
   const direction = String(ex.direction || parsed.direction || "").trim();
 
   if (!symbol) return { ok: false, reason: "missing_symbol" };

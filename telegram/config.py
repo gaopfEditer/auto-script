@@ -392,7 +392,8 @@ def channel_profiles_path() -> Path:
 
 def load_channel_profiles() -> dict[str, dict[str, str]]:
     """
-    Telegram chat_id → {name, avatar}。
+    Telegram chat_id → {name, avatar, main}。
+    main：主要监听的发言人（模糊匹配；多个用中文/英文逗号分隔）；缺省空=不过滤。
     键可用 "-100…" 或去掉符号的数字串；缺省时空对象。
     """
     path = channel_profiles_path()
@@ -414,6 +415,7 @@ def load_channel_profiles() -> dict[str, dict[str, str]]:
         out[key] = {
             "name": str(v.get("name") or v.get("channelName") or "").strip(),
             "avatar": str(v.get("avatar") or v.get("channelAvatar") or "").strip(),
+            "main": str(v.get("main") or v.get("mainSenders") or "").strip(),
         }
     return out
 
@@ -472,7 +474,8 @@ def resolve_channel_profile(chat_id: int, *, fallback_title: str = "") -> dict[s
     meta = profiles.get(key) or profiles.get(alt) or {}
     name = (meta.get("name") or "").strip() or (fallback_title or "").strip() or f"TG {chat_id}"
     avatar = resolve_avatar_path(meta.get("avatar") or "", chat_id=chat_id)
-    return {"name": name, "avatar": avatar, "channelId": key}
+    main = (meta.get("main") or "").strip()
+    return {"name": name, "avatar": avatar, "channelId": key, "main": main}
 
 
 def monitored_groups_file_default() -> Path:

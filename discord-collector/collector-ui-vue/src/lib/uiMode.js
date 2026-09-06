@@ -1,22 +1,23 @@
 /**
  * 前端界面模式：
  * - local：本地开发，显示全部页面（含 Local 模块工具页）
- * - deploy：打包部署版，仅保留配置的页面（默认 show + cards + eval + community + oi）
+ * - deploy：打包部署版，仅保留配置的页面（默认 show + cards + eval + community + oi + news）
  *
  * 顶层模块：
  * - discord：Show / 卡片 / 评估 / 社区
  * - oi：OI Monitor（可切换；运行时探测 oi_mornitor 后嵌入）
+ * - news：平台热点（金十宏观 + 币安/OKX 热榜，collect:ui 自动守护）
  * - local：本机工具（Telegram / 拉取 / 文稿 / Debug）——仅开发态，不进部署包
  *
  * 环境变量（discord-collector/.env*）：
  *   VITE_UI_MODE=local|deploy
- *   VITE_UI_PAGES=show,cards,eval,community,oi   # deploy 模式白名单（路径名，逗号分隔）
- *   VITE_OI_EMBED_URL=http://127.0.0.1:5173  # 可选，oi:dev 时指向 Vite
+ *   VITE_UI_PAGES=show,cards,eval,community,oi,news
+ *   VITE_OI_EMBED_URL / VITE_NEWS_EMBED_URL
  *
  * 未设置 VITE_UI_MODE 时：开发 → local，生产构建 → deploy
  */
 
-/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" | "local" | "content" }} UiPageDef */
+/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" | "news" | "local" | "content" }} UiPageDef */
 
 /** 仅本机 Local 模块；deploy 构建一律剔除（即使误写进 VITE_UI_PAGES） */
 export const LOCAL_ONLY_PAGE_NAMES = Object.freeze([
@@ -42,16 +43,18 @@ export const ALL_UI_PAGES = [
   /** 独立页：不进 Discord/OI/Local 顶栏，全屏自管 */
   { path: "/content", name: "content", label: "内容", nav: false, module: "content" },
   { path: "/oi", name: "oi", label: "OI", nav: false, module: "oi" },
+  { path: "/news", name: "news", label: "平台热点", nav: false, module: "news" },
 ];
 
-/** @type {{ id: "discord" | "oi" | "local", label: string, to: string }[]} */
+/** @type {{ id: "discord" | "oi" | "news" | "local", label: string, to: string }[]} */
 export const UI_MODULES = [
-  { id: "discord", label: "Discord", to: "/show" },
-  { id: "oi", label: "OI Monitor", to: "/oi" },
-  { id: "local", label: "Local", to: "/local/manual-stats" },
+  { id: "discord", label: "专属频道", to: "/show" },
+  { id: "oi", label: "实时信号", to: "/oi" },
+  { id: "news", label: "平台热点", to: "/news" },
+  { id: "local", label: "本地", to: "/local/manual-stats" },
 ];
 
-const DEFAULT_DEPLOY_PAGES = ["show", "cards", "eval", "community", "oi"];
+const DEFAULT_DEPLOY_PAGES = ["show", "cards", "eval", "community", "oi", "news"];
 
 /**
  * @returns {"local" | "deploy"}
@@ -60,7 +63,6 @@ export function getUiMode() {
   const raw = String(import.meta.env.VITE_UI_MODE ?? "").trim().toLowerCase();
   if (raw === "local" || raw === "dev" || raw === "full") return "local";
   if (raw === "deploy" || raw === "prod" || raw === "production") return "deploy";
-  // 未配置：开发服全开，打包默认精简
   return import.meta.env.DEV ? "local" : "deploy";
 }
 
@@ -79,10 +81,8 @@ export function getEnabledPageNames() {
   const list = raw
     ? raw.split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
     : DEFAULT_DEPLOY_PAGES;
-  // 允许用路径别名
   const normalized = list.map((s) => s.replace(/^\//, "").replace(/-/g, "_"));
   const set = new Set(normalized.length ? normalized : DEFAULT_DEPLOY_PAGES);
-  // 本机工具页永不进入部署白名单
   for (const name of LOCAL_ONLY_PAGE_NAMES) set.delete(name);
   return set;
 }
@@ -111,12 +111,13 @@ export function isLocalModuleEnabled() {
 
 /**
  * @param {string} path
- * @returns {"discord" | "oi" | "local" | "content"}
+ * @returns {"discord" | "oi" | "news" | "local" | "content"}
  */
 export function getModuleFromPath(path) {
   const p = String(path ?? "");
   if (p === "/content" || p.startsWith("/content/")) return "content";
   if (p === "/oi" || p.startsWith("/oi/")) return "oi";
+  if (p === "/news" || p.startsWith("/news/")) return "news";
   if (
     p === "/local" ||
     p.startsWith("/local/") ||
@@ -139,10 +140,15 @@ export function isOiModuleEnabled() {
   return isPageEnabled("oi");
 }
 
+/** 平台热点模块 */
+export function isNewsModuleEnabled() {
+  return isPageEnabled("news");
+}
+
 /** 部署版默认落地页 */
 export function getDefaultDeployPath() {
   const enabled = getEnabledPageNames();
-  const prefer = ["show", "cards", "eval", "community", "oi"];
+  const prefer = ["show", "cards", "eval", "community", "oi", "news"];
   for (const name of prefer) {
     if (enabled.has(name)) {
       const page = ALL_UI_PAGES.find((p) => p.name === name);

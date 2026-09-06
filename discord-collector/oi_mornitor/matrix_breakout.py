@@ -23,6 +23,7 @@ from oi_mornitor.config import (
     MATRIX_TOP_N,
     OI_OI_BATCH_CONCURRENCY,
 )
+from oi_mornitor import http_backoff
 from oi_mornitor.rank_metrics import DOMAINS
 from oi_mornitor.state_tracker import BreakoutStateTracker
 
@@ -163,19 +164,33 @@ async def fetch_ohlc_klines_batch(
     timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SEC)
     out: dict[str, list[list[Any]]] = {}
     kline_url = f"{base_url.rstrip('/')}/fapi/v1/klines"
+    banned = False
 
     async def _one(sym: str) -> None:
+        nonlocal banned
+        if banned or http_backoff.is_cooling():
+            out[sym] = []
+            return
         url = f"{kline_url}?symbol={sym}&interval=5m&limit={BREAKOUT_KLINE_LIMIT}"
         async with sem:
-            try:
-                async with session.get(url, timeout=timeout) as resp:
-                    if resp.status != 200:
-                        out[sym] = []
-                        return
-                    data = await resp.json()
-                    out[sym] = data if isinstance(data, list) else []
-            except (asyncio.TimeoutError, aiohttp.ClientError, ValueError, TypeError):
+            if banned or http_backoff.is_cooling():
                 out[sym] = []
+                return
+            status, data = await http_backoff.get_json(
+                session,
+                url,
+                timeout=timeout,
+                max_attempts=2,
+                label=f"breakout-klines:{sym}",
+            )
+            if status in (429, 418):
+                banned = True
+                out[sym] = []
+                return
+            if status != 200 or not isinstance(data, list):
+                out[sym] = []
+                return
+            out[sym] = data
 
     await asyncio.gather(*[_one(s) for s in symbols])
     return out

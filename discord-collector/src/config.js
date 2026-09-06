@@ -289,6 +289,22 @@ export const config = {
     String(process.env.OI_AUTO_START ?? "1").toLowerCase()
   ),
   oiSupervisorIntervalMs: Number(process.env.OI_SUPERVISOR_INTERVAL_MS ?? 15_000),
+  /** 平台热点（news_mornitor / CryptoPulse） */
+  newsWebBaseUrl: (process.env.NEWS_WEB_BASE_URL ?? "http://127.0.0.1:8770").replace(/\/$/, ""),
+  newsEmbedUrl: (process.env.NEWS_EMBED_URL ?? process.env.VITE_NEWS_EMBED_URL ?? "").replace(
+    /\/$/,
+    "",
+  ),
+  newsPublicEmbedUrl: (
+    process.env.NEWS_PUBLIC_EMBED_URL ??
+    process.env.VITE_NEWS_PUBLIC_EMBED_URL ??
+    ""
+  ).replace(/\/$/, ""),
+  newsHealthTimeoutMs: Number(process.env.NEWS_HEALTH_TIMEOUT_MS ?? 3_000),
+  newsAutoStart: !["0", "false", "no", "off"].includes(
+    String(process.env.NEWS_AUTO_START ?? "1").toLowerCase()
+  ),
+  newsSupervisorIntervalMs: Number(process.env.NEWS_SUPERVISOR_INTERVAL_MS ?? 20_000),
   /** 图文内容板（Python SQLite content_board） */
   contentBoardBaseUrl: (process.env.CONTENT_BOARD_BASE_URL ?? "http://127.0.0.1:8767").replace(
     /\/$/,
@@ -348,6 +364,10 @@ export const config = {
   communitySqlitePath: (process.env.COMMUNITY_SQLITE_PATH ?? "").trim()
     ? path.resolve(process.env.COMMUNITY_SQLITE_PATH.trim())
     : path.join(_collectorRoot, "data", "community.sqlite"),
+  /** Telegram /telegram 实时消息本地库（切 tab / 重启可续拉） */
+  telegramLiveSqlitePath: (process.env.TELEGRAM_LIVE_SQLITE_PATH ?? "").trim()
+    ? path.resolve(process.env.TELEGRAM_LIVE_SQLITE_PATH.trim())
+    : path.join(_collectorRoot, "data", "telegram-live.sqlite"),
   /** 社区聊天室媒体上传目录 */
   communityChatUploadDir: (process.env.COMMUNITY_CHAT_UPLOAD_DIR ?? "").trim()
     ? path.resolve(process.env.COMMUNITY_CHAT_UPLOAD_DIR.trim())

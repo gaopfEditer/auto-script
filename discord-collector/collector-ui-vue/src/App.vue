@@ -20,6 +20,7 @@ import {
   isDeployUi,
   isLocalModuleEnabled,
   isOiModuleEnabled,
+  isNewsModuleEnabled,
   UI_MODULES,
 } from "./lib/uiMode.js";
 
@@ -30,17 +31,19 @@ const { debugMode, setDebugMode } = useDebugMode();
 const uiMode = getUiMode();
 const brandTo = isDeployUi() ? getDefaultDeployPath() : "/";
 const showOiModule = isOiModuleEnabled();
+const showNewsModule = isNewsModuleEnabled();
 const showLocalModule = isLocalModuleEnabled();
 
 const activeModule = computed(() => getModuleFromPath(route.path));
 const isOi = computed(() => activeModule.value === "oi");
+const isNews = computed(() => activeModule.value === "news");
 const isLocal = computed(() => activeModule.value === "local");
-/** Discord / Local 共用二级导航；OI 用 spacer */
-const showSubNav = computed(() => !isOi.value);
+/** Discord / Local 共用二级导航；OI / 平台热点用 spacer */
+const showSubNav = computed(() => !isOi.value && !isNews.value);
 const navPages = computed(() =>
   getNavPages(isLocal.value ? "local" : "discord")
 );
-const showDebugToggle = computed(() => !isOi.value && !isDeployUi());
+const showDebugToggle = computed(() => !isOi.value && !isNews.value && !isDeployUi());
 /** /content 独立全屏，不共用 Discord/OI 顶栏 */
 const isContentStandalone = computed(() => activeModule.value === "content");
 
@@ -102,6 +105,7 @@ onUnmounted(() => {
 const moduleLinks = computed(() => {
   let list = UI_MODULES;
   if (!showOiModule) list = list.filter((m) => m.id !== "oi");
+  if (!showNewsModule) list = list.filter((m) => m.id !== "news");
   if (!showLocalModule) list = list.filter((m) => m.id !== "local");
   return list.map((m) => {
     if (m.id === "discord") {
@@ -140,7 +144,7 @@ async function toggleDebug() {
 
   <div v-else class="app-shell" :data-ui-mode="uiMode" :data-module="activeModule">
     <header class="top-nav">
-      <RouterLink :to="brandTo" class="brand">discord-collector</RouterLink>
+      <RouterLink :to="brandTo" class="brand">ezcoin</RouterLink>
       <nav class="module-switch" aria-label="模块">
         <RouterLink
           v-for="m in moduleLinks"
@@ -155,7 +159,8 @@ async function toggleDebug() {
       <nav v-if="showSubNav" class="nav-links">
         <RouterLink v-for="p in navPages" :key="p.name" :to="p.path">{{ p.label }}</RouterLink>
       </nav>
-      <div v-else class="oi-nav-spacer">OI Monitor · 行情 / 形态 / 沙盒</div>
+      <div v-else-if="isOi" class="oi-nav-spacer">OI Monitor · 行情 / 形态 / 沙盒</div>
+      <div v-else class="oi-nav-spacer">平台热点 · 金十/PANews · 多源热榜</div>
       <button
         type="button"
         class="guide-btn"
@@ -165,7 +170,7 @@ async function toggleDebug() {
         新手指引
       </button>
       <button
-        v-if="!isOi"
+        v-if="!isOi && !isNews"
         type="button"
         class="ws-status"
         :class="[wsStatus, { warn: wsLongDisconnect }]"
@@ -183,15 +188,23 @@ async function toggleDebug() {
         {{ debugMode ? "Debug 开" : "精简模式" }}
       </button>
     </header>
-    <div v-if="!isOi && wsLongDisconnect" class="ws-down-banner" role="alert">
+    <div v-if="!isOi && !isNews && wsLongDisconnect" class="ws-down-banner" role="alert">
       <span>实时通道已断开超过 {{ wsDownLabel }}，新消息可能收不到。已在自动重连。</span>
       <button type="button" class="ws-down-btn" @click="reconnectWs">立即重连</button>
     </div>
     <main class="main-outlet">
-      <RouterView :key="viewEpoch" />
+      <!-- OI / 平台热点 iframe 用 KeepAlive 保住 -->
+      <RouterView v-slot="{ Component, route: r }">
+        <KeepAlive :include="['OiMonitorView', 'NewsHotView', 'TelegramPromView']" :max="12">
+          <component
+            :is="Component"
+            :key="r.name === 'oi' || r.name === 'news' || r.name === 'telegram' ? `${r.name}-persist` : `${viewEpoch}:${r.fullPath}`"
+          />
+        </KeepAlive>
+      </RouterView>
     </main>
-    <OnboardingGuide v-if="!isOi || onboardingState.open" />
-    <NewCardToastStack v-if="!isOi" />
+    <OnboardingGuide v-if="(!isOi && !isNews) || onboardingState.open" />
+    <NewCardToastStack v-if="!isOi && !isNews" />
   </div>
 </template>
 

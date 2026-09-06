@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { PatternAlert } from "../types";
-import { coinInitial, displaySymbol } from "../utils/symbol";
+import { displaySymbol } from "../utils/symbol";
+import { CoinAvatar } from "./CoinAvatar";
 
 interface ToastItem {
   id: string;
@@ -98,7 +99,7 @@ export const SandboxToastStack = memo(function SandboxToastStack({
               ×
             </button>
             <div className="toast-head">
-              <span className="coin-avatar">{coinInitial(alert.symbol)}</span>
+              <CoinAvatar symbol={alert.symbol} />
               <div>
                 <div className="toast-title">
                   ${displaySymbol(alert.symbol)} · {TYPE_LABEL[alert.type] ?? alert.status_label}

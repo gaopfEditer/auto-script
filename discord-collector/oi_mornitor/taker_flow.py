@@ -10,6 +10,7 @@ from typing import Any
 
 import aiohttp
 
+from oi_mornitor import http_backoff
 from oi_mornitor.config import HTTP_TIMEOUT_SEC, OI_OI_BATCH_CONCURRENCY
 
 # 与前端 tf-btn / radar OI_TF_WINDOWS 对齐（5m K 线根数）
@@ -70,30 +71,29 @@ async def _fetch_klines_flow_batch(
 
     async def _one(sym: str) -> None:
         nonlocal hit_418
-        if hit_418:
+        if hit_418 or http_backoff.is_cooling():
             out[sym] = empty_flow_by_tf()
             return
         url = f"{kline_url}?symbol={sym}&interval=5m&limit={MAX_KLINE_LIMIT}"
         async with sem:
-            if hit_418:
+            if hit_418 or http_backoff.is_cooling():
                 out[sym] = empty_flow_by_tf()
                 return
-            try:
-                async with session.get(url, timeout=timeout) as resp:
-                    if resp.status == 418:
-                        hit_418 = True
-                        out[sym] = empty_flow_by_tf()
-                        return
-                    if resp.status != 200:
-                        out[sym] = empty_flow_by_tf()
-                        return
-                    data = await resp.json()
-                    if not isinstance(data, list):
-                        out[sym] = empty_flow_by_tf()
-                        return
-                    out[sym] = build_flow_by_tf(data)
-            except (asyncio.TimeoutError, aiohttp.ClientError, ValueError, TypeError, IndexError):
+            status, data = await http_backoff.get_json(
+                session,
+                url,
+                timeout=timeout,
+                max_attempts=2,
+                label=f"taker-flow:{sym}",
+            )
+            if status in (429, 418):
+                hit_418 = True
                 out[sym] = empty_flow_by_tf()
+                return
+            if status != 200 or not isinstance(data, list):
+                out[sym] = empty_flow_by_tf()
+                return
+            out[sym] = build_flow_by_tf(data)
 
     await asyncio.gather(*[_one(s) for s in symbols])
     return out, hit_418

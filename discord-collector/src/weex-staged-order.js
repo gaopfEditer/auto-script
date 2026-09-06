@@ -15,7 +15,7 @@ import {
   formatOrderSize,
 } from "./bitget-order-from-signal.js";
 import { formatWeexPrice, parseWeexContractMeta } from "./weex-api.js";
-import { normalizeSymbol } from "./card-fields.js";
+import { normalizeHumanSymbol } from "./card-fields.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 
 /** @param {number} marketPrice @param {number} sl @param {"long"|"short"} holdSide */
@@ -71,7 +71,7 @@ function buildTpPlans(totalSize, takeProfits, ratios, contractMeta) {
 export async function executeWeexStagedMarketOpen(client, input) {
   const parsed = input.parsed;
   const channelTrade = input.channelTrade;
-  const symbol = normalizeSymbol(parsed.symbol);
+  const symbol = normalizeHumanSymbol(parsed.symbol);
   const direction = String(parsed.direction ?? "").trim();
   const side = directionToSide(direction);
   if (!symbol || !side) return { ok: false, reason: "invalid_symbol_or_direction" };
@@ -179,7 +179,7 @@ export async function executeWeexStagedTpslUpdate(client, input) {
     .filter(Boolean);
   if (!stopLossRaw || !takeProfits.length) return { ok: false, reason: "missing_tpsl" };
 
-  const symbol = String(prev.symbol ?? normalizeSymbol(parsed.symbol));
+  const symbol = String(prev.symbol ?? normalizeHumanSymbol(parsed.symbol));
   const holdSide = /** @type {"long"|"short"} */ (String(prev.holdSide ?? (prev.side === "buy" ? "long" : "short")));
   const rawSize = String(prev.size ?? "");
   const ratios = /** @type {number[]} */ (input.channelTrade.tpPartialRatios ?? STAGED_TP_PARTIAL_RATIOS);
@@ -277,7 +277,7 @@ export async function executeWeexStagedTpslUpdate(client, input) {
 export async function executeWeexStagedReverse(client, input) {
   const prev = input.prevOrder;
   const parsed = input.parsed;
-  const symbol = normalizeSymbol(parsed.symbol ?? prev.symbol);
+  const symbol = normalizeHumanSymbol(parsed.symbol ?? prev.symbol);
 
   /** @type {Record<string, unknown>} */
   const record = {

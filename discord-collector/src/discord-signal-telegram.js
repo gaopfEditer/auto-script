@@ -2,7 +2,10 @@
  * Discord 信号卡片 → Telegram 推送。
  */
 import { config } from "./config.js";
-import { formatTelegramWithChannelLabel } from "./discord-telegram-push-config.js";
+import {
+  formatTelegramWithChannelLabel,
+  stripTelegramAtUsernameMentions,
+} from "./discord-telegram-push-config.js";
 
 /**
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
@@ -18,9 +21,13 @@ export function createDiscordSignalTelegramPush(log) {
    */
   async function send(text, meta = {}) {
     if (!enabled) return { skipped: "telegram_disabled" };
-    const body = meta.skipChannelLabel
+    let body = meta.skipChannelLabel
       ? String(text ?? "").trim()
       : formatTelegramWithChannelLabel(text, meta.channelId, meta.channelName);
+    // 卡片推送：去掉 (@telegram_username)，避免标题里带句柄
+    if (meta.cardId != null) {
+      body = stripTelegramAtUsernameMentions(body);
+    }
     if (!body) return { skipped: "empty" };
 
     log.info(`[telegram] POST ${sendUrl} chat=${chatId} channel=${meta.channelId ?? "?"}${meta.cardId != null ? ` card=${meta.cardId}` : ""}`);

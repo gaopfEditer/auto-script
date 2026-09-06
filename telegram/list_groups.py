@@ -6,7 +6,11 @@
 
 与 listen.py 的区别：本脚本只打印到终端，不建卡、不推送到 push_chat。
 #prom 发车建卡 / 10 分钟合并请用 listen.py（TradeCardPusher → POST /api/v1/cards）。
-前端检查群 id、时间范围与回测：discord-collector UI → /telegram。
+前端检查群 id、时间范围与回测：discord-collector UI → `/telegram`（现为 **channel_profiles 实时消息**）。
+
+实时页依赖：
+1. `pnpm run collect:ui`（:3851）
+2. `cd telegram && python listen.py`（把 `channel_profiles.json` 内群的新消息 POST 到 `/api/telegram/live/ingest`）
 
 须使用「用户账号」手机号登录；若用 Bot token 登录，Telegram 不允许调用 iter_dialogs（会报 BotMethodInvalidError）。
 Bot 在配置了明确 chat id 时可仅做实时监听（设 TELEGRAM_RECENT_MESSAGES=0 跳过历史拉取）。

@@ -27,13 +27,13 @@ export function getOiWindow(row: TickerRow, tf: OiTimeframe): { delta_usd: numbe
       ? { delta_usd: row.delta_15m_usd ?? 0, pct: row.pct_15m ?? 0 }
       : { delta_usd: row.delta_5m_usd ?? 0, pct: row.pct_5m ?? 0 };
 
-  // 前端兜底：屏蔽历史脏点导致的荒谬 OI 差分（与后端 OI_DELTA_MAX_PCT 对齐）
-  const maxPct = 150;
+  // 前端兜底：屏蔽历史脏点导致的荒谬 OI 差分（与后端短窗上限对齐）
+  const maxPct = tf === "5m" ? 25 : tf === "15m" ? 40 : 80;
   if (!Number.isFinite(raw.pct) || Math.abs(raw.pct) > maxPct) {
     return { delta_usd: 0, pct: 0 };
   }
   const oiUsd = row.current_oi_usd ?? 0;
-  if (oiUsd > 0 && Math.abs(raw.delta_usd) > oiUsd * (1 + maxPct / 100)) {
+  if (oiUsd > 0 && Math.abs(raw.delta_usd) > oiUsd * (maxPct / 100)) {
     return { delta_usd: 0, pct: 0 };
   }
   return raw;

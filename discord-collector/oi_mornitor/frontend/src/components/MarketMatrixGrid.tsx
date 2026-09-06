@@ -4,7 +4,8 @@ import type { OiTimeframe } from "../types";
 import type { MatrixRow } from "../types";
 import { fmtMk, fmtPct } from "../utils/format";
 import { patternsPathForSymbol } from "../utils/patternNav";
-import { coinInitial, displaySymbol } from "../utils/symbol";
+import { displaySymbol } from "../utils/symbol";
+import { CoinAvatar } from "./CoinAvatar";
 import { MercuTimeframes } from "./MercuTimeframes";
 
 type ValueMode = "pct" | "mk";
@@ -77,7 +78,7 @@ const RankList = memo(function RankList({
                 role={onSelectSymbol ? "button" : undefined}
               >
                 <span className="rank-badge">{row.matrix_rank}</span>
-                <span className="rank-coin-avatar">{coinInitial(row.symbol)}</span>
+                <CoinAvatar symbol={row.symbol} variant="rank" />
                 <span className="rank-symbol">${displaySymbol(row.symbol)}</span>
                 <span className={`rank-value ${negativeBoard ? "neg" : "pos"}`}>
                   {formatValue(v, valueMode)}

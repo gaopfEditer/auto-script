@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { PatternAlert, PatternPayload, PatternState, PatternWatchItem } from "../types";
-import { coinInitial, displaySymbol } from "../utils/symbol";
+import { displaySymbol } from "../utils/symbol";
+import { CoinAvatar } from "../components/CoinAvatar";
 import { MercuHeader } from "../components/MercuHeader";
 import { PatternChartPanel } from "../components/PatternChartPanel";
 import { PatternAlertTicker } from "../components/PatternAlertTicker";
@@ -68,6 +69,9 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  /** 从信号 chip / 胜率列表打开图表时带上的周期 */
+  const [chartPreferredTf, setChartPreferredTf] = useState<string | null>(null);
+  const [chartTfNonce, setChartTfNonce] = useState(0);
   const [mainTab, setMainTab] = useState<"pattern" | "sandbox">("pattern");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; symbol: string } | null>(null);
   /** 本页是否已做过「进入默认选中」；用户手动关掉图表后不再强选 */
@@ -632,7 +636,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     onKeyDown={(e) => e.key === "Enter" && setSelectedSymbol(w.symbol)}
                   >
                     <div className="pattern-watch-head">
-                      <span className="coin-avatar sm">{coinInitial(w.symbol)}</span>
+                      <CoinAvatar symbol={w.symbol} size="sm" />
                       <span className="pattern-sym">${displaySymbol(w.symbol)}</span>
                       {isManual ? (
                         <span className="pattern-manual-badge" title="手动输入专用槽">
@@ -722,8 +726,10 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
             <PatternAlertTicker
               alerts={alerts}
               scanTs={scanTs}
-              onOpen={(sym) => {
+              onOpen={(sym, interval) => {
                 setSelectedSymbol(sym);
+                setChartPreferredTf(interval || null);
+                setChartTfNonce((n) => n + 1);
                 setMainTab("pattern");
               }}
             />
@@ -737,16 +743,18 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
           {selectedSymbol ? (
             <PatternChartPanel
               symbol={selectedSymbol}
+              preferredTimeframe={chartPreferredTf}
+              preferredTimeframeNonce={chartTfNonce}
               state={selectedState}
               liveTicker={selectedTicker}
-              onClose={() => setSelectedSymbol(null)}
+              onClose={() => {
+                setSelectedSymbol(null);
+                setChartPreferredTf(null);
+              }}
               onTitleContextMenu={openWatchCtxMenu}
               inWatchlist={watchSet.has(selectedSymbol.toUpperCase())}
               addWatchBusy={busy}
               onAddToWatchlist={(sym) => void addSymbol(sym)}
-              sandboxEnabled={sandboxOn}
-              manualEnterBusy={busy}
-              onManualEnter={(args) => void manualSandboxEnter(args)}
             />
           ) : mainTab === "pattern" ? (
                 <div className="pattern-flow pattern-tab-panel">
@@ -793,7 +801,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                             onClick={() => setSelectedSymbol(s.symbol)}
                           >
                             <div className="pattern-alert-card-head">
-                              <span className="coin-avatar sm">{coinInitial(s.symbol)}</span>
+                              <CoinAvatar symbol={s.symbol} size="sm" />
                               <strong>${displaySymbol(s.symbol)}</strong>
                               <span className="pattern-alert-badge">{s.status_label}</span>
                             </div>
@@ -827,7 +835,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                             onClick={() => setSelectedSymbol(a.symbol)}
                           >
                             <div className="pattern-alert-card-head">
-                              <span className="coin-avatar sm">{coinInitial(a.symbol)}</span>
+                              <CoinAvatar symbol={a.symbol} size="sm" />
                               <strong>${displaySymbol(a.symbol)}</strong>
                               <span className="pat-fire-tag">多头爆发</span>
                             </div>

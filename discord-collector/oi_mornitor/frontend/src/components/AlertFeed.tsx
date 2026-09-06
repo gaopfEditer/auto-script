@@ -1,14 +1,16 @@
-import { memo, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { TickerRow } from "../types";
 import {
   deriveOiAlerts,
+  isPlausibleOiAlert,
   type AlertThresholds,
   type OiAlertItem,
 } from "../utils/deriveOiAlerts";
 import { fmtDelta, fmtPct } from "../utils/format";
 import { patternsPathForSymbol } from "../utils/patternNav";
-import { coinInitial, displaySymbol } from "../utils/symbol";
+import { displaySymbol } from "../utils/symbol";
+import { CoinAvatar } from "./CoinAvatar";
 
 interface Props {
   rows: TickerRow[];
@@ -16,6 +18,16 @@ interface Props {
   poolSize: number;
   thresholds: AlertThresholds;
 }
+
+/** 异动流本地缓存时长 */
+const ALERT_FEED_TTL_MS = 2 * 60 * 60_000;
+const ALERT_FEED_MAX = 80;
+/** v2：丢掉旧缓存里 5m OI +100% 这类脏点 */
+const ALERT_FEED_CACHE_KEY = "oi_alert_feed_v2";
+
+type AlertFeedCachePayload = {
+  items: OiAlertItem[];
+};
 
 function formatClock(ts: number): string {
   if (!ts) return "—";
@@ -35,6 +47,77 @@ function typeLabel(item: OiAlertItem): string {
     return item.isPump ? "价格暴涨" : "价格暴跌";
   }
   return item.isPump ? "OI 暴增" : "OI 暴跌";
+}
+
+function pruneAlertItems(items: OiAlertItem[], nowMs = Date.now()): OiAlertItem[] {
+  const cutoffSec = (nowMs - ALERT_FEED_TTL_MS) / 1000;
+  return items
+    .filter((it) => Number(it.alertTs) > cutoffSec)
+    .filter((it) => isPlausibleOiAlert(it))
+    .sort((a, b) => (b.alertTs || 0) - (a.alertTs || 0))
+    .slice(0, ALERT_FEED_MAX);
+}
+
+function isAlertItem(v: unknown): v is OiAlertItem {
+  if (!v || typeof v !== "object") return false;
+  const it = v as OiAlertItem;
+  return (
+    typeof it.id === "string" &&
+    it.row != null &&
+    typeof it.row === "object" &&
+    typeof it.row.symbol === "string" &&
+    typeof it.alertTs === "number"
+  );
+}
+
+function loadAlertFeedCache(): OiAlertItem[] {
+  try {
+    const raw =
+      localStorage.getItem(ALERT_FEED_CACHE_KEY) ||
+      localStorage.getItem("oi_alert_feed_v1");
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as AlertFeedCachePayload;
+    const items = Array.isArray(parsed?.items) ? parsed.items.filter(isAlertItem) : [];
+    const pruned = pruneAlertItems(items);
+    localStorage.setItem(ALERT_FEED_CACHE_KEY, JSON.stringify({ items: pruned }));
+    localStorage.removeItem("oi_alert_feed_v1");
+    return pruned;
+  } catch {
+    return [];
+  }
+}
+
+function saveAlertFeedCache(items: OiAlertItem[]) {
+  try {
+    const payload: AlertFeedCachePayload = { items: pruneAlertItems(items) };
+    localStorage.setItem(ALERT_FEED_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+/** 合并本轮派生与缓存：同 id 保留首次出现时间，刷新数值与标签 */
+function mergeAlertFeed(
+  cached: OiAlertItem[],
+  live: OiAlertItem[],
+  scanTs: number,
+): OiAlertItem[] {
+  const byId = new Map<string, OiAlertItem>();
+  for (const it of cached) byId.set(it.id, it);
+
+  const fallbackTs = scanTs > 0 ? scanTs : Date.now() / 1000;
+  for (const item of live) {
+    const prev = byId.get(item.id);
+    const alertTs =
+      prev && Number(prev.alertTs) > 0
+        ? Number(prev.alertTs)
+        : Number(item.alertTs) > 0
+          ? Number(item.alertTs)
+          : fallbackTs;
+    byId.set(item.id, { ...item, alertTs });
+  }
+
+  return pruneAlertItems([...byId.values()]);
 }
 
 const AlertCard = memo(function AlertCard({
@@ -60,7 +143,7 @@ const AlertCard = memo(function AlertCard({
         <div className="alert-card-body">
           <div className="alert-card-head">
             <div className="alert-coin">
-              <span className="coin-avatar">{coinInitial(row.symbol)}</span>
+              <CoinAvatar symbol={row.symbol} />
               <span className="alert-symbol">${displaySymbol(row.symbol)}</span>
             </div>
             <span className={`alert-type ${isPump ? "pump" : "dump"}`}>
@@ -99,33 +182,32 @@ export const AlertFeed = memo(function AlertFeed({
   thresholds,
 }: Props) {
   const navigate = useNavigate();
-  const firstSeenRef = useRef<Map<string, number>>(new Map());
+  const [items, setItems] = useState<OiAlertItem[]>(() => loadAlertFeedCache());
 
-  const alerts = useMemo(() => {
-    const derived = deriveOiAlerts(rows, thresholds, 60, scanTs);
-    const seen = firstSeenRef.current;
-    const alive = new Set<string>();
-    const out: OiAlertItem[] = derived.map((item) => {
-      alive.add(item.id);
-      let alertTs = item.alertTs;
-      if (alertTs > 0) {
-        seen.set(item.id, alertTs);
-      } else {
-        const prev = seen.get(item.id);
-        if (prev && prev > 0) {
-          alertTs = prev;
-        } else {
-          alertTs = scanTs > 0 ? scanTs : Date.now() / 1000;
-          seen.set(item.id, alertTs);
-        }
-      }
-      return { ...item, alertTs };
+  const liveAlerts = useMemo(
+    () => deriveOiAlerts(rows, thresholds, 60, scanTs),
+    [rows, thresholds, scanTs],
+  );
+
+  useEffect(() => {
+    setItems((prev) => {
+      const next = mergeAlertFeed(prev, liveAlerts, scanTs);
+      saveAlertFeedCache(next);
+      return next;
     });
-    for (const id of [...seen.keys()]) {
-      if (!alive.has(id)) seen.delete(id);
-    }
-    return out;
-  }, [rows, thresholds, scanTs]);
+  }, [liveAlerts, scanTs]);
+
+  useEffect(() => {
+    if (!items.length) return;
+    const id = window.setInterval(() => {
+      setItems((prev) => {
+        const next = pruneAlertItems(prev);
+        if (next.length !== prev.length) saveAlertFeedCache(next);
+        return next;
+      });
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [items.length]);
 
   const scanTimeLabel = formatClock(scanTs);
   const openPattern = (symbol: string) => navigate(patternsPathForSymbol(symbol));
@@ -137,13 +219,13 @@ export const AlertFeed = memo(function AlertFeed({
           异动监控
           <span
             className="alert-feed-info"
-            title="OI 暴增/暴跌 + 价格暴涨/暴跌（5m/15m），实时派生不依赖冷却门控"
+            title="OI 暴增/暴跌 + 价格暴涨/暴跌（5m/15m）；本地缓存约 2 小时，刷新不丢"
           >
             ⓘ
           </span>
         </span>
         <span className="panel-count">
-          LIVE · {alerts.length} · 更新 {scanTimeLabel}
+          LIVE · {items.length} · 更新 {scanTimeLabel}
         </span>
       </div>
 
@@ -153,10 +235,10 @@ export const AlertFeed = memo(function AlertFeed({
       </div>
 
       <div className="alert-feed-scroll">
-        {alerts.length === 0 ? (
+        {items.length === 0 ? (
           <div className="panel-empty">暂无异动 · 持续扫描中（暖机约需数分钟）</div>
         ) : (
-          alerts.map((item) => (
+          items.map((item) => (
             <AlertCard
               key={item.id}
               item={item}

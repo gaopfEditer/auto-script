@@ -64,7 +64,11 @@ async def handle_index(_request: web.Request) -> web.FileResponse:
 
         )
 
-    return web.FileResponse(index)
+    resp = web.FileResponse(index)
+    # 避免浏览器缓存旧 index，导致刷新仍指向过期 hash 资源
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 
@@ -73,7 +77,23 @@ async def handle_index(_request: web.Request) -> web.FileResponse:
 async def handle_health(_request: web.Request) -> web.Response:
     """轻量探活（供 collect:ui / supervisor 使用；勿用 /api/snapshot）。"""
     root = str(Path(__file__).resolve().parent)
-    return _json_response({"ok": True, "service": "oi_mornitor", "package_root": root})
+    index = STATIC_DIST / "index.html"
+    ui_build = ""
+    try:
+        if index.exists():
+            # mtime + size：oi:ui:build 后 iframe 可据此强制重载
+            st = index.stat()
+            ui_build = f"{int(st.st_mtime)}-{st.st_size}"
+    except OSError:
+        ui_build = ""
+    return _json_response(
+        {
+            "ok": True,
+            "service": "oi_mornitor",
+            "package_root": root,
+            "ui_build": ui_build,
+        }
+    )
 
 
 async def handle_snapshot(_request: web.Request) -> web.Response:
@@ -219,6 +239,118 @@ async def handle_focus_symbols_get(_request: web.Request) -> web.Response:
         "symbols": list_focus_symbols(),
         "main_chat_id": MAIN_CARD_TELEGRAM_CHAT_ID or "",
     })
+
+
+async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
+    """多端共享的形态信号胜率列表（长期保存；默认分页每页 100）。"""
+    from oi_mornitor.pattern_alert_stats import list_alert_stats_page
+
+    q = request.query
+    page_raw = str(q.get("page") or "1").strip()
+    size_raw = str(q.get("pageSize") or q.get("limit") or "100").strip()
+    page = int(page_raw) if page_raw.isdigit() else 1
+    page_size = int(size_raw) if size_raw.isdigit() else 100
+    time_filter = str(q.get("time") or q.get("timeFilter") or "all").strip() or "all"
+    type_label = str(q.get("type") or q.get("typeLabel") or "all").strip() or "all"
+    payload = list_alert_stats_page(
+        page=page,
+        page_size=page_size,
+        time_filter=time_filter,
+        type_label=type_label,
+    )
+    return _json_response({"ok": True, **payload})
+
+
+async def handle_pattern_alert_stats_post(request: web.Request) -> web.Response:
+    """结算结果回写 / 补登记。body: { updates: AlertStatsRecord[] }"""
+    from oi_mornitor.pattern_alert_stats import apply_settle_updates, summarize
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        return _json_response({"ok": False, "error": "body must be object"}, status=400)
+    raw = body.get("updates")
+    if raw is None and isinstance(body.get("items"), list):
+        raw = body.get("items")
+    if not isinstance(raw, list):
+        return _json_response({"ok": False, "error": "updates must be list"}, status=400)
+    items = apply_settle_updates(raw)
+    # 不回传全量 items，避免长期库过大时响应膨胀
+    return _json_response({"ok": True, "updated": len(raw), "summary": summarize(items)})
+
+
+async def handle_pattern_alert_ticker_get(_request: web.Request) -> web.Response:
+    """形态 ticker 滚动条（本机写入，生产只读）。"""
+    from oi_mornitor.pattern_alert_ticker import list_ticker
+
+    items = list_ticker()
+    return _json_response({"ok": True, "items": items})
+
+
+async def handle_pattern_alert_ticker_post(request: web.Request) -> web.Response:
+    """本机前端合并后推送 ticker。body: { items: TickerItem[] }"""
+    from oi_mornitor.pattern_alert_ticker import list_ticker, upsert_ticker
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        return _json_response({"ok": False, "error": "body must be object"}, status=400)
+    raw = body.get("items")
+    if not isinstance(raw, list):
+        return _json_response({"ok": False, "error": "items must be list"}, status=400)
+    items = upsert_ticker(raw) if raw else list_ticker()
+    return _json_response({"ok": True, "items": items})
+
+
+async def handle_telegram_push_toggles_get(_request: web.Request) -> web.Response:
+    from oi_mornitor.telegram_push_toggles import get_telegram_push_toggles
+
+    return _json_response(get_telegram_push_toggles())
+
+
+async def handle_telegram_push_toggles_post(request: web.Request) -> web.Response:
+    from oi_mornitor.telegram_push_toggles import set_telegram_push_toggles
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        return _json_response({"ok": False, "error": "body must be object"}, status=400)
+    partial = body.get("toggles") if isinstance(body.get("toggles"), dict) else body
+    return _json_response(set_telegram_push_toggles(partial if isinstance(partial, dict) else {}))
+
+
+async def handle_telegram_push_test(request: web.Request) -> web.Response:
+    """Debug：向 candle / main 群发一条测试消息。"""
+    from oi_mornitor.config import CANDLE_CARD_TELEGRAM_CHAT_ID, MAIN_CARD_TELEGRAM_CHAT_ID
+    from oi_mornitor.notify_telegram import send_telegram_text
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    target = str(body.get("target") or "candle").strip().lower()
+    text = str(body.get("text") or "").strip() or (
+        f"[OI Debug] telegram push test · target={target}"
+    )
+    if target == "main":
+        chat = MAIN_CARD_TELEGRAM_CHAT_ID
+    else:
+        chat = CANDLE_CARD_TELEGRAM_CHAT_ID
+    if not chat:
+        return _json_response(
+            {"ok": False, "error": f"chat id 未配置（target={target}）", "target": target},
+            status=400,
+        )
+    ok = send_telegram_text(text, chat_id=chat)
+    return _json_response({"ok": ok, "target": target, "chatId": chat})
 
 
 async def handle_focus_symbols_put(request: web.Request) -> web.Response:
@@ -384,7 +516,7 @@ async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
         "state": state,
         "ticker": ticker,
         "sandbox_markers": trade_markers,
-        "price_lines": (derivatives.get("liquidation_zones") or []) if derivatives else [],
+        "price_lines": [],
         "derivatives": derivatives,
         "analysis": {"derivatives": derivatives} if derivatives else {},
     })
@@ -415,6 +547,121 @@ async def handle_patterns_oi_hist(request: web.Request) -> web.Response:
         return _json_response({"ok": False, "error": str(exc)}, status=500)
     points = [{"time": t, "value": v} for t, v in sorted(oi_map.items())]
     return _json_response({"ok": True, "symbol": symbol, "interval": interval, "points": points})
+
+
+async def handle_patterns_spot_net(request: web.Request) -> web.Response:
+    """浏览器 CORS 受限时，由服务端代拉现货净主动买入。"""
+    from oi_mornitor.chart_deriv_hist import fetch_spot_net_taker_hist
+
+    symbol = request.query.get("symbol", "").strip().upper()
+    if not symbol:
+        return _json_response({"ok": False, "error": "symbol required"}, status=400)
+    interval = request.query.get("interval", "").strip() or "15m"
+    limit_raw = request.query.get("limit", "").strip()
+    limit = int(limit_raw) if limit_raw.isdigit() else 500
+    svc = get_service()
+    session = await svc._ensure_session()
+    try:
+        points = await fetch_spot_net_taker_hist(
+            session,
+            symbol=symbol,
+            interval=interval,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.exception("现货净买入代拉失败 %s", symbol)
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response(
+        {"ok": True, "symbol": symbol, "interval": interval, "points": points}
+    )
+
+
+async def handle_patterns_futures_net(request: web.Request) -> web.Response:
+    """浏览器 CORS 受限时，由服务端代拉合约 taker 净买入。"""
+    from oi_mornitor.chart_deriv_hist import fetch_futures_net_taker_hist
+
+    symbol = request.query.get("symbol", "").strip().upper()
+    if not symbol:
+        return _json_response({"ok": False, "error": "symbol required"}, status=400)
+    interval = request.query.get("interval", "").strip() or "15m"
+    limit_raw = request.query.get("limit", "").strip()
+    limit = int(limit_raw) if limit_raw.isdigit() else 500
+    svc = get_service()
+    session = await svc._ensure_session()
+    try:
+        points = await fetch_futures_net_taker_hist(
+            session,
+            base_url=svc.radar.base_url,
+            symbol=symbol,
+            interval=interval,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.exception("合约净买入代拉失败 %s", symbol)
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response(
+        {"ok": True, "symbol": symbol, "interval": interval, "points": points}
+    )
+
+
+async def handle_patterns_klines(request: web.Request) -> web.Response:
+    """浏览器无法直连币安时，由服务端代拉 K 线（走代理 + 跨所兜底）。"""
+    from oi_mornitor.pattern_monitor import fetch_pattern_klines_with_source
+
+    symbol = request.query.get("symbol", "").strip().upper()
+    if not symbol:
+        return _json_response({"ok": False, "error": "symbol required"}, status=400)
+    interval = request.query.get("interval", "").strip() or "5m"
+    limit_raw = request.query.get("limit", "").strip()
+    end_raw = request.query.get("endTime", "").strip()
+    limit = int(limit_raw) if limit_raw.isdigit() else 500
+    end_time = int(end_raw) if end_raw.isdigit() else None
+    svc = get_service()
+    session = await svc._ensure_session()
+    try:
+        rows, src = await fetch_pattern_klines_with_source(
+            session,
+            base_url=svc.radar.base_url,
+            symbol=symbol,
+            interval=interval,
+            limit=limit,
+            end_time=end_time,
+        )
+    except Exception as exc:
+        logger.exception("K线代拉失败 %s", symbol)
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    if not rows:
+        return _json_response(
+            {"ok": False, "error": f"K线为空 ({symbol})", "symbol": symbol},
+            status=404,
+        )
+    candles = []
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            continue
+        try:
+            candles.append(
+                {
+                    "time": int(row[0]) // 1000,
+                    "open": float(row[1]),
+                    "high": float(row[2]),
+                    "low": float(row[3]),
+                    "close": float(row[4]),
+                    "volume": float(row[5] or 0),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    return _json_response(
+        {
+            "ok": True,
+            "symbol": symbol,
+            "interval": interval,
+            "source": src,
+            "candles": candles,
+            "rawCount": len(rows),
+        }
+    )
 
 
 async def handle_sandbox_stats(_request: web.Request) -> web.Response:
@@ -596,6 +843,19 @@ def create_app() -> web.Application:
 
     app.router.add_post("/api/focus-symbols", handle_focus_symbols_put)
 
+    app.router.add_get("/api/pattern-alert-stats", handle_pattern_alert_stats_get)
+    app.router.add_post("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
+    app.router.add_put("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
+
+    app.router.add_get("/api/pattern-alert-ticker", handle_pattern_alert_ticker_get)
+    app.router.add_post("/api/pattern-alert-ticker", handle_pattern_alert_ticker_post)
+    app.router.add_put("/api/pattern-alert-ticker", handle_pattern_alert_ticker_post)
+
+    app.router.add_get("/api/telegram-push-toggles", handle_telegram_push_toggles_get)
+    app.router.add_post("/api/telegram-push-toggles", handle_telegram_push_toggles_post)
+    app.router.add_put("/api/telegram-push-toggles", handle_telegram_push_toggles_post)
+    app.router.add_post("/api/telegram-push-test", handle_telegram_push_test)
+
     app.router.add_post("/api/patterns/random", handle_patterns_random)
 
     app.router.add_get("/api/patterns/chart", handle_patterns_chart)
@@ -603,6 +863,10 @@ def create_app() -> web.Application:
     app.router.add_get("/api/patterns/chart-meta", handle_patterns_chart_meta)
 
     app.router.add_get("/api/patterns/oi-hist", handle_patterns_oi_hist)
+    app.router.add_get("/api/patterns/spot-net", handle_patterns_spot_net)
+    app.router.add_get("/api/patterns/futures-net", handle_patterns_futures_net)
+
+    app.router.add_get("/api/patterns/klines", handle_patterns_klines)
 
     app.router.add_get("/api/sandbox", handle_sandbox_stats)
 

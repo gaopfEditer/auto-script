@@ -10,6 +10,11 @@ import {
 } from "react";
 import type { PatternPayload, RadarSnapshot } from "../types";
 import { EMPTY_SNAPSHOT } from "../types";
+import {
+  loadRadarSnapshotCache,
+  mergeRadarSnapshot,
+  saveRadarSnapshotCache,
+} from "../utils/radarSnapshotCache";
 
 const SILENT_REFRESH_FIRST_MS = 30_000;
 const SILENT_REFRESH_EVERY_MS = 5 * 60_000;
@@ -22,8 +27,12 @@ type RadarSSEValue = {
 
 const RadarSSEContext = createContext<RadarSSEValue | null>(null);
 
+function initialSnapshot(): RadarSnapshot {
+  return loadRadarSnapshotCache() ?? EMPTY_SNAPSHOT;
+}
+
 function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
-  const [snapshot, setSnapshot] = useState<RadarSnapshot>(EMPTY_SNAPSHOT);
+  const [snapshot, setSnapshot] = useState<RadarSnapshot>(initialSnapshot);
   const [online, setOnline] = useState(false);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downSinceRef = useRef(0);
@@ -32,42 +41,25 @@ function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
 
   const apply = useCallback((data: RadarSnapshot) => {
     setSnapshot((prev) => {
-      // 防止空/残缺包把雷达列表冲掉（切页重连瞬间偶发）
-      const incomingEmpty =
-        !data.all_tickers?.length &&
-        !data.hot_tickers?.length &&
-        !data.market_matrix;
-      const hadRadar =
-        (prev.all_tickers?.length ?? 0) > 0 ||
-        (prev.hot_tickers?.length ?? 0) > 0 ||
-        !!prev.market_matrix;
-      if (incomingEmpty && hadRadar) {
-        return {
-          ...data,
-          all_tickers: prev.all_tickers,
-          hot_tickers: prev.hot_tickers,
-          market_matrix: prev.market_matrix,
-          pool_meta: data.pool_meta ?? prev.pool_meta,
-          pool_size: data.pool_size || prev.pool_size,
-          breakout_alerts: data.breakout_alerts?.length
-            ? data.breakout_alerts
-            : prev.breakout_alerts,
-          pattern: data.pattern ?? prev.pattern,
-        };
-      }
-      return data;
+      const next = mergeRadarSnapshot(prev, data);
+      saveRadarSnapshotCache(next);
+      return next;
     });
   }, []);
 
   /** 本地补丁：watch/pin/remove 等 API 成功后立刻反映，不必等下一轮 SSE */
   const patchPattern = useCallback((partial: Partial<PatternPayload>) => {
-    setSnapshot((prev) => ({
-      ...prev,
-      pattern: {
-        ...(prev.pattern ?? EMPTY_SNAPSHOT.pattern!),
-        ...partial,
-      },
-    }));
+    setSnapshot((prev) => {
+      const next = {
+        ...prev,
+        pattern: {
+          ...(prev.pattern ?? EMPTY_SNAPSHOT.pattern!),
+          ...partial,
+        },
+      };
+      saveRadarSnapshotCache(next);
+      return next;
+    });
   }, []);
 
   useEffect(() => {

@@ -48,6 +48,18 @@ const TRADE_PLATFORMS_STORAGE_KEY = "discord-collector-trade-platforms";
 const tradePlatforms = ref({ bitget: true, weex: true });
 const requiredChannelIds = ref(/** @type {string[]} */ ([]));
 
+const oiTgOnline = ref(false);
+const oiTgLoading = ref(false);
+const oiTgSaving = ref(false);
+const oiTgTesting = ref(false);
+const oiTgToggles = ref({ candle: true, structure: true, main: true });
+const oiTgChatIds = ref({ candle: "", main: "" });
+const oiTgTransport = ref({ gateway: false, botToken: false, ready: false });
+const oiTgHint = ref("");
+const oiTgResult = ref("");
+const oiTgResultOk = ref(/** @type {boolean | null} */ (null));
+const oiTgBase = ref("");
+
 function loadTradePlatformsFromStorage() {
   try {
     const raw = localStorage.getItem(TRADE_PLATFORMS_STORAGE_KEY);
@@ -87,6 +99,101 @@ async function syncTradePlatformsToServer() {
 async function onTradePlatformChange() {
   saveTradePlatformsToStorage();
   await syncTradePlatformsToServer();
+}
+
+async function loadOiTelegramPush() {
+  oiTgLoading.value = true;
+  try {
+    const res = await fetch("/api/debug/oi-telegram-push");
+    const data = await res.json();
+    oiTgOnline.value = Boolean(data.oiOnline ?? data.ok);
+    oiTgBase.value = String(data.oiBase ?? "");
+    if (data.toggles && typeof data.toggles === "object") {
+      oiTgToggles.value = {
+        candle: data.toggles.candle !== false,
+        structure: data.toggles.structure !== false,
+        main: data.toggles.main !== false,
+      };
+    }
+    if (data.chatIds && typeof data.chatIds === "object") {
+      oiTgChatIds.value = {
+        candle: String(data.chatIds.candle ?? ""),
+        main: String(data.chatIds.main ?? ""),
+      };
+    }
+    if (data.transport && typeof data.transport === "object") {
+      oiTgTransport.value = {
+        gateway: Boolean(data.transport.gateway),
+        botToken: Boolean(data.transport.botToken),
+        ready: Boolean(data.transport.ready),
+      };
+    }
+    oiTgHint.value = String(data.hint || data.error || "");
+  } catch (e) {
+    oiTgOnline.value = false;
+    oiTgHint.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    oiTgLoading.value = false;
+  }
+}
+
+async function onOiTgToggleChange() {
+  oiTgSaving.value = true;
+  oiTgResult.value = "";
+  oiTgResultOk.value = null;
+  try {
+    const res = await fetch("/api/debug/oi-telegram-push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toggles: oiTgToggles.value }),
+    });
+    const data = await res.json();
+    oiTgOnline.value = Boolean(data.oiOnline ?? data.ok);
+    if (data.toggles && typeof data.toggles === "object") {
+      oiTgToggles.value = {
+        candle: data.toggles.candle !== false,
+        structure: data.toggles.structure !== false,
+        main: data.toggles.main !== false,
+      };
+    }
+    oiTgResultOk.value = Boolean(data.ok) && oiTgOnline.value;
+    oiTgResult.value = oiTgOnline.value
+      ? `已保存 · candle=${oiTgToggles.value.candle} structure=${oiTgToggles.value.structure} main=${oiTgToggles.value.main}`
+      : data.error || data.hint || "OI 未在线，开关未生效";
+  } catch (e) {
+    oiTgResultOk.value = false;
+    oiTgResult.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    oiTgSaving.value = false;
+  }
+}
+
+/** @param {"candle"|"main"} target */
+async function sendOiTgTest(target) {
+  oiTgTesting.value = true;
+  oiTgResult.value = "";
+  oiTgResultOk.value = null;
+  try {
+    const res = await fetch("/api/debug/oi-telegram-push-test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target }),
+    });
+    const data = await res.json();
+    oiTgOnline.value = Boolean(data.oiOnline ?? true);
+    if (data.ok) {
+      oiTgResultOk.value = true;
+      oiTgResult.value = `测试已发送 → ${target} chat=${data.chatId}`;
+    } else {
+      oiTgResultOk.value = false;
+      oiTgResult.value = data.error || data.hint || `失败 HTTP ${res.status}`;
+    }
+  } catch (e) {
+    oiTgResultOk.value = false;
+    oiTgResult.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    oiTgTesting.value = false;
+  }
 }
 
 async function loadSimulateConfig() {
@@ -305,6 +412,7 @@ onMounted(async () => {
   loadTradePlatformsFromStorage();
   await syncTradePlatformsToServer();
   void loadTelegramStatus();
+  void loadOiTelegramPush();
   void loadSimulateConfig();
   try {
     const res = await fetch("/api/frames?limit=80");
@@ -365,6 +473,78 @@ function isDiscordRow(row) {
         <p v-if="tgResult" class="tg-result" :class="{ err: tgResultOk === false }">
           {{ tgResult }}
         </p>
+      </div>
+      <div class="tg-panel oi-tg-panel">
+        <div class="tg-head">
+          <span class="tg-label">OI 形态卡片推送</span>
+          <span class="tg-badge" :class="{ on: oiTgOnline }">
+            {{ oiTgLoading ? "检测中…" : oiTgOnline ? "OI 在线" : "OI 离线" }}
+          </span>
+        </div>
+        <p class="tg-meta">
+          candle={{ oiTgChatIds.candle || "—" }} · main={{ oiTgChatIds.main || "—" }}
+        </p>
+        <p class="tg-meta" :class="{ warn: !oiTgTransport.ready }">
+          通道：
+          {{
+            oiTgTransport.ready
+              ? `${oiTgTransport.gateway ? "gateway" : ""}${oiTgTransport.gateway && oiTgTransport.botToken ? "+" : ""}${oiTgTransport.botToken ? "bot" : ""}`
+              : "未配置 TELEGRAM_SEND_URL / BOT_TOKEN"
+          }}
+        </p>
+        <div class="sim-platforms">
+          <span class="sim-lbl">推送开关</span>
+          <label class="sim-check">
+            <input
+              v-model="oiTgToggles.candle"
+              type="checkbox"
+              :disabled="!oiTgOnline || oiTgSaving"
+              @change="onOiTgToggleChange"
+            />
+            形态卡片群
+          </label>
+          <label class="sim-check">
+            <input
+              v-model="oiTgToggles.structure"
+              type="checkbox"
+              :disabled="!oiTgOnline || oiTgSaving"
+              @change="onOiTgToggleChange"
+            />
+            结构信号
+          </label>
+          <label class="sim-check">
+            <input
+              v-model="oiTgToggles.main"
+              type="checkbox"
+              :disabled="!oiTgOnline || oiTgSaving"
+              @change="onOiTgToggleChange"
+            />
+            特别关注→MAIN
+          </label>
+        </div>
+        <div class="sim-actions">
+          <button type="button" class="sim-link" :disabled="oiTgLoading" @click="loadOiTelegramPush">
+            刷新状态
+          </button>
+          <button
+            type="button"
+            class="tg-btn"
+            :disabled="!oiTgOnline || oiTgTesting || !oiTgChatIds.candle"
+            @click="sendOiTgTest('candle')"
+          >
+            测形态群
+          </button>
+          <button
+            type="button"
+            class="tg-btn"
+            :disabled="!oiTgOnline || oiTgTesting || !oiTgChatIds.main"
+            @click="sendOiTgTest('main')"
+          >
+            测 MAIN 群
+          </button>
+        </div>
+        <p v-if="oiTgHint" class="tg-meta">{{ oiTgHint }}</p>
+        <p v-if="oiTgResult" class="tg-result" :class="{ err: oiTgResultOk === false }">{{ oiTgResult }}</p>
       </div>
       <div class="tg-panel sim-panel">
         <div class="tg-head">

@@ -12,6 +12,7 @@ import {
   isAlphaContractAddress,
   isAlphaTradingSymbol,
 } from "./card-alpha-market.js";
+import { symbolLookupCandidates, toUsdtSymbol } from "./symbol-aliases.js";
 
 const log = createLogger("card-price");
 
@@ -76,13 +77,13 @@ async function marketFetch(url, init = {}) {
 
 /** @param {string} symbol */
 function normalizeUsdtSymbol(symbol) {
-  const s = String(symbol ?? "").toUpperCase().trim();
-  return s.endsWith("USDT") ? s : `${s}USDT`;
+  return toUsdtSymbol(symbol);
 }
 
 /** @param {string} symbol */
 function symbolToOkxSwap(symbol) {
-  const sym = normalizeUsdtSymbol(symbol);
+  const candidates = symbolLookupCandidates(symbol, "okx");
+  const sym = candidates[0] || normalizeUsdtSymbol(symbol);
   return `${sym.replace(/USDT$/, "")}-USDT-SWAP`;
 }
 
@@ -95,13 +96,21 @@ function intervalSpanMs(interval) {
  * @param {string} symbol 如 BTC 或 BTCUSDT
  */
 export async function fetchFuturesPrice(symbol) {
-  const sym = normalizeUsdtSymbol(symbol);
-  const base = config.binanceFapiUrl.replace(/\/$/, "");
-  const url = `${base}/fapi/v1/ticker/price?symbol=${encodeURIComponent(sym)}`;
-  const res = await marketFetch(url);
-  if (!res.ok) throw new Error(`Binance price HTTP ${res.status}`);
-  const data = await res.json();
-  return { symbol: sym, price: Number(data.price) };
+  const candidates = symbolLookupCandidates(symbol, "binance");
+  let lastErr = null;
+  for (const sym of candidates) {
+    try {
+      const base = config.binanceFapiUrl.replace(/\/$/, "");
+      const url = `${base}/fapi/v1/ticker/price?symbol=${encodeURIComponent(sym)}`;
+      const res = await marketFetch(url);
+      if (!res.ok) throw new Error(`Binance price HTTP ${res.status}`);
+      const data = await res.json();
+      return { symbol: sym, price: Number(data.price) };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? "price failed"));
 }
 
 /**
@@ -258,47 +267,51 @@ async function fetchOkxFuturesKlines(symbol, startMs, endMs, interval = "5m") {
  * @param {string} [interval]
  */
 export async function fetchFuturesKlines(symbol, startMs, endMs, interval = "5m") {
-  const sym = normalizeUsdtSymbol(symbol);
+  const binanceCandidates = symbolLookupCandidates(symbol, "binance");
 
   if (!binanceKlineBlocked) {
-    try {
-      const rows = await fetchBinanceFuturesKlines(sym, startMs, endMs, interval);
-      if (rows.length) return rows;
-    } catch (e) {
-      const msg = String(/** @type {Error} */ (e).message ?? e);
-      if (/418|429|403/.test(msg)) {
-        binanceKlineBlocked = true;
-        log.warn(
-          `币安 K 线 ${msg.slice(0, 60)}（代理 ${config.binanceProxy || "未配置"}），改走 Bybit/OKX 兜底`
-        );
-      } else if (/400|Invalid symbol|invalid symbol|-1121/i.test(msg)) {
-        /** 合约不存在：交给上层走 Alpha，不抛成「全部失败」 */
-        const err = /** @type {Error & { code?: string }} */ (
-          new Error(`futures_symbol_not_found ${sym}: ${msg}`)
-        );
-        err.code = "FUTURES_NOT_FOUND";
-        throw err;
-      } else {
-        throw e;
+    for (const sym of binanceCandidates) {
+      try {
+        const rows = await fetchBinanceFuturesKlines(sym, startMs, endMs, interval);
+        if (rows.length) return rows;
+      } catch (e) {
+        const msg = String(/** @type {Error} */ (e).message ?? e);
+        if (/418|429|403/.test(msg)) {
+          binanceKlineBlocked = true;
+          log.warn(
+            `币安 K 线 ${msg.slice(0, 60)}（代理 ${config.binanceProxy || "未配置"}），改走 Bybit/OKX 兜底`
+          );
+          break;
+        } else if (/400|Invalid symbol|invalid symbol|-1121/i.test(msg)) {
+          continue;
+        } else {
+          throw e;
+        }
       }
     }
   }
 
   for (const source of KLINE_FALLBACK_ORDER) {
-    try {
-      const rows =
-        source === "bybit"
-          ? await fetchBybitFuturesKlines(sym, startMs, endMs, interval)
-          : await fetchOkxFuturesKlines(sym, startMs, endMs, interval);
-      if (rows.length) {
-        log.info(`K线兜底 ${source} ${sym} ${interval} n=${rows.length}`);
-        return rows;
+    const candidates = symbolLookupCandidates(symbol, source);
+    for (const sym of candidates) {
+      try {
+        const rows =
+          source === "bybit"
+            ? await fetchBybitFuturesKlines(sym, startMs, endMs, interval)
+            : await fetchOkxFuturesKlines(sym, startMs, endMs, interval);
+        if (rows.length) {
+          log.info(`K线兜底 ${source} ${sym} ${interval} n=${rows.length}`);
+          return rows;
+        }
+      } catch (e) {
+        log.warn(
+          `K线兜底 ${source} 失败 ${sym}: ${String(/** @type {Error} */ (e).message ?? e)}`
+        );
       }
-    } catch (e) {
-      log.warn(`K线兜底 ${source} 失败 ${sym}: ${String(/** @type {Error} */ (e).message ?? e)}`);
     }
   }
 
+  const sym = normalizeUsdtSymbol(symbol);
   const proxyHint = config.binanceProxy
     ? `已配置代理 ${config.binanceProxy}，但币安仍 418（出口 IP 被封）`
     : "请配置 COMMON_PROXY 或 BINANCE_PROXY";

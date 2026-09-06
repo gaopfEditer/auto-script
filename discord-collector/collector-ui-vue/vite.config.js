@@ -27,8 +27,8 @@ export default defineConfig(({ mode }) => {
     "debug",
   ]);
   const pagesCsv =
-    String(env.VITE_UI_PAGES ?? "show,cards,eval,community,oi").trim() ||
-    "show,cards,eval,community,oi";
+    String(env.VITE_UI_PAGES ?? "show,cards,eval,community,oi,news").trim() ||
+    "show,cards,eval,community,oi,news";
   const pageSet = new Set(
     pagesCsv
       .split(/[,;\s]+/)
@@ -53,6 +53,7 @@ export default defineConfig(({ mode }) => {
       __UI_PAGE_SHOW__: JSON.stringify(pageOn("show")),
       __UI_PAGE_FETCH__: JSON.stringify(pageOn("fetch")),
       __UI_PAGE_OI__: JSON.stringify(pageOn("oi")),
+      __UI_PAGE_NEWS__: JSON.stringify(pageOn("news")),
       __UI_PAGE_CARDS__: JSON.stringify(pageOn("cards")),
       __UI_PAGE_EVAL__: JSON.stringify(pageOn("eval")),
       __UI_PAGE_TELEGRAM__: JSON.stringify(pageOn("telegram")),
@@ -72,7 +73,7 @@ export default defineConfig(({ mode }) => {
             const addr = server.httpServer?.address();
             const port = addr && typeof addr === "object" ? addr.port : "?";
             console.info(
-              `[discord-collector-ui] dev 端口 ${port}；/api、/ws → ${apiTarget}`
+              `[discord-collector-ui] dev 端口 ${port}；/api、/ws、/telegram-avatars、/telegram-media、/community-avatars → ${apiTarget}`
             );
           });
         },
@@ -94,6 +95,8 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
         "/community-avatars": { target: apiTarget, changeOrigin: true },
+        "/telegram-avatars": { target: apiTarget, changeOrigin: true },
+        "/telegram-media": { target: apiTarget, changeOrigin: true },
         "/ws": {
           target: apiTarget,
           ws: true,
