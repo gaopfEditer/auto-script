@@ -267,7 +267,7 @@ export async function fetchAlertStatsPage(opts: {
   const params = new URLSearchParams({
     page: String(page),
     pageSize: String(pageSize),
-    time: timeFilter,
+    time: timeFilter === "all" ? "all" : timeFilter,
     type: typeFilter,
     interval: intervalFilter,
   });
@@ -279,6 +279,7 @@ export async function fetchAlertStatsPage(opts: {
     pages: 1,
     summary: summarizeAlertWinRate([]),
     typeOptions: [],
+    intervalOptions: [],
     typeLabels: [],
   };
   try {
@@ -305,7 +306,10 @@ export async function fetchAlertStatsPage(opts: {
       ),
     );
     const typeOptions = normalizeTypeOptions(body.typeOptions, body.typeLabels, items);
-    const intervalOptions = normalizeIntervalOptions(body.intervalOptions, items);
+    const intervalOptions = mergeIntervalOptions(
+      normalizeIntervalOptions(body.intervalOptions, items),
+      items,
+    );
     return {
       items,
       total: Number(body.total) || items.length,
@@ -370,7 +374,15 @@ export function formatAlertTypeOptionLabel(opt: AlertStatsTypeOption): string {
 }
 
 export function formatIntervalOptionLabel(opt: AlertStatsIntervalOption): string {
-  return formatAlertTypeOptionLabel(/** @type {AlertStatsTypeOption} */ (opt));
+  const label = opt.label || "";
+  const wr =
+    opt.winRate == null ? "胜率 —" : `胜率 ${(opt.winRate * 100).toFixed(0)}%`;
+  const pnl =
+    opt.totalPnlPct == null || !Number.isFinite(opt.totalPnlPct)
+      ? "合计 —"
+      : `合计 ${opt.totalPnlPct > 0 ? "+" : ""}${opt.totalPnlPct.toFixed(1)}%`;
+  const n = opt.count > 0 ? ` (${opt.count})` : "";
+  return `${label}${n} · ${wr} · ${pnl}`;
 }
 
 /** 周期下拉回退（前端本地统计） */
@@ -397,9 +409,10 @@ function listAlertStatsIntervalOptions(records: AlertStatsRecord[]): AlertStatsI
     });
 }
 
+/** 周期下拉：只做归一化（保留原逻辑，主体已由 mergeIntervalOptions 接管） */
 function normalizeIntervalOptions(
   rawOpts: AlertStatsIntervalOption[] | undefined,
-  pageItems: AlertStatsRecord[],
+  _pageItems: AlertStatsRecord[],
 ): AlertStatsIntervalOption[] {
   if (Array.isArray(rawOpts) && rawOpts.length) {
     return rawOpts
@@ -1035,21 +1048,59 @@ export function alertStatsPnlHover(rec: AlertStatsRecord): string {
   return lines.join("\n");
 }
 
-export type AlertStatsTimeFilter = "2h" | "8h" | "24h" | "7d" | "30d";
+export type AlertStatsTimeFilter = "2h" | "4h" | "8h" | "24h" | "3d" | "7d" | "14d" | "30d" | "1m" | "2m" | "3m" | "all";
+
+/** 固定周期下拉集合（与后端 FIXED_INTERVALS 保持一致） */
+export const FIXED_INTERVALS: string[] = ["4h", "8h", "24h", "3d", "1w", "2w", "1m", "2m", "3m"];
+
+/**
+ * 周期下拉：固定集合 + 覆盖 backend 实际统计（有数据时用 backend，无数据时只显示 label）。
+ * intervalOptions 来自 backend，格式同 typeOptions。
+ */
+export function mergeIntervalOptions(
+  raw: AlertStatsIntervalOption[],
+  pageItems: AlertStatsRecord[],
+): AlertStatsIntervalOption[] {
+  const byLabel = new Map<string, AlertStatsIntervalOption>();
+  for (const o of raw) {
+    if (o && typeof o.label === "string") {
+      byLabel.set(o.label, o);
+    }
+  }
+  const result: AlertStatsIntervalOption[] = [];
+  for (const label of FIXED_INTERVALS) {
+    const fromBackend = byLabel.get(label);
+    if (fromBackend) {
+      result.push(fromBackend);
+    } else {
+      // 无数据时仍显示选项，但 count=0
+      result.push({ label, count: 0, winRate: null, totalPnlPct: null });
+    }
+  }
+  return result;
+}
 
 const TIME_FILTER_MS: Record<AlertStatsTimeFilter, number> = {
+  "all": Infinity,
   "2h": 2 * 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
   "8h": 8 * 60 * 60_000,
   "24h": 24 * 60 * 60_000,
+  "3d": 3 * 24 * 60 * 60_000,
   "7d": 7 * 24 * 60 * 60_000,
+  "14d": 14 * 24 * 60 * 60_000,
   "30d": 30 * 24 * 60 * 60_000,
+  "1m": 1 * 30 * 24 * 60 * 60_000,
+  "2m": 2 * 30 * 24 * 60 * 60_000,
+  "3m": 3 * 30 * 24 * 60 * 60_000,
 };
 
 export function filterAlertStatsByTime(
   records: AlertStatsRecord[],
-  filter: AlertStatsTimeFilter,
+  filter: AlertStatsTimeFilter | "all",
   now = Date.now(),
 ): AlertStatsRecord[] {
+  if (filter === "all") return records.slice().sort((a, b) => b.signalAt - a.signalAt);
   const cutoff = now - (TIME_FILTER_MS[filter] ?? TIME_FILTER_MS["24h"]);
   return records
     .filter((r) => r.signalAt >= cutoff)

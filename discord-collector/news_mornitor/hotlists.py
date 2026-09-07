@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urljoin
 
@@ -60,6 +60,7 @@ def _item(
     summary: str = "",
     heat: str | None = None,
     tags: list[str] | None = None,
+    published_at: str | None = None,
 ) -> dict[str, Any]:
     return {
         "platform": platform,
@@ -69,7 +70,58 @@ def _item(
         "summary": (summary or "").strip(),
         "heat": heat,
         "tags": tags or [],
+        "published_at": published_at,
     }
+
+
+def _pick_published_at(row: dict) -> str | None:
+    """尝试从 row 中提取发布时间，返回 ISO 字符串或 None。"""
+    for k in (
+        "publishTime",
+        "publishedAt",
+        "published_at",
+        "createTime",
+        "createdAt",
+        "ctime",
+        "ctimeMs",
+        "pubTime",
+        "time",
+        "date",
+        "updatedAt",
+        "updateTime",
+    ):
+        v = row.get(k)
+        if v is None:
+            continue
+        # 毫秒时间戳
+        if isinstance(v, (int, float)):
+            try:
+                ts = float(v)
+                if ts < 1e12:  # 秒转毫秒
+                    ts *= 1000
+                dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+                return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                continue
+        # ISO 字符串
+        if isinstance(v, str) and len(v) >= 10:
+            try:
+                # 尝试直接解析常见格式
+                for fmt in (
+                    "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%dT%H:%M:%S.%fZ",
+                    "%Y-%m-%dT%H:%M:%S+08:00",
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%d %H:%M:%S",
+                ):
+                    try:
+                        dt = datetime.strptime(v[:19], fmt).replace(tzinfo=timezone.utc)
+                        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    except ValueError:
+                        continue
+            except Exception:
+                continue
+    return None
 
 
 async def _http_get(url: str, *, headers: dict[str, str] | None = None) -> tuple[int, str]:
@@ -177,6 +229,7 @@ def _parse_api_rows(data: Any, *, platform: str, limit: int = 30) -> list[dict[s
                         :240
                     ],
                     heat=heat,
+                    published_at=_pick_published_at(row),
                 )
             )
         if len(items) > len(best):
@@ -309,6 +362,7 @@ def _parse_foresight_feed(rows: list[dict[str, Any]], *, limit: int = 30) -> lis
                 summary=brief[:240],
                 heat="重要" if body.get("is_important") else None,
                 tags=tags[:6],
+                published_at=_utc_now(),
             )
         )
         if len(out) >= limit:
@@ -335,7 +389,13 @@ def _parse_foresight_html(html: str) -> list[dict[str, Any]]:
             continue
         seen.add(href)
         out.append(
-            _item(platform="foresight", rank=len(out) + 1, title=title[:180], url=href)
+            _item(
+                platform="foresight",
+                rank=len(out) + 1,
+                title=title[:180],
+                url=href,
+                published_at=_utc_now(),
+            )
         )
         if len(out) >= 30:
             break
@@ -409,6 +469,7 @@ def _parse_coindesk_html(html: str) -> list[dict[str, Any]]:
                 rank=len(out) + 1,
                 title=title[:180],
                 url=href,
+                published_at=_utc_now(),
             )
         )
         if len(out) >= 30:
@@ -425,7 +486,7 @@ def _parse_coindesk_html(html: str) -> list[dict[str, Any]]:
         slug = href.rstrip("/").split("/")[-1].replace("-", " ")
         seen.add(href)
         out.append(
-            _item(platform="coindesk", rank=len(out) + 1, title=slug[:180], url=href)
+            _item(platform="coindesk", rank=len(out) + 1, title=slug[:180], url=href, published_at=_utc_now())
         )
         if len(out) >= 30:
             break
@@ -489,6 +550,7 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
                     url=f"https://www.theblockbeats.info/flash/{aid}",
                     summary=summary[:280],
                     tags=tags,
+                    published_at=_utc_now(),
                 )
             )
         return out
@@ -514,6 +576,7 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
                 title=title[:180],
                 url=f"https://www.theblockbeats.info/flash/{aid}",
                 summary=summary[:280],
+                published_at=_utc_now(),
             )
         )
         if len(out) >= limit:
@@ -591,6 +654,7 @@ def _parse_okx_html(html: str) -> list[dict[str, Any]]:
                 rank=len(out) + 1,
                 title=title[:160],
                 url=urljoin("https://www.okx.com", path),
+                published_at=_utc_now(),
             )
         )
         if len(out) >= 30:
@@ -626,7 +690,7 @@ def _parse_binance_html(html: str) -> list[dict[str, Any]]:
                 continue
             seen.add(href)
             out.append(
-                _item(platform="binance", rank=len(out) + 1, title=title[:160], url=href)
+                _item(platform="binance", rank=len(out) + 1, title=title[:160], url=href, published_at=_utc_now())
             )
             if len(out) >= 30:
                 return out
@@ -731,6 +795,7 @@ def _cdp_hotlists() -> dict[str, list[dict[str, Any]]]:
                             rank=len(result["binance"]) + 1,
                             title=title[:160],
                             url=str(row.get("href") or BINANCE_TRENDS_URL),
+                            published_at=_utc_now(),
                         )
                     )
             logger.info("币安 CDP %d 条", len(result["binance"]))
@@ -754,6 +819,7 @@ def _cdp_hotlists() -> dict[str, list[dict[str, Any]]]:
                             rank=i,
                             title=text[:160],
                             url=str(row.get("href") or OKX_TOPICS_URL),
+                            published_at=_utc_now(),
                         )
                     )
             logger.info("OKX CDP %d 条", len(result["okx"]))
@@ -763,8 +829,121 @@ def _cdp_hotlists() -> dict[str, list[dict[str, Any]]]:
     return result
 
 
+_PUBLISHED_AT_FILE = Path(__file__).resolve().parent / "data" / "hot_published_at.json"
+
+
+def _load_published_at_map() -> dict[str, str]:
+    """URL → published_at (ISO UTC) 的持久化缓存。"""
+    try:
+        if _PUBLISHED_AT_FILE.is_file():
+            raw = json.loads(_PUBLISHED_AT_FILE.read_text(encoding="utf-8"))
+            return {str(k): str(v) for k, v in raw.items() if v}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_published_at_map(m: dict[str, str]) -> None:
+    try:
+        _PUBLISHED_AT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _PUBLISHED_AT_FILE.write_text(
+            json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+_RElATIVE_TIME_RE = re.compile(
+    r"(\d+)\s*(分钟?|小时?|小时|天|日|周|秒|秒?)前"
+    r"|刚才|(半[小时天日])前"
+    r"|今天|昨天|前天",
+    re.I,
+)
+
+
+def _parse_relative_time(text: str, *, now: datetime) -> datetime | None:
+    """把「36分钟前」「2小时前」「昨天」等中文相对时间转 UTC datetime。"""
+    t = text.strip()
+    m = _RElATIVE_TIME_RE.search(t)
+    if not m:
+        return None
+    span = m.group(0).lower()
+
+    if "秒" in span:
+        n = re.search(r"(\d+)", t)
+        return now - timedelta(seconds=int(n.group(1) if n else 0))
+    if "分钟" in span or "分" in span:
+        n = re.search(r"(\d+)", t)
+        return now - timedelta(minutes=int(n.group(1) if n else 0))
+    if "小时" in span or "小时" in span or "时" in span:
+        n = re.search(r"(\d+)", t)
+        return now - timedelta(hours=int(n.group(1) if n else 0))
+    if "天" in span or "日" in span:
+        n = re.search(r"(\d+)", t)
+        days = int(n.group(1) if n else 0)
+        # 昨天/前天特殊处理
+        if "昨天" in t:
+            return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+        if "前天" in t:
+            return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+        return now - timedelta(days=days)
+    if "周" in span:
+        n = re.search(r"(\d+)", t)
+        return now - timedelta(weeks=int(n.group(1) if n else 0))
+    if "半" in span:
+        for unit, delta in [("小时", 0.5), ("天", 0.5), ("日", 0.5)]:
+            if unit in span:
+                return now - timedelta(hours=delta * 24 if "天" in unit else delta)
+    if "刚才" in t:
+        return now
+    if "今天" in t:
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if "昨天" in t:
+        return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    if "前天" in t:
+        return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+    return None
+
+
+def _blockbeats_time_to_iso(time_str: str, *, now: datetime) -> str:
+    """BlockBeats HH:mm → ISO UTC（如 "14:32" → 今日 UTC 14:32）。"""
+    try:
+        h, m = time_str.strip().split(":")
+        dt = now.replace(hour=int(h), minute=int(m), second=0, microsecond=0, tzinfo=timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return ""
+
+
+def _merge_published_at(
+    items: list[dict[str, Any]],
+    stored: dict[str, str],
+    now_ts: int,
+) -> list[dict[str, Any]]:
+    """
+    Merge persisted published_at:
+    - Has real published_at → keep
+    - None → look up by URL from stored cache
+    - Still none → use now_ts
+    """
+    out = []
+    for item in items:
+        url = str(item.get("url") or "")
+        ts = item.get("published_at")
+        if not ts or ts.startswith("1970") or ts.startswith("1969"):
+            ts = stored.get(url) or ""
+        if not ts:
+            ts = datetime.fromtimestamp(now_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        out.append({**item, "published_at": ts})
+    return out
+
+
 async def fetch_hotlists() -> dict[str, Any]:
     import asyncio
+
+    now_ts = int(time.time() * 1000)
+    # 加载历史 published_at，按 URL 持久化（热榜帖子跨请求保留发布时间）
+    stored = _load_published_at_map()
 
     binance_t = asyncio.create_task(_fetch_binance_http())
     okx_t = asyncio.create_task(_fetch_okx_http())
@@ -793,6 +972,32 @@ async def fetch_hotlists() -> dict[str, Any]:
                 binance = _parse_binance_html(html)
         except Exception:
             pass
+
+    # BlockBeats: tags[0] 可能是 HH:mm 相对时间，转 ISO
+    now_dt = datetime.fromtimestamp(now_ts / 1000, tz=timezone.utc)
+    for item in blockbeats:
+        tags = item.get("tags") or []
+        for tag in tags:
+            if re.fullmatch(r"\d{1,2}:\d{2}", str(tag)):
+                iso = _blockbeats_time_to_iso(tag, now=now_dt)
+                if iso:
+                    item["published_at"] = iso
+                    break
+
+    # 对各平台合并历史 published_at
+    for board_items in [binance, okx, foresight, coindesk, blockbeats]:
+        merged = _merge_published_at(board_items, stored, now_ts)
+        # 回写：本次发现新 URL 时更新缓存
+        for item in merged:
+            url = str(item.get("url") or "")
+            ts = item.get("published_at") or ""
+            if url and ts and url not in stored:
+                stored[url] = ts
+        board_items.clear()
+        board_items.extend(merged)
+
+    # 持久化新发现的 URL→published_at
+    _save_published_at_map(stored)
 
     payload = {
         "updated_at": _utc_now(),

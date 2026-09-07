@@ -33,12 +33,19 @@ interface Props {
   onCaptureEnabledChange?: (enabled: boolean) => void;
 }
 
-const TIME_FILTERS: { id: AlertStatsTimeFilter; label: string }[] = [
+const TIME_FILTERS: { id: AlertStatsTimeFilter | "all"; label: string }[] = [
+  { id: "all", label: "全部" },
   { id: "2h", label: "2h" },
+  { id: "4h", label: "4h" },
   { id: "8h", label: "8h" },
   { id: "24h", label: "24h" },
+  { id: "3d", label: "3d" },
   { id: "7d", label: "近一周" },
+  { id: "14d", label: "2w" },
   { id: "30d", label: "近一月" },
+  { id: "1m", label: "1m" },
+  { id: "2m", label: "2m" },
+  { id: "3m", label: "3m" },
 ];
 
 const EMPTY_SUMMARY: AlertWinRateSummary = {
@@ -143,7 +150,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   captureEnabled = true,
   onCaptureEnabledChange,
 }: Props) {
-  const [filter, setFilter] = useState<AlertStatsTimeFilter>("7d");
+  const [filter, setFilter] = useState<AlertStatsTimeFilter>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [intervalFilter, setIntervalFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
@@ -196,7 +203,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     setHideYield((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem(HIDE_YIELD_KEY, next ? "1" : "0");
+        localStorage.setItem(HIDE_YIELD_LS, next ? "1" : "0");
       } catch {
         /* ignore */
       }
@@ -464,19 +471,21 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
         ) : null}
 
         <div className="pattern-wr-filters">
-          <div className="pattern-wr-time-filters" role="tablist" aria-label="时间筛选">
-            {TIME_FILTERS.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                role="tab"
-                aria-selected={filter === f.id}
-                className={`pattern-wr-filter${filter === f.id ? " active" : ""}`}
-                onClick={() => setFilter(f.id)}
+          <div className="pattern-wr-time-filters" role="group" aria-label="时间筛选">
+            <label className="pattern-wr-type-filter">
+              <span>时间</span>
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value as AlertStatsTimeFilter)}
+                aria-label="按时间范围筛选"
               >
-                {f.label}
-              </button>
-            ))}
+                {TIME_FILTERS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <label className="pattern-wr-type-filter">
             <span>类型</span>

@@ -237,6 +237,45 @@
 |------|------|--------|------|
 | `refresh` | bool | `false` | 强制重新抓取（仅本机） |
 
+#### boards 响应结构
+
+```json
+{
+  "ok": true,
+  "updated_at": "2026-09-07T14:45:53Z",
+  "boards": [
+    {
+      "platform": "binance",
+      "label": "币安广场热榜",
+      "source_url": "https://www.binance.com/zh-CN/square/trending",
+      "items": [
+        {
+          "rank": 1,
+          "title": "HYPE 突破 88 美元创历史新高",
+          "url": "https://www.binance.com/zh-CN/square/post/123456",
+          "summary": "Hyperliquid 生态爆发，24 小时销毁 8730 枚……",
+          "heat": "98543",
+          "tags": ["Hyperliquid", "DeFi"],
+          "published_at": "2026-09-06T10:00:00Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### 单条 item 字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `rank` | int | 热榜排名 |
+| `title` | string | 帖子标题 |
+| `url` | string | 原始链接 |
+| `summary` | string | 内容摘要（最长 240 字） |
+| `heat` | string | 热度值（热分 / 阅读数等，平台各异） |
+| `tags` | string[] | 标签列表 |
+| `published_at` | string | 发布时间（UTC ISO 8601）。热榜帖子无原始时间时，首次抓取用获取时刻，第二次抓取后复用历史时间；BlockBeats 快讯为真实发布时间 |
+
 ---
 
 ### 5. `POST /api/v1/refresh`
@@ -277,7 +316,7 @@
 | OKX 星球热门 | 社区热榜 | 1h | OKX Orbit Topics |
 | Foresight News | 新闻源 | 1h | Foresightnews.pro 最新 |
 | CoinDesk | 新闻源 | 1h | 最新加密货币新闻 |
-| BlockBeats 快讯 | 快讯源 | 1h | The BlockBeats 实时快讯 |
+| BlockBeats 快讯 | 快讯源 | 1h | The BlockBeats 实时快讯，含真实发布时间 |
 
 ### 标签体系（父子类目）
 

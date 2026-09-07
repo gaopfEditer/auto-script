@@ -83,6 +83,7 @@ Twitter 建议 **另一个 profile + 9223**，避免和 Discord 抢同一个浏�
 需要 OI 时再开 `pnpm run oi:start`（:8765）。`collect:ui` 里的 supervisor 可按 env 自动拉起。
 
 平台热点（`news_mornitor`，:8770）由 `collect:ui` 自动守护（`NEWS_AUTO_START=1`）；顶栏「平台热点」iframe。左侧金十+[PANews 日历](https://www.panewslab.com/zh/calendar)，右侧币安 [广场热榜](https://www.binance.com/zh-CN/square/trends) / OKX [星球话题](https://www.okx.com/zh-hans/orbit/topics) / [Foresight](https://foresightnews.pro/) / [CoinDesk 中文](https://www.coindesk.com/zh/latest-crypto-news)。手动：`pnpm run news:start`。
+- 热榜 items 新增 `published_at`（ISO UTC 时间，优先取 API 发布时间；API 不可用时回退为抓取时刻），前端据此展示贴文时间。
 
 | 端口 | 谁 |
 |------|-----|

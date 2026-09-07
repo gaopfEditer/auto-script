@@ -25,12 +25,30 @@ _LEV_100 = frozenset({"BTC", "ETH", "SOL"})
 
 _TIME_FILTER_MS: dict[str, int] = {
     "2h": 2 * 60 * 60 * 1000,
+    "4h": 4 * 60 * 60 * 1000,
     "8h": 8 * 60 * 60 * 1000,
     "24h": 24 * 60 * 60 * 1000,
+    "3d": 3 * 24 * 60 * 60 * 1000,
     "7d": 7 * 24 * 60 * 60 * 1000,
+    "14d": 14 * 24 * 60 * 60 * 1000,
     "30d": 30 * 24 * 60 * 60 * 1000,
-    "1m": 30 * 24 * 60 * 60 * 1000,
+    "1m": 1 * 30 * 24 * 60 * 60 * 1000,
+    "2m": 2 * 30 * 24 * 60 * 60 * 1000,
+    "3m": 3 * 30 * 24 * 60 * 60 * 1000,
 }
+
+# 固定周期下拉集合（与前端保持一致）
+FIXED_INTERVALS = ["4h", "8h", "24h", "3d", "1w", "2w", "1m", "2m", "3m"]
+
+def _interval_in_fixed(iv: str) -> str | None:
+    """判断原始 interval 是否落在固定集合中；尝试归一化（w → 7d / m → 30d）。"""
+    if not iv:
+        return None
+    iv = str(iv).strip().lower()
+    norm: dict[str, str] = {"1w": "7d", "2w": "14d", "1mo": "1m", "2mo": "2m", "3mo": "3m"}
+    if iv in norm:
+        iv = norm[iv]
+    return iv if iv in FIXED_INTERVALS else None
 
 _memory: list[dict[str, Any]] | None = None
 
@@ -191,18 +209,23 @@ def filter_alert_stats(
 
 
 def list_interval_options(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """周期下拉：含胜率、总盈亏（相对当前时间筛选全集）。"""
+    """周期下拉：固定集合（4h/8h/24h/3d/1w/2w/1m/2m/3m），含胜率、合计盈亏。"""
     rows = items if items is not None else _load()
-    groups: dict[str, list[dict[str, Any]]] = {}
+    # 先按固定顺序把各 bucket 建好
+    buckets: dict[str, list[dict[str, Any]]] = {iv: [] for iv in FIXED_INTERVALS}
     for r in rows:
-        lab = str(r.get("interval") or "").strip() or "—"
-        groups.setdefault(lab, []).append(r)
+        iv = _interval_in_fixed(str(r.get("interval") or ""))
+        if iv:
+            buckets[iv].append(r)
     out: list[dict[str, Any]] = []
-    for lab, bucket in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+    for iv in FIXED_INTERVALS:
+        bucket = buckets[iv]
+        if not bucket:
+            continue
         s = summarize(bucket)
         out.append(
             {
-                "label": lab,
+                "label": iv,
                 "count": len(bucket),
                 "wins": s["wins"],
                 "losses": s["losses"],
