@@ -217,6 +217,8 @@ export type AlertStatsTypeOption = {
   totalPnlPct: number | null;
 };
 
+export type AlertStatsIntervalOption = AlertStatsTypeOption;
+
 export type AlertStatsPageResult = {
   items: AlertStatsRecord[];
   total: number;
@@ -225,6 +227,7 @@ export type AlertStatsPageResult = {
   pages: number;
   summary: AlertWinRateSummary;
   typeOptions: AlertStatsTypeOption[];
+  intervalOptions: AlertStatsIntervalOption[];
   /** @deprecated 用 typeOptions */
   typeLabels: string[];
 };
@@ -254,16 +257,19 @@ export async function fetchAlertStatsPage(opts: {
   pageSize?: number;
   timeFilter?: AlertStatsTimeFilter;
   typeFilter?: string;
+  intervalFilter?: string;
 }): Promise<AlertStatsPageResult> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? ALERT_STATS_PAGE_SIZE));
   const timeFilter = opts.timeFilter ?? "all";
   const typeFilter = opts.typeFilter && opts.typeFilter !== "all" ? opts.typeFilter : "all";
+  const intervalFilter = opts.intervalFilter && opts.intervalFilter !== "all" ? opts.intervalFilter : "all";
   const params = new URLSearchParams({
     page: String(page),
     pageSize: String(pageSize),
     time: timeFilter,
     type: typeFilter,
+    interval: intervalFilter,
   });
   const empty: AlertStatsPageResult = {
     items: [],
@@ -289,6 +295,7 @@ export async function fetchAlertStatsPage(opts: {
       pages?: number;
       summary?: Partial<AlertWinRateSummary>;
       typeOptions?: AlertStatsTypeOption[];
+      intervalOptions?: AlertStatsIntervalOption[];
       typeLabels?: string[];
     };
     if (!body?.ok || !Array.isArray(body.items)) return empty;
@@ -298,6 +305,7 @@ export async function fetchAlertStatsPage(opts: {
       ),
     );
     const typeOptions = normalizeTypeOptions(body.typeOptions, body.typeLabels, items);
+    const intervalOptions = normalizeIntervalOptions(body.intervalOptions, items);
     return {
       items,
       total: Number(body.total) || items.length,
@@ -306,6 +314,7 @@ export async function fetchAlertStatsPage(opts: {
       pages: Math.max(1, Number(body.pages) || 1),
       summary: coerceSummary(body.summary, items),
       typeOptions,
+      intervalOptions,
       typeLabels: typeOptions.map((t) => t.label),
     };
   } catch {
@@ -360,6 +369,59 @@ export function formatAlertTypeOptionLabel(opt: AlertStatsTypeOption): string {
   return `${opt.label}${n} · ${wr} · ${pnl}`;
 }
 
+export function formatIntervalOptionLabel(opt: AlertStatsIntervalOption): string {
+  return formatAlertTypeOptionLabel(/** @type {AlertStatsTypeOption} */ (opt));
+}
+
+/** 周期下拉回退（前端本地统计） */
+function listAlertStatsIntervalOptions(records: AlertStatsRecord[]): AlertStatsIntervalOption[] {
+  const groups = new Map<string, AlertStatsRecord[]>();
+  for (const r of records) {
+    const iv = String(r.interval || "").trim() || "—";
+    const arr = groups.get(iv) || [];
+    arr.push(r);
+    groups.set(iv, arr);
+  }
+  return [...groups.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], "zh-CN"))
+    .map(([label, rows]) => {
+      const s = summarizeAlertWinRate(rows);
+      return {
+        label,
+        count: rows.length,
+        wins: s.wins,
+        losses: s.losses,
+        winRate: s.winRate,
+        totalPnlPct: s.totalPnlPct,
+      };
+    });
+}
+
+function normalizeIntervalOptions(
+  rawOpts: AlertStatsIntervalOption[] | undefined,
+  pageItems: AlertStatsRecord[],
+): AlertStatsIntervalOption[] {
+  if (Array.isArray(rawOpts) && rawOpts.length) {
+    return rawOpts
+      .filter((o) => o && typeof o.label === "string")
+      .map((o) => ({
+        label: String(o.label),
+        count: Number(o.count) || 0,
+        wins: Number(o.wins) || 0,
+        losses: Number(o.losses) || 0,
+        winRate:
+          o.winRate == null || !Number.isFinite(Number(o.winRate))
+            ? null
+            : Number(o.winRate),
+        totalPnlPct:
+          o.totalPnlPct == null || !Number.isFinite(Number(o.totalPnlPct))
+            ? null
+            : Number(o.totalPnlPct),
+      }));
+  }
+  return listAlertStatsIntervalOptions(pageItems);
+}
+
 /** 从后台拉取近期共享库（供 Ticker/核实本地缓存），与本地合并 */
 export async function syncAlertStatsFromServer(): Promise<AlertStatsRecord[]> {
   try {
@@ -373,6 +435,7 @@ export async function syncAlertStatsFromServer(): Promise<AlertStatsRecord[]> {
         pageSize: ALERT_STATS_PAGE_SIZE,
         timeFilter: "7d",
         typeFilter: "all",
+        intervalFilter: "all",
       });
       pages = chunk.pages;
       mergedPages.push(...chunk.items);

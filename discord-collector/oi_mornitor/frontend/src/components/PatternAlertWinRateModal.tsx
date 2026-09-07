@@ -12,6 +12,8 @@ import {
   reverifyAlertStatsByKeys,
   formatAlertTotalPnlPct,
   formatAlertTypeOptionLabel,
+  formatIntervalOptionLabel,
+  type AlertStatsIntervalOption,
   type AlertStatsRecord,
   type AlertStatsTimeFilter,
   type AlertStatsTypeOption,
@@ -143,10 +145,12 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
 }: Props) {
   const [filter, setFilter] = useState<AlertStatsTimeFilter>("7d");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [intervalFilter, setIntervalFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<AlertStatsRecord[]>([]);
   const [summary, setSummary] = useState<AlertWinRateSummary>(EMPTY_SUMMARY);
   const [typeOptions, setTypeOptions] = useState<AlertStatsTypeOption[]>([]);
+  const [intervalOptions, setIntervalOptions] = useState<AlertStatsIntervalOption[]>([]);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [loadingList, setLoadingList] = useState(false);
@@ -173,10 +177,12 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
         pageSize: ALERT_STATS_PAGE_SIZE,
         timeFilter: filter,
         typeFilter,
+        intervalFilter,
       });
       setRows(res.items);
       setSummary(res.summary);
       setTypeOptions(res.typeOptions);
+      setIntervalOptions(res.intervalOptions ?? []);
       setTotal(res.total);
       setPages(res.pages);
       setPage(res.page);
@@ -214,7 +220,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     setPage(1);
     void reloadPage({ page: 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, typeFilter]);
+  }, [filter, typeFilter, intervalFilter]);
 
   useEffect(() => {
     if (!open) return;
@@ -483,6 +489,21 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
               {typeOptions.map((t) => (
                 <option key={t.label} value={t.label}>
                   {formatAlertTypeOptionLabel(t)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="pattern-wr-type-filter">
+            <span>周期</span>
+            <select
+              value={intervalFilter}
+              onChange={(e) => setIntervalFilter(e.target.value)}
+              aria-label="按周期筛选"
+            >
+              <option value="all">全部周期</option>
+              {intervalOptions.map((o) => (
+                <option key={o.label} value={o.label}>
+                  {formatIntervalOptionLabel(o)}
                 </option>
               ))}
             </select>

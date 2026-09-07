@@ -170,6 +170,7 @@ def filter_alert_stats(
     *,
     time_filter: str | None = None,
     type_label: str | None = None,
+    interval: str | None = None,
     now_ms: int | None = None,
 ) -> list[dict[str, Any]]:
     rows = items if items is not None else _load()
@@ -183,7 +184,33 @@ def filter_alert_stats(
     tl = (type_label or "").strip()
     if tl and tl != "all":
         rows = [r for r in rows if _type_label_of(r) == tl]
+    iv = (interval or "").strip()
+    if iv and iv != "all":
+        rows = [r for r in rows if str(r.get("interval") or "").strip() == iv]
     return rows
+
+
+def list_interval_options(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """周期下拉：含胜率、总盈亏（相对当前时间筛选全集）。"""
+    rows = items if items is not None else _load()
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        lab = str(r.get("interval") or "").strip() or "—"
+        groups.setdefault(lab, []).append(r)
+    out: list[dict[str, Any]] = []
+    for lab, bucket in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        s = summarize(bucket)
+        out.append(
+            {
+                "label": lab,
+                "count": len(bucket),
+                "wins": s["wins"],
+                "losses": s["losses"],
+                "winRate": s["winRate"],
+                "totalPnlPct": s.get("totalPnlPct"),
+            }
+        )
+    return out
 
 
 def list_type_labels(items: list[dict[str, Any]] | None = None) -> list[str]:
@@ -247,13 +274,15 @@ def list_alert_stats_page(
     page_size: int = _PAGE_SIZE_DEFAULT,
     time_filter: str | None = None,
     type_label: str | None = None,
+    interval: str | None = None,
 ) -> dict[str, Any]:
-    """分页列表；summary / typeOptions 相对当前时间筛选；type 再滤列表。"""
+    """分页列表；summary / typeOptions / intervalOptions 相对当前时间筛选全集；type/interval 再滤列表。"""
     page = max(1, int(page or 1))
     size = min(100, max(1, int(page_size or _PAGE_SIZE_DEFAULT)))
-    timed = filter_alert_stats(time_filter=time_filter, type_label=None)
+    timed = filter_alert_stats(time_filter=time_filter, type_label=None, interval=None)
     type_opts = list_type_options(timed)
-    filtered = filter_alert_stats(timed, time_filter=None, type_label=type_label)
+    interval_opts = list_interval_options(timed)
+    filtered = filter_alert_stats(timed, time_filter=None, type_label=type_label, interval=interval)
     total = len(filtered)
     pages = max(1, (total + size - 1) // size) if total else 1
     if page > pages:
@@ -268,6 +297,7 @@ def list_alert_stats_page(
         "pages": pages,
         "summary": summarize(filtered),
         "typeOptions": type_opts,
+        "intervalOptions": interval_opts,
         # 兼容旧前端
         "typeLabels": [x["label"] for x in type_opts],
     }

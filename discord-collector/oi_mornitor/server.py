@@ -252,11 +252,13 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
     page_size = int(size_raw) if size_raw.isdigit() else 100
     time_filter = str(q.get("time") or q.get("timeFilter") or "all").strip() or "all"
     type_label = str(q.get("type") or q.get("typeLabel") or "all").strip() or "all"
+    interval = str(q.get("interval") or q.get("iv") or "all").strip() or "all"
     payload = list_alert_stats_page(
         page=page,
         page_size=page_size,
         time_filter=time_filter,
         type_label=type_label,
+        interval=interval,
     )
     return _json_response({"ok": True, **payload})
 
