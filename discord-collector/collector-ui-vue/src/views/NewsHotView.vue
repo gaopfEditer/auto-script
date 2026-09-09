@@ -84,6 +84,18 @@ async function refreshStatus() {
   }
 }
 
+async function restartAndRefresh() {
+  loading.value = true;
+  try {
+    await fetch("/api/news/restart", { method: "POST" });
+  } catch {
+    /* ignore — let refreshStatus show result */
+  }
+  // 延迟等进程拉起
+  await new Promise((r) => setTimeout(r, 3000));
+  await refreshStatus();
+}
+
 onMounted(() => {
   void refreshStatus();
   pollTimer = setInterval(() => void refreshStatus(), 5_000);
@@ -112,7 +124,7 @@ onUnmounted(() => {
           嵌入地址：<code>{{ iframeSrc || embedUrl || "—" }}</code>
           <span v-if="latencyMs != null"> · {{ latencyMs }}ms</span>
         </p>
-        <button type="button" class="retry" @click="refreshStatus">重新探测</button>
+        <button type="button" class="retry" @click="restartAndRefresh">重新探测</button>
       </div>
     </div>
     <iframe

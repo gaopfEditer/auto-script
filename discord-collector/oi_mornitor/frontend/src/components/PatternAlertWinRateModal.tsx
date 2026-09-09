@@ -26,11 +26,13 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onOpenSymbol?: (symbol: string, interval?: string) => void;
-  /** 列表重拉/筛选后同步头部胜率 */
-  onStatsChange?: () => void;
+  /** 列表重拉/筛选后同步头部胜率；后端 summary 传来时一并更新 ticker 头部 */
+  onStatsChange?: (summary?: AlertWinRateSummary) => void;
   /** 顶部滚动条是否继续捕获新 SSE 信号（仅 operator 有意义） */
   captureEnabled?: boolean;
   onCaptureEnabledChange?: (enabled: boolean) => void;
+  /** Modal 打开时传入当前 ticker 头部的胜率；后端数据返回后以此为基准同步回去 */
+  initialSummary?: AlertWinRateSummary;
 }
 
 const TIME_FILTERS: { id: AlertStatsTimeFilter | "all"; label: string }[] = [
@@ -149,13 +151,16 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   onStatsChange,
   captureEnabled = true,
   onCaptureEnabledChange,
+  initialSummary,
 }: Props) {
   const [filter, setFilter] = useState<AlertStatsTimeFilter>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [intervalFilter, setIntervalFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<AlertStatsRecord[]>([]);
-  const [summary, setSummary] = useState<AlertWinRateSummary>(EMPTY_SUMMARY);
+  const [summary, setSummary] = useState<AlertWinRateSummary>(
+    initialSummary ?? EMPTY_SUMMARY,
+  );
   const [typeOptions, setTypeOptions] = useState<AlertStatsTypeOption[]>([]);
   const [intervalOptions, setIntervalOptions] = useState<AlertStatsIntervalOption[]>([]);
   const [total, setTotal] = useState(0);
@@ -171,8 +176,8 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   const canWriteStats = useMemo(() => isOiOperator(), []);
   const showCaptureToggle = canWriteStats && typeof onCaptureEnabledChange === "function";
 
-  const bump = () => {
-    onStatsChange?.();
+  const bump = (s?: AlertWinRateSummary) => {
+    onStatsChange?.(s ?? summary);
   };
 
   const reloadPage = async (opts?: { page?: number }) => {

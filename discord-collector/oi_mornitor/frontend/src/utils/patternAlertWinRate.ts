@@ -1051,7 +1051,7 @@ export function alertStatsPnlHover(rec: AlertStatsRecord): string {
 export type AlertStatsTimeFilter = "2h" | "4h" | "8h" | "24h" | "3d" | "7d" | "14d" | "30d" | "1m" | "2m" | "3m" | "all";
 
 /** 固定周期下拉集合（与后端 FIXED_INTERVALS 保持一致） */
-export const FIXED_INTERVALS: string[] = ["4h", "8h", "24h", "3d", "1w", "2w", "1m", "2m", "3m"];
+export const FIXED_INTERVALS: string[] = ["15m", "1h", "4h"];
 
 /**
  * 周期下拉：固定集合 + 覆盖 backend 实际统计（有数据时用 backend，无数据时只显示 label）。

@@ -411,8 +411,12 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
     setCaptureEnabled(on);
   }, []);
 
-  const refreshStatsUi = useCallback(() => {
-    setWinSummary(summarizeAlertWinRate(loadAlertStats()));
+  const refreshStatsUi = useCallback((incoming?: AlertWinRateSummary) => {
+    if (incoming) {
+      setWinSummary(incoming);
+    } else {
+      setWinSummary(summarizeAlertWinRate(loadAlertStats()));
+    }
     setOutcomes(outcomeByKeyMap());
   }, []);
 
@@ -764,6 +768,7 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
         open={statsOpen}
         onClose={() => setStatsOpen(false)}
         onStatsChange={refreshStatsUi}
+        initialSummary={winSummary}
         captureEnabled={captureEnabled}
         onCaptureEnabledChange={setCaptureEnabledPersist}
         onOpenSymbol={(sym, interval) => {

@@ -38,14 +38,30 @@ _TIME_FILTER_MS: dict[str, int] = {
 }
 
 # 固定周期下拉集合（与前端保持一致）
-FIXED_INTERVALS = ["4h", "8h", "24h", "3d", "1w", "2w", "1m", "2m", "3m"]
+FIXED_INTERVALS = ["15m", "1h", "4h"]
 
 def _interval_in_fixed(iv: str) -> str | None:
     """判断原始 interval 是否落在固定集合中；尝试归一化（w → 7d / m → 30d）。"""
     if not iv:
         return None
     iv = str(iv).strip().lower()
-    norm: dict[str, str] = {"1w": "7d", "2w": "14d", "1mo": "1m", "2mo": "2m", "3mo": "3m"}
+    norm: dict[str, str] = {
+        "1h": "1h",
+        "1w": "7d",
+        "2w": "14d",
+        "1mo": "1m",
+        "2mo": "2m",
+        "3mo": "3m",
+        # 兼容后端存的英文别名
+        "15min": "15m",
+        "30min": "30m",
+        "1hour": "1h",
+        "4hour": "4h",
+        "8hour": "8h",
+        "1day": "24h",
+        "3day": "3d",
+        "1week": "7d",
+    }
     if iv in norm:
         iv = norm[iv]
     return iv if iv in FIXED_INTERVALS else None
@@ -299,12 +315,20 @@ def list_alert_stats_page(
     type_label: str | None = None,
     interval: str | None = None,
 ) -> dict[str, Any]:
-    """分页列表；summary / typeOptions / intervalOptions 相对当前时间筛选全集；type/interval 再滤列表。"""
+    """分页列表；typeOptions/intervalOptions 互相联动（选了什么 filter，另一个的 count 就跟着变）。"""
     page = max(1, int(page or 1))
     size = min(100, max(1, int(page_size or _PAGE_SIZE_DEFAULT)))
+    # 基础时间筛选
     timed = filter_alert_stats(time_filter=time_filter, type_label=None, interval=None)
-    type_opts = list_type_options(timed)
-    interval_opts = list_interval_options(timed)
+    # intervalOpts 叠加 type 过滤（联动）
+    interval_opts = list_interval_options(
+        filter_alert_stats(timed, time_filter=None, type_label=type_label, interval=None)
+    )
+    # typeOpts 叠加 interval 过滤（联动）
+    type_opts = list_type_options(
+        filter_alert_stats(timed, time_filter=None, type_label=None, interval=interval)
+    )
+    # 列表用全部过滤
     filtered = filter_alert_stats(timed, time_filter=None, type_label=type_label, interval=interval)
     total = len(filtered)
     pages = max(1, (total + size - 1) // size) if total else 1
@@ -328,6 +352,11 @@ def list_alert_stats_page(
 def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
     """TG 推送形态/结构卡片时登记一条待核实信号。"""
     if not isinstance(alert, dict):
+        return None
+    # 彻底屏蔽已停用的 30m 周期和破底翻确认
+    iv = str(alert.get("interval") or "").strip()
+    kind = str(alert.get("kind") or alert.get("type_label") or "").strip()
+    if iv in ("30m", "30min") or kind == "破底翻确认" or kind == "spring_2b":
         return None
     side = _side_from_alert(alert)
     if side not in ("long", "short"):

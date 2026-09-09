@@ -132,7 +132,7 @@ def detect_structure_events(df: pd.DataFrame) -> list[dict[str, Any]]:
     events.extend(_detect_hs_vegas(work))
     events.extend(_detect_m_top_vegas(work))
     events.extend(_detect_bottom_reversal(work))
-    events.extend(_detect_spring_2b(work))
+    # events.extend(_detect_spring_2b(work))  # 破底翻确认：已停用
     events.extend(_detect_liquidity_sweep(work))
     events.extend(_detect_curvature_decay(work))
     return events

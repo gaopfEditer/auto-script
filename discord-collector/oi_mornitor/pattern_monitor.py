@@ -95,7 +95,7 @@ _LONG_PATTERN_KINDS = frozenset({
     "continuous_lower_wick",
     "continuous_non_lower_wick",
 })
-_INTERVAL_SECONDS = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+_INTERVAL_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 
 
 def _combo_side_hint(kind: str) -> str:
@@ -1689,6 +1689,11 @@ class PatternMonitorEngine:
                 hits = [h for h in hits if str(h.get("kind")) != "m_top_vegas_break"]
             if "bottom_secondary_test" in kinds:
                 hits = [h for h in hits if str(h.get("kind")) != "spring_2b"]
+
+            # 彻底屏蔽已停用的 30m 周期和破底翻确认（spring_2b）
+            if iv == "30m":
+                hits = []
+            hits = [h for h in hits if str(h.get("kind") or "") != "spring_2b"]
 
             out: list[dict[str, Any]] = []
             for hit in hits:

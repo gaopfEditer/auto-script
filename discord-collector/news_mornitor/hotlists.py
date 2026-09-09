@@ -7,6 +7,7 @@ import logging
 import re
 import zlib
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 

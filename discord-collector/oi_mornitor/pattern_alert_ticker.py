@@ -178,6 +178,11 @@ def record_ticker_from_alert(alert: dict[str, Any]) -> dict[str, Any] | None:
     sym = str(alert.get("symbol") or "").strip()
     if not sym:
         return None
+    # 彻底屏蔽已停用的 30m 周期和破底翻确认
+    iv = str(alert.get("interval") or "").strip()
+    kind = str(alert.get("kind") or alert.get("type_label") or "").strip()
+    if iv in ("30m", "30min") or kind == "破底翻确认" or kind == "spring_2b":
+        return None
     key = _item_key_from_alert(alert)
     if not key or key.count(":") < 2:
         return None
@@ -231,6 +236,9 @@ def backfill_ticker_from_stats(*, limit: int = 40) -> int:
             continue
         type_label = str(rec.get("typeLabel") or "")
         interval = str(rec.get("interval") or "")
+        # 彻底屏蔽已停用的 30m 周期和破底翻确认
+        if interval.strip() in ("30m", "30min") or type_label.strip() == "破底翻确认":
+            continue
         dir_cn = str(rec.get("dir") or "—")
         reason = f"{type_label}·{interval}" if interval and type_label else (type_label or "信号")
         alert = {

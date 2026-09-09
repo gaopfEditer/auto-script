@@ -419,15 +419,24 @@ async def handle_patterns_chart(request: web.Request) -> web.Response:
     svc = get_service()
     session = await svc._ensure_session()
     try:
-        data = await svc.pattern_engine.get_chart_data(
-            session,
-            symbol,
-            base_url=svc.radar.base_url,
-            pool_rows=svc.radar.last_all_rows,
-            interval=interval,
-            limit=limit,
-            end_time=end_time,
+        # 30s 请求超时：避免 Binance 418 时备选所卡死导致图表挂起
+        data = await asyncio.wait_for(
+            asyncio.shield(
+                svc.pattern_engine.get_chart_data(
+                    session,
+                    symbol,
+                    base_url=svc.radar.base_url,
+                    pool_rows=svc.radar.last_all_rows,
+                    interval=interval,
+                    limit=limit,
+                    end_time=end_time,
+                )
+            ),
+            timeout=30,
         )
+    except asyncio.TimeoutError:
+        logger.warning("形态图表请求超时（30s）：%s %s — Binance 可能 418 且备选所卡住", symbol, interval)
+        return _json_response({"ok": False, "error": "图表加载超时（30s），Binance 可能被限流，请稍后重试"}, status=504)
     except Exception as exc:
         logger.exception("形态图表拉取失败 %s", symbol)
         return _json_response({"ok": False, "error": str(exc)}, status=500)

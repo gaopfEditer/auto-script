@@ -490,6 +490,22 @@ async function main() {
     }
   });
 
+  // POST /api/news/restart — 强制重启 news_mornitor 进程
+  app.post("/api/news/restart", async (_req, res) => {
+    const sup = newsSupervisor;
+    if (!sup) { res.json({ ok: false, error: "news-supervisor 未初始化" }); return; }
+    try {
+      if (typeof sup.ensureOnce === "function") {
+        const ok = await sup.ensureOnce();
+        res.json({ ok, message: ok ? "news_mornitor 已就绪" : "已触发重启，请稍后刷新" });
+      } else {
+        res.json({ ok: false, error: "supervisor 不支持 ensureOnce" });
+      }
+    } catch (e) {
+      res.json({ ok: false, error: String(/** @type {Error} */(e).message ?? e) });
+    }
+  });
+
   app.get("/api/config", (_req, res) => {
     res.json({ ok: true, mysql: !mysqlOffline, ...getDebugConfig() });
   });

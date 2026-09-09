@@ -30,19 +30,6 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
     ],
   },
   {
-    label: "破底翻确认",
-    side: "多",
-    summary: "跌破前低后 1～3 根内放量收回（2B / Wyckoff Spring）。",
-    impl: "structure_signals._detect_spring_2b",
-    conditions: [
-      "① 存在 swing low 前低 L1（摆动窗 order=5）",
-      "② 之后某根低点刺破 L1（假突破）",
-      "③ 刺破后 1～3 根内：收盘重新站上 L1，且为阳线",
-      "④ 确认柱量能 ≥ 1.3×MA20",
-      "⑤ 入场价取收回确认柱收盘；防守参考刺破低点",
-    ],
-  },
-  {
     label: "顶部结构确认",
     side: "空",
     summary: "头肩/M顶破 Vegas、流动性掠夺或圆弧动量衰竭（同标签多种子形态）。",
