@@ -1,10 +1,7 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 
 defineOptions({ name: "NewsHotView" });
-
-/** 与 news_mornitor/frontend/public/index.html 的 app.js?v= 对齐，逼 iframe 换文档 */
-const NEWS_UI_V = "16";
 
 const active = ref(false);
 const loading = ref(true);
@@ -16,44 +13,21 @@ const iframeReady = ref(false);
 
 let pollTimer = null;
 
-/** @param {string} raw */
-function normalizeEmbed(raw) {
-  const s = String(raw || "").trim();
-  if (!s) return "";
-  try {
-    const u = new URL(s);
-    if (!u.pathname.endsWith("/")) u.pathname = `${u.pathname}/`;
-    if (!u.searchParams.get("v")) u.searchParams.set("v", NEWS_UI_V);
-    return u.href;
-  } catch {
-    const base = s.replace(/\/?$/, "/");
-    return base.includes("?") ? base : `${base}?v=${NEWS_UI_V}`;
-  }
-}
-
 /**
+ * 根据当前页面 URL 判断：
+ * - http://localhost/* → 嵌本机 news (http://127.0.0.1:8770/)
+ * - https://* → 生产同源 /news/index.html
  * @param {Record<string, unknown>} j
  */
 function pickEmbedUrl(j) {
-  const host = typeof location !== "undefined" ? location.hostname : "";
-  const pageIsLocal = host === "localhost" || host === "127.0.0.1";
-  const apiBase = normalizeEmbed(String(j.apiBase || ""));
-  const fromApi = normalizeEmbed(String(j.publicEmbedUrl || j.embedUrl || ""));
-  const fromEnv = normalizeEmbed(String(import.meta.env.VITE_NEWS_PUBLIC_EMBED_URL || ""));
-
-  // 优先带 ?v= 的嵌入地址，避免 iframe 一直吃旧静态资源（含旧 row-score UI）
-  if (pageIsLocal) {
-    if (fromApi) return fromApi;
-    if (apiBase) return apiBase;
+  const protocol = String(typeof location !== "undefined" ? location.protocol : "https:");
+  if (protocol === "http:") {
     return "http://127.0.0.1:8770/";
   }
-  if (fromEnv) return fromEnv;
-  if (fromApi) return fromApi;
-  if (apiBase) return apiBase;
-  return "http://127.0.0.1:8770/";
+  return "/news/index.html";
 }
 
-const iframeSrc = computed(() => embedUrl.value);
+const iframeSrc = embedUrl;
 
 async function refreshStatus() {
   try {

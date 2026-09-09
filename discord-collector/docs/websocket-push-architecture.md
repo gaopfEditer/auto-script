@@ -267,6 +267,7 @@ pnpm run collect:ui    # 同时提供静态页 + API + WS
 cd discord-collector
 pnpm run ui:build
 rsync -avz --delete public/collector-ui/ user@your-server:/var/www/discord-collector-ui/
+rsync -avz --delete oi_mornitor/public/oi-dist/ user@your-server:/var/www/discord-collector-ui/oi-dist/
 ```
 
 **本地建立反向隧道（保持常开）：**

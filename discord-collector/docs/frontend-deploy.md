@@ -341,6 +341,7 @@ cd discord-collector
 # 如需改可见页面，先编辑 .env.production 的 VITE_UI_PAGES
 pnpm run ui:build
 rsync -avz --delete public/collector-ui/ user@your-server:/var/www/discord-collector-ui/
+rsync -avz --delete oi_mornitor/public/oi-dist/ user@your-server:/var/www/discord-collector-ui/oi-dist/
 # 浏览器强刷 https://ui.example.com/show
 ```
 
@@ -417,7 +418,10 @@ pnpm run dev:ui-vue
 
 # —— 打部署包（deploy：默认 show+cards）——
 pnpm run ui:build
+# OI 前端也一起打包（部署后 iframe 走 /oi/ 同域静态，无需 frp）
+cd oi_mornitor/frontend && pnpm build && cd ../..
 rsync -avz --delete public/collector-ui/ user@host:/var/www/discord-collector-ui/
+rsync -avz --delete oi_mornitor/public/oi-dist/ user@host:/var/www/discord-collector-ui/oi-dist/
 
 # —— 本地后台 + frp（示例）——
 pnpm run collect:ui

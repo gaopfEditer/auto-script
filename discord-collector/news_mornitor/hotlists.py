@@ -363,7 +363,7 @@ def _parse_foresight_feed(rows: list[dict[str, Any]], *, limit: int = 30) -> lis
                 summary=brief[:240],
                 heat="重要" if body.get("is_important") else None,
                 tags=tags[:6],
-                published_at=_utc_now(),
+                published_at=None,
             )
         )
         if len(out) >= limit:
@@ -395,7 +395,7 @@ def _parse_foresight_html(html: str) -> list[dict[str, Any]]:
                 rank=len(out) + 1,
                 title=title[:180],
                 url=href,
-                published_at=_utc_now(),
+                published_at=None,
             )
         )
         if len(out) >= 30:
@@ -470,7 +470,7 @@ def _parse_coindesk_html(html: str) -> list[dict[str, Any]]:
                 rank=len(out) + 1,
                 title=title[:180],
                 url=href,
-                published_at=_utc_now(),
+                published_at=None,
             )
         )
         if len(out) >= 30:
@@ -487,7 +487,7 @@ def _parse_coindesk_html(html: str) -> list[dict[str, Any]]:
         slug = href.rstrip("/").split("/")[-1].replace("-", " ")
         seen.add(href)
         out.append(
-            _item(platform="coindesk", rank=len(out) + 1, title=slug[:180], url=href, published_at=_utc_now())
+            _item(platform="coindesk", rank=len(out) + 1, title=slug[:180], url=href, published_at=None)
         )
         if len(out) >= 30:
             break
@@ -551,7 +551,7 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
                     url=f"https://www.theblockbeats.info/flash/{aid}",
                     summary=summary[:280],
                     tags=tags,
-                    published_at=_utc_now(),
+                    published_at=None,
                 )
             )
         return out
@@ -577,7 +577,7 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
                 title=title[:180],
                 url=f"https://www.theblockbeats.info/flash/{aid}",
                 summary=summary[:280],
-                published_at=_utc_now(),
+                published_at=None,
             )
         )
         if len(out) >= limit:
@@ -655,7 +655,7 @@ def _parse_okx_html(html: str) -> list[dict[str, Any]]:
                 rank=len(out) + 1,
                 title=title[:160],
                 url=urljoin("https://www.okx.com", path),
-                published_at=_utc_now(),
+                published_at=None,
             )
         )
         if len(out) >= 30:
@@ -691,7 +691,7 @@ def _parse_binance_html(html: str) -> list[dict[str, Any]]:
                 continue
             seen.add(href)
             out.append(
-                _item(platform="binance", rank=len(out) + 1, title=title[:160], url=href, published_at=_utc_now())
+                _item(platform="binance", rank=len(out) + 1, title=title[:160], url=href, published_at=None)
             )
             if len(out) >= 30:
                 return out
@@ -796,7 +796,7 @@ def _cdp_hotlists() -> dict[str, list[dict[str, Any]]]:
                             rank=len(result["binance"]) + 1,
                             title=title[:160],
                             url=str(row.get("href") or BINANCE_TRENDS_URL),
-                            published_at=_utc_now(),
+                            published_at=None,
                         )
                     )
             logger.info("币安 CDP %d 条", len(result["binance"]))
@@ -820,7 +820,7 @@ def _cdp_hotlists() -> dict[str, list[dict[str, Any]]]:
                             rank=i,
                             title=text[:160],
                             url=str(row.get("href") or OKX_TOPICS_URL),
-                            published_at=_utc_now(),
+                            published_at=None,
                         )
                     )
             logger.info("OKX CDP %d 条", len(result["okx"]))

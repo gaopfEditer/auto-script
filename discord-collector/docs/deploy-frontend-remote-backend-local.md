@@ -103,6 +103,7 @@ discord-collector/public/collector-ui/
 
 ```bash
 rsync -avz --delete public/collector-ui/ user@your-server:/var/www/discord-collector-ui/
+rsync -avz --delete oi_mornitor/public/oi-dist/ user@your-server:/var/www/discord-collector-ui/oi-dist/
 ```
 
 ---

@@ -1,9 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import {
-  OI_EMBED_PATH_EVENT,
-  getPendingOiEmbedPath,
-} from "../composables/useOnboardingGuide.js";
+import { onMounted, onUnmounted, ref } from "vue";
 
 defineOptions({ name: "OiMonitorView" });
 
@@ -13,84 +9,28 @@ const embedUrl = ref("");
 const error = ref("");
 const hint = ref("");
 const latencyMs = ref(null);
-/** OI 前端构建戳：变化时强制重载 iframe（KeepAlive 否则仍跑旧 JS） */
-const uiBuild = ref("");
 /** 一旦激活过就保留 iframe，避免 status 抖动拆掉页面状态 */
 const iframeReady = ref(false);
-/** 新手指引要求的嵌入子路径，如 /patterns */
-const forcedEmbedPath = ref(/** @type {string | null} */ (getPendingOiEmbedPath()));
 
 let pollTimer = null;
 
-/** @param {string} raw */
-function normalizeEmbed(raw) {
-  const s = String(raw || "").trim();
-  if (!s) return "";
-  try {
-    const u = new URL(s);
-    if (!u.pathname.endsWith("/")) u.pathname = `${u.pathname}/`;
-    return u.href;
-  } catch {
-    return s.replace(/\/?$/, "/");
-  }
-}
+const iframeKey = ref(0);
+
+const iframeSrc = embedUrl;
 
 /**
- * @param {string} base
- * @param {string | null} path
- * @param {string} build
+ * 根据当前页面 URL 判断：
+ * - http://localhost/* 或 http://127.0.0.1/* → 嵌本机 OI (http://127.0.0.1:8766/)
+ * - https://* → 生产独立部署的 OI 前端（hash 路由，无需 /oi-static/ 前缀）
+ * @param {Record<string, unknown>} _j
  */
-function buildIframeSrc(base, path, build) {
-  const root = String(base || "").trim();
-  if (!root) return "";
-  try {
-    const u = new URL(normalizeEmbed(root));
-    const p = String(path || "").trim();
-    if (p && p !== "/") {
-      const clean = p.replace(/^\//, "").replace(/\/$/, "");
-      u.pathname = `${u.pathname.replace(/\/?$/, "/")}${clean}`;
-    }
-    if (build) u.searchParams.set("v", build);
-    return u.href;
-  } catch {
-    return root;
-  }
-}
-
-const iframeSrc = computed(() =>
-  buildIframeSrc(embedUrl.value, forcedEmbedPath.value, uiBuild.value),
-);
-const iframeKey = computed(
-  () => `oi-${uiBuild.value || "0"}-${forcedEmbedPath.value || ""}`,
-);
-
-/**
- * 本机固定嵌 OI_WEB_BASE_URL（默认 :8766）；上云才用公网地址。
- * @param {Record<string, unknown>} j
- */
-function pickEmbedUrl(j) {
-  const host = typeof location !== "undefined" ? location.hostname : "";
-  const pageIsLocal = host === "localhost" || host === "127.0.0.1";
-  const apiBase = normalizeEmbed(String(j.apiBase || ""));
-  const fromApiRaw = String(j.publicEmbedUrl || j.embedUrl || "").trim();
-  const fromApi = normalizeEmbed(fromApiRaw.replace(/[?&]v=[^&]*/g, "").replace(/\?$/, ""));
-  const fromEnv = normalizeEmbed(String(import.meta.env.VITE_OI_PUBLIC_EMBED_URL || ""));
-
-  // 本机：优先 apiBase（避免误嵌公网）；?v= 由 uiBuild 单独加，不依赖 embed 上的 query
-  if (pageIsLocal) {
-    if (apiBase && !/:5173\/?$/i.test(apiBase)) return apiBase;
-    if (fromApi && !/:5173\/?$/i.test(fromApi)) return fromApi;
+function pickEmbedUrl(_j) {
+  const protocol = String(typeof location !== "undefined" ? location.protocol : "https:");
+  if (protocol === "http:") {
     return "http://127.0.0.1:8766/";
   }
-
-  const apiIsLocal = /^(https?:\/\/)?(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(
-    fromApi.replace(/\/$/, ""),
-  );
-  if (apiIsLocal && fromEnv) return fromEnv;
-  if (fromApi) return fromApi;
-  if (fromEnv) return fromEnv;
-  if (apiBase) return apiBase;
-  return "http://127.0.0.1:8766/";
+  // TODO: 替换为生产 OI 前端真实域名
+  return "https://op.b.ezcoin.ink/";
 }
 
 async function refreshStatus() {
@@ -114,52 +54,35 @@ async function refreshStatus() {
     }
     embedUrl.value = pickEmbedUrl(j);
     active.value = Boolean(j.active);
+    iframeReady.value = true;
     error.value = j.error ? String(j.error) : "";
     hint.value = j.hint ? String(j.hint) : "";
     latencyMs.value = Number.isFinite(j.latencyMs) ? j.latencyMs : null;
-    // 同源 /api/oi/status 已代读 OI index hash（避免浏览器跨域 peek 8766 失败）
-    if (j.uiBuild) uiBuild.value = String(j.uiBuild);
   } catch (e) {
     active.value = false;
+    iframeReady.value = false;
     error.value = String(e?.message ?? e);
     hint.value = "collect:ui 未响应；请先 pnpm run collect:ui（OI 在 8766 也需其代理 /api/oi/status）";
-    if (!embedUrl.value) {
-      embedUrl.value = pickEmbedUrl({});
-    }
+    if (!embedUrl.value) embedUrl.value = pickEmbedUrl({});
   } finally {
     loading.value = false;
   }
 }
 
-/** 手动打穿缓存：换 iframe key + 强制 status */
-async function forceReloadOiFrame() {
-  uiBuild.value = `force-${Date.now()}`;
-  await refreshStatus();
-}
-
-/** @param {Event} ev */
-function onEmbedPathEvent(ev) {
-  const path = /** @type {CustomEvent} */ (ev).detail?.path;
-  forcedEmbedPath.value = path ? String(path) : null;
+/** 手动打穿缓存：换 iframe key + 强制重新加载 iframe */
+function forceReloadOiFrame() {
+  iframeKey.value++;
+  iframeReady.value = false;
+  void refreshStatus();
 }
 
 onMounted(() => {
-  forcedEmbedPath.value = getPendingOiEmbedPath();
   void refreshStatus();
   pollTimer = setInterval(() => void refreshStatus(), 5_000);
-  window.addEventListener(OI_EMBED_PATH_EVENT, onEmbedPathEvent);
 });
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
-  window.removeEventListener(OI_EMBED_PATH_EVENT, onEmbedPathEvent);
-});
-
-watch(active, (ok) => {
-  if (ok) {
-    loading.value = false;
-    iframeReady.value = true;
-  }
 });
 </script>
 

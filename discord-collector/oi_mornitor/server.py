@@ -30,7 +30,13 @@ from oi_mornitor.sandbox.card_ws import register_card_routes
 
 logger = logging.getLogger("OI_Web")
 
-STATIC_DIST = Path(__file__).resolve().parent / "static" / "dist"
+# 静态文件路径（按优先级）：
+# 1. public/oi-dist/   — npm run build 产物，与 Vue 前端一起 rsync 部署
+# 2. static/dist/       — 开发模式（build 产物在别处或为空）
+_OI_ROOT = Path(__file__).resolve().parent
+_PUBLIC_OI_DIST = _OI_ROOT / "public" / "oi-dist"
+_STATIC_DIST = _OI_ROOT / "static" / "dist"
+STATIC_DIST = _PUBLIC_OI_DIST if _PUBLIC_OI_DIST.exists() else _STATIC_DIST
 
 
 
