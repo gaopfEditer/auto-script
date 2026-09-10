@@ -760,6 +760,36 @@ async def handle_tv_alert(_request: web.Request) -> web.Response:
     return _json_response({"ok": True, **get_service().tv_alert_sync.get_payload()})
 
 
+async def handle_scan_status(_request: web.Request) -> web.Response:
+    """返回雷达扫描运行状态。"""
+    svc = get_service()
+    is_running = svc._running
+    scan_ts = svc.radar.last_scan_ts
+    return _json_response({
+        "ok": True,
+        "running": is_running,
+        "scan_ts": scan_ts,
+    })
+
+
+async def handle_scan_restart(_request: web.Request) -> web.Response:
+    """重启雷达后台扫描循环（stop 再 start）。"""
+    svc = get_service()
+    import inspect as _inspect
+    sig = _inspect.signature(svc.start_background)
+    sig2 = _inspect.signature(svc.stop)
+    await svc.stop()
+    interval = SCAN_INTERVAL_SEC
+    if "interval_sec" in sig.parameters:
+        interval = sig.parameters["interval_sec"].default or SCAN_INTERVAL_SEC
+    await svc.start_background(interval)
+    return _json_response({
+        "ok": True,
+        "running": svc._running,
+        "scan_ts": svc.radar.last_scan_ts,
+    })
+
+
 async def handle_stream(request: web.Request) -> web.StreamResponse:
 
     """SSE：推送最新雷达快照。"""
@@ -894,6 +924,8 @@ def create_app() -> web.Application:
     app.router.add_get("/api/tv-alert", handle_tv_alert)
 
     app.router.add_get("/api/stream", handle_stream)
+    app.router.add_get("/api/scan/status", handle_scan_status)
+    app.router.add_post("/api/scan/restart", handle_scan_restart)
 
     # Discord 卡片外送：WS /ws/cards · POST /api/cards
     register_card_routes(app)

@@ -33,6 +33,10 @@ interface Props {
   onCaptureEnabledChange?: (enabled: boolean) => void;
   /** Modal 打开时传入当前 ticker 头部的胜率；后端数据返回后以此为基准同步回去 */
   initialSummary?: AlertWinRateSummary;
+  /** 后台扫描是否运行中 */
+  scanRunning?: boolean;
+  /** 重新触发一次后端扫描 */
+  onRestartScan?: () => void;
 }
 
 const TIME_FILTERS: { id: AlertStatsTimeFilter | "all"; label: string }[] = [
@@ -152,7 +156,10 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   captureEnabled = true,
   onCaptureEnabledChange,
   initialSummary,
+  scanRunning = true,
+  onRestartScan,
 }: Props) {
+  const operator = useMemo(() => isOiOperator(), []);
   const [filter, setFilter] = useState<AlertStatsTimeFilter>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [intervalFilter, setIntervalFilter] = useState<string>("all");
@@ -342,6 +349,17 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
             <p className="pattern-wr-rules">{ALERT_SETTLE_RULES_SUMMARY}</p>
           </div>
           <div className="pattern-wr-head-actions">
+            {operator && (
+              <button
+                type="button"
+                className={`pattern-wr-scan-status${!scanRunning ? " stopped" : ""}`}
+                onClick={onRestartScan}
+                disabled={scanRunning}
+                title={scanRunning ? "雷达后台扫描运行中" : "扫描已停止，点击重启"}
+              >
+                {!scanRunning ? "⚠ 扫描停止" : "● 运行中"}
+              </button>
+            )}
             {showCaptureToggle ? (
               <button
                 type="button"

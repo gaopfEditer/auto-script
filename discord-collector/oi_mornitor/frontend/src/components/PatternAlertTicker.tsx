@@ -404,7 +404,37 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
   );
   const [outcomes, setOutcomes] = useState<Map<string, AlertOutcome>>(() => outcomeByKeyMap());
   const [statsOpen, setStatsOpen] = useState(false);
+  const [scanRunning, setScanRunning] = useState(true);
+  const [scanStatusBusy, setScanStatusBusy] = useState(false);
   const alertsSigRef = useRef("");
+
+  const checkScanStatus = useCallback(async () => {
+    if (!operator) return;
+    try {
+      const res = await fetch("/api/scan/status", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { ok?: boolean; running?: boolean };
+      if (data?.ok) setScanRunning(data.running ?? false);
+    } catch {
+      /* ignore */
+    }
+  }, [operator]);
+
+  const restartScan = useCallback(async () => {
+    if (!operator || scanStatusBusy) return;
+    setScanStatusBusy(true);
+    try {
+      const res = await fetch("/api/scan/restart", { method: "POST" });
+      if (res.ok) {
+        const data = (await res.json()) as { ok?: boolean; running?: boolean };
+        if (data?.ok) setScanRunning(data.running ?? false);
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setScanStatusBusy(false);
+    }
+  }, [operator, scanStatusBusy]);
 
   const setCaptureEnabledPersist = useCallback((on: boolean) => {
     writeTickerCaptureEnabled(on);
@@ -565,6 +595,14 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
       window.clearInterval(id);
     };
   }, [refreshStatsUi, operator]);
+
+  // 扫描状态轮询（仅 operator 可见）
+  useEffect(() => {
+    if (!operator) return;
+    void checkScanStatus();
+    const id = window.setInterval(checkScanStatus, 20_000);
+    return () => window.clearInterval(id);
+  }, [operator, checkScanStatus]);
 
   const row = useMemo(() => sortTickerByTime(items), [items]);
   const loop = row.length >= 3 ? [...row, ...row] : row;
@@ -771,6 +809,8 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
         initialSummary={winSummary}
         captureEnabled={captureEnabled}
         onCaptureEnabledChange={setCaptureEnabledPersist}
+        scanRunning={scanRunning}
+        onRestartScan={restartScan}
         onOpenSymbol={(sym, interval) => {
           setStatsOpen(false);
           onOpen?.(sym, interval);

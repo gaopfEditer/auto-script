@@ -1587,6 +1587,34 @@ button {
   color: #ffcc80;
 }
 
+.pattern-wr-scan-status {
+  appearance: none;
+  border: 1px solid rgba(76, 175, 80, 0.4);
+  background: rgba(76, 175, 80, 0.1);
+  color: #81c784;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.pattern-wr-scan-status.stopped {
+  border-color: rgba(244, 67, 54, 0.5);
+  background: rgba(244, 67, 54, 0.15);
+  color: #ef9a9a;
+  cursor: pointer;
+}
+
+.pattern-wr-scan-status.stopped:hover {
+  border-color: rgba(244, 67, 54, 0.8);
+  background: rgba(244, 67, 54, 0.25);
+}
+
+.pattern-wr-scan-status:disabled {
+  cursor: default;
+}
+
 .pattern-wr-confirm {
   position: absolute;
   inset: 0;
