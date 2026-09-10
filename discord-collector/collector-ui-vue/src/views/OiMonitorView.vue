@@ -20,14 +20,14 @@ const iframeSrc = embedUrl;
 
 /**
  * 根据当前页面 URL 判断：
- * - http://localhost/* 或 http://127.0.0.1/* → 嵌本机 OI (http://127.0.0.1:8766/)
+ * - http://localhost/* 或 http://127.0.0.1/* → 嵌本机 OI (http://127.0.0.1:8765/)
  * - https://* → 生产独立部署的 OI 前端（hash 路由，无需 /oi-static/ 前缀）
  * @param {Record<string, unknown>} _j
  */
 function pickEmbedUrl(_j) {
   const protocol = String(typeof location !== "undefined" ? location.protocol : "https:");
   if (protocol === "http:") {
-    return "http://127.0.0.1:8766/";
+    return "http://127.0.0.1:8765/";
   }
   // TODO: 替换为生产 OI 前端真实域名
   return "https://op.b.ezcoin.ink/";
@@ -62,7 +62,7 @@ async function refreshStatus() {
     active.value = false;
     iframeReady.value = false;
     error.value = String(e?.message ?? e);
-    hint.value = "collect:ui 未响应；请先 pnpm run collect:ui（OI 在 8766 也需其代理 /api/oi/status）";
+    hint.value = "collect:ui 未响应；请先 pnpm run collect:ui（OI 在 8765 也需其代理 /api/oi/status）";
     if (!embedUrl.value) embedUrl.value = pickEmbedUrl({});
   } finally {
     loading.value = false;

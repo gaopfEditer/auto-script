@@ -332,6 +332,13 @@ def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:
       - initial: 先发信号（可无止盈止损）
       - update: 补发止盈止损
       - full: 一次发全
+    格式示例：
+      【币圈所长】
+      ETH 做空
+      入场：2505-2515
+      止盈：2495, 2485, 2470, 2455
+      止损：2525
+      备注：15m 突破站稳
     """
     who = (sig.sender or "未知").strip()
     if who.startswith("【") and who.endswith("】"):
@@ -339,26 +346,32 @@ def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:
     else:
         header = f"【{who}】"
 
+    arrow = "📈" if sig.direction == "多" else "📉" if sig.direction == "空" else ""
+    dir_cn = sig.direction if sig.direction in ("多", "空") else ""
+    sym_dir = f"{sig.symbol or '?'} {dir_cn}".strip()
+    if arrow and sym_dir:
+        sym_dir = f"{arrow} {sym_dir}"
+
     lines = [header]
-    arrow = "📈" if sig.direction == "多" else "📉" if sig.direction == "空" else "▪️"
-    dir_cn = f"做{sig.direction}" if sig.direction in ("多", "空") else (sig.direction or "")
-    lines.append(f"{arrow} {sig.symbol or '?'} {dir_cn}".strip())
+    if sym_dir:
+        lines.append(sym_dir)
+
     if sig.is_prom:
         lines.append("#prom")
 
     if sig.entry:
-        lines.append(f"📈 入场：{sig.entry}")
+        lines.append(f"入场：{sig.entry}")
     elif phase == "initial" and not sig.has_tpsl:
-        lines.append("📈 入场：现价")
+        lines.append("入场：现价")
 
     if phase in ("full", "update") or sig.has_tpsl:
         if sig.take_profit:
-            lines.append(f"💰 止盈：{sig.take_profit}")
+            lines.append(f"止盈：{sig.take_profit}")
         if sig.stop_loss:
-            lines.append(f"❌ 止损：{sig.stop_loss}")
+            lines.append(f"止损：{sig.stop_loss}")
 
     if sig.position:
-        lines.append(f"⚖️ 仓位：{sig.position}")
+        lines.append(f"仓位：{sig.position}")
     if sig.note and phase != "update":
         lines.append(f"备注：{sig.note}")
 

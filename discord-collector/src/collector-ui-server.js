@@ -325,7 +325,7 @@ async function main() {
       apiBase,
       embedUrl: publicEmbed,
       publicEmbedUrl: publicEmbed,
-      hint: "oi_mornitor 由 collect:ui 自动守护；也可手动：pnpm run oi:start；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8766",
+      hint: "oi_mornitor 由 collect:ui 自动守护；也可手动：pnpm run oi:start；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8765",
     };
 
     /** @param {string} url */

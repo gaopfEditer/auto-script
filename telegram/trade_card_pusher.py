@@ -20,6 +20,7 @@ from config import get_cards_api_key
 from trade_context_buffer import TradeContextBuffer, WindowMessage
 from trade_signal_detect import (
     TradeSignal,
+    format_signal_push,
     looks_like_trade_message,
     parse_trade_text,
 )
@@ -41,7 +42,7 @@ class PendingCard:
 
 
 class TradeCardPusher:
-    def __init__(self) -> None:
+    def __init__(self, client=None) -> None:
         raw = os.environ.get("TELEGRAM_TRADE_SIGNAL_WINDOW", "10").strip()
         try:
             window = int(raw)
@@ -52,6 +53,10 @@ class TradeCardPusher:
         self._pending: dict[str, PendingCard] = {}
         self._pushed_digest: set[str] = set()
         self._lock = asyncio.Lock()
+        self._client = client
+        # 格式参考 discord 卡片通知，推到 MAIN_CARD_TELEGRAM_CHAT_ID
+        raw_id = os.environ.get("MAIN_CARD_TELEGRAM_CHAT_ID", "").strip()
+        self._tg_chat_id: int | None = int(raw_id) if raw_id.lstrip("-").isdigit() else None
 
     def enabled(self) -> bool:
         return bool(get_cards_api_key())
@@ -409,6 +414,17 @@ class TradeCardPusher:
     def _clear_pending(self, key: str) -> None:
         self._pending.pop(key, None)
 
+    async def _push_telegram(self, sig: TradeSignal, *, phase: str) -> None:
+        """把格式化的交易信号推送到 MAIN_CARD_TELEGRAM_CHAT_ID。"""
+        if not self._client or not self._tg_chat_id:
+            return
+        text = format_signal_push(sig, phase=phase)
+        try:
+            await self._client.send_message(self._tg_chat_id, text, link_preview=False)
+            print(f"    → 交易信号已推送 Telegram({phase}) → {self._tg_chat_id}", flush=True)
+        except Exception as e:
+            print(f"[!] Telegram 推送失败: {e}", flush=True)
+
     async def _post_card(
         self,
         sig: TradeSignal,
@@ -442,6 +458,10 @@ class TradeCardPusher:
         self._pushed_digest.add(digest)
         if len(self._pushed_digest) > 500:
             self._pushed_digest = set(list(self._pushed_digest)[-250:])
+
+        # 同步推送到 MAIN_CARD_TELEGRAM_CHAT_ID
+        await self._push_telegram(sig, phase=phase)
+
         card = (result or {}).get("card") if isinstance(result, dict) else None
         cid = card.get("id") if isinstance(card, dict) else None
         tpsl = "含止盈止损" if sig.has_tpsl else "仅开仓"

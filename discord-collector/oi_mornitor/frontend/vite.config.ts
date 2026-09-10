@@ -7,9 +7,9 @@ const oiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const collectorRoot = path.resolve(oiRoot, "..");
 
 export default defineConfig(({ mode }) => {
-  // discord-collector/.env 的 OI_WEB_PORT 对齐（本机常被占时用 8766）
+  // discord-collector/.env 的 OI_WEB_PORT 对齐（本机常被占时用 8765）
   const env = loadEnv(mode, collectorRoot, "");
-  const oiPort = Number(env.OI_WEB_PORT) || 8766;
+  const oiPort = Number(env.OI_WEB_PORT) || 8765;
   const apiTarget = `http://127.0.0.1:${oiPort}`;
 
   return {

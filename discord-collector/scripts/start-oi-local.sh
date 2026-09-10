@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 启动本仓库 oi_mornitor（读取 discord-collector/.env 的 OI_WEB_PORT，默认 8766）
+# 启动本仓库 oi_mornitor（读取 discord-collector/.env 的 OI_WEB_PORT，默认 8765）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OI="$ROOT/oi_mornitor"
@@ -12,7 +12,7 @@ fi
 set -a
 [[ -f "$ROOT/.env" ]] && source "$ROOT/.env"
 set +a
-PORT="${OI_WEB_PORT:-8766}"
+PORT="${OI_WEB_PORT:-8765}"
 mkdir -p "$OI/data"
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "端口 $PORT 已有进程监听，跳过启动"

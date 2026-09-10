@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import re
+import time
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -354,6 +355,19 @@ def _parse_foresight_feed(rows: list[dict[str, Any]], *, limit: int = 30) -> lis
         if isinstance(important, dict) and important.get("name"):
             tags.insert(0, str(important["name"]))
         source_id = body.get("id") or row.get("source_id") or row.get("id")
+        # 尝试从 body → row 提取发布时间
+        pub = _pick_published_at(body)
+        if not pub:
+            raw_ct = row.get("createTime")
+            if raw_ct:
+                try:
+                    ts = int(raw_ct)
+                    if ts > 1e12:  # 毫秒
+                        pub = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    else:
+                        pub = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                except Exception:
+                    pass
         out.append(
             _item(
                 platform="foresight",
@@ -363,7 +377,7 @@ def _parse_foresight_feed(rows: list[dict[str, Any]], *, limit: int = 30) -> lis
                 summary=brief[:240],
                 heat="重要" if body.get("is_important") else None,
                 tags=tags[:6],
-                published_at=None,
+                published_at=pub,
             )
         )
         if len(out) >= limit:
@@ -463,14 +477,19 @@ def _parse_coindesk_html(html: str) -> list[dict[str, Any]]:
         if re.fullmatch(r"[\d\s分钟小时天前昨天今天广告积极消极中性]+", title):
             continue
         seen.add(href)
-        # 从 slug 旁或后续短文案里尽量取摘要：下一截纯文本
+        # 时间提取：URL 里含 /YYYY/MM/DD/ → 拼当日 UTC 00:00；其余 None 让 _merge_published_at 兜底
+        date_in_url = re.search(r"/(\d{4})/(\d{2})/(\d{2})/", href)
+        pub = None
+        if date_in_url:
+            y, mo, d = date_in_url.group(1), date_in_url.group(2), date_in_url.group(3)
+            pub = f"{y}-{mo}-{d}T00:00:00Z"
         out.append(
             _item(
                 platform="coindesk",
                 rank=len(out) + 1,
                 title=title[:180],
                 url=href,
-                published_at=None,
+                published_at=pub,
             )
         )
         if len(out) >= 30:
@@ -486,8 +505,14 @@ def _parse_coindesk_html(html: str) -> list[dict[str, Any]]:
             continue
         slug = href.rstrip("/").split("/")[-1].replace("-", " ")
         seen.add(href)
+        # 时间提取同上：URL 含日期
+        date_in_url = re.search(r"/(\d{4})/(\d{2})/(\d{2})/", href)
+        pub = None
+        if date_in_url:
+            y, mo, d = date_in_url.group(1), date_in_url.group(2), date_in_url.group(3)
+            pub = f"{y}-{mo}-{d}T00:00:00Z"
         out.append(
-            _item(platform="coindesk", rank=len(out) + 1, title=slug[:180], url=href, published_at=None)
+            _item(platform="coindesk", rank=len(out) + 1, title=slug[:180], url=href, published_at=pub)
         )
         if len(out) >= 30:
             break
@@ -509,6 +534,7 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
+    now_dt = datetime.now(tz=timezone.utc)
 
     shares: list[tuple[str, str]] = []
     for m in re.finditer(
@@ -541,8 +567,11 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
     if shares:
         for i, (aid, title) in enumerate(shares[:limit]):
             summary = contents[i] if i < len(contents) else ""
+            # BlockBeats 快讯时间格式 HH:mm，URL 含 /flash/{id}
             time_bit = times[i] if i < len(times) else ""
             tags = [time_bit] if time_bit else []
+            # 时间转 ISO（用 _blockbeats_time_to_iso，now_dt 在调用处已定义）
+            pub = _blockbeats_time_to_iso(time_bit, now=now_dt) if time_bit else None
             out.append(
                 _item(
                     platform="blockbeats",
@@ -551,7 +580,7 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
                     url=f"https://www.theblockbeats.info/flash/{aid}",
                     summary=summary[:280],
                     tags=tags,
-                    published_at=None,
+                    published_at=pub,
                 )
             )
         return out
@@ -570,6 +599,9 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
         chunk = html[start : m.end()]
         ids = re.findall(r"/flash/(\d+)", chunk)
         aid = ids[-1] if ids else str(len(out) + 1)
+        time_bit = times[len(out)] if len(out) < len(times) else ""
+        tags = [time_bit] if time_bit else []
+        pub = _blockbeats_time_to_iso(time_bit, now=now_dt) if time_bit else None
         out.append(
             _item(
                 platform="blockbeats",
@@ -577,7 +609,8 @@ def _parse_blockbeats_html(html: str, *, limit: int = 30) -> list[dict[str, Any]
                 title=title[:180],
                 url=f"https://www.theblockbeats.info/flash/{aid}",
                 summary=summary[:280],
-                published_at=None,
+                tags=tags,
+                published_at=pub,
             )
         )
         if len(out) >= limit:

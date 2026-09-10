@@ -52,6 +52,7 @@ logger = logging.getLogger("news.server")
 STATIC = Path(__file__).resolve().parent / "frontend" / "public"
 
 _refresh_lock = asyncio.Lock()
+_auto_refresh = True  # True=开启定时刷新，False=暂停
 _task: asyncio.Task | None = None
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -124,22 +125,25 @@ async def _loop() -> None:
     while True:
         now = time.time()
         try:
-            if last_macro <= 0 or now - last_macro >= max(MACRO_REFRESH_SEC, 60):
-                stats = await refresh_macro()
-                last_macro = time.time()
-                logger.info(
-                    "宏观定时刷新完成（间隔 %ds）%s",
-                    MACRO_REFRESH_SEC,
-                    stats,
-                )
-            if last_hot <= 0 or now - last_hot >= max(HOT_REFRESH_SEC, 60):
-                stats = await refresh_hot()
-                last_hot = time.time()
-                logger.info(
-                    "热榜定时刷新完成（间隔 %ds）%s",
-                    HOT_REFRESH_SEC,
-                    stats,
-                )
+            if _auto_refresh:
+                if last_macro <= 0 or now - last_macro >= max(MACRO_REFRESH_SEC, 60):
+                    stats = await refresh_macro()
+                    last_macro = time.time()
+                    logger.info(
+                        "宏观定时刷新完成（间隔 %ds）%s",
+                        MACRO_REFRESH_SEC,
+                        stats,
+                    )
+                if last_hot <= 0 or now - last_hot >= max(HOT_REFRESH_SEC, 60):
+                    stats = await refresh_hot()
+                    last_hot = time.time()
+                    logger.info(
+                        "热榜定时刷新完成（间隔 %ds）%s",
+                        HOT_REFRESH_SEC,
+                        stats,
+                    )
+            else:
+                logger.debug("自动刷新已暂停，跳过本次轮询")
         except Exception:
             logger.exception("定时刷新失败")
         # 按分钟检查到期；实际抓取按 MACRO/HOT 间隔
@@ -184,6 +188,7 @@ def health() -> dict[str, Any]:
         "macro": "jinshi_panews",
         "macro_refresh_sec": MACRO_REFRESH_SEC,
         "hot_refresh_sec": HOT_REFRESH_SEC,
+        "auto_refresh": _auto_refresh,
     }
 
 
@@ -925,18 +930,44 @@ def fetch_status_compat() -> dict[str, Any]:
         "macro_refresh_sec": MACRO_REFRESH_SEC,
         "hot_refresh_sec": HOT_REFRESH_SEC,
         "remain_sec": 0,
+        "auto_refresh": _auto_refresh,
     }
 
 
 @app.post("/api/v1/fetch/start")
-@app.post("/api/v1/fetch/stop")
-@app.post("/api/v1/fetch/now")
-async def fetch_control_compat(request: Request) -> dict[str, Any]:
+async def fetch_start(request: Request) -> dict[str, Any]:
+    global _auto_refresh
     if not _client_is_local(request):
-        return JSONResponse(
-            {"ok": False, "error": "refresh only on local operator"},
-            status_code=403,
-        )
+        return JSONResponse({"ok": False, "error": "local only"}, status_code=403)
+    _auto_refresh = True
+    logger.info("自动刷新已开启")
+    return {"ok": True, "auto_refresh": True}
+
+
+@app.post("/api/v1/fetch/stop")
+async def fetch_stop(request: Request) -> dict[str, Any]:
+    global _auto_refresh
+    if not _client_is_local(request):
+        return JSONResponse({"ok": False, "error": "local only"}, status_code=403)
+    _auto_refresh = False
+    logger.info("自动刷新已暂停")
+    return {"ok": True, "auto_refresh": False}
+
+
+@app.post("/api/v1/fetch/toggle")
+async def fetch_toggle(request: Request) -> dict[str, Any]:
+    global _auto_refresh
+    if not _client_is_local(request):
+        return JSONResponse({"ok": False, "error": "local only"}, status_code=403)
+    _auto_refresh = not _auto_refresh
+    logger.info("自动刷新切换为 %s", _auto_refresh)
+    return {"ok": True, "auto_refresh": _auto_refresh}
+
+
+@app.post("/api/v1/fetch/now")
+async def fetch_now(request: Request) -> dict[str, Any]:
+    if not _client_is_local(request):
+        return JSONResponse({"ok": False, "error": "local only"}, status_code=403)
     try:
         stats = await refresh_all(force=True)
         return {"ok": True, **stats}

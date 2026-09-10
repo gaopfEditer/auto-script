@@ -5,6 +5,7 @@
   const hotHint = document.getElementById("hotHint");
   const statusEl = document.getElementById("status");
   const btn = document.getElementById("btnRefresh");
+  const btnToggle = document.getElementById("btnToggle");
   const macroTabs = document.querySelector(".macro-tabs");
   const sourceFilters = document.getElementById("sourceFilters");
   const btnSourceAll = document.getElementById("btnSourceAll");
@@ -217,11 +218,13 @@
     const rank = payload.rank != null ? String(payload.rank) : "";
     const summary = String(payload.summary || "").trim();
     const tags = Array.isArray(payload.tags) ? payload.tags.filter(Boolean) : [];
+    const pubTime = payload.published_at ? fmtTime(payload.published_at) : "";
     modalUrl = String(payload.url || "").trim();
 
     modalTitle.textContent = title;
     if (modalMeta) {
-      modalMeta.textContent = [platform, rank ? `#${rank}` : ""].filter(Boolean).join(" · ");
+      const metaParts = [platform, rank ? `#${rank}` : "", pubTime].filter(Boolean);
+      modalMeta.textContent = metaParts.join(" · ");
     }
     if (modalSummary) {
       if (summary) {
@@ -308,6 +311,7 @@
           ? items
               .map((it) => {
                 const href = it.url || boardUrl;
+                const pubTime = it.published_at ? fmtTime(it.published_at) : "";
                 const payload = esc(
                   JSON.stringify({
                     title: it.title || "",
@@ -316,12 +320,14 @@
                     url: href,
                     platform: platformLabel,
                     rank: it.rank,
+                    published_at: it.published_at || null,
                   }),
                 );
                 return `
 <li>
   <button type="button" class="item-row" data-item="${payload}" title="查看详情">
     <span class="rank">${esc(it.rank)}</span>
+    ${pubTime ? `<span class="item-time">${esc(pubTime)}</span>` : ""}
     <span class="item-body">
       <div class="item-title">${esc(it.title)}</div>
       ${it.summary ? `<div class="item-sub">${esc(it.summary)}</div>` : ""}
@@ -391,8 +397,59 @@
     }
   }
 
+  /** 自动刷新状态：null=未加载，true=开启，false=暂停 */
+  let autoRefresh = null;
+
+  function updateToggleBtn() {
+    if (!btnToggle) return;
+    if (autoRefresh === null) {
+      btnToggle.textContent = "…";
+      btnToggle.disabled = true;
+    } else {
+      btnToggle.textContent = autoRefresh ? "暂停" : "开启";
+      btnToggle.disabled = false;
+      btnToggle.classList.toggle("paused", !autoRefresh);
+    }
+  }
+
+  async function loadToggleState() {
+    if (!newsOperator) return;
+    try {
+      const res = await fetch("/api/v1/fetch/status");
+      const json = await res.json();
+      autoRefresh = json.auto_refresh ?? true;
+    } catch (_) {
+      autoRefresh = true;
+    }
+    updateToggleBtn();
+  }
+
+  async function toggleAutoRefresh() {
+    if (autoRefresh === null) return;
+    btnToggle.disabled = true;
+    statusEl.textContent = "切换中…";
+    try {
+      const res = await fetch("/api/v1/fetch/toggle", { method: "POST" });
+      const json = await res.json();
+      if (json.ok) {
+        autoRefresh = json.auto_refresh;
+        statusEl.textContent = autoRefresh ? "已开启自动刷新" : "已暂停自动刷新";
+      } else {
+        statusEl.textContent = "切换失败";
+      }
+    } catch (_) {
+      statusEl.textContent = "切换失败";
+    }
+    updateToggleBtn();
+  }
+
   if (newsOperator) {
     btn?.addEventListener("click", () => refreshAll(true));
+    btnToggle?.addEventListener("click", toggleAutoRefresh);
+  } else {
+    // 非本机：隐藏操作按钮
+    if (btn) { btn.hidden = true; btn.setAttribute("aria-hidden", "true"); }
+    if (btnToggle) { btnToggle.hidden = true; btnToggle.setAttribute("aria-hidden", "true"); }
   }
 
   sourceFilters?.addEventListener("click", (ev) => {
@@ -471,6 +528,7 @@
   });
 
   refreshAll(false);
+  loadToggleState();
   // 仅读缓存；抓取节奏由后台宏观 8h / 热榜 1h 控制
   setInterval(() => refreshAll(false), 5 * 60_000);
 })();

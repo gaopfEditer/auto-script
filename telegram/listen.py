@@ -132,7 +132,7 @@ async def main() -> None:
         print("[!] channel_profiles 已配置，但 CARDS API base 无效，UI 实时推送关闭", flush=True)
 
     if main_ids:
-        card_pusher = TradeCardPusher()
+        card_pusher = TradeCardPusher(client=client)
         if card_pusher.enabled():
             print(
                 f"[+] 主群建卡: {get_cards_api_base_url()}/api/v1/cards "
