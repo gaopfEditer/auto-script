@@ -18,12 +18,19 @@ _CN_COIN: dict[str, str] = {
 }
 
 _DIR_LONG = re.compile(
-    r"(?:做多|开多|多单|看多|逢低多|做多单|\blong\b)",
+    r"(?:做多|开多|多单|看多|逢低多|做多单|\blong\b|↗|🔼|📈|🟢|⬆|看涨|上行|涨)",
     re.I,
 )
 _DIR_SHORT = re.compile(
-    r"(?:做空|开空|空单|看空|逢高空|做空单|\bshort\b)",
+    r"(?:做空|开空|空单|看空|逢高空|做空单|\bshort\b|↘|🔽|📉|🔴|⬇|看跌|下行|跌)",
     re.I,
+)
+# 「#SYMBOL 后紧接单个 空/多」(允许中间夹 emoji/换行/空格)，用于识别 #IOST\n📉空 这种格式
+_DIR_SHORT_LOOSE = re.compile(
+    r"#[A-Za-z]{2,12}\s*(?:📉|🔽|↘|⬇)?\s*空",
+)
+_DIR_LONG_LOOSE = re.compile(
+    r"#[A-Za-z]{2,12}\s*(?:📈|🔼|↗|⬆)?\s*多",
 )
 _MARKET_DIR_LONG = re.compile(r"市[价價]\s*多|市[价價]多", re.I)
 _MARKET_DIR_SHORT = re.compile(r"市[价價]\s*空|市[价價]空", re.I)
@@ -201,6 +208,13 @@ def _pick_symbol(text: str) -> str:
 def _pick_direction(text: str) -> str:
     longs = list(_DIR_LONG.finditer(text))
     shorts = list(_DIR_SHORT.finditer(text))
+    # loose 模式：#SYMBOL 后紧接 📉空/📈多 这类
+    ml_loose = _DIR_LONG_LOOSE.search(text)
+    if ml_loose:
+        longs.append(ml_loose)
+    ms_loose = _DIR_SHORT_LOOSE.search(text)
+    if ms_loose:
+        shorts.append(ms_loose)
     ml = _MARKET_DIR_LONG.search(text)
     if ml:
         longs.append(ml)
@@ -314,6 +328,8 @@ def looks_like_trade_message(text: str) -> bool:
     if _MARKET_DIR_LONG.search(t) or _MARKET_DIR_SHORT.search(t):
         return True
     if _DIR_LONG.search(t) or _DIR_SHORT.search(t):
+        return True
+    if _DIR_LONG_LOOSE.search(t) or _DIR_SHORT_LOOSE.search(t):
         return True
     if _TP.search(t) or _SL.search(t) or _ENTRY.search(t) or _FARE.search(t):
         return True

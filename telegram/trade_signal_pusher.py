@@ -72,6 +72,9 @@ class TradeSignalPusher:
         self._pending: dict[str, PendingFollowUp] = {}
         self._pushed_digest: set[str] = set()
         self._lock = asyncio.Lock()
+        # 次要群信号也转发到 MAIN_CARD_TELEGRAM_CHAT_ID（与 discord 卡片通知统一）
+        raw_main = os.environ.get("MAIN_CARD_TELEGRAM_CHAT_ID", "").strip()
+        self._main_card_id: int | None = int(raw_main) if raw_main.lstrip("-").isdigit() else None
 
     def enabled(self) -> bool:
         return bool(self._push_ids)
@@ -175,12 +178,13 @@ class TradeSignalPusher:
                 return
 
             if merged.has_tpsl:
-                await self._push_text(format_signal_push(merged, phase="full"), tag="full")
+                await self._push_text(format_signal_push(merged, phase="full"), tag="full", sig=merged)
                 return
 
             ok = await self._push_text(
                 format_signal_push(merged, phase="initial"),
                 tag="initial",
+                sig=merged,
             )
             if not ok:
                 return
@@ -287,9 +291,9 @@ class TradeSignalPusher:
 
     async def _push_update(self, pf: PendingFollowUp) -> None:
         text = format_signal_push(pf.signal, phase="update")
-        await self._push_text(text, tag="update")
+        await self._push_text(text, tag="update", sig=pf.signal)
 
-    async def _push_text(self, text: str, *, tag: str) -> bool:
+    async def _push_text(self, text: str, *, tag: str, sig: TradeSignal | None = None) -> bool:
         digest = self._digest(f"{tag}:{text}")
         if digest in self._pushed_digest:
             return False
@@ -299,5 +303,18 @@ class TradeSignalPusher:
             if len(self._pushed_digest) > 500:
                 self._pushed_digest = set(list(self._pushed_digest)[-250:])
             print(f"    → 交易信号已推送({tag}) 至 {ok}", flush=True)
+            # 同步转发到 MAIN_CARD_TELEGRAM_CHAT_ID（与主群建卡通知统一）
+            if self._main_card_id and sig is not None:
+                main_text = format_signal_push(sig, phase="full" if sig.has_tpsl else tag)
+                try:
+                    await self._client.send_message(
+                        self._main_card_id, main_text, link_preview=False
+                    )
+                    print(
+                        f"    → 次要群信号已转发 Telegram → {self._main_card_id}",
+                        flush=True,
+                    )
+                except Exception as e:
+                    print(f"[!] 次要群 Telegram 转发失败: {e}", flush=True)
             return True
         return False

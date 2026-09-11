@@ -210,6 +210,7 @@ class TradeCardPusher:
         body = (text or "").strip()
         if not body:
             return
+        print(f"    · [card_pusher] chat={chat_id} body[:80]={body[:80]!r}", flush=True)
 
         self._buffer.add(
             chat_id,
@@ -221,6 +222,7 @@ class TradeCardPusher:
         )
         win = self._buffer.get(chat_id)
         if win is None:
+            print(f"    · [card_pusher] win is None after add", flush=True)
             return
 
         async with self._lock:
@@ -229,11 +231,18 @@ class TradeCardPusher:
             snap = win.snapshot_for_ai()
 
             if not looks_like_trade_message(body):
+                print(f"    · [card_pusher] looks_like_trade_message=False, body={body!r}", flush=True)
                 return
 
             current = parse_trade_text(body, sender=sender, msg_id=msg_id)
+            print(
+                f"    · [card_pusher] parsed: symbol={current.symbol!r} dir={current.direction!r} "
+                f"entry={current.entry!r} has_tpsl={current.has_tpsl}",
+                flush=True,
+            )
             merged = self._merge_snap_with_current(snap, current, prefer_sender=sender)
             if merged is None:
+                print(f"    · [card_pusher] merged is None, skip", flush=True)
                 return
             if not merged.sender:
                 merged.sender = sender
@@ -416,9 +425,15 @@ class TradeCardPusher:
 
     async def _push_telegram(self, sig: TradeSignal, *, phase: str) -> None:
         """把格式化的交易信号推送到 MAIN_CARD_TELEGRAM_CHAT_ID。"""
+        print(
+            f"    · [_push_telegram] client={'set' if self._client else 'None'} "
+            f"chat_id={self._tg_chat_id} phase={phase} symbol={sig.symbol} dir={sig.direction}",
+            flush=True,
+        )
         if not self._client or not self._tg_chat_id:
             return
         text = format_signal_push(sig, phase=phase)
+        print(f"    · [_push_telegram] text={text!r}", flush=True)
         try:
             await self._client.send_message(self._tg_chat_id, text, link_preview=False)
             print(f"    → 交易信号已推送 Telegram({phase}) → {self._tg_chat_id}", flush=True)
