@@ -495,13 +495,33 @@ export async function openStore(cfg, log) {
 
     await pool.query(insertMsgSql, [tuples]);
 
+    // 批量 upsert channels（按 channelId 去重，每 channel 只保留最新一条）
+    /** @type {Map<string, {channelId:string, guildId:string, name:string, preview:string|null, atMs:number, receivedAt:string}>} */
+    const channelMap = new Map();
     for (const r of valid) {
       if (!r.channelId) continue;
-      const preview = String(r.content ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
       const atMs = Number(r.createdAtMs) || 0;
+      const key = r.channelId;
+      if (!channelMap.has(key) || atMs > channelMap.get(key).atMs) {
+        channelMap.set(key, {
+          channelId: r.channelId,
+          guildId: r.guildId ?? "",
+          name: r.channelName ?? "",
+          preview: String(r.content ?? "").replace(/\s+/g, " ").trim().slice(0, 200) || null,
+          atMs,
+          receivedAt: r.receivedAt ?? new Date().toISOString(),
+        });
+      }
+    }
+    if (channelMap.size) {
+      const channelTuples = [...channelMap.values()].map((c) => [
+        c.channelId, c.guildId, c.name, 0, c.preview, c.atMs,
+        isoToMysqlDatetime3(c.receivedAt),
+      ]);
+      const placeholders = channelTuples.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
       await pool.execute(
         `INSERT INTO discord_channels (channel_id, guild_id, name, channel_type, last_message_preview, last_message_at_ms, updated_at)
-         VALUES (?, ?, ?, 0, ?, ?, ?)
+         VALUES ${placeholders}
          ON DUPLICATE KEY UPDATE
            guild_id = IF(VALUES(guild_id) != '', VALUES(guild_id), guild_id),
            name = IF(VALUES(name) != '', VALUES(name), name),
@@ -512,15 +532,8 @@ export async function openStore(cfg, log) {
            ),
            last_message_at_ms = GREATEST(COALESCE(last_message_at_ms, 0), VALUES(last_message_at_ms)),
            updated_at = VALUES(updated_at)`,
-        [
-          r.channelId,
-          r.guildId ?? "",
-          r.channelName ?? "",
-          preview || null,
-          atMs,
-          isoToMysqlDatetime3(r.receivedAt ?? new Date().toISOString()),
-        ]
-      ).catch(() => {});
+        channelTuples.flat()
+      );
     }
 
     return {
@@ -551,21 +564,26 @@ export async function openStore(cfg, log) {
     const valid = rows.filter((r) => r?.guildId);
     if (!valid.length) return 0;
     const now = isoToMysqlDatetime3(new Date().toISOString());
-    let n = 0;
-    for (const r of valid) {
-      await pool.execute(
-        `INSERT INTO discord_guilds (guild_id, name, icon_hash, icon_url, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           name = IF(VALUES(name) != '', VALUES(name), name),
-           icon_hash = COALESCE(VALUES(icon_hash), icon_hash),
-           icon_url = COALESCE(VALUES(icon_url), icon_url),
-           updated_at = VALUES(updated_at)`,
-        [r.guildId, r.name ?? "", r.icon ?? null, r.iconUrl ?? null, now]
-      );
-      n += 1;
-    }
-    return n;
+    const tuples = valid.map((r) => [
+      r.guildId,
+      r.name ?? "",
+      r.icon ?? null,
+      r.iconUrl ?? null,
+      now,
+    ]);
+    const placeholders = tuples.map(() => "(?, ?, ?, ?, ?)").join(", ");
+    const flat = tuples.flat();
+    await pool.execute(
+      `INSERT INTO discord_guilds (guild_id, name, icon_hash, icon_url, updated_at)
+       VALUES ${placeholders}
+       ON DUPLICATE KEY UPDATE
+         name = IF(VALUES(name) != '', VALUES(name), name),
+         icon_hash = COALESCE(VALUES(icon_hash), icon_hash),
+         icon_url = COALESCE(VALUES(icon_url), icon_url),
+         updated_at = VALUES(updated_at)`,
+      flat
+    );
+    return valid.length;
   }
 
   /**
@@ -575,21 +593,26 @@ export async function openStore(cfg, log) {
     const valid = rows.filter((r) => r?.channelId);
     if (!valid.length) return 0;
     const now = isoToMysqlDatetime3(new Date().toISOString());
-    let n = 0;
-    for (const r of valid) {
-      await pool.execute(
-        `INSERT INTO discord_channels (channel_id, guild_id, name, channel_type, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           guild_id = IF(VALUES(guild_id) != '', VALUES(guild_id), guild_id),
-           name = IF(VALUES(name) != '', VALUES(name), name),
-           channel_type = VALUES(channel_type),
-           updated_at = VALUES(updated_at)`,
-        [r.channelId, r.guildId ?? "", r.name ?? "", Number(r.type) || 0, now]
-      );
-      n += 1;
-    }
-    return n;
+    const tuples = valid.map((r) => [
+      r.channelId,
+      r.guildId ?? "",
+      r.name ?? "",
+      Number(r.type) || 0,
+      now,
+    ]);
+    const placeholders = tuples.map(() => "(?, ?, ?, ?, ?)").join(", ");
+    const flat = tuples.flat();
+    await pool.execute(
+      `INSERT INTO discord_channels (channel_id, guild_id, name, channel_type, updated_at)
+       VALUES ${placeholders}
+       ON DUPLICATE KEY UPDATE
+         guild_id = IF(VALUES(guild_id) != '', VALUES(guild_id), guild_id),
+         name = IF(VALUES(name) != '', VALUES(name), name),
+         channel_type = VALUES(channel_type),
+         updated_at = VALUES(updated_at)`,
+      flat
+    );
+    return valid.length;
   }
 
   /** 清理误把 channel_id 写入 discord_guilds 的历史脏数据 */
@@ -1710,31 +1733,46 @@ export async function openStore(cfg, log) {
   async function insertTwitterTweets(rows) {
     if (!rows?.length) return { inserted: 0 };
     const now = isoToMysqlDatetime3(new Date().toISOString());
-    let inserted = 0;
-    for (const r of rows) {
-      const id = String(r.tweetId ?? "").trim();
-      if (!id) continue;
-      const tweetAt = r.tweetAt ? isoToMysqlDatetime3(r.tweetAt) : null;
-      const tgAt = r.telegramSentAt ? isoToMysqlDatetime3(r.telegramSentAt) : null;
-      const [ret] = await pool.execute(
+
+    // 过滤有效行
+    const valid = rows
+      .map((r) => ({
+        id: String(r.tweetId ?? "").trim(),
+        listId: String(r.listId ?? "").slice(0, 128),
+        authorHandle: String(r.authorHandle ?? "").slice(0, 64) || null,
+        authorName: String(r.authorName ?? "").slice(0, 128) || null,
+        text: r.text ?? null,
+        tweetUrl: String(r.tweetUrl ?? "").slice(0, 512) || null,
+        tweetAt: r.tweetAt ? isoToMysqlDatetime3(r.tweetAt) : null,
+        tgAt: r.telegramSentAt ? isoToMysqlDatetime3(r.telegramSentAt) : null,
+      }))
+      .filter((r) => r.id);
+
+    if (!valid.length) return { inserted: 0 };
+
+    // 去重：只插入库里不存在的 tweet_id
+    const ids = valid.map((r) => r.id);
+    const [existingRows] = await pool.query(
+      `SELECT tweet_id FROM twitter_seen_tweets WHERE tweet_id IN (?)`,
+      [ids]
+    );
+    const existingSet = new Set(existingRows.map((r) => String(r.tweet_id)));
+    const toInsert = valid.filter((r) => !existingSet.has(r.id));
+
+    if (toInsert.length) {
+      const tuples = toInsert.map((r) => [
+        r.id, r.listId, r.authorHandle, r.authorName, r.text,
+        r.tweetUrl, r.tweetAt, now, r.tgAt,
+      ]);
+      await pool.query(
         `INSERT IGNORE INTO twitter_seen_tweets
           (tweet_id, list_id, author_handle, author_name, text, tweet_url, tweet_at, fetched_at, telegram_sent_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          id,
-          String(r.listId ?? "").slice(0, 128),
-          String(r.authorHandle ?? "").slice(0, 64) || null,
-          String(r.authorName ?? "").slice(0, 128) || null,
-          r.text ?? null,
-          String(r.tweetUrl ?? "").slice(0, 512) || null,
-          tweetAt,
-          now,
-          tgAt,
-        ]
+         VALUES ?`,
+        [tuples]
       );
-      inserted += Number(ret?.affectedRows) || 0;
     }
-    return { inserted };
+
+    return { inserted: toInsert.length };
   }
 
   async function markTwitterTelegramSent(ids) {

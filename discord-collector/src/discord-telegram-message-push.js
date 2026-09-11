@@ -6,6 +6,7 @@ import {
   isTelegramPushChannel,
   isTelegramRealtimeChannel,
   isSpamMessage,
+  stripTelegramAtUsernameMentions,
   telegramPushChannelLabel,
   getTelegramRealtimeChannelIds,
 } from "./discord-telegram-push-config.js";
@@ -43,7 +44,7 @@ export function createDiscordTelegramMessagePush(log) {
       String(row.authorGlobalName ?? "").trim() ||
       String(row.authorUsername ?? "").trim() ||
       "未知";
-    const body = String(row.content ?? "").trim();
+    const body = stripTelegramAtUsernameMentions(String(row.content ?? "").trim());
     return `【${ch}】\n${author}\n${body}`;
   }
 
