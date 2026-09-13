@@ -376,6 +376,23 @@ export interface SandboxCardOrder {
   reject_reason?: string;
 }
 
+/** 潜力暴涨漏斗条目（并行于 LH→HL） */
+export interface MoonshotItem {
+  symbol: string;
+  state: string;
+  state_label?: string;
+  score: number;
+  reasons?: string[];
+  range_high?: number;
+  last_hl?: number;
+  last_lh?: number;
+  vol_wake?: number;
+  compress_days?: number;
+  updated_at?: number;
+  cooldown_until?: number;
+  score_parts?: Record<string, number>;
+}
+
 export interface PatternPayload {
   scan_ts: number;
   watchlist: PatternWatchItem[];
@@ -392,6 +409,17 @@ export interface PatternPayload {
   watchlist_refresh_tf?: string;
   last_watchlist_refresh_ts?: number;
   package_root?: string;
+  /** 潜力暴涨漏斗 */
+  moonshot_enabled?: boolean;
+  moonshot_full_scan?: boolean;
+  moonshot_a_interval_sec?: number;
+  moonshot_last_a_scan_ts?: number;
+  moonshot_a_pool_size?: number;
+  moonshot_score_b?: number;
+  moonshot_score_c?: number;
+  moonshot?: MoonshotItem[];
+  moonshot_by_symbol?: Record<string, MoonshotItem>;
+  moonshot_alerts?: PatternAlert[];
   sandbox_enabled?: boolean;
   sandbox_day?: string;
   sandbox_pool?: string[];
@@ -426,8 +454,22 @@ export interface PatternChartMarker {
   text: string;
   price?: number;
   kind?: string;
+  /** LWC marker size；缺省 1 */
+  size?: number;
   /** 柱级 OI 异动（形态后缀或纯 OI 标签） */
   oi_anomaly?: boolean;
+}
+
+/** 从形态信号列表点开图表时，用于在 K 线上标出入场点 */
+export interface ChartAlertEntryFocus {
+  key: string;
+  symbol: string;
+  interval?: string;
+  entry: number;
+  typeLabel?: string;
+  signalAt: number;
+  side: "long" | "short" | "flat";
+  dir?: "多" | "空" | "—";
 }
 
 export interface PatternPriceLine {

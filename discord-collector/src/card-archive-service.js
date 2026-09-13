@@ -35,6 +35,7 @@ import {
   findMergeTargetCard,
   resolveAuthorKey,
 } from "./card-signal-merge.js";
+import { notifyTradeSignalAiPublish } from "./trade-signal-ai-publish.js";
 
 /** Discord 雪花频道 ID（排除 api/youtube 等占位） */
 function isDiscordChannelId(id) {
@@ -745,6 +746,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
             }
           }
           await pushArchivedCardToTelegram(clientCard);
+          notifyTradeSignalAiPublish(clientCard, { event: "update", log });
           return Object.assign(clientCard, { channelMessage: null, merged: true });
         }
       }
@@ -852,6 +854,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     }
 
     await pushArchivedCardToTelegram(clientCard);
+    notifyTradeSignalAiPublish(clientCard, { event: "entry", log });
 
     /** @type {Awaited<ReturnType<typeof publishCardToChannelFeed>> | null} */
     let channelMessage = null;

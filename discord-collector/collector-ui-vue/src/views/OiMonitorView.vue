@@ -1,8 +1,10 @@
 <script setup>
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 defineOptions({ name: "OiMonitorView" });
 
+const route = useRoute();
 const active = ref(false);
 const loading = ref(true);
 const embedUrl = ref("");
@@ -22,15 +24,39 @@ const iframeSrc = embedUrl;
  * 根据当前页面 URL 判断：
  * - http://localhost/* 或 http://127.0.0.1/* → 嵌本机 OI (http://127.0.0.1:8765/)
  * - https://* → 生产独立部署的 OI 前端（hash 路由，无需 /oi-static/ 前缀）
+ * 支持壳层 query：`/oi?symbol=BTCUSDT` → iframe `#/patterns?symbol=…&add=1`
  * @param {Record<string, unknown>} _j
+ * @param {string} [symbolOverride]
  */
-function pickEmbedUrl(_j) {
+function pickEmbedUrl(_j, symbolOverride) {
   const protocol = String(typeof location !== "undefined" ? location.protocol : "https:");
+  let base = "https://op.b.ezcoin.ink/";
   if (protocol === "http:") {
-    return "http://127.0.0.1:8765/";
+    base = "http://127.0.0.1:8765/";
   }
-  // TODO: 替换为生产 OI 前端真实域名
-  return "https://op.b.ezcoin.ink/";
+  const fromRoute = String(symbolOverride ?? route.query.symbol ?? "").trim().toUpperCase();
+  let symbol = fromRoute;
+  if (!symbol) {
+    try {
+      const q = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+      symbol = (q.get("symbol") || "").trim().toUpperCase();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (symbol) {
+    return `${base}#/patterns?symbol=${encodeURIComponent(symbol)}&add=1`;
+  }
+  return base;
+}
+
+function applySymbolToEmbed(sym) {
+  const next = pickEmbedUrl({}, sym);
+  if (next !== embedUrl.value) {
+    embedUrl.value = next;
+    iframeKey.value += 1;
+    iframeReady.value = true;
+  }
 }
 
 async function refreshStatus() {
@@ -52,7 +78,11 @@ async function refreshStatus() {
         `collect:ui 未返回 JSON (HTTP ${r.status})：${text.slice(0, 120)}`
       );
     }
-    embedUrl.value = pickEmbedUrl(j);
+    // 已有深链币种时不要被 status 轮询冲掉
+    const sym = String(route.query.symbol ?? "").trim();
+    if (!sym || !embedUrl.value.includes("patterns?symbol=")) {
+      embedUrl.value = pickEmbedUrl(j);
+    }
     active.value = Boolean(j.active);
     iframeReady.value = true;
     error.value = j.error ? String(j.error) : "";
@@ -76,7 +106,16 @@ function forceReloadOiFrame() {
   void refreshStatus();
 }
 
+watch(
+  () => String(route.query.symbol ?? "").trim().toUpperCase(),
+  (sym) => {
+    if (sym) applySymbolToEmbed(sym);
+  }
+);
+
 onMounted(() => {
+  const sym = String(route.query.symbol ?? "").trim();
+  if (sym) applySymbolToEmbed(sym);
   void refreshStatus();
   pollTimer = setInterval(() => void refreshStatus(), 5_000);
 });

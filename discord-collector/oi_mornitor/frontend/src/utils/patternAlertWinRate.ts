@@ -5,9 +5,11 @@
  * - 杠杆：BTC/ETH/SOL 100x，其余山寨 20x
  * - K 线时序先触 SL / TP；窗口内未触达则按收盘价相对入场结算
  */
-import type { PatternAlert } from "../types";
+import type { ChartAlertEntryFocus, PatternAlert, PatternChartMarker } from "../types";
 import { fetchBinanceFuturesKlines } from "./binanceKlines";
-import { displaySymbol, humanBaseAsset, isStablecoinSymbol, toUsdtSymbol, priceScaleAlignFactor } from "./symbol";
+import { displaySymbol, humanBaseAsset, isStablecoinSymbol, toUsdtSymbol, priceScaleAlignFactor, alignPriceToReference } from "./symbol";
+
+export type { ChartAlertEntryFocus };
 
 export type AlertOutcome = "pending" | "take_profit" | "stop_loss" | "flat" | "error";
 
@@ -258,12 +260,14 @@ export async function fetchAlertStatsPage(opts: {
   timeFilter?: AlertStatsTimeFilter;
   typeFilter?: string;
   intervalFilter?: string;
+  symbol?: string;
 }): Promise<AlertStatsPageResult> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? ALERT_STATS_PAGE_SIZE));
   const timeFilter = opts.timeFilter ?? "all";
   const typeFilter = opts.typeFilter && opts.typeFilter !== "all" ? opts.typeFilter : "all";
   const intervalFilter = opts.intervalFilter && opts.intervalFilter !== "all" ? opts.intervalFilter : "all";
+  const symbol = String(opts.symbol || "").trim();
   const params = new URLSearchParams({
     page: String(page),
     pageSize: String(pageSize),
@@ -271,6 +275,7 @@ export async function fetchAlertStatsPage(opts: {
     type: typeFilter,
     interval: intervalFilter,
   });
+  if (symbol) params.set("symbol", symbol);
   const empty: AlertStatsPageResult = {
     items: [],
     total: 0,
@@ -1162,4 +1167,123 @@ export function formatAlertStatsTime(ms: number): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+export function alertRecordToChartFocus(r: AlertStatsRecord): ChartAlertEntryFocus {
+  return {
+    key: r.key,
+    symbol: r.tradeSymbol || r.symbol,
+    interval: r.interval,
+    entry: r.entry,
+    typeLabel: r.typeLabel,
+    signalAt: r.signalAt,
+    side: r.side,
+    dir: r.dir,
+  };
+}
+
+function sameAlertSymbol(rec: AlertStatsRecord, symbol: string): boolean {
+  const want = humanBaseAsset(symbol);
+  if (!want) return false;
+  return humanBaseAsset(rec.symbol) === want || humanBaseAsset(rec.tradeSymbol || "") === want;
+}
+
+/** 按币种拉胜率库（图表叠加入场点）；客户端再按人类名过滤一层。 */
+export async function fetchAlertStatsForSymbol(symbol: string): Promise<AlertStatsRecord[]> {
+  const want = String(symbol || "").trim();
+  if (!want) return [];
+  const items: AlertStatsRecord[] = [];
+  let page = 1;
+  let pages = 1;
+  while (page <= pages && items.length < 400) {
+    const chunk = await fetchAlertStatsPage({
+      page,
+      pageSize: ALERT_STATS_PAGE_SIZE,
+      timeFilter: "all",
+      typeFilter: "all",
+      intervalFilter: "all",
+      symbol: want,
+    });
+    pages = chunk.pages;
+    items.push(...chunk.items.filter((r) => sameAlertSymbol(r, want)));
+    if (!chunk.items.length) break;
+    page += 1;
+    if (page > 8) break;
+  }
+  return items;
+}
+
+const MAX_ALERT_CHART_MARKERS = 40;
+
+function alertFocusToMarkerRecord(focus: ChartAlertEntryFocus): AlertStatsRecord {
+  return {
+    key: focus.key,
+    symbol: focus.symbol,
+    dir: focus.dir || (focus.side === "short" ? "空" : "多"),
+    side: focus.side,
+    signalAt: focus.signalAt,
+    entry: focus.entry,
+    tier: "altcoin",
+    stepPct: ALERT_DEFAULT_TP_SL_PCT,
+    verifyAt: focus.signalAt,
+    outcome: "pending",
+    typeLabel: focus.typeLabel,
+    interval: focus.interval,
+  };
+}
+
+function oneAlertEntryMarker(
+  rec: AlertStatsRecord,
+  focused: boolean,
+  refPrice?: number,
+): PatternChartMarker | null {
+  if (!(rec.entry > 0) || !(rec.signalAt > 0)) return null;
+  const isShort = rec.side === "short" || rec.dir === "空";
+  const type = String(rec.typeLabel || "").trim() || "信号";
+  const iv = String(rec.interval || "").trim();
+  const dir = rec.dir === "空" || rec.dir === "多" ? rec.dir : isShort ? "空" : "多";
+  const text = focused ? `入${dir} · ${type}` : iv ? `${type} ${iv}` : type;
+  const price =
+    refPrice && refPrice > 0 ? alignPriceToReference(rec.entry, refPrice) : rec.entry;
+  const t = rec.signalAt > 1e12 ? Math.floor(rec.signalAt / 1000) : rec.signalAt;
+  return {
+    time: t,
+    position: isShort ? "aboveBar" : "belowBar",
+    color: focused ? (isShort ? "#ff6e40" : "#b8ff3c") : isShort ? "#ef5350" : "#66bb6a",
+    shape: isShort ? "arrowDown" : "arrowUp",
+    text,
+    price,
+    kind: focused ? "alert_entry_focus" : "alert_entry",
+    size: focused ? 1.25 : 0.85,
+  };
+}
+
+/** 把胜率列表入场记录转成 K 线标记；聚焦那条始终保留。 */
+export function buildAlertEntryMarkers(
+  records: AlertStatsRecord[],
+  focus?: ChartAlertEntryFocus | null,
+  refPrice?: number,
+): PatternChartMarker[] {
+  const byKey = new Map<string, AlertStatsRecord>();
+  for (const r of records) {
+    if (r?.key) byKey.set(r.key, r);
+  }
+  if (focus?.key && !byKey.has(focus.key)) {
+    byKey.set(focus.key, alertFocusToMarkerRecord(focus));
+  }
+  const focusKey = focus?.key;
+  const all = [...byKey.values()].sort((a, b) => b.signalAt - a.signalAt);
+  const focused = focusKey ? all.filter((r) => r.key === focusKey) : [];
+  const rest = all.filter((r) => r.key !== focusKey).slice(0, MAX_ALERT_CHART_MARKERS);
+  const out: PatternChartMarker[] = [];
+  const seen = new Set<string>();
+  for (const r of [...focused, ...rest]) {
+    const m = oneAlertEntryMarker(r, r.key === focusKey, refPrice);
+    if (!m) continue;
+    const k = `${m.time}:${m.kind}:${m.text}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(m);
+  }
+  return out;
 }

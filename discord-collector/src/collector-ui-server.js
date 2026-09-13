@@ -677,6 +677,18 @@ async function main() {
     });
   });
 
+  /** 潜力暴涨顶栏条：score > min_score（默认 5） */
+  app.get("/api/oi/moonshot", async (req, res) => {
+    const raw = String(req.query?.min_score ?? "").trim();
+    const q = raw ? `?min_score=${encodeURIComponent(raw)}` : "";
+    const { status, data, online } = await proxyOiJson(`/api/moonshot${q}`);
+    res.status(online ? status : 200).json({
+      ok: online && data?.ok !== false,
+      online,
+      ...(data && typeof data === "object" ? data : { items: [] }),
+    });
+  });
+
   app.post("/api/debug/oi-telegram-push", async (req, res) => {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const { status, data, online } = await proxyOiJson("/api/telegram-push-toggles", {

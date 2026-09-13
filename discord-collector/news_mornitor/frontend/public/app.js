@@ -326,14 +326,16 @@
                 return `
 <li>
   <button type="button" class="item-row" data-item="${payload}" title="查看详情">
-    <span class="rank">${esc(it.rank)}</span>
-    ${pubTime ? `<span class="item-time">${esc(pubTime)}</span>` : ""}
+    <div class="item-meta">
+      <span class="rank">${esc(it.rank)}</span>
+      ${pubTime ? `<span class="item-time">${esc(pubTime)}</span>` : ""}
+      <span class="item-more">详情</span>
+    </div>
     <span class="item-body">
       <div class="item-title">${esc(it.title)}</div>
       ${it.summary ? `<div class="item-sub">${esc(it.summary)}</div>` : ""}
       ${(it.tags || []).length ? `<div class="item-sub">${esc((it.tags || []).slice(0, 4).join(" · "))}</div>` : ""}
     </span>
-    <span class="item-more">详情</span>
   </button>
 </li>`;
               })

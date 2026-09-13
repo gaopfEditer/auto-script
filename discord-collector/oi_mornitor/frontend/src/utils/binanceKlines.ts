@@ -1,7 +1,7 @@
 /** 浏览器直连币安 U 本位 REST（分散服务端压力）。可用 VITE_BINANCE_FAPI_BASE 覆盖。 */
 import type { ChartTimeframe } from "./chartTimeframe";
 import type { PatternCandle } from "../types";
-import { symbolLookupCandidates, toUsdtSymbol } from "./symbol";
+import { isStablecoinSymbol, symbolLookupCandidates, toUsdtSymbol } from "./symbol";
 
 const DEFAULT_FAPI =
   (import.meta.env.VITE_BINANCE_FAPI_BASE as string | undefined)?.replace(/\/$/, "") ||
@@ -66,6 +66,9 @@ async function fetchKlinesViaBackend(
   interval: ChartTimeframe,
   opts?: { limit?: number; endTimeMs?: number; startTimeMs?: number },
 ): Promise<{ candles: PatternCandle[]; rawCount: number; resolvedSymbol: string }> {
+  if (isStablecoinSymbol(symbol)) {
+    throw new Error(`稳定币已排除回溯 (${symbol})`);
+  }
   const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 1500);
   const params = new URLSearchParams({
     symbol: toUsdtSymbol(symbol) || symbol,

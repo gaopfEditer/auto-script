@@ -58,6 +58,11 @@ def _prune(items: list[dict[str, Any]], now: int | None = None) -> list[dict[str
         signal_at = _to_ms(r.get("signalAt"), 0)
         if signal_at <= cutoff:
             continue
+        # 彻底屏蔽已停用的 30m 周期（前端/后端任何路径写入都过滤）
+        _alert = r.get("alert") or {}
+        _iv = str(_alert.get("interval") or "").strip()
+        if _iv in ("30m", "30min"):
+            continue
         seen.add(key)
         row = dict(r)
         row["key"] = key

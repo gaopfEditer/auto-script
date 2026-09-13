@@ -1,7 +1,15 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { PatternAlert, PatternPayload, PatternState, PatternWatchItem } from "../types";
-import { displaySymbol } from "../utils/symbol";
+import type {
+  ChartAlertEntryFocus,
+  MoonshotItem,
+  PatternAlert,
+  PatternPayload,
+  PatternState,
+  PatternWatchItem,
+} from "../types";
+import { fmtMetaPrice, fmtTs } from "../utils/format";
+import { displaySymbol, humanBaseAsset } from "../utils/symbol";
 import { CoinAvatar } from "../components/CoinAvatar";
 import { MercuHeader } from "../components/MercuHeader";
 import { PatternChartPanel } from "../components/PatternChartPanel";
@@ -12,7 +20,6 @@ import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useOiOnboardBridge } from "../hooks/useOiOnboardBridge";
 import { useSandboxTradeHistory } from "../hooks/useSandboxTradeHistory";
 import { useSpecialFocus } from "../hooks/useSpecialFocus";
-import { fmtMetaPrice, fmtTs } from "../utils/format";
 import { resolveSandboxCardAuthor } from "../utils/cardAuthor";
 import {
   filterHistoryByRange,
@@ -61,6 +68,16 @@ const STATUS_CLASS: Record<string, string> = {
   EXPIRED: "pat-expired",
 };
 
+const MOONSHOT_CLASS: Record<string, string> = {
+  COMPRESS: "ms-compress",
+  WAIT_HL: "ms-wait",
+  LH_NEAR: "ms-lh",
+  READY_BREAK: "ms-ready",
+  IN_POSITION: "ms-hold",
+  FIND_TOP: "ms-top",
+  INVALID: "ms-invalid",
+};
+
 export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const { snapshot, online, patchPattern } = useRadarSSE();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -72,6 +89,8 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   /** 从信号 chip / 胜率列表打开图表时带上的周期 */
   const [chartPreferredTf, setChartPreferredTf] = useState<string | null>(null);
   const [chartTfNonce, setChartTfNonce] = useState(0);
+  /** 形态信号列表点开时，在 K 线上标出入场点 */
+  const [chartAlertFocus, setChartAlertFocus] = useState<ChartAlertEntryFocus | null>(null);
   const [mainTab, setMainTab] = useState<"pattern" | "sandbox">("pattern");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; symbol: string } | null>(null);
   /** 本页是否已做过「进入默认选中」；用户手动关掉图表后不再强选 */
@@ -118,7 +137,17 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     return set;
   }, [sandboxPositions]);
 
-  /** 左侧列表：置顶 → 进行中持仓 → 其余（组内保持原相对顺序） */
+  /** 左侧列表：置顶 → 进行中持仓 → 潜力暴涨分 → 其余 */
+  const moonshotBySym = useMemo(() => {
+    const map = pattern?.moonshot_by_symbol;
+    if (map && typeof map === "object") return map as Record<string, MoonshotItem>;
+    const out: Record<string, MoonshotItem> = {};
+    for (const m of pattern?.moonshot ?? []) {
+      if (m?.symbol) out[String(m.symbol).toUpperCase()] = m;
+    }
+    return out;
+  }, [pattern?.moonshot, pattern?.moonshot_by_symbol]);
+
   const sortedWatchlist = useMemo(() => {
     const pinned: PatternWatchItem[] = [];
     const trading: PatternWatchItem[] = [];
@@ -129,8 +158,15 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
       else if (enteredSymbols.has(sym)) trading.push(w);
       else rest.push(w);
     }
+    const byScore = (a: PatternWatchItem, b: PatternWatchItem) => {
+      const sa = moonshotBySym[String(a.symbol || "").toUpperCase()]?.score ?? -1;
+      const sb = moonshotBySym[String(b.symbol || "").toUpperCase()]?.score ?? -1;
+      return sb - sa;
+    };
+    rest.sort(byScore);
+    trading.sort(byScore);
     return [...pinned, ...trading, ...rest];
-  }, [watchlist, enteredSymbols]);
+  }, [watchlist, enteredSymbols, moonshotBySym]);
 
   const [manualSym, setManualSym] = useState("");
   const [manualLogic, setManualLogic] = useState<"S" | "T">("S");
@@ -545,6 +581,13 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     ? snapshot.all_tickers.find((t) => t.symbol === selectedSymbol)
     : undefined;
 
+  useEffect(() => {
+    if (!chartAlertFocus || !selectedSymbol) return;
+    const a = humanBaseAsset(chartAlertFocus.symbol);
+    const b = humanBaseAsset(selectedSymbol);
+    if (a && b && a !== b) setChartAlertFocus(null);
+  }, [selectedSymbol, chartAlertFocus]);
+
   return (
     <div className="mercu-app pattern-app">
       <MercuHeader
@@ -593,7 +636,10 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
             {(pattern?.manual_reserved_slots ?? 1) > 0
               ? `（含手动槽 1 · 当前 ${pattern?.manual_slot_symbol || "空"}）`
               : ""}
-            ；排序：置顶 → 持仓 → 其他
+            ；排序：置顶 → 持仓 → 潜力分 → 其他
+            {pattern?.moonshot_enabled
+              ? ` · 暴涨漏斗 A池 ${pattern.moonshot_a_pool_size ?? 0}${pattern.moonshot_full_scan ? " ·全市场扫" : ""}`
+              : ""}
           </p>
 
           <ul className="pattern-watchlist">
@@ -602,7 +648,12 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
             ) : (
               sortedWatchlist.map((w) => {
                 const st = states.find((s) => s.symbol === w.symbol);
-                const cls = STATUS_CLASS[st?.status ?? "SEARCHING_TOP"] ?? "pat-search";
+                const ms = moonshotBySym[String(w.symbol || "").toUpperCase()];
+                const msCls = ms?.state ? MOONSHOT_CLASS[ms.state] : "";
+                const cls =
+                  msCls ||
+                  STATUS_CLASS[st?.status ?? "SEARCHING_TOP"] ||
+                  "pat-search";
                 const active = selectedSymbol === w.symbol;
                 const pinned = Boolean(w.pinned);
                 const isManual = Boolean(w.manual) || w.slot === "manual";
@@ -611,6 +662,12 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                   pinned && (w.pin_remaining_sec ?? 0) > 0
                     ? Math.max(1, Math.ceil((w.pin_remaining_sec ?? 0) / 3600))
                     : 0;
+                const statusText =
+                  ms?.state_label ||
+                  ms?.state ||
+                  st?.status_label ||
+                  st?.status ||
+                  "—";
                 return (
                   <li
                     key={w.symbol}
@@ -620,13 +677,16 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     role="button"
                     tabIndex={0}
                     title={
-                      isManual
-                        ? "手动输入槽 · 再次添加其他币会替换此项"
-                        : entered
-                          ? "沙盒持仓中"
-                          : pinned
-                            ? `已置顶，约剩 ${pinHours} 小时`
-                            : "点击查看 K 线"
+                      [
+                        isManual ? "手动输入槽" : "",
+                        entered ? "沙盒持仓中" : "",
+                        pinned ? `已置顶，约剩 ${pinHours} 小时` : "",
+                        ms
+                          ? `潜力 ${ms.state_label || ms.state} · 分 ${Number(ms.score).toFixed(1)} · ${(ms.reasons || []).join(" / ")}`
+                          : "点击查看 K 线",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
                     }
                     onClick={() => {
                       setSelectedSymbol(w.symbol);
@@ -638,6 +698,11 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     <div className="pattern-watch-head">
                       <CoinAvatar symbol={w.symbol} size="sm" />
                       <span className="pattern-sym">${displaySymbol(w.symbol)}</span>
+                      {ms && Number(ms.score) > 0 ? (
+                        <span className="pattern-ms-score" title="潜力暴涨评分">
+                          {Number(ms.score).toFixed(1)}
+                        </span>
+                      ) : null}
                       {isManual ? (
                         <span className="pattern-manual-badge" title="手动输入专用槽">
                           手动
@@ -673,7 +738,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                         ×
                       </button>
                     </div>
-                    <div className="pattern-status">{st?.status_label ?? "寻找顶部"}</div>
+                    <div className="pattern-status">{statusText}</div>
                     {st?.message && <div className="pattern-msg">{st.message}</div>}
                     {st && (st.lh_price ?? 0) > 0 && (
                       <div className="pattern-levels">
@@ -726,10 +791,11 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
             <PatternAlertTicker
               alerts={alerts}
               scanTs={scanTs}
-              onOpen={(sym, interval) => {
+              onOpen={(sym, interval, focus) => {
                 setSelectedSymbol(sym);
                 setChartPreferredTf(interval || null);
                 setChartTfNonce((n) => n + 1);
+                setChartAlertFocus(focus ?? null);
                 setMainTab("pattern");
               }}
             />
@@ -745,11 +811,14 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               symbol={selectedSymbol}
               preferredTimeframe={chartPreferredTf}
               preferredTimeframeNonce={chartTfNonce}
+              alertFocus={chartAlertFocus}
+              alertFocusNonce={chartTfNonce}
               state={selectedState}
               liveTicker={selectedTicker}
               onClose={() => {
                 setSelectedSymbol(null);
                 setChartPreferredTf(null);
+                setChartAlertFocus(null);
               }}
               onTitleContextMenu={openWatchCtxMenu}
               inWatchlist={watchSet.has(selectedSymbol.toUpperCase())}

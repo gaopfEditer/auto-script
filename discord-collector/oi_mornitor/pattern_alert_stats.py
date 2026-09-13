@@ -199,12 +199,18 @@ def _type_label_of(rec: dict[str, Any]) -> str:
     return str(rec.get("typeLabel") or "").strip() or "未标注"
 
 
+def _rec_base_symbol(rec: dict[str, Any]) -> str:
+    raw = str(rec.get("tradeSymbol") or rec.get("symbol") or "")
+    return human_base_asset(raw) or raw.strip().upper()
+
+
 def filter_alert_stats(
     items: list[dict[str, Any]] | None = None,
     *,
     time_filter: str | None = None,
     type_label: str | None = None,
     interval: str | None = None,
+    symbol: str | None = None,
     now_ms: int | None = None,
 ) -> list[dict[str, Any]]:
     rows = items if items is not None else _load()
@@ -221,6 +227,10 @@ def filter_alert_stats(
     iv = (interval or "").strip()
     if iv and iv != "all":
         rows = [r for r in rows if str(r.get("interval") or "").strip() == iv]
+    needle = (symbol or "").strip().upper()
+    if needle and needle != "ALL":
+        want = human_base_asset(needle) or needle
+        rows = [r for r in rows if _rec_base_symbol(r) == want]
     return rows
 
 
@@ -314,12 +324,15 @@ def list_alert_stats_page(
     time_filter: str | None = None,
     type_label: str | None = None,
     interval: str | None = None,
+    symbol: str | None = None,
 ) -> dict[str, Any]:
     """分页列表；typeOptions/intervalOptions 互相联动（选了什么 filter，另一个的 count 就跟着变）。"""
     page = max(1, int(page or 1))
     size = min(100, max(1, int(page_size or _PAGE_SIZE_DEFAULT)))
-    # 基础时间筛选
-    timed = filter_alert_stats(time_filter=time_filter, type_label=None, interval=None)
+    # 基础时间筛选（可叠加币种，供图表按币拉取入场点）
+    timed = filter_alert_stats(
+        time_filter=time_filter, type_label=None, interval=None, symbol=symbol
+    )
     # intervalOpts 叠加 type 过滤（联动）
     interval_opts = list_interval_options(
         filter_alert_stats(timed, time_filter=None, type_label=type_label, interval=None)

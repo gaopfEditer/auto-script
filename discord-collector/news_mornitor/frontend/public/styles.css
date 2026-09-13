@@ -330,10 +330,9 @@ a.tl-title:hover { color: var(--accent); }
   background: color-mix(in srgb, var(--accent) 55%, var(--muted));
 }
 .board-list li .item-row {
-  display: grid;
-  grid-template-columns: 28px 80px 1fr auto;
-  gap: 8px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   width: 100%;
   padding: 9px 14px;
   margin: 0;
@@ -343,6 +342,21 @@ a.tl-title:hover { color: var(--accent); }
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+.board-list li .item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.board-list li .item-meta .item-time {
+  margin-left: auto;
+}
+.board-list li .item-body {
+  display: block;
+  width: 100%;
 }
 .board-list li .item-row:hover { background: #1b2431; }
 .board-list li .item-row:hover .item-title { color: var(--accent); }
@@ -358,7 +372,6 @@ a.tl-title:hover { color: var(--accent); }
   color: var(--muted);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
-  padding-top: 2px;
   white-space: nowrap;
 }
 .item-title { font-size: 0.86rem; line-height: 1.4; }
@@ -372,7 +385,6 @@ a.tl-title:hover { color: var(--accent); }
   overflow: hidden;
 }
 .item-more {
-  margin-top: 2px;
   font-size: 0.68rem;
   color: var(--muted);
   border: 1px solid var(--line);

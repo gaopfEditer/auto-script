@@ -1202,6 +1202,22 @@ button {
 .pattern-watch-item.pat-lh { border-color: rgba(255, 193, 7, 0.35); }
 .pattern-watch-item.pat-wait { border-color: rgba(100, 180, 255, 0.35); }
 .pattern-watch-item.pat-fire { border-color: rgba(0, 230, 118, 0.45); background: rgba(0, 60, 30, 0.2); }
+.pattern-watch-item.ms-compress { border-color: rgba(140, 140, 160, 0.4); }
+.pattern-watch-item.ms-wait { border-color: rgba(100, 180, 255, 0.4); }
+.pattern-watch-item.ms-lh { border-color: rgba(255, 193, 7, 0.4); }
+.pattern-watch-item.ms-ready { border-color: rgba(180, 120, 255, 0.5); background: rgba(40, 20, 60, 0.25); }
+.pattern-watch-item.ms-hold { border-color: rgba(0, 230, 118, 0.5); background: rgba(0, 60, 30, 0.22); }
+.pattern-watch-item.ms-top { border-color: rgba(255, 120, 80, 0.5); }
+.pattern-watch-item.ms-invalid { border-color: rgba(100, 100, 100, 0.35); opacity: 0.72; }
+.pattern-ms-score {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #c4b5fd;
+  background: rgba(88, 70, 140, 0.35);
+  border-radius: 4px;
+  padding: 0 0.28rem;
+  margin-left: 0.15rem;
+}
 .pattern-watch-item.pinned {
   border-color: rgba(255, 193, 7, 0.55);
   box-shadow: inset 2px 0 0 rgba(255, 193, 7, 0.7);
@@ -2535,6 +2551,29 @@ button {
 
 .pattern-chart-title:hover {
   background: rgba(255, 255, 255, 0.03);
+}
+
+.pattern-chart-alert-focus {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid rgba(184, 255, 60, 0.4);
+  color: #b8ff3c;
+  background: rgba(184, 255, 60, 0.1);
+}
+
+.pattern-chart-alert-focus.short {
+  border-color: rgba(255, 110, 64, 0.45);
+  color: #ff6e40;
+  background: rgba(255, 110, 64, 0.12);
 }
 
 .pattern-ctx-menu {

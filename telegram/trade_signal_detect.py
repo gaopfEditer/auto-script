@@ -1,11 +1,41 @@
-"""从群消息文本中规则提取交易信号（币种 / 多空 / 入场 / 止盈止损）。"""
+"""从群消息文本中规则提取交易信号（币种 / 多空 / 入场 / 止盈止损）。
+
+繁简归一：先把整段文本繁→简（T2S），再走统一正则。繁简关键字同时存在
+（"入場/进場/進場/进场" → 一处"进场"），靠 T2S 收敛，避免双写。
+"""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field, replace
 
-# 常见中文币名 → 展示符号
+# —— 繁→简字符表（按需小集合；覆盖常见交易关键字与方向/币名） ——
+_T2S = str.maketrans({
+    "場": "场", "進": "进", "佈": "布", "價": "价", "幣": "币",
+    "倉": "仓", "槓": "杠", "桿": "杆", "損": "损", "盈": "盈",
+    "數": "数", "據": "据", "訊": "讯", "單": "单", "車": "车",
+    "發": "发", "車": "车", "頭": "头", "倉": "仓", "頂": "顶",
+    "底": "底", "長": "长", "空": "空", "多": "多", "買": "买",
+    "賣": "卖", "漲": "涨", "跌": "跌", "補": "补", "齊": "齐",
+    "齊": "齐", "備": "备", "註": "注", "類": "类", "線": "线",
+    "對": "对", "話": "话", "說": "说", "頁": "页", "標": "标",
+    "籤": "签", "記": "记", "檔": "档", "權": "权", "區": "区",
+    "塊": "块", "幣": "币", "匯": "汇", "總": "总", "開": "开",
+    "關": "关", "時": "时", "間": "间", "週": "周", "報": "报",
+    "見": "见", "覽": "览", "響": "响", "應": "应", "當": "当",
+    "樣": "样", "檢": "检", "測": "测", "設": "设", "計": "计",
+    "畫": "画", "畫": "画", "視": "视", "頻": "频", "變": "变",
+    "顏": "颜", "色": "色", "邊": "边", "邊": "边", "畫": "画",
+})
+
+
+def _t2s(text: str) -> str:
+    """繁→简归一（小集合字符表，未命中保持不变）。"""
+    if not text:
+        return text
+    return text.translate(_T2S)
+
+# 常见中文币名 → 展示符号（同步繁简）
 _CN_COIN: dict[str, str] = {
     "比特币": "BTC",
     "大饼": "BTC",
@@ -18,11 +48,11 @@ _CN_COIN: dict[str, str] = {
 }
 
 _DIR_LONG = re.compile(
-    r"(?:做多|开多|多单|看多|逢低多|做多单|\blong\b|↗|🔼|📈|🟢|⬆|看涨|上行|涨)",
+    r"(?:做多|开多|多单|看多|逢低多|做多单|埋伏单方向多|埋伏单\s*方向\s*多|\blong\b|↗|🔼|📈|🟢|⬆|看涨|上行|涨)",
     re.I,
 )
 _DIR_SHORT = re.compile(
-    r"(?:做空|开空|空单|看空|逢高空|做空单|\bshort\b|↘|🔽|📉|🔴|⬇|看跌|下行|跌)",
+    r"(?:做空|开空|空单|看空|逢高空|做空单|埋伏单方向空|埋伏单\s*方向\s*空|\bshort\b|↘|🔽|📉|🔴|⬇|看跌|下行|跌)",
     re.I,
 )
 # 「#SYMBOL 后紧接单个 空/多」(允许中间夹 emoji/换行/空格)，用于识别 #IOST\n📉空 这种格式
@@ -39,6 +69,10 @@ _MARKET_PRICE = re.compile(
     r"市[价價]\s*[多空]\s+([0-9]+(?:\.[0-9]+)?)",
     re.I,
 )
+_ENTRY_EN = re.compile(
+    r"\bENTRY\b\s*[:：]?\s*(市[价價]|现价|[0-9]+(?:\.[0-9]+)?)",
+    re.I,
+)
 
 _SYM_TICKER = re.compile(
     r"(?<![A-Za-z0-9])\$?([A-Za-z]{2,12})(?:/USDT|/USD|USDT|USD)?(?![A-Za-z0-9])",
@@ -46,7 +80,13 @@ _SYM_TICKER = re.compile(
 _SYM_CN = re.compile("|".join(sorted(map(re.escape, _CN_COIN.keys()), key=len, reverse=True)))
 
 _ENTRY = re.compile(
-    r"(?:入场|建仓|开仓|挂单|上车|进场)\s*[:：]?\s*([^\n，,；;]{1,40})",
+    r"(?:入场价格|入场|建仓|开仓|挂单|上车|进场)\s*[:：]?\s*"
+    r"([^\n，,；;]*?(?=\s*(?:ENTRY|EXIT|TP|SL|止盈|止损|止損|\n|$)|$))",
+    re.I,
+)
+# 专门处理「「进场」 ENTRY: 市价」这种格式（括号里嵌的关键字会被主正则误捕获）
+_ENTRY_WITH_LABEL = re.compile(
+    r"「[^」]*进场[^」]*」\s*ENTRY\s*[:：]?\s*(市[价價]|现价|[0-9]+(?:\.[0-9]+)?)",
     re.I,
 )
 _TP = re.compile(
@@ -238,6 +278,8 @@ def _clean_field(v: str) -> str:
     s = re.split(r"[|｜]{2,}|\s{2,}", s)[0].strip()
     # 截断误吞的止损等后续字段
     s = re.split(r"(?:止损|止損|SL\b)", s, maxsplit=1, flags=re.I)[0].strip()
+    # 截断 ENTRY/exit/entry 等英文后续标记（针对「📍 「進場」 ENTRY: 市價」这种）
+    s = re.split(r"(?:\bENTRY\b|\bEXIT\b|\bTP\b|\bSL\b)", s, maxsplit=1, flags=re.I)[0].strip()
     return s[:80]
 
 
@@ -257,7 +299,7 @@ def _pick_tp_levels(text: str) -> str:
 
 def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) -> TradeSignal | None:
     """单条消息解析；无有效交易字段则返回 None。"""
-    body = (text or "").strip()
+    body = _t2s((text or "").strip())
     if not body:
         return None
 
@@ -276,8 +318,15 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
         source_text=body[:500],
         msg_ids=[int(msg_id)] if msg_id is not None else [],
     )
+    # 优先级：带标签的 ENTRY(「进场」 ENTRY: 市价) > _ENTRY_EN > _MARKET_PRICE > 中文 _ENTRY
+    em_label = _ENTRY_WITH_LABEL.search(body)
+    em_en = _ENTRY_EN.search(body)
     em = _ENTRY.search(body)
-    if em:
+    if em_label:
+        sig.entry = _clean_field(em_label.group(1))
+    elif em_en and (not em or em_en.start() <= em.start()):
+        sig.entry = _clean_field(em_en.group(1))
+    elif em:
         sig.entry = _clean_field(em.group(1))
     else:
         mp = _MARKET_PRICE.search(body)
@@ -320,7 +369,7 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
 
 def looks_like_trade_message(text: str) -> bool:
     """粗筛：是否值得进窗口分析。"""
-    t = text or ""
+    t = _t2s(text or "")
     if _PROM_TAG.search(t):
         return True
     if _SYM_HASH.search(t):
@@ -339,7 +388,7 @@ def looks_like_trade_message(text: str) -> bool:
 
 
 def has_prom_tag(text: str) -> bool:
-    return bool(_PROM_TAG.search(text or ""))
+    return bool(_PROM_TAG.search(_t2s(text or "")))
 
 
 def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:

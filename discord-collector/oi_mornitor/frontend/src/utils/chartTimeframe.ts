@@ -26,6 +26,34 @@ export const CHART_LOAD_CHUNK = 300;
 export const CHART_REFRESH_TAIL = 80;
 export const CHART_VISIBLE_BARS = 160;
 
+export function chartBarDurationMs(tf: ChartTimeframe): number {
+  switch (tf) {
+    case "5m":
+      return 5 * 60_000;
+    case "15m":
+      return 15 * 60_000;
+    case "30m":
+      return 30 * 60_000;
+    case "1h":
+      return 60 * 60_000;
+    case "4h":
+      return 4 * 60 * 60_000;
+    case "1d":
+      return 24 * 60 * 60_000;
+    default:
+      return 15 * 60_000;
+  }
+}
+
+/** 为覆盖历史入场点，首屏多拉一些 K 线（上限对齐币安单页）。 */
+export function chartLimitForSignalTime(signalAt: number, tf: ChartTimeframe): number {
+  const ms = signalAt > 1e12 ? signalAt : signalAt * 1000;
+  if (!(ms > 0)) return CHART_DEFAULT_LIMIT;
+  const age = Math.max(0, Date.now() - ms);
+  const bars = Math.ceil(age / chartBarDurationMs(tf)) + 120;
+  return Math.min(1500, Math.max(CHART_DEFAULT_LIMIT, bars));
+}
+
 /** 默认 client：浏览器直连币安；设 VITE_CHART_KLINES_SOURCE=backend 可回退服务端代拉 */
 export function chartKlinesSource(): "client" | "backend" {
   const v = (import.meta.env.VITE_CHART_KLINES_SOURCE as string | undefined)?.trim().toLowerCase();
@@ -136,6 +164,22 @@ export function chartApiUrl(
     params.set("endTime", String(opts.endTimeMs));
   }
   return `/api/patterns/chart?${params.toString()}`;
+}
+
+export function chartCandlesApiUrl(
+  symbol: string,
+  interval: ChartTimeframe,
+  opts?: { limit?: number; endTimeMs?: number },
+): string {
+  const params = new URLSearchParams({
+    symbol,
+    interval,
+    limit: String(opts?.limit ?? CHART_DEFAULT_LIMIT),
+  });
+  if (opts?.endTimeMs != null && opts.endTimeMs > 0) {
+    params.set("endTime", String(opts.endTimeMs));
+  }
+  return `/api/patterns/chart-candles?${params.toString()}`;
 }
 
 export function chartMetaApiUrl(symbol: string, interval: ChartTimeframe): string {

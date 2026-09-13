@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import type { PatternAlert } from "../types";
+import type { ChartAlertEntryFocus, PatternAlert } from "../types";
 import { formatAlertHoverDetail } from "../utils/alertHoverDetail";
 import { isOiOperator } from "../utils/oiOperator";
 import {
@@ -32,7 +32,7 @@ interface TickerItem {
 interface Props {
   alerts: PatternAlert[];
   scanTs: number;
-  onOpen?: (symbol: string, interval?: string) => void;
+  onOpen?: (symbol: string, interval?: string, focus?: ChartAlertEntryFocus) => void;
 }
 
 /** 头部滚动条保留时长（按信号时间；超过 4h 不展示） */
@@ -811,9 +811,9 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
         onCaptureEnabledChange={setCaptureEnabledPersist}
         scanRunning={scanRunning}
         onRestartScan={restartScan}
-        onOpenSymbol={(sym, interval) => {
+        onOpenSymbol={(sym, interval, focus) => {
           setStatsOpen(false);
-          onOpen?.(sym, interval);
+          onOpen?.(sym, interval, focus);
         }}
       />
       {!row.length ? (

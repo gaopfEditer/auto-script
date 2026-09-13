@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   ALERT_SETTLE_RULES_SUMMARY,
   ALERT_STATS_PAGE_SIZE,
+  alertRecordToChartFocus,
   alertStatsLeverage,
   alertStatsPnlPct,
   fetchAlertStatsPage,
@@ -21,11 +22,12 @@ import {
 } from "../utils/patternAlertWinRate";
 import { PATTERN_ENTRY_RULES } from "../utils/patternEntryRules";
 import { isOiOperator } from "../utils/oiOperator";
+import type { ChartAlertEntryFocus } from "../types";
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  onOpenSymbol?: (symbol: string, interval?: string) => void;
+  onOpenSymbol?: (symbol: string, interval?: string, focus?: ChartAlertEntryFocus) => void;
   /** 列表重拉/筛选后同步头部胜率；后端 summary 传来时一并更新 ticker 头部 */
   onStatsChange?: (summary?: AlertWinRateSummary) => void;
   /** 顶部滚动条是否继续捕获新 SSE 信号（仅 operator 有意义） */
@@ -576,6 +578,8 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                 {rows.map((r) => {
                   const pnl = fmtPnl(r, hideYield);
                   const isOn = selected.has(r.key);
+                  const openChart = () =>
+                    onOpenSymbol?.(r.symbol, r.interval, alertRecordToChartFocus(r));
                   return (
                     <tr
                       key={r.key}
@@ -596,15 +600,15 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                       ) : null}
                       <td
                         className="mono"
-                        onClick={() => onOpenSymbol?.(r.symbol, r.interval)}
-                        title={onOpenSymbol ? `打开 ${r.symbol} 图表` : undefined}
+                        onClick={openChart}
+                        title={onOpenSymbol ? `打开 ${r.symbol} 图表并标记入场` : undefined}
                       >
                         {formatAlertStatsTime(r.signalAt)}
                       </td>
-                      <td onClick={() => onOpenSymbol?.(r.symbol, r.interval)}>
+                      <td onClick={openChart}>
                         <strong>${r.symbol}</strong>
                       </td>
-                      <td onClick={() => onOpenSymbol?.(r.symbol, r.interval)}>
+                      <td onClick={openChart}>
                         <span
                           className={`pattern-wr-dir ${
                             r.dir === "多" ? "long" : r.dir === "空" ? "short" : "flat"
@@ -613,16 +617,16 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                           {r.dir}
                         </span>
                       </td>
-                      <td className="muted" onClick={() => onOpenSymbol?.(r.symbol, r.interval)}>
+                      <td className="muted" onClick={openChart}>
                         {r.typeLabel || "—"}
                       </td>
-                      <td className="muted" onClick={() => onOpenSymbol?.(r.symbol, r.interval)}>
+                      <td className="muted" onClick={openChart}>
                         {r.interval || "—"}
                       </td>
-                      <td className="mono" onClick={() => onOpenSymbol?.(r.symbol, r.interval)}>
+                      <td className="mono" onClick={openChart}>
                         {fmtPrice(r.entry)}
                       </td>
-                      <td onClick={() => onOpenSymbol?.(r.symbol, r.interval)}>
+                      <td onClick={openChart}>
                         <span className={`pattern-wr-out oc-${r.outcome}`}>
                           {outcomeLabel(r.outcome)}
                         </span>
@@ -630,7 +634,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                       <td
                         className={`mono ${pnl.cls}`}
                         title={pnl.title}
-                        onClick={() => onOpenSymbol?.(r.symbol, r.interval)}
+                        onClick={openChart}
                       >
                         {pnl.text}
                       </td>

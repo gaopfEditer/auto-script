@@ -29,6 +29,7 @@ RadarService.scan_once (~30–60s)
 | 形态多头爆发 | `pattern.pattern_alerts` | 形态页 ✅ | ❌ |
 | 形态卡片（射击之星/OI倒锤子） | `pattern.pattern_alerts` `candle_pattern_card` | 形态页 ✅ | ✅ `OI_CANDLE_CARD_TELEGRAM_CHAT_ID` |
 | 结构卡片（头肩/探底/2B/Sweep） | `pattern.pattern_alerts` `structure_pattern_card` | 形态页 ✅ | ✅ 同群 · `OI_STRUCTURE_CARD_TELEGRAM` |
+| 形态信号结算摘要（4h） | 胜率库 `pattern_alert_stats` | 形态列表 | ✅ `MAIN_CARD_TELEGRAM_CHAT_ID` · 北京 04/08/12/16/20/24 |
 | 回踩/射击之星 | `pattern.pullback_*` | ❌ 未接 | 仅 `run_coin_monitor --telegram` |
 | 沙盒入场/移止损/减仓/平仓 | `pattern.sandbox_alerts` | 形态页 ✅ | ❌ |
 
@@ -178,6 +179,7 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 - 结构：头肩顶/M顶 + Vegas 破位；恐慌放量 + 二次阳线探底；2B Spring；流动性掠夺；圆弧动量衰竭
 - 群：`OI_CANDLE_CARD_TELEGRAM_CHAT_ID`；开关 `OI_CANDLE_CARD_TELEGRAM` / `OI_STRUCTURE_CARD_TELEGRAM`
 - 去重：同币同周期同类型同开盘时间只推一次
+- **结算摘要**：北京时间 `04/08/12/16/20/24` 点，把形态信号列表本档 4h + 当日累计推到 `MAIN_CARD_TELEGRAM_CHAT_ID`（开关 `OI_STATS_SETTLE_TELEGRAM`）
 
 **2026-09 准确率调优过滤（均可在 `config.py` 经环境变量开关/调参）**
 
@@ -517,3 +519,37 @@ SQLite `trades` + 持仓 `meta_json.events` + 前端 localStorage：
 3. **短线防抖**：中轨用收盘判定 + 最短持仓 + 最小有利波动，减少影线假平仓。  
 4. **长线分阶段**：先保本 → 减仓 30% 落袋 → 尾仓才给 1% 回撤空间。  
 5. **多币并发**：日池 12、上限 20，先触发先开；平仓后冷却防反复扫损。
+
+---
+
+## 10. 潜力暴涨漏斗（A/B/C）
+
+并行于 LH→HL 拐点机；字段挂在 `pattern.moonshot*`。核心：**先找死久了还在抬的盘子，再只做放量收盘离开平台的那一下**；竖起后切「寻找顶部」，不追中段。
+
+### 10.1 猎场
+
+- 默认宇宙：雷达 `TOP_N`（≈200），**不是**全市场
+- 中场 OI 优先；踢稳定币、24h 涨幅过热前排、低 `quote_volume`
+- OI 不足不否决
+- 监听硬上限仍为 **50**；A 池可更大，按分占槽
+- 全市场：`OI_MOONSHOT_FULL_SCAN=1`（默认关；每 2h 约 +700～900 次 K，有 418 风险）
+
+### 10.2 状态机
+
+| 状态 | 含义 | 动作 |
+|------|------|------|
+| `COMPRESS` | 压缩观察 | 只盯不买 |
+| `WAIT_HL` / `LH_NEAR` / `READY_BREAK` | 蓄势 B | 警报 + 可选沙盒试丁点 |
+| `IN_POSITION` | C 放量收盘突破 | 交易/纸面开仓 |
+| `FIND_TOP` | 已竖直/量高潮 | 只减不加 |
+| `INVALID` | 跌回 HL/平台 | 冷却 3～5 天 |
+
+评分 0～10（压缩/结构/量/突破/大盘·RS）；默认 **≥8 进 B，≥9 且突破进 C**。OI/资金费仅加减分。  
+壳层顶栏 `oi-nav-spacer` 展示 **score > 5** 的币种+分数（`OI_MOONSHOT_SCORE_DISPLAY`，默认 5）；点击跳转 `/oi?symbol=` → 形态图。
+
+### 10.3 扫描节奏
+
+- A：独立慢环 `OI_MOONSHOT_A_INTERVAL_SEC`（默认 7200），1h K，与主环错峰
+- B/C：形态 watchlist 每轮 15m K 复用更新，几乎不增请求
+
+开关：`OI_MOONSHOT_ENABLED`（默认开）、`OI_MOONSHOT_SANDBOX_B/C`、`OI_MOONSHOT_FULL_SCAN`（默认关）。

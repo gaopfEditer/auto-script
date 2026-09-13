@@ -34,14 +34,17 @@ FALLBACK_SOURCE_ORDER = tuple(
 )
 FALLBACK_MIN_TICKERS = int(os.getenv("OI_FALLBACK_MIN_TICKERS", "30"))
 # 币安 418 / 硬封后，多久内优先走备选所（秒）
-BINANCE_BAN_COOLDOWN_SEC = float(os.getenv("OI_BINANCE_BAN_COOLDOWN_SEC", "300"))
+BINANCE_BAN_COOLDOWN_SEC = float(os.getenv("OI_BINANCE_BAN_COOLDOWN_SEC", "1800"))
 
 # 候选池：fapi 全市场 ticker/24hr 聚合 + OI 量级分层（略降门槛以覆盖更多山寨异动）
 OI_TIER_MID_MIN_USD = float(os.getenv("OI_TIER_MID_MIN_USD", "5000000"))
 OI_TIER_HEAVY_MIN_USD = float(os.getenv("OI_TIER_HEAVY_MIN_USD", "50000000"))
-OI_OI_BATCH_CONCURRENCY = int(os.getenv("OI_OI_BATCH_CONCURRENCY", "20"))
-# 兼容旧配置：0 表示不限制，监控所有符合量级条件的合约
-TOP_N = int(os.getenv("OI_TOP_N", "0"))
+OI_OI_BATCH_CONCURRENCY = int(os.getenv("OI_OI_BATCH_CONCURRENCY", "8"))
+# 并发拉单 symbol OI 的上限（被 ban 时降速：默认 8）
+# 监控池上限：0=不限；默认 200 减少后续 K 线/形态扫描的 symbol 数量
+TOP_N = int(os.getenv("OI_TOP_N", "200"))
+# Heavyweight 池（形态/沙盒/卡片快速扫描的目标）按 USD 排名取前 N
+HEAVY_POOL_LIMIT = int(os.getenv("OI_HEAVY_POOL_LIMIT", "200"))
 
 # 异动阈值（偏灵敏：便于发现刚起的热币；可用 env 调严）
 OI_USD_LIMIT = float(os.getenv("OI_USD_LIMIT", "500000"))
@@ -62,7 +65,7 @@ REQUEST_INTERVAL_SEC = float(os.getenv("OI_REQUEST_INTERVAL_SEC", "0.1"))
 HTTP_TIMEOUT_SEC = float(os.getenv("OI_HTTP_TIMEOUT_SEC", "30"))
 
 # 扫描周期（秒）— 略缩短以更快刷新左栏/榜单
-SCAN_INTERVAL_SEC = int(os.getenv("OI_SCAN_INTERVAL_SEC", "30"))
+SCAN_INTERVAL_SEC = int(os.getenv("OI_SCAN_INTERVAL_SEC", "150"))
 
 # HTTP 重试
 MAX_RETRIES = int(os.getenv("OI_MAX_RETRIES", "3"))
@@ -163,6 +166,15 @@ MAIN_CARD_DEFAULT_SYMBOLS = tuple(
     for s in os.getenv("OI_MAIN_CARD_DEFAULT_SYMBOLS", "BTCUSDT,ETHUSDT").split(",")
     if s.strip()
 )
+# 形态信号列表结算摘要 → MAIN 群（北京时间 04/08/12/16/20/24 点各发一档）
+STATS_SETTLE_TELEGRAM = os.getenv(
+    "OI_STATS_SETTLE_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+STATS_SETTLE_TELEGRAM_CHAT_ID = (
+    os.getenv("OI_STATS_SETTLE_TELEGRAM_CHAT_ID")
+    or MAIN_CARD_TELEGRAM_CHAT_ID
+    or ""
+).strip()
 CANDLE_CARD_MAJOR_SYMBOLS = tuple(
     s.strip().upper()
     for s in os.getenv("OI_CANDLE_CARD_MAJORS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
@@ -170,12 +182,12 @@ CANDLE_CARD_MAJOR_SYMBOLS = tuple(
 )
 CANDLE_CARD_MAJOR_INTERVALS = tuple(
     x.strip()
-    for x in os.getenv("OI_CANDLE_CARD_MAJOR_INTERVALS", "15m,30m,1h,4h").split(",")
+    for x in os.getenv("OI_CANDLE_CARD_MAJOR_INTERVALS", "15m,1h,4h").split(",")
     if x.strip()
 )
 CANDLE_CARD_ALT_INTERVALS = tuple(
     x.strip()
-    for x in os.getenv("OI_CANDLE_CARD_ALT_INTERVALS", "15m,30m,1h").split(",")
+    for x in os.getenv("OI_CANDLE_CARD_ALT_INTERVALS", "15m,1h").split(",")
     if x.strip()
 )
 # 山寨：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN
@@ -450,3 +462,40 @@ def proxy_url() -> str | None:
         if v:
             return v
     return None
+
+# —— 潜力暴涨漏斗 A/B/C（并行于 LH→HL；默认开猎场内 A 扫）——
+MOONSHOT_ENABLED = os.getenv("OI_MOONSHOT_ENABLED", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+MOONSHOT_FULL_SCAN = os.getenv("OI_MOONSHOT_FULL_SCAN", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+MOONSHOT_A_INTERVAL_SEC = int(os.getenv("OI_MOONSHOT_A_INTERVAL_SEC", "7200"))
+MOONSHOT_A_POOL_MAX = int(os.getenv("OI_MOONSHOT_A_POOL_MAX", "120"))
+MOONSHOT_KLINE_INTERVAL = os.getenv("OI_MOONSHOT_INTERVAL", "1h").strip() or "1h"
+MOONSHOT_KLINE_LIMIT = int(os.getenv("OI_MOONSHOT_KLINE_LIMIT", "120"))
+MOONSHOT_ATR_RATIO = float(os.getenv("OI_MOONSHOT_ATR_RATIO", "0.7"))
+MOONSHOT_BB_PCTILE = float(os.getenv("OI_MOONSHOT_BB_PCTILE", "20"))
+MOONSHOT_RANGE_RATIO = float(os.getenv("OI_MOONSHOT_RANGE_RATIO", "0.5"))
+MOONSHOT_COMPRESS_DAYS_MIN = float(os.getenv("OI_MOONSHOT_COMPRESS_DAYS_MIN", "3"))
+MOONSHOT_COMPRESS_DAYS_MAX = float(os.getenv("OI_MOONSHOT_COMPRESS_DAYS_MAX", "8"))
+MOONSHOT_VOL_WAKE_LO = float(os.getenv("OI_MOONSHOT_VOL_WAKE_LO", "1.5"))
+MOONSHOT_VOL_WAKE_HI = float(os.getenv("OI_MOONSHOT_VOL_WAKE_HI", "2.5"))
+MOONSHOT_VOL_BREAK = float(os.getenv("OI_MOONSHOT_VOL_BREAK", "2.5"))
+MOONSHOT_BODY_RATIO = float(os.getenv("OI_MOONSHOT_BODY_RATIO", "0.55"))
+MOONSHOT_SCORE_B = float(os.getenv("OI_MOONSHOT_SCORE_B", "8"))
+MOONSHOT_SCORE_C = float(os.getenv("OI_MOONSHOT_SCORE_C", "9"))
+MOONSHOT_SCORE_DISPLAY = float(os.getenv("OI_MOONSHOT_SCORE_DISPLAY", "5"))
+MOONSHOT_HOT_EXCLUDE_TOP = int(os.getenv("OI_MOONSHOT_HOT_EXCLUDE_TOP", "10"))
+MOONSHOT_QUOTE_VOL_MIN = float(os.getenv("OI_MOONSHOT_QUOTE_VOL_MIN", "500000"))
+MOONSHOT_COOLDOWN_DAYS = float(os.getenv("OI_MOONSHOT_COOLDOWN_DAYS", "4"))
+MOONSHOT_SANDBOX_B = os.getenv("OI_MOONSHOT_SANDBOX_B", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+MOONSHOT_SANDBOX_C = os.getenv("OI_MOONSHOT_SANDBOX_C", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+MOONSHOT_STATE_DB = Path(
+    os.getenv("OI_MOONSHOT_STATE_DB") or (_PKG_ROOT / "data" / "moonshot_state.db")
+)
+

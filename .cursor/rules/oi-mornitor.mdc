@@ -57,6 +57,8 @@ Pivot 窗默认 11。DB：`data/pattern_state.db`；`trigger_emitted` 后同币�
 | 蜡烛卡片 | `OI_CANDLE_CARD_TELEGRAM`（默认开） | `OI_CANDLE_CARD_TELEGRAM_CHAT_ID` | 射击之星；连续走平射击之星（主流）；柱级 OI 异动倒锤子 |
 | 结构卡片 | `OI_STRUCTURE_CARD_TELEGRAM` | 同上 | 头肩/M顶+Vegas 破位；二次探底；2B；Sweep；圆弧动量 |
 | 形态+OI 旧短文 | `OI_PATTERN_OI_COMBO_TELEGRAM` | 同通道 | **若已开蜡烛卡片，不再发旧文案** |
+| 形态结算摘要 | `OI_STATS_SETTLE_TELEGRAM`（默认开） | `MAIN_CARD_TELEGRAM_CHAT_ID` | 北京 04/08/12/16/20/24 点：本档 4h 胜率/盈亏 + 当日累计 |
+| 潜力暴涨漏斗 | `OI_MOONSHOT_ENABLED`（默认开） | 形态页侧栏 / 沙盒纸面 | A 压缩慢扫 → B 蓄势警报 → C 放量收盘；`OI_MOONSHOT_FULL_SCAN` 默认关 |
 
 周期池：
 

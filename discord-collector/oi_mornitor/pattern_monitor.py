@@ -593,6 +593,10 @@ class PatternMonitorEngine:
         self._card_last_emit: dict[str, int] = {}
         # (symbol, interval) → (fetched_at, klines)
         self._card_kline_cache: dict[tuple[str, str], tuple[float, list]] = {}
+        # 可选：潜力暴涨漏斗引擎（由 RadarService 注入）
+        self.moonshot_engine = None
+        self._last_moonshot_payload: dict[str, Any] = {}
+        self._moonshot_sandbox_done: set[str] = set()
 
     @property
     def last_alerts(self) -> list[dict[str, Any]]:
@@ -971,6 +975,27 @@ class PatternMonitorEngine:
             bump_existing=True,
         )
 
+    def ingest_moonshot_candidates(
+        self,
+        *,
+        protect_extra: set[str] | None = None,
+    ) -> list[str]:
+        """潜力暴涨高分币 → 占形态监听槽（宁缺毋滥，按分排序）。"""
+        eng = self.moonshot_engine
+        if eng is None or not getattr(eng, "enabled", False):
+            return []
+        try:
+            hits = eng.top_for_watchlist(limit=MAX_WATCH_SYMBOLS)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("moonshot 候选读取失败: %s", exc)
+            return []
+        return self._ingest_symbols_to_watch(
+            hits,
+            protect_extra=protect_extra,
+            log_tag="潜力暴涨",
+            bump_existing=True,
+        )
+
     def prune_inactive_watch(
         self,
         *,
@@ -1104,6 +1129,12 @@ class PatternMonitorEngine:
         heavy_count = len(candidates)
         if heavy_count == 0 and pool_meta:
             heavy_count = int(pool_meta.get("heavyweight_count") or 0)
+        ms_payload: dict[str, Any] = dict(self._last_moonshot_payload or {})
+        if self.moonshot_engine is not None and not ms_payload:
+            try:
+                ms_payload = self.moonshot_engine.get_payload()
+            except Exception:
+                ms_payload = {}
         return {
             "scan_ts": self._last_scan_ts,
             "watchlist": self.get_watchlist(),
@@ -1121,6 +1152,7 @@ class PatternMonitorEngine:
             "last_watchlist_refresh_ts": self._last_watchlist_refresh_ts,
             # 供 collect:ui 守护进程识别是否为本仓库实例（避免占用同端口的旧/旁路进程）
             "package_root": str(Path(__file__).resolve().parent),
+            **ms_payload,
         }
 
     async def scan(
@@ -1167,6 +1199,8 @@ class PatternMonitorEngine:
                 hot_tickers=hot_tickers,
                 protect_extra=protect_symbols,
             )
+            # 潜力暴涨 A/B 高分 → 占监听槽（不超 50）
+            self.ingest_moonshot_candidates(protect_extra=protect_symbols)
 
         watchlist = self.tracker.list_watchlist()
         if not watchlist:
@@ -1261,9 +1295,11 @@ class PatternMonitorEngine:
 
             elif snap.status == STATUS_TRIGGER and fire:
                 self.tracker.mark_triggered(sym, kline_close_time)
+                # 单独字段：信号类型 / 关键价位
                 alert = {
                     "symbol": sym,
                     "type": "pattern_bull_continuation",
+                    "type_label": "带量突破",
                     "interval": item.interval,
                     "status": STATUS_TRIGGER,
                     "status_label": STATUS_LABELS[STATUS_TRIGGER],
@@ -1295,6 +1331,19 @@ class PatternMonitorEngine:
 
             updated = self.tracker.get_state(sym)
             states.append(self._state_dict(sym, item.interval, updated))
+
+        # 潜力暴涨：复用本轮 15m K 更新 B/C，合并警报（不叠一堆形态箭头）
+        if self.moonshot_engine is not None:
+            try:
+                ms_alerts = self.moonshot_engine.update_from_15m(
+                    klines_map, pool_rows=self._last_pool_rows
+                )
+                self._last_moonshot_payload = self.moonshot_engine.get_payload()
+                for a in ms_alerts:
+                    a.setdefault("type", "moonshot_coil")
+                    alerts.append(a)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("moonshot 15m 更新失败: %s", exc)
 
         self._last_alerts = alerts
         self._last_states = states
@@ -1583,6 +1632,9 @@ class PatternMonitorEngine:
         ) -> list[dict[str, Any]]:
             if not is_candle_push_enabled():
                 return []
+            # 彻底屏蔽已停用的 30m 周期（hits 留空即可，不发出 alert）
+            if iv == "30m":
+                return []
             try:
                 preview = collect_candle_signal_markers(df)
             except Exception:  # noqa: BLE001
@@ -1755,6 +1807,9 @@ class PatternMonitorEngine:
             return out
 
         async def _one(sym: str, iv: str, is_major: bool) -> list[dict[str, Any]]:
+            # 彻底屏蔽已停用的 30m 周期：拉 K 线 / 算指标 / 扫形态 / 推 TG 一律跳过
+            if iv == "30m":
+                return []
             klines = await _klines_for(sym, iv)
             min_bars = 80 if is_structure_push_enabled() else 30
             if not klines or len(klines) < min_bars:
@@ -1824,6 +1879,56 @@ class PatternMonitorEngine:
             ),
         )
         return build_mtf_context({"4h": k4, "1d": k1d})
+
+    async def get_chart_candles(
+        self,
+        session: aiohttp.ClientSession,
+        symbol: str,
+        *,
+        base_url: str = FAPI_BASE_URL,
+        interval: str | None = None,
+        limit: int | None = None,
+        end_time: int | None = None,
+    ) -> dict[str, Any]:
+        """轻量接口：只拉 K 线 + 算 BB/MACD/Vegas，不做 OI 历史/资金费率/多周期。
+
+        用于图表优先渲染——K 线到了立刻返回，侧边栏形态分析走 /chart 独立补。
+        """
+        sym = symbol.strip().upper()
+        tf = interval or PATTERN_KLINE_INTERVAL
+        req_limit = limit if limit is not None else PATTERN_CHART_DEFAULT_LIMIT
+        if end_time is None:
+            req_limit = max(req_limit, PATTERN_CHART_DEFAULT_LIMIT)
+        req_limit = min(req_limit, PATTERN_CHART_MAX_LIMIT)
+
+        klines, kline_src = await fetch_pattern_klines_with_source(
+            session,
+            base_url=base_url,
+            symbol=sym,
+            interval=tf,
+            limit=req_limit,
+            end_time=end_time,
+        )
+        page_has_more = klines_page_has_more(len(klines), req_limit, kline_src)
+        partial = end_time is not None
+
+        chart = build_pattern_chart_payload(klines, state={}, oi_by_time=None, derivatives_ctx=None)
+
+        return {
+            "symbol": sym,
+            "interval": tf,
+            "partial": partial,
+            "has_more": page_has_more,
+            "kline_source": kline_src,
+            "candles": chart["candles"],
+            "bb": chart["bb"],
+            "vegas": chart.get("vegas") or {},
+            "macd": chart.get("macd") or {"line": [], "signal": [], "hist": []},
+            "markers": chart.get("markers") or [],
+            "price_lines": chart.get("price_lines") or [],
+            "analysis": {},
+            "state": {},
+        }
 
     async def get_chart_data(
         self,

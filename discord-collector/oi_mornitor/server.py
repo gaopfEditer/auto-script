@@ -142,6 +142,32 @@ async def handle_patterns(_request: web.Request) -> web.Response:
     )
 
 
+async def handle_moonshot(request: web.Request) -> web.Response:
+    """潜力暴涨列表（壳层顶栏用）：默认 score > 5。"""
+    from oi_mornitor.config import MOONSHOT_SCORE_DISPLAY
+
+    svc = get_service()
+    eng = getattr(svc, "moonshot_engine", None)
+    try:
+        min_score = float(request.rel_url.query.get("min_score") or MOONSHOT_SCORE_DISPLAY)
+    except (TypeError, ValueError):
+        min_score = float(MOONSHOT_SCORE_DISPLAY)
+    items = []
+    if eng is not None:
+        for row in eng.list_rows():
+            if float(row.score) > min_score:
+                items.append(row.to_dict())
+    return _json_response(
+        {
+            "ok": True,
+            "min_score": min_score,
+            "items": items,
+            "count": len(items),
+            "enabled": bool(getattr(eng, "enabled", False)) if eng else False,
+        }
+    )
+
+
 
 
 
@@ -259,12 +285,14 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
     time_filter = str(q.get("time") or q.get("timeFilter") or "all").strip() or "all"
     type_label = str(q.get("type") or q.get("typeLabel") or "all").strip() or "all"
     interval = str(q.get("interval") or q.get("iv") or "all").strip() or "all"
+    symbol = str(q.get("symbol") or q.get("sym") or "").strip()
     payload = list_alert_stats_page(
         page=page,
         page_size=page_size,
         time_filter=time_filter,
         type_label=type_label,
         interval=interval,
+        symbol=symbol or None,
     )
     return _json_response({"ok": True, **payload})
 
@@ -411,6 +439,45 @@ async def handle_patterns_random(_request: web.Request) -> web.Response:
         "picked": picked,
         "watchlist": svc.pattern_engine.get_watchlist(),
     })
+
+
+async def handle_patterns_chart_candles(request: web.Request) -> web.Response:
+    """轻量接口：只拉 K 线 + BB/MACD/Vegas，不等待 OI 历史/资金费率/多周期。
+    图表渲染走这个，侧边栏形态分析走 /chart 独立补。
+    """
+    symbol = request.query.get("symbol", "").strip().upper()
+    if not symbol:
+        return _json_response({"ok": False, "error": "symbol required"}, status=400)
+    interval = request.query.get("interval", "").strip() or None
+    limit_raw = request.query.get("limit", "").strip()
+    end_raw = request.query.get("endTime", "").strip()
+    limit = int(limit_raw) if limit_raw.isdigit() else None
+    end_time = int(end_raw) if end_raw.isdigit() else None
+    svc = get_service()
+    session = await svc._ensure_session()
+    try:
+        data = await asyncio.wait_for(
+            asyncio.shield(
+                svc.pattern_engine.get_chart_candles(
+                    session,
+                    symbol,
+                    base_url=svc.radar.base_url,
+                    interval=interval,
+                    limit=limit,
+                    end_time=end_time,
+                )
+            ),
+            timeout=15,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("K 线轻量请求超时（15s）：%s %s", symbol, interval)
+        return _json_response({"ok": False, "error": "K 线加载超时（15s）"}, status=504)
+    except Exception as exc:
+        logger.exception("K 线轻量请求失败 %s", symbol)
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    if not data.get("candles"):
+        return _json_response({"ok": False, "error": "K线数据为空"}, status=404)
+    return _json_response({"ok": True, **data})
 
 
 async def handle_patterns_chart(request: web.Request) -> web.Response:
@@ -624,10 +691,13 @@ async def handle_patterns_futures_net(request: web.Request) -> web.Response:
 async def handle_patterns_klines(request: web.Request) -> web.Response:
     """浏览器无法直连币安时，由服务端代拉 K 线（走代理 + 跨所兜底）。"""
     from oi_mornitor.pattern_monitor import fetch_pattern_klines_with_source
+    from oi_mornitor.symbol_aliases import is_stablecoin_symbol
 
     symbol = request.query.get("symbol", "").strip().upper()
     if not symbol:
         return _json_response({"ok": False, "error": "symbol required"}, status=400)
+    if is_stablecoin_symbol(symbol):
+        return _json_response({"ok": False, "error": f"稳定币已排除回溯 ({symbol})"}, status=400)
     interval = request.query.get("interval", "").strip() or "5m"
     limit_raw = request.query.get("limit", "").strip()
     end_raw = request.query.get("endTime", "").strip()
@@ -877,6 +947,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/matrix", handle_matrix)
 
     app.router.add_get("/api/patterns", handle_patterns)
+    app.router.add_get("/api/moonshot", handle_moonshot)
 
     app.router.add_post("/api/patterns/watch", handle_patterns_watch_post)
 
@@ -905,6 +976,7 @@ def create_app() -> web.Application:
 
     app.router.add_post("/api/patterns/random", handle_patterns_random)
 
+    app.router.add_get("/api/patterns/chart-candles", handle_patterns_chart_candles)
     app.router.add_get("/api/patterns/chart", handle_patterns_chart)
 
     app.router.add_get("/api/patterns/chart-meta", handle_patterns_chart_meta)

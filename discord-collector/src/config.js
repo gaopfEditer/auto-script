@@ -427,4 +427,18 @@ export const config = {
     String(process.env.TG_SIGNAL_BACKTEST_ALT_EXTEND_ON_STEP ?? "1").toLowerCase()
   ),
   tgSignalBacktestMaxH: Number(process.env.TG_SIGNAL_BACKTEST_MAX_H ?? 24),
+  /**
+   * Telegram 交易信号 → python-ai-operate（AI 短评 + OI 截图 + CDP 发布）
+   * 默认关；开启后需本机 console.py :8787 + Chrome CDP。
+   */
+  tradeSignalAiPublishEnabled: ["1", "true", "yes", "on"].includes(
+    String(process.env.TRADE_SIGNAL_AI_PUBLISH ?? "0").toLowerCase()
+  ),
+  tradeSignalAiPublishUrl: (
+    process.env.TRADE_SIGNAL_AI_PUBLISH_URL ?? "http://127.0.0.1:8787"
+  ).trim(),
+  tradeSignalAiPublishToken: (process.env.TRADE_SIGNAL_AI_PUBLISH_TOKEN ?? "").trim(),
+  tradeSignalAiPublishPlatforms: parseIdList(
+    process.env.TRADE_SIGNAL_AI_PUBLISH_PLATFORMS ?? ""
+  ),
 };

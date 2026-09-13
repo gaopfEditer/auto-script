@@ -38,7 +38,12 @@ class PendingCard:
     signal_at: datetime | None = None
     card_id: int | None = None
     is_prom: bool = False
+    is_tponly_pending: bool = False  # True=只收到 TP/SL，缺币种/方向，等待补充
     opened_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# TP/SL-only 消息（无币种/方向）建卡后，等待补充 core 的窗口
+_TPSLA_ONLY_WINDOW = timedelta(minutes=10)
 
 
 class TradeCardPusher:
@@ -74,7 +79,8 @@ class TradeCardPusher:
         dead = [
             k
             for k, p in self._pending.items()
-            if p.is_prom and now - p.opened_at > _PROM_MERGE_WINDOW
+            if (p.is_prom or p.is_tponly_pending)
+            and now - p.opened_at > _PROM_MERGE_WINDOW
         ]
         for k in dead:
             self._pending.pop(k, None)
@@ -100,6 +106,23 @@ class TradeCardPusher:
                 and p.signal.symbol.upper() != sig.symbol.upper()
             ):
                 continue
+            return p
+        return None
+
+    def _find_tponly_pending(
+        self, chat_id: int, sig: TradeSignal, now: datetime
+    ) -> PendingCard | None:
+        """同群同发言人、TP/SL-only 窗口内：core 消息来时，合并到对应 pending。"""
+        who = (sig.sender or "").strip().lower() or "_"
+        for p in self._pending.values():
+            if not p.is_tponly_pending or p.chat_id != chat_id:
+                continue
+            if now - p.opened_at > _PROM_MERGE_WINDOW:
+                continue
+            p_who = (p.signal.sender or "").strip().lower() or "_"
+            if p_who != who:
+                continue
+            # core 补完后清除 tponly_pending flag
             return p
         return None
 
@@ -268,6 +291,27 @@ class TradeCardPusher:
             card_key = self._pending_key(chat_id, merged)
             pf = self._pending.get(card_key)
 
+            # —— 优先处理 tponly pending（core+TP/SL 已合并且来自 tponly 补充的场景）——
+            if merged.has_core and merged.has_tpsl:
+                tp_pf = self._find_tponly_pending(chat_id, merged, now)
+                if tp_pf:
+                    raw_body = self._combine_raw_for_signal(snap, merged, prefer_sender=sender)
+                    await self._post_card(
+                        merged,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="update",
+                        raw_body=raw_body,
+                    )
+                    self._clear_pending(tp_pf.key)
+                    print(
+                        f"    · TP/SL-only 卡已补充 core → {merged.symbol}做{merged.direction}，"
+                        "更新卡片",
+                        flush=True,
+                    )
+                    return
+
             if merged.has_core and merged.has_tpsl:
                 phase = "update" if pf else "full"
                 raw_body = self._combine_raw_for_signal(snap, merged, prefer_sender=sender)
@@ -282,7 +326,82 @@ class TradeCardPusher:
                 self._clear_pending(card_key)
                 return
 
+            # —— TP/SL-only 路径（无币种/方向，只有止盈止损）——
+            if merged.has_tpsl and not merged.has_core:
+                tp_pf = self._find_tponly_pending(chat_id, merged, now)
+                if tp_pf:
+                    # 后续 core 消息补充进来：合并后 POST update 覆盖待补充 symbol
+                    merged = tp_pf.signal.merge_from(merged)
+                    raw_body = self._combine_raw_for_signal(snap, merged, prefer_sender=sender)
+                    await self._post_card(
+                        merged,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="update",
+                        raw_body=raw_body,
+                    )
+                    tp_pf.signal = merged
+                    tp_pf.is_tponly_pending = False
+                    print(
+                        f"    · TP/SL-only 卡已补充 core → {merged.symbol}做{merged.direction}，"
+                        "更新卡片",
+                        flush=True,
+                    )
+                else:
+                    # 首次只发 TP/SL：建卡 symbol=待补充，后续 core 来再合并
+                    placeholder = merged.merge_from(
+                        TradeSignal(symbol="待补充", direction="", sender=sender or "")
+                    )
+                    await self._post_card(
+                        placeholder,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="initial",
+                        raw_body=body,
+                        merge_window_ms=int(_PROM_MERGE_WINDOW.total_seconds() * 1000),
+                    )
+                    tponly_key = self._pending_key(chat_id, placeholder)
+                    self._pending[tponly_key] = PendingCard(
+                        key=tponly_key,
+                        signal=merged,
+                        chat_id=chat_id,
+                        chat_title=title,
+                        signal_at=signal_at,
+                        is_tponly_pending=True,
+                        opened_at=now,
+                    )
+                    print(
+                        "    · 主群已发 TP/SL-only 卡（symbol=待补充），"
+                        "等待同发言人补币种/方向",
+                        flush=True,
+                    )
+                return
+
             if merged.has_core and not merged.has_tpsl:
+                # 优先合并到已有 tponly pending（TP/SL-only 建卡等待补充的情况）
+                tp_pf = self._find_tponly_pending(chat_id, merged, now)
+                if tp_pf:
+                    # snap 里只有当前消息的 core；把 pending 里存的前一条 TP/SL 显式合并进来
+                    merged = tp_pf.signal.merge_from(merged)
+                    # 用 tp_pf.signal（包含 [10,11] msg_ids）生成 raw_body，才能取到两条原始消息
+                    raw_body = self._combine_raw_for_signal(snap, tp_pf.signal, prefer_sender=sender)
+                    await self._post_card(
+                        merged,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="update",
+                        raw_body=raw_body,
+                    )
+                    self._clear_pending(tp_pf.key)
+                    print(
+                        f"    · 开仓卡已补充 TP/SL → {merged.symbol}做{merged.direction}，"
+                        "更新卡片",
+                        flush=True,
+                    )
+                    return
                 if pf:
                     return
                 await self._post_card(

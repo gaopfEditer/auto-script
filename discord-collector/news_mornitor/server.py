@@ -671,7 +671,13 @@ def _normalize_event(item: dict[str, Any], *, source: str) -> dict[str, Any] | N
     if not title or len(title) < 3:
         return None
 
-    publish_at = str(item.get("publish_at") or item.get("pub_time") or item.get("event_time") or "")
+    publish_at = str(
+        item.get("publish_at")
+        or item.get("published_at")
+        or item.get("pub_time")
+        or item.get("event_time")
+        or ""
+    )
     url = str(item.get("url") or item.get("source_url") or item.get("link") or "")
     description = str(
         item.get("summary")

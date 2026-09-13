@@ -13,7 +13,7 @@ import {
   type SeriesMarker,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { PatternCandle, PatternChartData, PatternState } from "../types";
+import type { ChartAlertEntryFocus, PatternCandle, PatternChartData, PatternState } from "../types";
 import {
   chartOscillatorFormat,
   chartPriceFormat,
@@ -23,7 +23,7 @@ import {
   fmtNum,
   fmtPct,
 } from "../utils/format";
-import { displaySymbol } from "../utils/symbol";
+import { alignPriceToReference, displaySymbol } from "../utils/symbol";
 import { CoinAvatar } from "./CoinAvatar";
 import type { TickerRow } from "../types";
 import { useBinanceChartLive } from "../hooks/useBinanceChartLive";
@@ -34,8 +34,10 @@ import {
   CHART_REFRESH_TAIL,
   CHART_TIMEFRAMES,
   CHART_VISIBLE_BARS,
+  chartLimitForSignalTime,
   coerceChartTimeframe,
   type ChartTimeframe,
+  chartCandlesApiUrl,
   fetchPatternChart,
   mergeBbSeries,
   mergeCandlesByTime,
@@ -47,6 +49,10 @@ import {
 } from "../utils/chartTimeframe";
 import { chartLocalization, chartTimeScaleOptions, formatCandleLocalTime } from "../utils/chartLocale";
 import { buildChartFromCandles } from "../utils/chartIndicators";
+import {
+  buildAlertEntryMarkers,
+  fetchAlertStatsForSymbol,
+} from "../utils/patternAlertWinRate";
 import {
   DERIV_OI_LINE_COLOR,
   fetchChartDerivSubplots,
@@ -97,6 +103,21 @@ function restoreLogicalRange(
   });
 }
 
+function visibleRangeAroundIndex(len: number, idx: number, bars = CHART_VISIBLE_BARS): LogicalRange {
+  const half = Math.floor(bars / 2);
+  let from = idx - half;
+  let to = idx + half + 2;
+  if (from < 0) {
+    to -= from;
+    from = 0;
+  }
+  if (to > len) {
+    from = Math.max(0, from - (to - len));
+    to = len;
+  }
+  return { from, to } as LogicalRange;
+}
+
 interface Props {
   symbol: string;
   state?: PatternState;
@@ -106,6 +127,9 @@ interface Props {
   preferredTimeframe?: string | null;
   /** 每次从信号打开递增，确保重复点击同一周期也会切回 */
   preferredTimeframeNonce?: number;
+  /** 形态信号列表点开：在曲线上标出入场点与类型 */
+  alertFocus?: ChartAlertEntryFocus | null;
+  alertFocusNonce?: number;
   /** 右键标题：打开与左侧列表相同的操作菜单 */
   onTitleContextMenu?: (e: React.MouseEvent, symbol: string) => void;
   /** 当前币是否已在形态监听列表 */
@@ -173,6 +197,7 @@ const MARKER_LEGEND = [
   { kind: "continuous_upper_wick", label: "连续上插针", color: "#9c27b0" },
   { kind: "continuous_lower_wick", label: "连续下插针", color: "#9c27b0" },
   { kind: "oi_anomaly", label: "OI异动（无形态）", color: "#ff9800" },
+  { kind: "alert_entry_focus", label: "形态信号入场", color: "#b8ff3c" },
 ];
 
 const VEGAS_SERIES: { key: VegasKey; title: string; color: string }[] = [
@@ -290,7 +315,7 @@ function toCandleMarkers(
         color: m.color,
         shape: m.shape,
         text: m.text || undefined,
-        size: compact ? COMPACT_MARKER_SIZE : 1,
+        size: m.size ?? (compact ? COMPACT_MARKER_SIZE : 1),
       } as SeriesMarker<UTCTimestamp>;
     })
     .filter((m): m is SeriesMarker<UTCTimestamp> => m != null)
@@ -440,6 +465,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   onClose: _onClose,
   preferredTimeframe = null,
   preferredTimeframeNonce = 0,
+  alertFocus = null,
+  alertFocusNonce = 0,
   onTitleContextMenu,
   inWatchlist = false,
   onAddToWatchlist,
@@ -476,6 +503,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
   const vegasRefs = useRef<Partial<Record<VegasKey, ISeriesApi<"Line">>>>({});
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const alertEntryLineRef = useRef<IPriceLine | null>(null);
+  const alertEntryMarkersRef = useRef<NonNullable<PatternChartData["markers"]>>([]);
+  const pendingFocusScrollRef = useRef(false);
+  const focusScrollKeyRef = useRef("");
+  const focusLoadingMoreRef = useRef(false);
 
   const candlesRef = useRef<PatternCandle[]>([]);
   const hasMoreRef = useRef(true);
@@ -494,15 +526,21 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     return coerceChartTimeframe(preferredTimeframe) || "15m";
   });
   const [data, setData] = useState<PatternChartData | null>(null);
+  /** 分析增强数据（形态状态/衍生品/多周期），不阻塞 chart 渲染 */
+  const analysisRef = useRef<PatternChartData | null>(null);
   const [candleCount, setCandleCount] = useState(0);
   const [lastCandleTime, setLastCandleTime] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(true);
+  /** chart K 线已到达（不阻塞图表渲染） */
   const [loading, setLoading] = useState(true);
+  /** 侧边栏形态分析尚未到达 */
+  const [analysisLoading, setAnalysisLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [err, setErr] = useState("");
   const [layers, setLayers] = useState<ChartLayers>(DEFAULT_LAYERS);
   const [oiSubLoading, setOiSubLoading] = useState(false);
   const [oiSubErr, setOiSubErr] = useState("");
+  const [alertOverlayCount, setAlertOverlayCount] = useState(0);
   layersRef.current = layers;
 
   const clearPriceLines = useCallback(() => {
@@ -579,6 +617,38 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     }
   }, [clearPriceLines]);
 
+  const applyAlertEntryPriceLine = useCallback(
+    (candles?: PatternCandle[]) => {
+      const series = seriesRef.current;
+      if (!series) return;
+      if (alertEntryLineRef.current) {
+        try {
+          series.removePriceLine(alertEntryLineRef.current);
+        } catch {
+          /* disposed */
+        }
+        alertEntryLineRef.current = null;
+      }
+      const focus = alertFocus;
+      if (!focus || !(focus.entry > 0)) return;
+      const bars = candles ?? candlesRef.current;
+      const refPx = bars.at(-1)?.close ?? focus.entry;
+      const price = alignPriceToReference(focus.entry, refPx);
+      if (!(price > 0)) return;
+      const isShort = focus.side === "short" || focus.dir === "空";
+      const type = String(focus.typeLabel || "").trim();
+      alertEntryLineRef.current = series.createPriceLine({
+        price,
+        color: isShort ? "#ff6e40" : "#b8ff3c",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: type ? `入场 ${type}` : "入场",
+      });
+    },
+    [alertFocus],
+  );
+
   const applyChartSeries = useCallback(
     (payload: PatternChartData, candles: PatternCandle[], opts?: { isPrepend?: boolean }) => {
       const series = seriesRef.current;
@@ -603,10 +673,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         const showPattern = layersRef.current.candlePattern;
         const showStructure = layersRef.current.structure;
         const sandbox = extractSandboxMarkers(payload.markers, metaRef.current?.markers);
+        const extra = [...sandbox, ...alertEntryMarkersRef.current];
         const rebuilt = rebuildChartMarkers(
           sortedCandles,
           (metaRef.current?.state || payload.state) as PatternState | undefined,
-          sandbox,
+          extra,
         );
         const markers = toCandleMarkers(rebuilt, showPattern, showStructure, sortedCandles);
         if (markers.length) {
@@ -617,9 +688,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
         if (!payload.partial) {
           applyPriceLines(payload);
+          applyAlertEntryPriceLine(sortedCandles);
           metaRef.current = { ...payload, markers: rebuilt };
         } else if (metaRef.current) {
           metaRef.current = { ...metaRef.current, markers: rebuilt };
+          applyAlertEntryPriceLine(sortedCandles);
         }
 
         if (upperRef.current) {
@@ -720,15 +793,17 @@ export const PatternChartPanel = memo(function PatternChartPanel({
             restoreLogicalRange(chart, prevRange, suppressHistoryLoadRef);
           }
         } else if (!prevRange || prevLen === 0) {
-          const to = sortedCandles.length;
-          const from = Math.max(0, to - CHART_VISIBLE_BARS);
-          restoreLogicalRange(chart, { from, to: to + 2 }, suppressHistoryLoadRef);
+          if (!pendingFocusScrollRef.current) {
+            const to = sortedCandles.length;
+            const from = Math.max(0, to - CHART_VISIBLE_BARS);
+            restoreLogicalRange(chart, { from, to: to + 2 }, suppressHistoryLoadRef);
+          }
         }
       } catch (e) {
         setErr(e instanceof Error ? e.message : "图表渲染失败");
       }
     },
-    [applyPriceLines, applyPriceAxisFormat, applyMacdAxisFormat],
+    [applyPriceLines, applyAlertEntryPriceLine, applyPriceAxisFormat, applyMacdAxisFormat],
   );
 
   const loadMoreHistoryRef = useRef<() => Promise<void>>(async () => {});
@@ -959,7 +1034,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     if (series) {
       series.setMarkers(
         toCandleMarkers(
-          metaRef.current?.markers,
+          metaRef.current?.markers ?? [],
           next.candlePattern,
           next.structure,
           candlesRef.current,
@@ -968,10 +1043,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     }
     if (metaRef.current && !metaRef.current.partial) {
       applyPriceLines(metaRef.current);
+      applyAlertEntryPriceLine();
     }
 
     if (chart) applyPaneMargins(chart, next);
-  }, [applyPriceLines]);
+  }, [applyPriceLines, applyAlertEntryPriceLine]);
 
   const toggleLayer = useCallback(
     (key: keyof ChartLayers) => {
@@ -1018,36 +1094,184 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   }, [symbol, preferredTimeframe, preferredTimeframeNonce]);
 
   useEffect(() => {
+    if (alertFocus?.signalAt) {
+      pendingFocusScrollRef.current = true;
+      focusScrollKeyRef.current = "";
+    } else {
+      pendingFocusScrollRef.current = false;
+      alertEntryMarkersRef.current = [];
+      setAlertOverlayCount(0);
+    }
+  }, [alertFocus?.key, alertFocusNonce, symbol]);
+
+  // 拉取该币种全部入场记录，叠到 K 线
+  useEffect(() => {
+    let cancelled = false;
+    const focus = alertFocus;
+    const applyLocal = (records: Parameters<typeof buildAlertEntryMarkers>[0] = []) => {
+      const refPx = candlesRef.current.at(-1)?.close;
+      const markers = focus
+        ? buildAlertEntryMarkers(records, focus, refPx)
+        : [];
+      alertEntryMarkersRef.current = markers;
+      setAlertOverlayCount(markers.length);
+      const series = seriesRef.current;
+      const candles = candlesRef.current;
+      if (!series || !candles.length) return;
+      const sandbox = extractSandboxMarkers(metaRef.current?.markers);
+      const rebuilt = rebuildChartMarkers(
+        candles,
+        metaRef.current?.state,
+        [...sandbox, ...markers],
+      );
+      if (metaRef.current) metaRef.current = { ...metaRef.current, markers: rebuilt };
+      series.setMarkers(
+        toCandleMarkers(
+          rebuilt,
+          layersRef.current.candlePattern,
+          layersRef.current.structure,
+          candles,
+        ),
+      );
+      applyAlertEntryPriceLine(candles);
+    };
+
+    if (!focus) {
+      applyLocal([]);
+      if (alertEntryLineRef.current && seriesRef.current) {
+        try {
+          seriesRef.current.removePriceLine(alertEntryLineRef.current);
+        } catch {
+          /* */
+        }
+        alertEntryLineRef.current = null;
+      }
+      return;
+    }
+
+    applyLocal([]);
+    void fetchAlertStatsForSymbol(focus.symbol || symbol).then((rows) => {
+      if (cancelled) return;
+      applyLocal(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [alertFocus, alertFocusNonce, symbol, applyAlertEntryPriceLine]);
+
+  // 视口滚到入场 K 线；不够历史则向左续载
+  useEffect(() => {
+    if (!alertFocus?.signalAt || loading) return;
+    const key = `${alertFocus.key}:${alertFocusNonce}:${timeframe}:${symbol}`;
+    if (focusScrollKeyRef.current === key) return;
+
+    const candles = candlesRef.current;
+    if (!candles.length) return;
+    const times = candles.map((c) => c.time).sort((a, b) => a - b);
+    const timeSet = new Set(times);
+    const aligned = alignMarkerTime(alertFocus.signalAt, timeSet, times);
+    if (aligned != null) {
+      const idx = times.indexOf(aligned);
+      const chart = chartApi.current;
+      if (chart && idx >= 0) {
+        restoreLogicalRange(chart, visibleRangeAroundIndex(times.length, idx), suppressHistoryLoadRef);
+      }
+      pendingFocusScrollRef.current = false;
+      focusScrollKeyRef.current = key;
+      return;
+    }
+
+    const signalSec =
+      alertFocus.signalAt > 1e12 ? Math.floor(alertFocus.signalAt / 1000) : alertFocus.signalAt;
+    const oldest = times[0];
+    if (
+      signalSec < oldest &&
+      hasMoreRef.current &&
+      candles.length < CHART_HISTORY_MAX &&
+      !focusLoadingMoreRef.current
+    ) {
+      focusLoadingMoreRef.current = true;
+      void loadMoreHistoryRef.current().finally(() => {
+        focusLoadingMoreRef.current = false;
+      });
+    } else {
+      pendingFocusScrollRef.current = false;
+      focusScrollKeyRef.current = key;
+    }
+  }, [alertFocus, alertFocusNonce, loading, candleCount, timeframe, symbol]);
+
+  useEffect(() => {
     let cancelled = false;
     timeframeRef.current = timeframe;
     candlesRef.current = [];
     hasMoreRef.current = true;
     loadingMoreRef.current = false;
     metaRef.current = null;
+    analysisRef.current = null;
     setHasMore(true);
     setLoading(true);
+    setAnalysisLoading(true);
     setErr("");
     setLoadingMore(false);
     setLastCandleTime(null);
 
-    fetchPatternChart(symbol, timeframe, { limit: CHART_DEFAULT_LIMIT })
-      .then((json) => {
+    // 阶段 1：拉轻量 K 线端点 → 立刻渲染图表，不等待形态分析
+    const loadCandles = async () => {
+      try {
+        const limit = alertFocus?.signalAt
+          ? chartLimitForSignalTime(alertFocus.signalAt, timeframe)
+          : CHART_DEFAULT_LIMIT;
+        const url = chartCandlesApiUrl(symbol, timeframe, { limit });
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json: PatternChartData = await res.json();
         if (cancelled) return;
-        if (!json.ok) {
-          setErr(json.error || "加载失败");
+        if (!json.ok || !json.candles?.length) {
+          setErr(json.error || "K线数据为空");
           setData(null);
+          setLoading(false);
           return;
         }
-        hasMoreRef.current = resolveChartHasMore(json, CHART_DEFAULT_LIMIT);
+        hasMoreRef.current = resolveChartHasMore(json, limit);
         setHasMore(hasMoreRef.current);
         setData(json);
-      })
-      .catch(() => {
+        setLoading(false);
+      } catch {
         if (!cancelled) setErr("网络错误");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      }
+    };
+
+    // 阶段 2：后台补完整形态分析（OI历史/资金费率/多周期），不阻塞图表
+    const loadAnalysis = async () => {
+      try {
+        const json = await fetchPatternChart(symbol, timeframe, { limit: CHART_DEFAULT_LIMIT });
+        if (cancelled) return;
+        if (json.ok) {
+          analysisRef.current = json;
+          // 同时更新 data（仅形态分析字段，candles 保持已有）
+          setData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  analysis: json.analysis ?? {},
+                  state: json.state ?? {},
+                  markers: json.markers ?? prev.markers,
+                  price_lines: json.price_lines ?? prev.price_lines,
+                  ticker: json.ticker ?? prev.ticker,
+                  oi: json.oi ?? prev.oi,
+                }
+              : json,
+          );
+        }
+      } catch {
+        /* 分析加载失败不影响 chart 显示 */
+      } finally {
+        if (!cancelled) setAnalysisLoading(false);
+      }
+    };
+
+    loadCandles();
+    void loadAnalysis(); // 不等待
 
     return () => {
       cancelled = true;
@@ -1351,6 +1575,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         macdSignalRef.current = null;
         vegasRefs.current = {};
         priceLinesRef.current = [];
+        alertEntryLineRef.current = null;
       };
     } catch (e) {
       setErr(e instanceof Error ? e.message : "图表初始化失败");
@@ -1795,6 +2020,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
   const activeKinds = new Set(data?.markers?.map((m) => m.kind).filter(Boolean) ?? []);
   data?.price_lines?.forEach((l) => activeKinds.add(l.kind));
+  if (alertOverlayCount > 0) {
+    activeKinds.add("alert_entry_focus");
+    activeKinds.add("alert_entry");
+  }
   const hasVegas = Boolean(
     data?.vegas && VEGAS_SERIES.some((s) => (data.vegas?.[s.key]?.length ?? 0) > 0),
   );
@@ -1842,6 +2071,19 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 ) : null}
                 <span>24h额 {fmtNum(quoteVol)}</span>
                 <span className="pat-status-tag">{statusLabel}</span>
+                {alertFocus?.signalAt ? (
+                  <span
+                    className={`pattern-chart-alert-focus${
+                      alertFocus.side === "short" || alertFocus.dir === "空" ? " short" : ""
+                    }`}
+                    title={`${alertFocus.typeLabel || "形态信号"} · 入场 ${fmtMetaPrice(alertFocus.entry)}`}
+                  >
+                    入场 {alertFocus.dir || (alertFocus.side === "short" ? "空" : "多")}
+                    {alertFocus.typeLabel ? ` · ${alertFocus.typeLabel}` : ""}
+                    {alertFocus.interval ? ` · ${alertFocus.interval}` : ""}
+                    {` @${fmtMetaPrice(alertFocus.entry)}`}
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -1896,9 +2138,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           <h3>位置分析</h3>
           {loading && <p className="pattern-empty">加载 K 线…</p>}
           {err && <p className="pattern-err">{err}</p>}
-          {!loading && !err && (
+          {!loading && !err && data?.candles?.length ? (
             <>
-              <p className="pattern-analysis-msg">{analysis?.message || "扫描形态结构中…"}</p>
+              {analysisLoading && <p className="pattern-empty">加载形态分析…</p>}
+              {!analysisLoading && (
+                <>
+                  <p className="pattern-analysis-msg">{analysis?.message || "—"}</p>
               <ul className="pattern-marker-legend">
                 {MARKER_LEGEND.filter(
                   (m) =>
@@ -2038,8 +2283,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 {wsConnected ? " · 实时" : " · 连接中…"}
                 {loadingMore ? " · 加载更早…" : hasMore ? " · 右拖/左滑看更早可续载" : " · 已到最早"}
               </p>
+                </>
+              )}
             </>
-          )}
+          ) : null}
         </aside>
         <div
           className={`pattern-chart-wrap${layers.oi ? " with-oi-subs" : ""}`}

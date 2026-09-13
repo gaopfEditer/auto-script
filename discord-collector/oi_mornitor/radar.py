@@ -23,6 +23,7 @@ from oi_mornitor.config import (
     ALERT_COOLDOWN_SEC,
     BINANCE_BAN_COOLDOWN_SEC,
     FAPI_BASE_URL,
+    HEAVY_POOL_LIMIT,
     HTTP_TIMEOUT_SEC,
     MAX_RETRIES,
     OI_5M_RECORD_INTERVAL_SEC,
@@ -71,6 +72,7 @@ from oi_mornitor.market_snapshot import (
     tier_label,
 )
 from oi_mornitor.rank_metrics import RankMetricsEngine, empty_rank_by_tf
+from oi_mornitor.symbol_aliases import is_stablecoin_symbol
 from oi_mornitor.taker_flow import (
     empty_flow_by_tf,
     fetch_spot_taker_flow_batch,
@@ -747,6 +749,20 @@ class BinanceOIRadar:
         self,
         session: aiohttp.ClientSession,
     ) -> list[TickerMeta]:
+        # 首选：备选所（Bybit→OKX→Bitget→Gate）—— 一次聚合拿到 ticker + OI，避免被币安 IP 限频
+        # 配置开关 OI_USE_BINANCE_POOL_FIRST=true 才退回旧路径
+        import os as _os_local  # noqa: PLC0415  局部导入避免顶层依赖
+        use_binance_first = (
+            _os_local.getenv("OI_USE_BINANCE_POOL_FIRST", "0").lower()
+            in ("1", "true", "yes")
+        )
+        if not use_binance_first:
+            pool = await self._pool_from_fallback(session, reason="primary_fallback")
+            if pool:
+                return pool
+            # fallback 全部失败，兜底试 Binance（仍可能 ban）
+            logger.warning("备选所全部为空，降级到币安 ticker/24hr（可能被 ban）")
+
         if self._binance_banned():
             remain = max(0, int(self._binance_ban_until - time.time()))
             logger.warning("币安冷却中（剩余 %ds），轮询备选所 Bybit→OKX→Bitget→Gate", remain)
@@ -1279,8 +1295,21 @@ class BinanceOIRadar:
 
     @property
     def heavyweight_symbol_list(self) -> list[str]:
-        """首轮扫描后即可用的大象级 symbol 列表（来自 ticker 分层，不依赖 warming）。"""
-        return [m.symbol for m in self._ticker_meta.values() if m.oi_tier == TIER_HEAVY]
+        """首轮扫描后即可用的大象级 symbol 列表（按 USD 持仓量排名前 HEAVY_POOL_LIMIT）。
+
+        取 OI_TIER_HEAVY/MID 的全部条目，再按 current_oi_usd 降序截前 N。
+        在 ticker_meta 不足 N 个时返回全部可用，不补 warming 样本。
+        """
+        ranked = sorted(
+            (
+                m
+                for m in self._ticker_meta.values()
+                if m.oi_tier in (TIER_HEAVY, TIER_MID)
+            ),
+            key=lambda m: m.current_oi_usd,
+            reverse=True,
+        )
+        return [m.symbol for m in ranked[:HEAVY_POOL_LIMIT]]
 
 
 class RadarService:
@@ -1293,8 +1322,11 @@ class RadarService:
         self.pattern_engine = PatternMonitorEngine()
         self.pullback_engine = PullbackStrategyEngine(self.pattern_engine)
         self.sandbox_engine = SandboxEngine()
+        from oi_mornitor.moonshot_funnel import MoonshotEngine
         from oi_mornitor.tv_alert_sync import TvAlertSync
 
+        self.moonshot_engine = MoonshotEngine()
+        self.pattern_engine.moonshot_engine = self.moonshot_engine
         self.tv_alert_sync = TvAlertSync()
         self._session: aiohttp.ClientSession | None = None
         self._session_trust_env: bool | None = None
@@ -1302,9 +1334,12 @@ class RadarService:
         self._open_trade_task: asyncio.Task[None] | None = None
         self._sandbox_task: asyncio.Task[None] | None = None
         self._card_price_task: asyncio.Task[None] | None = None
+        self._settle_report_task: asyncio.Task[None] | None = None
+        self._moonshot_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
         self._sandbox_scan_lock = asyncio.Lock()
         self._running = False
+        self._moonshot_sandbox_keys: set[str] = set()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         # 代理失效时关闭 trust_env，改为直连，否则所有请求都会卡在 127.0.0.1:7890
@@ -1363,6 +1398,8 @@ class RadarService:
             )
         except asyncio.TimeoutError:
             logger.error("形态扫描超时（180s），跳过本轮形态更新")
+        else:
+            await self._maybe_moonshot_sandbox(session)
         for row in self.radar.last_all_rows:
             sym = str(row.get("symbol") or "")
             pct = row.get("pct_5m")
@@ -1532,17 +1569,156 @@ class RadarService:
         self._card_price_task = asyncio.create_task(
             self._card_price_loop(), name="oi-card-price-loop"
         )
+        from oi_mornitor.pattern_alert_settle_report import run_settle_report_loop
+
+        self._settle_report_task = asyncio.create_task(
+            run_settle_report_loop(lambda: self._running),
+            name="oi-stats-settle-report",
+        )
+        from oi_mornitor.moonshot_funnel import run_moonshot_a_loop
+
+        self._moonshot_task = asyncio.create_task(
+            run_moonshot_a_loop(
+                lambda: self._running,
+                get_session=lambda: self._session,
+                get_pool_rows=lambda: self.radar.last_all_rows,
+                get_hot=lambda: self.radar.last_hot_tickers,
+                engine=self.moonshot_engine,
+                get_full_universe=self._moonshot_full_universe,
+                on_alerts=self._on_moonshot_a_alerts,
+            ),
+            name="oi-moonshot-a",
+        )
         logger.info(
-            "雷达后台循环已启动，间隔 %ds；持仓快扫 %.0fs；沙盒扫描 %.0fs；卡片市价 %.0fs",
+            "雷达后台循环已启动，间隔 %ds；持仓快扫 %.0fs；沙盒扫描 %.0fs；卡片市价 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A 慢扫",
             interval_sec,
             max(5.0, float(OPEN_TRADE_SCAN_SEC or 15)),
             max(20.0, float(SANDBOX_SCAN_SEC or 60)),
             max(60.0, float(CARD_PRICE_REFRESH_SEC or 300)),
         )
 
+    def _on_moonshot_a_alerts(self, alerts: list[dict[str, Any]]) -> None:
+        if not alerts:
+            return
+        # 并入形态警报流，供 Toast / ticker
+        try:
+            cur = list(self.pattern_engine._last_alerts or [])
+            self.pattern_engine._last_alerts = (alerts + cur)[-40:]
+            self.pattern_engine._last_moonshot_payload = self.moonshot_engine.get_payload()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("合并 moonshot A 警报失败: %s", exc)
+
+    async def _moonshot_full_universe(self) -> list[str] | None:
+        """全市场 USDT 永续枚举（仅 OI_MOONSHOT_FULL_SCAN=1）。"""
+        from oi_mornitor.config import MOONSHOT_FULL_SCAN
+
+        if not MOONSHOT_FULL_SCAN:
+            return None
+        session = await self._ensure_session()
+        url = f"{self.radar.base_url.rstrip('/')}/fapi/v1/exchangeInfo"
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("exchangeInfo 失败: %s", exc)
+            return None
+        out: list[str] = []
+        for s in data.get("symbols") or []:
+            if str(s.get("contractType") or "") != "PERPETUAL":
+                continue
+            if str(s.get("quoteAsset") or "") != "USDT":
+                continue
+            if str(s.get("status") or "") != "TRADING":
+                continue
+            sym = str(s.get("symbol") or "").upper()
+            if sym and not is_stablecoin_symbol(sym):
+                out.append(sym)
+        logger.info("moonshot 全市场宇宙 %d 个永续", len(out))
+        return out
+
+    async def _maybe_moonshot_sandbox(self, session: aiohttp.ClientSession) -> None:
+        """B 蓄势试一丁点纸面；C 触发才正式开仓信号进沙盒。"""
+        from oi_mornitor.config import MOONSHOT_SANDBOX_B, MOONSHOT_SANDBOX_C
+        from oi_mornitor.moonshot_funnel import MS_FIND_TOP, MS_READY_BREAK
+
+        eng = self.moonshot_engine
+        if eng is None or not eng.enabled:
+            return
+        # C 触发
+        if MOONSHOT_SANDBOX_C:
+            for row in eng.c_triggers():
+                key = f"C:{row.symbol}:{int(row.updated_at)}"
+                if key in self._moonshot_sandbox_keys:
+                    continue
+                if row.state == MS_FIND_TOP:
+                    continue
+                try:
+                    result = await self.sandbox_engine.manual_enter(
+                        session,
+                        symbol=row.symbol,
+                        logic="S",
+                        side="LONG",
+                        interval="15m",
+                        base_url=self.radar.base_url,
+                        pattern_state={"hl": row.last_hl, "lh_price": row.last_lh},
+                    )
+                    self._moonshot_sandbox_keys.add(key)
+                    if result.get("ok"):
+                        logger.info("moonshot C → 沙盒试仓 %s", row.symbol)
+                    else:
+                        logger.info(
+                            "moonshot C 沙盒跳过 %s: %s",
+                            row.symbol,
+                            result.get("error"),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("moonshot C 沙盒异常 %s: %s", row.symbol, exc)
+        # B 蓄势：更克制，仅 READY_BREAK 且未持仓
+        if MOONSHOT_SANDBOX_B:
+            for row in eng.b_candidates_for_sandbox():
+                if row.state != MS_READY_BREAK:
+                    continue
+                key = f"B:{row.symbol}"
+                if key in self._moonshot_sandbox_keys:
+                    continue
+                # 已有仓则跳过
+                open_syms = {
+                    p.symbol.upper() for p in self.sandbox_engine.tracker.list_positions()
+                }
+                if row.symbol in open_syms:
+                    self._moonshot_sandbox_keys.add(key)
+                    continue
+                try:
+                    result = await self.sandbox_engine.manual_enter(
+                        session,
+                        symbol=row.symbol,
+                        logic="S",
+                        side="LONG",
+                        interval="15m",
+                        base_url=self.radar.base_url,
+                        pattern_state={"hl": row.last_hl, "lh_price": row.last_lh},
+                    )
+                    self._moonshot_sandbox_keys.add(key)
+                    if result.get("ok"):
+                        logger.info("moonshot B → 沙盒试丁点 %s score=%.1f", row.symbol, row.score)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("moonshot B 沙盒异常 %s: %s", row.symbol, exc)
+        # 防止集合无限涨
+        if len(self._moonshot_sandbox_keys) > 500:
+            self._moonshot_sandbox_keys = set(list(self._moonshot_sandbox_keys)[-200:])
+
     async def stop(self) -> None:
         self._running = False
-        for attr in ("_task", "_open_trade_task", "_sandbox_task", "_card_price_task"):
+        for attr in (
+            "_task",
+            "_open_trade_task",
+            "_sandbox_task",
+            "_card_price_task",
+            "_settle_report_task",
+            "_moonshot_task",
+        ):
             task = getattr(self, attr, None)
             if task:
                 task.cancel()
@@ -1615,7 +1791,7 @@ async def get_market_matrix() -> dict[str, Any]:
     return await get_service().get_market_matrix()
 
 
-async def run_daemon(interval_sec: int = 60) -> None:
+async def run_daemon(interval_sec: int = 150) -> None:
     """常驻守护进程入口。"""
     svc = get_service()
     await svc.start_background(interval_sec)
