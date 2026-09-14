@@ -368,6 +368,11 @@ export const config = {
   telegramLiveSqlitePath: (process.env.TELEGRAM_LIVE_SQLITE_PATH ?? "").trim()
     ? path.resolve(process.env.TELEGRAM_LIVE_SQLITE_PATH.trim())
     : path.join(_collectorRoot, "data", "telegram-live.sqlite"),
+  /** collect:ui 启动时自动守护 telegram/listen.py（默认开；与 /telegram 页面无关） */
+  telegramListenAutoStart: !["0", "false", "no", "off"].includes(
+    String(process.env.TELEGRAM_LISTEN_AUTO_START ?? "1").toLowerCase(),
+  ),
+  telegramSupervisorIntervalMs: Number(process.env.TELEGRAM_SUPERVISOR_INTERVAL_MS ?? 20_000),
   /** 社区聊天室媒体上传目录 */
   communityChatUploadDir: (process.env.COMMUNITY_CHAT_UPLOAD_DIR ?? "").trim()
     ? path.resolve(process.env.COMMUNITY_CHAT_UPLOAD_DIR.trim())
@@ -438,6 +443,14 @@ export const config = {
     process.env.TRADE_SIGNAL_AI_PUBLISH_URL ?? "http://127.0.0.1:8787"
   ).trim(),
   tradeSignalAiPublishToken: (process.env.TRADE_SIGNAL_AI_PUBLISH_TOKEN ?? "").trim(),
+  /** 卡片合并更新（补 TP/SL）是否再次推 Telegram；默认关，避免同卡重复 */
+  telegramPushOnCardUpdate: ["1", "true", "yes", "on"].includes(
+    String(process.env.TELEGRAM_PUSH_ON_CARD_UPDATE ?? "0").toLowerCase(),
+  ),
+  /** 卡片合并更新是否再次走 trade-signal CDP；默认关 */
+  tradeSignalAiPublishOnUpdate: ["1", "true", "yes", "on"].includes(
+    String(process.env.TRADE_SIGNAL_AI_PUBLISH_ON_UPDATE ?? "0").toLowerCase(),
+  ),
   tradeSignalAiPublishPlatforms: parseIdList(
     process.env.TRADE_SIGNAL_AI_PUBLISH_PLATFORMS ?? ""
   ),

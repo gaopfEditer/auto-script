@@ -8,6 +8,7 @@ import urllib.request
 from typing import TYPE_CHECKING
 
 from config import get_telegram_push_chat_ids, get_telegram_send_url
+from trade_signal_detect import strip_username_in_parens
 
 if TYPE_CHECKING:
     from telethon import TelegramClient
@@ -17,6 +18,7 @@ def send_text_via_http(chat_id: int, text: str) -> None:
     url = get_telegram_send_url()
     if not url:
         raise RuntimeError("未配置 TELEGRAM_SEND_URL")
+    text = strip_username_in_parens(text or "")
     body = json.dumps({"chat_id": chat_id, "text": text}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -31,7 +33,7 @@ def send_text_via_http(chat_id: int, text: str) -> None:
 
 
 async def send_text_via_client(client: TelegramClient, chat_id: int, text: str) -> None:
-    await client.send_message(chat_id, text, link_preview=False)
+    await client.send_message(chat_id, strip_username_in_parens(text or ""), link_preview=False)
 
 
 async def push_aggregate_text(
@@ -41,6 +43,7 @@ async def push_aggregate_text(
     dest_chat_ids: list[int] | None = None,
 ) -> list[int]:
     """发送到配置的推送群；返回成功送达的 chat id。"""
+    text = strip_username_in_parens(text or "")
     targets = dest_chat_ids if dest_chat_ids is not None else get_telegram_push_chat_ids()
     if not targets:
         return []

@@ -67,23 +67,21 @@ export function telegramPushChannelLabel(channelId, fallbackName = "") {
   return id ? `#${id.slice(-6)}` : "频道";
 }
 
+/** Telegram 句柄：字母开头 + 4–31 位字母数字下划线 */
+const TG_USER_IN_PARENS = String.raw`@?[A-Za-z][A-Za-z0-9_]{4,31}`;
+
 /**
  * 去掉文案中的 Telegram 用户名括号标记。
  *
- * 处理三种括号形式：
- *   半角：(hysqxx) /  (@hysqxx)
- *   全角：（hysqxx）/（@hysqxx）
- *
- * 用户名规则：以字母开头，后接 4–31 位字母数字下划线（总长 5–32）。
+ * 半角：(hysqxx) / (@hysqxx)；全角：（hysqxx）/（@hysqxx）
  *
  * @param {string} text
  */
 export function stripTelegramAtUsernameMentions(text) {
   return String(text ?? "")
-    // 半角括号
-    .replace(/\s*\(@[A-Za-z][A-Za-z0-9_]{4,31}\)/g, "")
-    // 全角括号
-    .replace(/\s*（@[A-Za-z][A-Za-z0-9_]{4,31}）/g, "")
+    .replace(new RegExp(String.raw`\s*\(${TG_USER_IN_PARENS}\)`, "g"), "")
+    .replace(new RegExp(String.raw`\s*（${TG_USER_IN_PARENS}）`, "g"), "")
+    .replace(/【([^】]*?)】/g, (_, inner) => `【${inner.replace(/\s{2,}/g, " ").trim()}】`)
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
@@ -118,13 +116,25 @@ export function isSpamMessage(text) {
  * @param {string} [fallbackName]
  */
 export function formatTelegramWithChannelLabel(text, channelId, fallbackName = "") {
-  const body = String(text ?? "").trim();
+  let body = stripTelegramAtUsernameMentions(String(text ?? "").trim());
   if (!body) return "";
   const id = String(channelId ?? "").trim();
   if (!id) return body;
   const label = stripTelegramAtUsernameMentions(
     telegramPushChannelLabel(id, fallbackName),
   );
-  if (!label || body.startsWith(`【${label}】`)) return body;
+  if (!label) return body;
+
+  const headerRe = /^【([^】]+)】\s*\n?/;
+  const headerMatch = body.match(headerRe);
+  if (headerMatch) {
+    const inner = stripTelegramAtUsernameMentions(headerMatch[1].trim());
+    if (inner === label) {
+      const rest = body.slice(headerMatch[0].length).trimStart();
+      return rest ? `【${label}】\n${rest}` : `【${label}】`;
+    }
+  }
+
+  if (body.startsWith(`【${label}】`)) return body;
   return `【${label}】\n${body}`;
 }

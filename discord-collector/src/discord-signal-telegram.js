@@ -23,12 +23,9 @@ export function createDiscordSignalTelegramPush(log) {
   async function send(text, meta = {}) {
     if (!enabled) return { skipped: "telegram_disabled" };
     let body = meta.skipChannelLabel
-      ? String(text ?? "").trim()
+      ? stripTelegramAtUsernameMentions(String(text ?? "").trim())
       : formatTelegramWithChannelLabel(text, meta.channelId, meta.channelName);
-    // 卡片推送：去掉 (@telegram_username)，避免标题里带句柄
-    if (meta.cardId != null) {
-      body = stripTelegramAtUsernameMentions(body);
-    }
+    body = stripTelegramAtUsernameMentions(body);
     // 过滤"引导私聊/转账"类垃圾消息
     if (isSpamMessage(body)) {
       log.debug(`[telegram] 过滤垃圾消息 cardId=${meta.cardId ?? "?"} kind=${meta.kind ?? ""}`);

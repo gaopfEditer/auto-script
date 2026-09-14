@@ -21,6 +21,7 @@ from trade_context_buffer import TradeContextBuffer, WindowMessage
 from trade_signal_detect import (
     TradeSignal,
     format_signal_push,
+    is_push_bypass_message,
     looks_like_trade_message,
     parse_trade_text,
 )
@@ -579,10 +580,11 @@ class TradeCardPusher:
             raw_body=raw_body,
             merge_window_ms=merge_window_ms,
         )
+        body_text = str(payload.get("body") or "")
         digest = self._digest(
-            f"{phase}:{payload.get('body')}:{payload.get('symbol')}:{payload.get('sourceRef')}"
+            f"{phase}:{body_text}:{payload.get('symbol')}:{payload.get('sourceRef')}"
         )
-        if digest in self._pushed_digest:
+        if digest in self._pushed_digest and not is_push_bypass_message(body_text):
             return False
         try:
             result = await asyncio.to_thread(post_card, payload)
@@ -593,8 +595,7 @@ class TradeCardPusher:
         if len(self._pushed_digest) > 500:
             self._pushed_digest = set(list(self._pushed_digest)[-250:])
 
-        # 同步推送到 MAIN_CARD_TELEGRAM_CHAT_ID
-        await self._push_telegram(sig, phase=phase)
+        # Telegram 推送由 discord-collector archiveCard → pushArchivedCardToTelegram 统一处理，避免重复
 
         card = (result or {}).get("card") if isinstance(result, dict) else None
         cid = card.get("id") if isinstance(card, dict) else None

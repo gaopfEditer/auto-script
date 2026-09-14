@@ -10,11 +10,14 @@ import { config } from "./config.js";
 import { requireLocalRequest } from "./local-request.js";
 import { createLogger } from "./logger.js";
 import { openTelegramLiveStore } from "./telegram-live-store.js";
+import {
+  CHANNEL_PROFILES_FILE as PROFILES_FILE,
+  readTelegramChannelProfiles,
+} from "./telegram-channel-profiles.js";
 
 const log = createLogger("telegram-live");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TELEGRAM_DIR = path.resolve(__dirname, "..", "..", "telegram");
-const PROFILES_FILE = path.join(TELEGRAM_DIR, "channel_profiles.json");
 
 const store = openTelegramLiveStore(config.telegramLiveSqlitePath);
 
@@ -66,39 +69,29 @@ function normalizeImageUrls(raw) {
 }
 
 export function readChannelProfiles() {
-  /** @type {Array<{ chatId: string, name: string, avatar: string, avatarUrl: string }>} */
-  const channels = [];
-  try {
-    if (!fs.existsSync(PROFILES_FILE)) {
-      return { channels, file: PROFILES_FILE, ok: false, error: "channel_profiles.json 不存在" };
-    }
-    const raw = JSON.parse(fs.readFileSync(PROFILES_FILE, "utf8"));
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      return { channels, file: PROFILES_FILE, ok: false, error: "profiles 格式无效" };
-    }
-    for (const [chatId, meta] of Object.entries(raw)) {
-      const id = String(chatId || "").trim();
-      if (!id) continue;
-      const m = meta && typeof meta === "object" ? /** @type {Record<string, unknown>} */ (meta) : {};
-      const name = String(m.name ?? id).trim() || id;
-      const avatar = String(m.avatar ?? "").trim();
-      channels.push({
-        chatId: id,
-        name,
-        avatar,
-        avatarUrl: avatarToUrl(avatar),
-      });
-    }
-    return { channels, file: PROFILES_FILE, ok: true };
-  } catch (e) {
-    log.warn(`读 channel_profiles 失败: ${/** @type {Error} */ (e).message}`);
+  const parsed = readTelegramChannelProfiles();
+  const channels = parsed.channels.map((c) => ({
+    chatId: c.chatId,
+    name: c.name,
+    avatar: c.avatar,
+    avatarUrl: avatarToUrl(c.avatar),
+  }));
+  if (!parsed.ok) {
+    log.warn(`读 channel_profiles 失败: ${parsed.error ?? "unknown"}`);
     return {
       channels,
-      file: PROFILES_FILE,
+      file: parsed.file,
       ok: false,
-      error: String(/** @type {Error} */ (e).message ?? e),
+      error: parsed.error,
+      sendChatIds: parsed.sendChatIds,
     };
   }
+  return {
+    channels,
+    file: parsed.file,
+    ok: true,
+    sendChatIds: parsed.sendChatIds,
+  };
 }
 
 /** @param {Partial<LiveMessage> & { chatId: string, text?: string }} raw */
@@ -132,13 +125,25 @@ function normalizeIngest(raw) {
 /**
  * @param {import("express").Express} app
  * @param {(channel: string, payload: Record<string, unknown>) => void} broadcast
+ * @param {{ getListenStatus?: () => Record<string, unknown> }} [deps]
  */
-export function registerTelegramLiveRoutes(app, broadcast) {
+export function registerTelegramLiveRoutes(app, broadcast, deps = {}) {
+  app.get("/api/telegram/live/status", (_req, res) => {
+    const listen = deps.getListenStatus?.() ?? { running: null, managed: false };
+    res.json({
+      ok: true,
+      listen,
+      messageCount: store.count(),
+      dbPath: config.telegramLiveSqlitePath,
+    });
+  });
+
   app.get("/api/telegram/live/channels", (_req, res) => {
-    const { channels, file, ok, error } = readChannelProfiles();
+    const { channels, file, ok, error, sendChatIds } = readChannelProfiles();
     res.json({
       ok: true,
       channels,
+      sendChatIds: sendChatIds ?? [],
       file,
       profilesOk: ok,
       error: error || undefined,

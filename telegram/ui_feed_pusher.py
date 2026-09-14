@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from cards_client import _channel_avatar_for_api
-from config import get_cards_api_base_url, resolve_channel_profile
+from config import get_cards_api_base_url, load_cdp_send_chat_ids, resolve_channel_profile
 
 
 def channel_profiles_path() -> Path:
@@ -46,6 +46,9 @@ def local_paths_to_media_urls(paths: list[str] | None) -> list[str]:
     return out
 
 
+_PROFILE_RESERVED_KEYS = frozenset({"send"})
+
+
 def load_profile_chat_ids() -> list[int]:
     path = channel_profiles_path()
     if not path.is_file():
@@ -57,7 +60,11 @@ def load_profile_chat_ids() -> list[int]:
     if not isinstance(raw, dict):
         return []
     out: list[int] = []
-    for k in raw.keys():
+    for k, v in raw.items():
+        if k in _PROFILE_RESERVED_KEYS:
+            continue
+        if not isinstance(v, dict):
+            continue
         try:
             out.append(int(str(k).strip()))
         except ValueError:

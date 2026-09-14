@@ -36,6 +36,12 @@ import {
   resolveAuthorKey,
 } from "./card-signal-merge.js";
 import { notifyTradeSignalAiPublish } from "./trade-signal-ai-publish.js";
+import {
+  isTelegramPushBypassMessage,
+  markTelegramCardPushSent,
+  resolveTelegramMessageRef,
+  shouldSkipTelegramCardPushDuplicate,
+} from "./telegram-card-push-dedup.js";
 
 /** Discord 雪花频道 ID（排除 api/youtube 等占位） */
 function isDiscordChannelId(id) {
@@ -281,7 +287,7 @@ export function formatCardSourceLog(card, meta) {
 }
 
 /**
- * Telegram 推送附带来源追溯行（API / Telegram 等经开放 API 归档的卡片）。
+ * 卡片来源追溯（仅写日志，勿发到 Telegram 群）。
  * @param {ReturnType<typeof archiveCardToClient> | Record<string, unknown> | null | undefined} card
  */
 export function formatTelegramCardSourceTrace(card) {
@@ -335,7 +341,7 @@ export function formatTelegramCardSourceTrace(card) {
 
   if (uid) parts.push(`卡片${uid}`);
 
-  return parts.length ? `【追溯】${parts.join(" · ")}` : "";
+  return parts.length ? parts.join(" · ") : "";
 }
 
 /**
@@ -359,10 +365,29 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
   const telegram = deps.telegram ?? null;
 
   /**
-   * 经开放 API 归档的卡片（API / Telegram 等）→ 推送到 TELEGRAM_PUSH_CHAT_ID，正文末尾附【追溯】来源行。
+   * channel_profiles.send 白名单 → python-ai-operate CDP（与 Telegram 群推送独立）。
    * @param {ReturnType<typeof archiveCardToClient>} clientCard
+   * @param {{ publishEvent?: string, narrativeOverride?: string, ingestSourceRef?: string }} [opts]
    */
-  async function pushArchivedCardToTelegram(clientCard) {
+  function maybeNotifyTradeSignalCdp(clientCard, opts = {}) {
+    const text =
+      String(opts.narrativeOverride ?? "").trim() ||
+      pickCardSinkText(clientCard) ||
+      formatCardAsChannelMessage(clientCard);
+    notifyTradeSignalAiPublish(clientCard, {
+      event: String(opts.publishEvent || "entry").trim() || "entry",
+      log,
+      narrativeOverride: text,
+      ingestSourceRef: opts.ingestSourceRef,
+    });
+  }
+
+  /**
+   * 经开放 API 归档的卡片（API / Telegram 等）→ 推送到 TELEGRAM_PUSH_CHAT_ID（不含追溯行，追溯仅日志）。
+   * @param {ReturnType<typeof archiveCardToClient>} clientCard
+   * @param {{ publishEvent?: string, ingestSourceRef?: string }} [opts]
+   */
+  async function pushArchivedCardToTelegram(clientCard, opts = {}) {
     if (!telegram?.enabled) return { skipped: "telegram_disabled" };
     const sourceType = normalizeCardSourceType(clientCard.sourceType);
     if (!shouldPushArchivedCardToTelegram(sourceType)) {
@@ -378,14 +403,54 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     const platform = resolveSourcePlatform(sourceType);
 
     const trace = formatTelegramCardSourceTrace(clientCard);
-    let bodyText = String(text).trim();
-    if (trace && !bodyText.includes(trace)) {
-      bodyText = `${bodyText}\n\n${trace}`;
-    }
+    const bodyText = String(text).trim();
 
     const skipChannelLabel =
       platform === "api" &&
       (!channelId || channelId === "api" || CARD_FEED_PLACEHOLDER_IDS.has(channelId));
+
+    const publishEvent = String(opts.publishEvent || "entry").trim() || "entry";
+    const messageRef = resolveTelegramMessageRef(clientCard, opts.ingestSourceRef);
+    const bypass = isTelegramPushBypassMessage(bodyText, text, clientCard.rawContent);
+    const dedupInput = {
+      channelId,
+      symbol: String(clientCard.symbol ?? "").trim(),
+      bodyText,
+      cardId: cardId ?? null,
+      messageRef,
+    };
+    if (shouldSkipTelegramCardPushDuplicate(dedupInput)) {
+      log.info(
+        `Telegram 推送跳过: 同一条 TG 消息已推过 ref=${messageRef || "?"} channel=${channelName || channelId}`,
+      );
+      return { skipped: "duplicate_message" };
+    }
+    if (
+      !bypass &&
+      publishEvent === "update" &&
+      !config.telegramPushOnCardUpdate &&
+      clientCard.telegramSentAt &&
+      !messageRef
+    ) {
+      log.info(`Telegram 推送跳过: 卡片 #${cardId ?? "?"} 合并更新且无法识别新消息 id`);
+      return { skipped: "update_skipped" };
+    }
+    if (bypass) {
+      log.info(`Telegram 测试 bypass：正文含【周一今日测试】等标记，跳过去重`);
+    }
+
+    let claimed = false;
+    const firstTelegramPush = !clientCard.telegramSentAt;
+    if (cardId && store.claimSignalCardTelegramSend && firstTelegramPush) {
+      claimed = await store.claimSignalCardTelegramSend(cardId);
+      if (!claimed) {
+        log.info(`Telegram 推送跳过: 卡片 #${cardId} 已被其它流程推送`);
+        return { skipped: "already_sent" };
+      }
+    } else if (cardId && clientCard.telegramSentAt && !messageRef) {
+      log.info(`Telegram 推送跳过: 卡片 #${cardId} 已推送且无新 TG 消息 ref`);
+      return { skipped: "already_sent" };
+    }
 
     try {
       await telegram.send(bodyText, {
@@ -394,14 +459,18 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
         cardId: cardId ?? undefined,
         skipChannelLabel,
       });
-      if (cardId && store.markSignalCardTelegramSent) {
+      markTelegramCardPushSent(dedupInput);
+      if (cardId && !claimed && store.markSignalCardTelegramSent) {
         await store.markSignalCardTelegramSent(cardId);
       }
       log.info(
-        `Telegram 推送归档卡片 #${cardId ?? "?"} source=${sourceType} channel=${channelName || channelId}`
+        `Telegram 推送归档卡片 #${cardId ?? "?"} source=${sourceType} channel=${channelName || channelId}${trace ? ` | 追溯: ${trace}` : ""}`
       );
       return { ok: true };
     } catch (e) {
+      if (claimed && cardId && store.releaseSignalCardTelegramSend) {
+        await store.releaseSignalCardTelegramSend(cardId);
+      }
       log.warn(`Telegram 推送归档卡片失败: ${/** @type {Error} */ (e).message}`);
       return { error: String(/** @type {Error} */ (e).message ?? e) };
     }
@@ -745,8 +814,15 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
               log.warn(`社区消息频道(合并)失败: ${/** @type {Error} */ (e).message}`);
             }
           }
-          await pushArchivedCardToTelegram(clientCard);
-          notifyTradeSignalAiPublish(clientCard, { event: "update", log });
+          const ingestRef = input.sourceRef ? String(input.sourceRef) : undefined;
+          await pushArchivedCardToTelegram(clientCard, {
+            publishEvent: "update",
+            ingestSourceRef: ingestRef,
+          });
+          maybeNotifyTradeSignalCdp(clientCard, {
+            publishEvent: "update",
+            ingestSourceRef: ingestRef,
+          });
           return Object.assign(clientCard, { channelMessage: null, merged: true });
         }
       }
@@ -853,8 +929,15 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       }
     }
 
-    await pushArchivedCardToTelegram(clientCard);
-    notifyTradeSignalAiPublish(clientCard, { event: "entry", log });
+    const ingestRef = input.sourceRef ? String(input.sourceRef) : undefined;
+    await pushArchivedCardToTelegram(clientCard, {
+      publishEvent: "entry",
+      ingestSourceRef: ingestRef,
+    });
+    maybeNotifyTradeSignalCdp(clientCard, {
+      publishEvent: "entry",
+      ingestSourceRef: ingestRef,
+    });
 
     /** @type {Awaited<ReturnType<typeof publishCardToChannelFeed>> | null} */
     let channelMessage = null;

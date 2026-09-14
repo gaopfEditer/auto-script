@@ -37,6 +37,7 @@ from config import (
     get_notify_forward_config,
     get_trade_context_flush_seconds,
     get_trade_context_window_size,
+    load_cdp_send_chat_ids,
     monitored_groups_file_default,
     resolve_channel_profile,
     resolve_listen_chat_ids,
@@ -101,6 +102,12 @@ async def main() -> None:
         print(f"[+] 主发车群 → 卡片 API: {sorted(main_ids)}", flush=True)
     if secondary_ids:
         print(f"[+] 次要闲聊群 → push_chat: {sorted(secondary_ids)}", flush=True)
+    cdp_send_ids = load_cdp_send_chat_ids()
+    if cdp_send_ids:
+        print(
+            f"[+] CDP 发布白名单（channel_profiles.send）: {sorted(cdp_send_ids)}",
+            flush=True,
+        )
     if profile_ids:
         print(f"[+] UI 实时页群（channel_profiles）: {sorted(profile_ids)}", flush=True)
         for cid in sorted(profile_ids):

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field, replace
 
@@ -391,6 +392,22 @@ def has_prom_tag(text: str) -> bool:
     return bool(_PROM_TAG.search(_t2s(text or "")))
 
 
+_USERNAME_IN_PARENS = re.compile(
+    r"\s*[\(（]@?[A-Za-z][A-Za-z0-9_]{4,31}[\)）]"
+)
+
+
+def strip_username_in_parens(text: str) -> str:
+    """去掉名称后的 (@username) / (username) 括号标记。"""
+    if not text:
+        return ""
+    t = _USERNAME_IN_PARENS.sub("", text)
+    t = re.sub(r"【([^】]*?)】", lambda m: f"【{m.group(1).strip()}】", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r"[ \t]+\n", "\n", t)
+    return t.strip()
+
+
 def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:
     """
     phase:
@@ -405,7 +422,7 @@ def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:
       止损：2525
       备注：15m 突破站稳
     """
-    who = (sig.sender or "未知").strip()
+    who = strip_username_in_parens((sig.sender or "未知").strip())
     if who.startswith("【") and who.endswith("】"):
         header = who
     else:
@@ -444,3 +461,14 @@ def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:
         lines.append("（补充止盈/止损）")
 
     return "\n".join(lines)
+
+
+def push_bypass_markers() -> list[str]:
+    """正文含这些标记时跳过去重（测试），默认【周一今日测试】。"""
+    raw = os.environ.get("TELEGRAM_PUSH_BYPASS_MARKERS", "【周一今日测试】")
+    return [m.strip() for m in raw.replace("|", ",").split(",") if m.strip()]
+
+
+def is_push_bypass_message(text: str) -> bool:
+    hay = text or ""
+    return any(m in hay for m in push_bypass_markers())

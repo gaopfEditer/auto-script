@@ -1,4 +1,12 @@
 {
+  "_comment_send": "send 不是频道条目，而是「来源群 id 白名单」：这些群产生交易信号并推送到 Telegram 后，会额外转发到 python-ai-operate POST /api/v1/trade-signal/publish（CDP 发布）。需 TRADE_SIGNAL_AI_PUBLISH=1",
+  "send":[
+    "-1004346465376",
+    "-1001720924085",
+    "-1003962150986",
+    "-1001908181865",
+    "-1002355647897"
+  ],
   "-1001766481463": {
     "name": "",
     "avatar": "avatar/1001766481463.png"
@@ -19,6 +27,6 @@
   "-1002158856702": {
     "name": "汇盈俱乐部行情学习群",
     "avatar": "avatar/-1002158856702.jpeg",
-    "main": "最美西西,另一位老师"
+    "main": "最美西西"
   }
 }

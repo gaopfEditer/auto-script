@@ -321,13 +321,36 @@ watch([timePeriod, symbolQuery, activeChatId], async () => {
 let unsub = /** @type {null | (() => void)} */ (null);
 let pollTimer = /** @type {ReturnType<typeof setInterval> | null} */ (null);
 
+async function loadListenStatus() {
+  try {
+    const r = await fetch("/api/telegram/live/status");
+    const j = await readJson(r);
+    if (!j.ok || !j.listen) return;
+    const st = j.listen;
+    if (st.running) {
+      const tag = st.managed ? "后台监听中" : "外部 listen.py";
+      status.value = `${tag} · pid ${st.pid ?? "?"}`;
+    } else if (st.error) {
+      status.value = `监听未启动：${st.error}`;
+    } else {
+      status.value = "listen.py 未运行（请确认 collect:ui 已启动）";
+    }
+  } catch {
+    /* 忽略，loadMessages 会更新 status */
+  }
+}
+
 onMounted(() => {
   void (async () => {
     await loadChannels();
     await loadMessages();
+    await loadListenStatus();
   })();
   unsub = subscribeCollectorSocket(onWs);
-  pollTimer = setInterval(() => void loadMessages(), 20_000);
+  pollTimer = setInterval(() => {
+    void loadMessages();
+    void loadListenStatus();
+  }, 20_000);
 });
 
 onActivated(() => {
@@ -347,7 +370,8 @@ onUnmounted(() => {
       <div>
         <h1>Telegram 实时</h1>
         <p class="muted">
-          消息落库 <code>data/telegram-live.sqlite</code> · 切 tab 可续拉 · 支持置顶编辑
+          消息落库 <code>data/telegram-live.sqlite</code> ·
+          <code>listen.py</code> 由 collect:ui 后台守护（关页面仍监听）· 支持置顶编辑
         </p>
       </div>
       <div class="tg-live-meta">

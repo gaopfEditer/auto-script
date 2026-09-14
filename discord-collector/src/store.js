@@ -918,6 +918,25 @@ export async function openStore(cfg, log) {
     ]);
   }
 
+  /** @param {number} id @returns {Promise<boolean>} 仅 telegram_sent_at 为空时可占用 */
+  async function claimSignalCardTelegramSend(id) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const [result] = await pool.execute(
+      `UPDATE discord_signal_cards SET telegram_sent_at = ?, updated_at = ? WHERE id = ? AND telegram_sent_at IS NULL`,
+      [now, now, id],
+    );
+    return Number(/** @type {import("mysql2").ResultSetHeader} */ (result).affectedRows) > 0;
+  }
+
+  /** @param {number} id */
+  async function releaseSignalCardTelegramSend(id) {
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    await pool.execute(
+      `UPDATE discord_signal_cards SET telegram_sent_at = NULL, updated_at = ? WHERE id = ?`,
+      [now, id],
+    );
+  }
+
   /**
    * @param {{ channelId?: string, status?: string, fromMs?: number, toMs?: number, sourceType?: string, sourceTypes?: string[], symbol?: string, includeChannelId?: boolean }} filters
    * @returns {{ where: string[], params: unknown[] }}
@@ -2076,6 +2095,8 @@ export async function openStore(cfg, log) {
     insertSignalCard,
     migrateCoinActionPasteCards,
     markSignalCardTelegramSent,
+    claimSignalCardTelegramSend,
+    releaseSignalCardTelegramSend,
     listSignalCards,
     getRecentSignalCardBySymbolChannel,
     listRecentSignalCardsBySymbolChannel,
@@ -2206,6 +2227,8 @@ export function createOfflineStore() {
     insertSignalCard: async () => null,
     migrateCoinActionPasteCards: async () => 0,
     markSignalCardTelegramSent: async () => {},
+    claimSignalCardTelegramSend: async () => true,
+    releaseSignalCardTelegramSend: async () => {},
     listSignalCards: async () => [],
     getRecentSignalCardBySymbolChannel: async () => null,
     listRecentSignalCardsBySymbolChannel: async () => [],

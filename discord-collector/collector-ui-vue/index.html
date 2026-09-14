@@ -4,7 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>discord-collector</title>
-    <script defer src="https://bz.ezcoin.ink/script.js" data-website-id="2a409684-5ffa-4c8c-8b28-68c2b22c21ee"></script>
+    <script>
+      (function () {
+        var host = (location.hostname || "").toLowerCase();
+        if (
+          host === "localhost" ||
+          host === "127.0.0.1" ||
+          host === "[::1]" ||
+          host === "::1"
+        ) {
+          return;
+        }
+        var s = document.createElement("script");
+        s.defer = true;
+        s.src = "https://bz.ezcoin.ink/script.js";
+        s.setAttribute("data-website-id", "2a409684-5ffa-4c8c-8b28-68c2b22c21ee");
+        document.head.appendChild(s);
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

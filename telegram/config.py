@@ -467,6 +467,46 @@ def resolve_avatar_path(raw: str, *, chat_id: int) -> str:
     return ""
 
 
+
+
+def load_cdp_send_chat_ids() -> list[int]:
+    """channel_profiles.json 的 send：需 CDP 发布的来源群 id（非频道条目）。"""
+    path = channel_profiles_path()
+    if not path.is_file():
+        return []
+    try:
+        import json
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    send = raw.get("send")
+    if not isinstance(send, list):
+        return []
+    out: list[int] = []
+    for x in send:
+        try:
+            out.append(int(str(x).strip()))
+        except ValueError:
+            continue
+    return _dedupe_preserve(out)
+
+
+def is_cdp_send_channel(chat_id: int) -> bool:
+    ids = load_cdp_send_chat_ids()
+    if not ids:
+        return False
+    key = str(chat_id)
+    alt = key.lstrip("-")
+    for cid in ids:
+        sk = str(cid)
+        if sk == key or sk.lstrip("-") == alt:
+            return True
+    return False
+
+
 def resolve_channel_profile(chat_id: int, *, fallback_title: str = "") -> dict[str, str]:
     profiles = load_channel_profiles()
     key = str(chat_id)

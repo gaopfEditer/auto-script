@@ -33,6 +33,7 @@ import { findFreePortNear, killListenersOnPort } from "../scripts/kill-port.mjs"
 import { startOiSupervisor } from "../scripts/oi-supervisor.mjs";
 import { startContentSupervisor } from "../scripts/content-supervisor.mjs";
 import { startNewsSupervisor } from "../scripts/news-supervisor.mjs";
+import { startTelegramSupervisor } from "../scripts/telegram-supervisor.mjs";
 import { registerContentBoardProxy } from "./content-board-proxy.js";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
@@ -252,7 +253,9 @@ async function main() {
   registerCardEvalRoutes(app, store, { requireOpenApiKey });
   registerCardValidateRoutes(app, store, cardArchiveListCacheRef, broadcast, { requireOpenApiKey });
   registerTelegramPromRoutes(app, store, cardArchiveListCacheRef, broadcast, { requireOpenApiKey });
-  registerTelegramLiveRoutes(app, broadcast);
+  /** @type {() => Record<string, unknown>} */
+  let getTelegramListenStatus = () => ({ running: null, managed: false });
+  registerTelegramLiveRoutes(app, broadcast, { getListenStatus: () => getTelegramListenStatus() });
   registerTwitterCdpRoutes(app, twitterCdp);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
@@ -1131,15 +1134,23 @@ async function main() {
     enabled: config.contentBoardAutoStart,
     checkIntervalMs: config.contentBoardSupervisorIntervalMs,
   });
+  const telegramSupervisor = startTelegramSupervisor({
+    log: createLogger("telegram-supervisor"),
+    enabled: config.telegramListenAutoStart,
+    checkIntervalMs: config.telegramSupervisorIntervalMs,
+  });
+  getTelegramListenStatus = () => telegramSupervisor.getStatus();
   process.once("SIGINT", () => {
     oiSupervisor.stop();
     newsSupervisor.stop();
     contentSupervisor.stop();
+    telegramSupervisor.stop();
   });
   process.once("SIGTERM", () => {
     oiSupervisor.stop();
     newsSupervisor.stop();
     contentSupervisor.stop();
+    telegramSupervisor.stop();
   });
 
   log.info(

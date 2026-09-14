@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * collect:ui 启动前：
- *   1. 释放 COLLECTOR_UI_PORT（默认 3851），自动改用附近空闲端口
- *   2. 拉起 telegram/listen.py（telegram/venv 中的 Python 环境）
+ * collect:ui 启动前：释放 COLLECTOR_UI_PORT（默认 3851），自动改用附近空闲端口。
+ * telegram/listen.py 由 collector-ui-server 内 telegram-supervisor 守护（与 /telegram 页面无关）。
  */
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -17,29 +16,7 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dir, "..");
 dotenv.config({ path: resolve(ROOT, ".env") });
 
-// ── 1. Telegram listen.py ────────────────────────────────────────────────────────
-const TELEGRAM_ROOT = resolve(ROOT, "..", "telegram");
-const VENV_PYTHON = resolve(TELEGRAM_ROOT, "venv", "bin", "python");
-const LISTEN_SCRIPT = resolve(TELEGRAM_ROOT, "listen.py");
-
-const telegram = spawn(VENV_PYTHON, [LISTEN_SCRIPT], {
-  cwd: TELEGRAM_ROOT,
-  env: process.env,
-  stdio: "inherit",
-});
-
-telegram.on("exit", (code, signal) => {
-  console.error(`[collect:ui] telegram listen.py 已退出 code=${code} signal=${signal}，一同退出`);
-  process.exit(code ?? 1);
-});
-
-for (const sig of ["SIGINT", "SIGTERM"]) {
-  process.on(sig, () => {
-    if (!telegram.killed) telegram.kill(sig);
-  });
-}
-
-// ── 2. collector-ui-server ──────────────────────────────────────────────────────
+// ── collector-ui-server ──────────────────────────────────────────────────────────
 const preferred = String(process.env.COLLECTOR_UI_PORT ?? "3851").trim() || "3851";
 
 let port = preferred;

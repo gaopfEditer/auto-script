@@ -2,7 +2,10 @@
  * 社区信息流：消息频道（卡片，Telegram 同格式）+ Twitter 短贴（AI 解析）。
  */
 import { config } from "./config.js";
-import { formatTelegramWithChannelLabel } from "./discord-telegram-push-config.js";
+import {
+  formatTelegramWithChannelLabel,
+  stripTelegramAtUsernameMentions,
+} from "./discord-telegram-push-config.js";
 import { extractTwitterSignalWithAi } from "./community-twitter-ai.js";
 
 /**
@@ -91,10 +94,12 @@ export function createCommunityFeedService(store, log, broadcast) {
     if (cardId && store.findCommunityFeedByCardId) {
       const exists = await store.findCommunityFeedByCardId(cardId);
       if (exists) {
-        const body = formatTelegramWithChannelLabel(
-          input.text,
-          input.channelId,
-          input.channelName
+        const body = stripTelegramAtUsernameMentions(
+          formatTelegramWithChannelLabel(
+            input.text,
+            input.channelId,
+            input.channelName
+          )
         );
         if (!body.trim()) return { skipped: "empty" };
         const updated =
@@ -120,10 +125,12 @@ export function createCommunityFeedService(store, log, broadcast) {
         return { ok: true, updated: true, message: client };
       }
     }
-    const body = formatTelegramWithChannelLabel(
-      input.text,
-      input.channelId,
-      input.channelName
+    const body = stripTelegramAtUsernameMentions(
+      formatTelegramWithChannelLabel(
+        input.text,
+        input.channelId,
+        input.channelName
+      )
     );
     if (!body.trim()) return { skipped: "empty" };
 
