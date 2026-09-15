@@ -467,29 +467,21 @@ def _trend_return(df: pd.DataFrame, idx: int, lookback: int) -> float | None:
     return (ref - base) / base * 100.0
 
 
-def find_last_closed_candle_card_hits(
+def _candle_card_hits_at_index(
     df: pd.DataFrame,
+    idx: int,
+    bar_markers: list[dict[str, Any]],
     *,
-    now_ms: int | None = None,
     allow_shooting_star: bool = True,
     allow_consecutive_shoot: bool = True,
     allow_inverted_hammer_oi: bool = True,
+    filter_kinds: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """最近收盘柱上的 Telegram 卡片信号。
-
-    - 射击之星：不要求 OI
-    - 连续走平射击之星：SHOOT_REPEAT_BARS 内再次出现（「射击之星（2）」）
-    - 倒锤子：仅柱级 OI 异动时推送
-    - 射击之星位置过滤：收盘须在 BB 上轨区或近 Vegas 通道（CANDLE_SHOOT_REQUIRE_POSITION）
-    - 趋势背景：射击之星前须有上涨、倒锤子前须有下跌（CANDLE_*_TREND_*）
-    """
-    if df.empty or "open_time" not in df.columns or "bb_basis" not in df.columns:
+    """单根 K 上的蜡烛卡片命中（与 Telegram 卡片推送同口径）。"""
+    if idx < 0 or idx >= len(df):
         return []
-    idx = closed_bar_index(df, now_ms=now_ms)
-    if idx < 0:
-        return []
-    closed_ts = _ts_sec(int(df.iloc[idx]["open_time"]))
     row = df.iloc[idx]
+    closed_ts = _ts_sec(int(row["open_time"]))
     o = float(row["open"])
     h = float(row["high"])
     l = float(row["low"])
@@ -497,16 +489,14 @@ def find_last_closed_candle_card_hits(
     near_v = near_vegas_channel(row)
     prior_high = float(df.iloc[max(0, idx - CARD_REF_LOOKBACK) : idx]["high"].max())
     prior_low = float(df.iloc[max(0, idx - CARD_REF_LOOKBACK) : idx]["low"].min())
-    markers = collect_candle_signal_markers(df)
     hits: list[dict[str, Any]] = []
     seen_kinds: set[str] = set()
 
-    for m in markers:
-        if int(m.get("time") or 0) != closed_ts:
-            continue
+    for m in bar_markers:
         kind = str(m.get("kind") or "")
         text = str(m.get("text") or "")
         oi_on = bool(m.get("oi_anomaly"))
+        trend: float | None = None
 
         if kind == "shooting_star":
             is_consec = "射击之星（2）" in text or "（2）" in text
@@ -539,12 +529,15 @@ def find_last_closed_candle_card_hits(
         else:
             continue
 
+        if filter_kinds is not None and card_kind not in filter_kinds:
+            continue
         if card_kind in seen_kinds:
             continue
         seen_kinds.add(card_kind)
         side = "bull" if card_kind == "inverted_hammer" else "bear"
         hits.append({
             "time": closed_ts,
+            "bar_index": idx,
             "kind": card_kind,
             "signal_kind": kind,
             "type_label": type_label,
@@ -563,3 +556,80 @@ def find_last_closed_candle_card_hits(
             "trend_pct": trend,
         })
     return hits
+
+
+def iter_candle_card_hits_in_range(
+    df: pd.DataFrame,
+    *,
+    start_ms: int,
+    end_ms: int,
+    kinds: set[str],
+    allow_shooting_star: bool = True,
+    allow_consecutive_shoot: bool = True,
+) -> list[dict[str, Any]]:
+    """历史区间内的蜡烛卡片信号（回测用）。"""
+    if df.empty or "open_time" not in df.columns or "bb_basis" not in df.columns:
+        return []
+    if not kinds:
+        return []
+    markers = collect_candle_signal_markers(df)
+    by_time: dict[int, list[dict[str, Any]]] = {}
+    for m in markers:
+        t = int(m.get("time") or 0)
+        if t:
+            by_time.setdefault(t, []).append(m)
+    hits: list[dict[str, Any]] = []
+    for idx in range(len(df)):
+        open_ms = int(df.iloc[idx]["open_time"])
+        if open_ms < start_ms or open_ms > end_ms:
+            continue
+        closed_ts = _ts_sec(open_ms)
+        bar_markers = by_time.get(closed_ts, [])
+        if not bar_markers:
+            continue
+        hits.extend(
+            _candle_card_hits_at_index(
+                df,
+                idx,
+                bar_markers,
+                allow_shooting_star=allow_shooting_star,
+                allow_consecutive_shoot=allow_consecutive_shoot,
+                allow_inverted_hammer_oi=False,
+                filter_kinds=kinds,
+            )
+        )
+    return hits
+
+
+def find_last_closed_candle_card_hits(
+    df: pd.DataFrame,
+    *,
+    now_ms: int | None = None,
+    allow_shooting_star: bool = True,
+    allow_consecutive_shoot: bool = True,
+    allow_inverted_hammer_oi: bool = True,
+) -> list[dict[str, Any]]:
+    """最近收盘柱上的 Telegram 卡片信号。
+
+    - 射击之星：不要求 OI
+    - 连续走平射击之星：SHOOT_REPEAT_BARS 内再次出现（「射击之星（2）」）
+    - 倒锤子：仅柱级 OI 异动时推送
+    - 射击之星位置过滤：收盘须在 BB 上轨区或近 Vegas 通道（CANDLE_SHOOT_REQUIRE_POSITION）
+    - 趋势背景：射击之星前须有上涨、倒锤子前须有下跌（CANDLE_*_TREND_*）
+    """
+    if df.empty or "open_time" not in df.columns or "bb_basis" not in df.columns:
+        return []
+    idx = closed_bar_index(df, now_ms=now_ms)
+    if idx < 0:
+        return []
+    closed_ts = _ts_sec(int(df.iloc[idx]["open_time"]))
+    markers = collect_candle_signal_markers(df)
+    bar_markers = [m for m in markers if int(m.get("time") or 0) == closed_ts]
+    return _candle_card_hits_at_index(
+        df,
+        idx,
+        bar_markers,
+        allow_shooting_star=allow_shooting_star,
+        allow_consecutive_shoot=allow_consecutive_shoot,
+        allow_inverted_hammer_oi=allow_inverted_hammer_oi,
+    )

@@ -66,7 +66,12 @@ from oi_mornitor.strategy.candle_signals import (
     find_last_closed_candle_card_hits,
     find_last_closed_pattern_oi_combos,
 )
-from oi_mornitor.strategy.structure_signals import find_last_closed_structure_hits
+from oi_mornitor.strategy.structure_signals import (
+    STRUCTURE_CARD_INTERVALS,
+    STRUCTURE_PUSH_COOLDOWN_BARS,
+    filter_structure_card_hits,
+    find_last_closed_structure_hits,
+)
 from oi_mornitor.symbol_aliases import is_stablecoin_symbol
 from oi_mornitor.telegram_push_toggles import (
     is_candle_push_enabled,
@@ -1538,6 +1543,19 @@ class PatternMonitorEngine:
             return False
         return (int(close_ts) - int(last)) <= CARD_PUSH_COOLDOWN_BARS * bar_sec
 
+    def _structure_emit_throttled(self, sym: str, iv: str, side: str, close_ts: int) -> bool:
+        """结构卡片：同币同周期同方向 STRUCTURE_PUSH_COOLDOWN_BARS 根 K 内只推一次。"""
+        if STRUCTURE_PUSH_COOLDOWN_BARS <= 0:
+            return False
+        key = f"struct:{sym}:{iv}:{side}"
+        last = self._card_last_emit.get(key)
+        if last is None:
+            return False
+        bar_sec = _INTERVAL_SECONDS.get(iv)
+        if not bar_sec:
+            return False
+        return (int(close_ts) - int(last)) <= STRUCTURE_PUSH_COOLDOWN_BARS * bar_sec
+
     async def _scan_candle_pattern_cards(
         self,
         session: aiohttp.ClientSession,
@@ -1732,19 +1750,28 @@ class PatternMonitorEngine:
         ) -> list[dict[str, Any]]:
             if not is_structure_push_enabled():
                 return []
+            if iv not in STRUCTURE_CARD_INTERVALS:
+                return []
+            work = df
+            async with sem:
+                oi_map = await fetch_open_interest_hist(
+                    session,
+                    base_url=base_url,
+                    symbol=sym,
+                    interval=iv,
+                    limit=min(fetch_limit, 500),
+                )
+            if oi_map:
+                work = df.copy()
+                work["oi"] = [
+                    oi_map.get(int(ot // 1000), float("nan"))
+                    for ot in work["open_time"].tolist()
+                ]
             try:
-                hits = find_last_closed_structure_hits(df, now_ms=now_ms)
+                hits = find_last_closed_structure_hits(work, now_ms=now_ms)
             except Exception:  # noqa: BLE001
                 return []
-            kinds = {str(h.get("kind") or "") for h in hits}
-            if "hs_vegas_break" in kinds:
-                hits = [h for h in hits if str(h.get("kind")) != "m_top_vegas_break"]
-            if "bottom_secondary_test" in kinds:
-                hits = [h for h in hits if str(h.get("kind")) != "spring_2b"]
-
-            # 彻底屏蔽已停用的 30m 周期和破底翻确认（spring_2b）
-            if iv == "30m":
-                hits = []
+            hits = filter_structure_card_hits(hits, interval=iv, now_ms=now_ms)
             hits = [h for h in hits if str(h.get("kind") or "") != "spring_2b"]
 
             out: list[dict[str, Any]] = []
@@ -1756,7 +1783,7 @@ class PatternMonitorEngine:
                     continue
                 self._card_seen.add(dedupe)
                 side = str(hit.get("side") or "")
-                if side in ("bull", "bear") and self._card_emit_throttled(sym, iv, side, close_ts):
+                if side in ("bull", "bear") and self._structure_emit_throttled(sym, iv, side, close_ts):
                     continue
                 type_label = str(hit.get("type_label") or kind)
                 alert = {
@@ -1803,7 +1830,7 @@ class PatternMonitorEngine:
                     logger.warning("Telegram 结构卡片失败 %s: %s", sym, exc)
                     ok = False
                 if ok and side in ("bull", "bear"):
-                    self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
+                    self._card_last_emit[f"struct:{sym}:{iv}:{side}"] = close_ts
             return out
 
         async def _one(sym: str, iv: str, is_major: bool) -> list[dict[str, Any]]:

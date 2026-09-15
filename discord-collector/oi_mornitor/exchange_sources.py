@@ -418,6 +418,16 @@ async def _fetch_binance_klines(
     return data
 
 
+def _parse_bybit_kline_row(row: Any, interval: str) -> list[Any] | None:
+    try:
+        open_ms = int(row[0])
+        o, h, l, c = float(row[1]), float(row[2]), float(row[3]), float(row[4])
+        vol, quote = float(row[5]), float(row[6])
+    except (IndexError, TypeError, ValueError):
+        return None
+    return _binance_row(open_ms, o, h, l, c, vol, quote, interval)
+
+
 async def _fetch_bybit_klines(
     session: aiohttp.ClientSession,
     *,
@@ -441,15 +451,67 @@ async def _fetch_bybit_klines(
     rows_raw = (payload.get("result") or {}).get("list") or []
     out: list[list[Any]] = []
     for row in rows_raw:
-        try:
-            open_ms = int(row[0])
-            o, h, l, c = float(row[1]), float(row[2]), float(row[3]), float(row[4])
-            vol, quote = float(row[5]), float(row[6])
-        except (IndexError, TypeError, ValueError):
-            continue
-        out.append(_binance_row(open_ms, o, h, l, c, vol, quote, interval))
+        parsed = _parse_bybit_kline_row(row, interval)
+        if parsed is not None:
+            out.append(parsed)
     out.sort(key=lambda r: int(r[0]))
     return out
+
+
+async def fetch_bybit_klines_range(
+    session: aiohttp.ClientSession,
+    *,
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+    limit: int = 1000,
+    page_sleep: float = 0.3,
+    as_of_ms: int | None = None,
+) -> list[list[Any]]:
+    """Bybit V5 成交 K 线分页回溯（start/end 均为 ms，结果升序、仅已收盘）。"""
+    iv = _BYBIT_INTERVAL.get(interval)
+    if not iv or end_ms <= start_ms:
+        return []
+    interval_ms = _INTERVAL_MS.get(interval, 900_000)
+    cap = min(max(int(limit), 1), 1000)
+    start_ms = int(start_ms)
+    end_ms = int(end_ms)
+    as_of = int(as_of_ms if as_of_ms is not None else __import__("time").time() * 1000)
+    by_open: dict[int, list[Any]] = {}
+    end_cursor = end_ms
+
+    while end_cursor > start_ms:
+        url = (
+            f"{BYBIT_BASE_URL}/v5/market/kline"
+            f"?category=linear&symbol={symbol}&interval={iv}&limit={cap}"
+            f"&start={start_ms}&end={end_cursor}"
+        )
+        payload = await _get_json(session, url, source="Bybit-klines-range")
+        if not isinstance(payload, dict) or int(payload.get("retCode") or -1) != 0:
+            break
+        rows_raw = (payload.get("result") or {}).get("list") or []
+        if not rows_raw:
+            break
+        oldest_open: int | None = None
+        for row in rows_raw:
+            parsed = _parse_bybit_kline_row(row, interval)
+            if parsed is None:
+                continue
+            open_ms = int(parsed[0])
+            if open_ms + interval_ms > as_of:
+                continue
+            by_open[open_ms] = parsed
+            oldest_open = open_ms if oldest_open is None else min(oldest_open, open_ms)
+        if oldest_open is None or oldest_open <= start_ms:
+            break
+        next_end = oldest_open - 1
+        if next_end >= end_cursor:
+            break
+        end_cursor = next_end
+        await asyncio.sleep(max(0.05, float(page_sleep)))
+
+    return sorted(by_open.values(), key=lambda r: int(r[0]))
 
 
 async def _fetch_okx_klines(

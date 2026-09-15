@@ -2,12 +2,14 @@ import { createHashRouter, RouterProvider } from "react-router-dom";
 import { RadarSSEProvider } from "./hooks/useRadarSSE";
 import { RadarPage } from "./pages/RadarPage";
 import { PatternMonitorPage } from "./pages/PatternMonitorPage";
+import { BacktestPage } from "./pages/BacktestPage";
 import "./styles/app.css";
 
 const router = createHashRouter(
   [
     { index: true, element: <RadarPage /> },
     { path: "patterns", element: <PatternMonitorPage /> },
+    { path: "backtest", element: <BacktestPage /> },
   ]
 );
 

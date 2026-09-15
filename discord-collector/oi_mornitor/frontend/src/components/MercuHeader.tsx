@@ -16,6 +16,7 @@ interface Props {
 const NAV = [
   { to: "/", label: "雷达", end: true },
   { to: "/patterns", label: "形态", end: false },
+  { to: "/backtest", label: "回测", end: false },
 ] as const;
 
 export const MercuHeader = memo(function MercuHeader({

@@ -317,6 +317,155 @@ async def handle_pattern_alert_stats_post(request: web.Request) -> web.Response:
     return _json_response({"ok": True, "updated": len(raw), "summary": summarize(items)})
 
 
+async def handle_backtest_structure_options(_request: web.Request) -> web.Response:
+    """结构回测：可选形态 / 周期 / 核算说明。"""
+    from oi_mornitor.backtest_kline_store import storage_stats
+    from oi_mornitor.backtest_universe import load_latest_universe
+    from oi_mornitor.structure_backtest import DEFAULT_KINDS, list_kind_options
+    from oi_mornitor.strategy.structure_signals import STRUCTURE_CARD_INTERVALS
+
+    stats = storage_stats()
+    mb = stats.get("mb")
+    size_hint = f"本地约 {mb} MB" if mb else "本地库为空，首次回测会分页拉取"
+    return _json_response(
+        {
+            "ok": True,
+            "kindOptions": list_kind_options(),
+            "defaultKinds": DEFAULT_KINDS,
+            "intervals": sorted(STRUCTURE_CARD_INTERVALS),
+            "symbolScopes": [
+                {"id": "top200", "label": "Top200 流动性（推荐）"},
+                {"id": "pool", "label": "雷达池（当前监控）"},
+                {"id": "majors", "label": "主流 BTC/ETH/SOL"},
+                {"id": "all", "label": "全市场 USDT 永续"},
+            ],
+            "defaultSymbolScope": "top200",
+            "defaultMaxSymbols": 200,
+            "defaultMaxDays": 730,
+            "settleRules": "BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% · 信号后 3h · 5m K 线核实",
+            "klineSource": "bybit_v5_parquet",
+            "klineSourceNote": (
+                f"K 线：Bybit V5 分页 → Parquet（{size_hint}）；"
+                "先「拉取 K 线」分段入库，再「开始回测」只读本地。"
+                "200 币 × 15m/1h/4h × 3 年约 4～10 GB。"
+            ),
+            "defaultChunkDays": 30,
+            "universeNote": (
+                "Top200 按 Bybit linear 24h 成交额 + 上市≥14 天 + BTC/ETH/SOL 必含；"
+                "为当前截面名单，近 1～2 年可接受，更长区间注意存活者偏差。"
+            ),
+            "latestUniverse": load_latest_universe(),
+            "storageStats": stats,
+        }
+    )
+
+
+async def handle_backtest_structure_start(request: web.Request) -> web.Response:
+    """启动结构形态全市场回测（异步任务）。"""
+    from oi_mornitor.radar import get_service
+    from oi_mornitor.structure_backtest import job_to_dict, start_structure_backtest
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        job = await start_structure_backtest(
+            body,
+            get_pool_rows=lambda: get_service().radar.last_all_rows,
+        )
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("回测启动失败")
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response({"ok": True, **job_to_dict(job, page=1, page_size=100)})
+
+
+async def handle_backtest_structure_get(request: web.Request) -> web.Response:
+    """查询回测任务进度与结果（分页）。"""
+    from oi_mornitor.structure_backtest import get_backtest_job, job_to_dict
+
+    job_id = str(request.match_info.get("job_id") or "").strip()
+    if not job_id:
+        return _json_response({"ok": False, "error": "missing job_id"}, status=400)
+    job = get_backtest_job(job_id)
+    if job is None:
+        return _json_response({"ok": False, "error": "job not found"}, status=404)
+    q = request.query
+    page = int(q.get("page") or "1") if str(q.get("page") or "1").isdigit() else 1
+    page_size = int(q.get("pageSize") or "100") if str(q.get("pageSize") or "100").isdigit() else 100
+    kind_filter = str(q.get("kind") or q.get("kindFilter") or "all").strip() or "all"
+    type_filter = str(q.get("type") or q.get("typeLabel") or "all").strip() or "all"
+    interval_filter = str(q.get("interval") or q.get("intervalFilter") or "all").strip() or "all"
+    return _json_response(
+        {
+            "ok": True,
+            **job_to_dict(
+                job,
+                page=page,
+                page_size=page_size,
+                kind_filter=kind_filter,
+                interval_filter=interval_filter,
+                type_label_filter=type_filter,
+            ),
+        }
+    )
+
+
+async def handle_backtest_kline_prefetch_start(request: web.Request) -> web.Response:
+    """分段拉取 K 线到本地 Parquet。"""
+    from oi_mornitor.backtest_prefetch import prefetch_job_to_dict, start_kline_prefetch
+    from oi_mornitor.radar import get_service
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        job = await start_kline_prefetch(body, get_pool_rows=lambda: get_service().radar.last_all_rows)
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("K 线拉取启动失败")
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response({"ok": True, **prefetch_job_to_dict(job)})
+
+
+async def handle_backtest_kline_prefetch_get(request: web.Request) -> web.Response:
+    from oi_mornitor.backtest_prefetch import get_prefetch_job, prefetch_job_to_dict
+
+    job_id = str(request.match_info.get("job_id") or "").strip()
+    if not job_id:
+        return _json_response({"ok": False, "error": "missing job_id"}, status=400)
+    job = get_prefetch_job(job_id)
+    if job is None:
+        return _json_response({"ok": False, "error": "job not found"}, status=404)
+    return _json_response({"ok": True, **prefetch_job_to_dict(job)})
+
+
+async def handle_backtest_kline_coverage(request: web.Request) -> web.Response:
+    """检查本地 K 线覆盖率（不回测）。"""
+    from oi_mornitor.backtest_prefetch import check_kline_coverage
+    from oi_mornitor.radar import get_service
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        data = await check_kline_coverage(body, get_pool_rows=lambda: get_service().radar.last_all_rows)
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, status=400)
+    return _json_response({"ok": True, **data})
+
+
 async def handle_pattern_alert_ticker_get(_request: web.Request) -> web.Response:
     """形态 ticker 滚动条（本机写入，生产只读）。"""
     from oi_mornitor.pattern_alert_ticker import list_ticker
@@ -938,6 +1087,8 @@ def create_app() -> web.Application:
 
     app.router.add_get("/patterns", handle_index)
 
+    app.router.add_get("/backtest", handle_index)
+
     app.router.add_get("/api/health", handle_health)
 
     app.router.add_get("/api/snapshot", handle_snapshot)
@@ -964,6 +1115,13 @@ def create_app() -> web.Application:
     app.router.add_get("/api/pattern-alert-stats", handle_pattern_alert_stats_get)
     app.router.add_post("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
     app.router.add_put("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
+
+    app.router.add_get("/api/backtest/structure/options", handle_backtest_structure_options)
+    app.router.add_post("/api/backtest/structure", handle_backtest_structure_start)
+    app.router.add_get("/api/backtest/structure/{job_id}", handle_backtest_structure_get)
+    app.router.add_post("/api/backtest/kline/prefetch", handle_backtest_kline_prefetch_start)
+    app.router.add_get("/api/backtest/kline/prefetch/{job_id}", handle_backtest_kline_prefetch_get)
+    app.router.add_post("/api/backtest/kline/coverage", handle_backtest_kline_coverage)
 
     app.router.add_get("/api/pattern-alert-ticker", handle_pattern_alert_ticker_get)
     app.router.add_post("/api/pattern-alert-ticker", handle_pattern_alert_ticker_post)

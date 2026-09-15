@@ -11,26 +11,63 @@ import numpy as np
 import pandas as pd
 
 from oi_mornitor.config import (
-    STRUCTURE_BREAK_VOL_MULT,
     STRUCTURE_CURVE_DECEL,
     STRUCTURE_CURVE_DOWN_SLOPE,
     STRUCTURE_CURVE_UP_SLOPE,
 )
-from oi_mornitor.strategy.candle_signals import closed_bar_index
+from oi_mornitor.strategy.candle_signals import closed_bar_index, compute_oi_anomaly_flags
 
 # 与用户规格对齐的可调默认
 SWING_ORDER = 5
 HS_SHOULDER_TOL = 0.03
 HS_VEGAS_SCAN_BARS = 15
+HS_HEAD_MIN_ABOVE = 0.015
+HS_RIGHT_SHOULDER_MAX = 0.01
+HS_CLOSE_LOWER_PCT = 0.40
+M_TOP_PEAK_TOL = 0.02
+M_TOP_VALLEY_MAX = 0.97
+M_TOP_PEAK2_VOL_MAX = 0.85
+TOP_BREAK_VOL_MULT = 1.5
+TOP_RISK_MAX_PCT = 0.025
+TOP_PRIOR_UP_PCT = 0.04
+TOP_PRIOR_LOOKBACK = 20
+TOP_VEGAS_SLOPE_BARS = 5
+SWEEP_PIERCE_LO = 0.001
+SWEEP_PIERCE_HI = 0.012
+SWEEP_CLOSE_BELOW_PH = 0.997
+SWEEP_CLOSE_LOWER_PCT = 0.50
+ENABLE_CURVATURE_DECAY = False
+TOP_BEAR_KINDS = frozenset({
+    "hs_vegas_break",
+    "m_top_vegas_break",
+    "liquidity_sweep",
+    "curvature_decay",
+})
+TOP_KIND_PRIORITY = (
+    "hs_vegas_break",
+    "m_top_vegas_break",
+    "liquidity_sweep",
+    "curvature_decay",
+)
+STRUCTURE_CARD_INTERVALS = frozenset({"15m", "1h", "4h"})
+STRUCTURE_PUSH_COOLDOWN_BARS = 8
 CLIMAX_VOL_MULT = 2.0
 CLIMAX_WICK_RATIO = 0.4
-BOTTOM_WAIT_BARS = 25
+BOTTOM_L2_MIN_GAP = 5
+BOTTOM_L2_MAX_GAP = 18
 BOTTOM_L2_LO = 0.98
 BOTTOM_L2_HI = 1.03
+BOTTOM_L2_VOL_MAX_RATIO = 0.8
+BOTTOM_L2_BODY_MAX_RATIO = 0.7
+BOTTOM_CONFIRM_VOL_MULT = 1.3
 BOTTOM_CLOSE_PCT = 0.70
+BOTTOM_RECOVERY_CLOSE_RATIO = 0.4
+BOTTOM_RISK_MAX_PCT = 0.025
+BOTTOM_RR_MIN = 1.5
+BOTTOM_ENGULF_BODY_RATIO = 0.8
 SPRING_RECLAIM_BARS = 3
 SPRING_VOL_MULT = 1.3
-SWEEP_WICK_MIN_PCT = 0.15  # 影线占 range
+SWEEP_WICK_MIN_PCT = 0.40  # 上影占 range
 CURVE_LOOKBACK = 20
 
 
@@ -105,6 +142,137 @@ def _vol_ratio(row: pd.Series) -> float | None:
     return v / ma
 
 
+def _candle_body(row: pd.Series) -> float:
+    return max(0.0, float(row["body_top"]) - float(row["body_bottom"]))
+
+
+def _oi_delta(df: pd.DataFrame, idx: int) -> float | None:
+    if "oi" not in df.columns or idx < 1:
+        return None
+    cur = df.iloc[idx].get("oi")
+    prev = df.iloc[idx - 1].get("oi")
+    if pd.isna(cur) or pd.isna(prev):
+        return None
+    c, p = float(cur), float(prev)
+    if c <= 0 or p <= 0:
+        return None
+    return c - p
+
+
+def _close_pos_from_low(row: pd.Series) -> float:
+    rng = float(row["candle_range"] or 0) + 1e-8
+    return (float(row["close"]) - float(row["low"])) / rng
+
+
+def _close_in_lower_pct(row: pd.Series, max_pct_from_low: float) -> bool:
+    return _close_pos_from_low(row) <= max_pct_from_low
+
+
+def _vegas_mid_slope_ok(df: pd.DataFrame, idx: int, *, lookback: int = TOP_VEGAS_SLOPE_BARS) -> bool:
+    """ema144-ema169 差值的 lookback 根变化 ≤ 0（中轨走平或向下）。"""
+    if idx < lookback:
+        return False
+    if "ema144" in df.columns and "ema169" in df.columns:
+        e1 = df["ema144"].astype(float)
+        e2 = df["ema169"].astype(float)
+    elif "vegas_e1" in df.columns and "vegas_e2" in df.columns:
+        e1 = df["vegas_e1"].astype(float)
+        e2 = df["vegas_e2"].astype(float)
+    else:
+        return False
+    spread_now = float(e1.iloc[idx] - e2.iloc[idx])
+    spread_prev = float(e1.iloc[idx - lookback] - e2.iloc[idx - lookback])
+    if not (np.isfinite(spread_now) and np.isfinite(spread_prev)):
+        return False
+    return spread_now <= spread_prev
+
+
+def _top_common_ok(df: pd.DataFrame, j: int, entry: float, guard: float) -> bool:
+    """顶部公共闸：收阴、中轨下、量能、先涨后跌、风险宽度。"""
+    if j < TOP_PRIOR_LOOKBACK:
+        return False
+    row = df.iloc[j]
+    close_j = float(row["close"])
+    open_j = float(row["open"])
+    if close_j >= open_j:
+        return False
+    mid = float(row["vegas_mid"]) if pd.notna(row.get("vegas_mid")) else None
+    if mid is None or close_j >= mid:
+        return False
+    if not _vegas_mid_slope_ok(df, j):
+        return False
+    ma = float(row.get("vol_ma20") or 0)
+    if ma <= 0 or float(row["volume"]) < TOP_BREAK_VOL_MULT * ma:
+        return False
+    close_ago = float(df.iloc[j - TOP_PRIOR_LOOKBACK]["close"])
+    if close_ago <= 0:
+        return False
+    max_hi = float(df.iloc[j - TOP_PRIOR_LOOKBACK : j]["high"].max())
+    if max_hi < close_ago * (1 + TOP_PRIOR_UP_PCT):
+        return False
+    risk = guard - entry
+    if risk <= 0 or risk > entry * TOP_RISK_MAX_PCT:
+        return False
+    return True
+
+
+def _attach_oi_anomaly(df: pd.DataFrame) -> pd.DataFrame:
+    if "oi" not in df.columns:
+        return df
+    flags, _ = compute_oi_anomaly_flags(df)
+    out = df.copy()
+    out["oi_anomaly"] = flags
+    return out
+
+
+def _us_open_sweep_blocked(now_ms: int | None) -> bool:
+    """美盘开盘前后 15 分钟（北京时间 21/22 点档）禁用 sweep。"""
+    if now_ms is None:
+        return False
+    from datetime import datetime, timedelta, timezone
+
+    cn = timezone(timedelta(hours=8))
+    dt = datetime.fromtimestamp(now_ms / 1000, tz=cn)
+    minutes = dt.hour * 60 + dt.minute
+    for hour in (21, 22):
+        lo = hour * 60 + 15
+        hi = hour * 60 + 45
+        if lo <= minutes <= hi:
+            return True
+    return False
+
+
+def filter_structure_card_hits(
+    hits: list[dict[str, Any]],
+    *,
+    interval: str,
+    now_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    """推送层：周期白名单 + 美盘 sweep 禁推。"""
+    if interval not in STRUCTURE_CARD_INTERVALS:
+        return []
+    out: list[dict[str, Any]] = []
+    block_sweep = _us_open_sweep_blocked(now_ms)
+    for hit in hits:
+        if block_sweep and str(hit.get("kind") or "") == "liquidity_sweep":
+            continue
+        out.append(hit)
+    return out
+
+
+def _bottom_reversal_oi_ok(df: pd.DataFrame, l1_idx: int, confirm_idx: int) -> bool:
+    """L1 空头加仓砸盘 + 确认柱 OI 不再增；无 OI 列时不挡。"""
+    d1 = _oi_delta(df, l1_idx)
+    d2 = _oi_delta(df, confirm_idx)
+    if d1 is None or d2 is None:
+        return True
+    row_l1 = df.iloc[l1_idx]
+    price_down = float(row_l1["close"]) < float(row_l1["open"])
+    if not (d1 > 0 and price_down):
+        return False
+    return d2 <= 0
+
+
 def _neckline_between(
     df: pd.DataFrame, i_left: int, i_right: int
 ) -> tuple[float, int] | None:
@@ -126,6 +294,7 @@ def detect_structure_events(df: pd.DataFrame) -> list[dict[str, Any]]:
     work = _ensure_structure_cols(df)
     if "vegas_mid" not in work.columns:
         return []
+    work = _attach_oi_anomaly(work)
     work = mark_swing_points(work, order=SWING_ORDER)
     events: list[dict[str, Any]] = []
 
@@ -134,7 +303,8 @@ def detect_structure_events(df: pd.DataFrame) -> list[dict[str, Any]]:
     events.extend(_detect_bottom_reversal(work))
     # events.extend(_detect_spring_2b(work))  # 破底翻确认：已停用
     events.extend(_detect_liquidity_sweep(work))
-    events.extend(_detect_curvature_decay(work))
+    if ENABLE_CURVATURE_DECAY:
+        events.extend(_detect_curvature_decay(work))
     return events
 
 
@@ -151,16 +321,23 @@ def find_last_closed_structure_hits(
         return []
     closed_ts = _ts_sec(int(df.iloc[idx]["open_time"]))
     events = detect_structure_events(df)
+    at_bar = [ev for ev in events if int(ev.get("bar_index", -1)) == idx]
+    bulls = [ev for ev in at_bar if str(ev.get("side") or "") == "bull"]
+    bears = [ev for ev in at_bar if str(ev.get("kind") or "") in TOP_BEAR_KINDS]
+    if bulls and bears:
+        return []
+    picked: list[dict[str, Any]] = list(bulls)
+    if bears:
+        chosen: dict[str, Any] | None = None
+        for kind in TOP_KIND_PRIORITY:
+            chosen = next((b for b in bears if str(b.get("kind") or "") == kind), None)
+            if chosen is not None:
+                break
+        if chosen is not None:
+            picked.append(chosen)
+    row = df.iloc[idx]
     hits: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for ev in events:
-        if int(ev.get("bar_index", -1)) != idx:
-            continue
-        kind = str(ev.get("kind") or "")
-        if kind in seen:
-            continue
-        seen.add(kind)
-        row = df.iloc[idx]
+    for ev in picked:
         hits.append({
             **ev,
             "time": closed_ts,
@@ -174,7 +351,7 @@ def find_last_closed_structure_hits(
 
 
 def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """头肩顶 + 右肩后跌破 Vegas 中轨。"""
+    """头肩顶 + 跌破颈线（非仅摸中轨）。"""
     highs = [(i, float(df.iloc[i]["high"])) for i in range(len(df)) if bool(df.iloc[i]["is_swing_high"])]
     if len(highs) < 3:
         return []
@@ -185,9 +362,12 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
         i1, p1 = highs[a]
         i2, p2 = highs[a + 1]
         i3, p3 = highs[a + 2]
-        if not (p2 > p1 and p2 > p3):
-            continue
         if p1 <= 0:
+            continue
+        head_min = max(p1, p3) * (1 + HS_HEAD_MIN_ABOVE)
+        if p2 < head_min:
+            continue
+        if p3 > p1 * (1 + HS_RIGHT_SHOULDER_MAX):
             continue
         if abs(p1 - p3) / p1 > HS_SHOULDER_TOL:
             continue
@@ -195,31 +375,33 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
         neck_price = neck[0] if neck else min(
             float(df.iloc[i1]["low"]), float(df.iloc[i3]["low"])
         )
+        rs_vol = float(df.iloc[i3]["volume"])
 
         end = min(len(df), i3 + 1 + HS_VEGAS_SCAN_BARS)
         for j in range(i3 + 1, end):
             if j in used_triggers:
                 continue
             row = df.iloc[j]
-            prev = df.iloc[j - 1]
             mid = float(row["vegas_mid"]) if pd.notna(row["vegas_mid"]) else None
-            prev_mid = float(prev["vegas_mid"]) if pd.notna(prev["vegas_mid"]) else None
-            if mid is None or prev_mid is None:
+            if mid is None:
                 continue
-            # 实体跌破 Vegas 中轨（由上穿下）
-            crossed = float(row["close"]) < mid and float(prev["close"]) >= prev_mid
-            # 或同时跌破颈线
-            broke_neck = float(row["close"]) < neck_price
-            if not crossed and not (broke_neck and float(row["close"]) < mid):
+            close_j = float(row["close"])
+            if close_j >= neck_price:
+                continue
+            if not _close_in_lower_pct(row, HS_CLOSE_LOWER_PCT):
+                continue
+            if float(row["volume"]) < rs_vol:
+                continue
+            entry = close_j
+            guard = p3
+            if not _top_common_ok(df, j, entry, guard):
                 continue
             vr = _vol_ratio(row)
-            if vr is None or vr < STRUCTURE_BREAK_VOL_MULT:
-                continue
             out.append({
                 "kind": "hs_vegas_break",
                 "side": "bear",
                 "type_label": "顶部结构确认",
-                "pattern_label": "头肩顶 / 跌破维加斯通道",
+                "pattern_label": "头肩顶 / 跌破颈线",
                 "bar_index": j,
                 "head_high": p2,
                 "left_shoulder": p1,
@@ -227,8 +409,9 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "neckline": neck_price,
                 "vegas_mid": mid,
                 "vol_ratio": vr,
-                "defense": p3,
+                "defense": guard,
                 "support_ref": neck_price,
+                "risk_pct": round((guard - entry) / entry * 100, 4) if entry > 0 else None,
             })
             used_triggers.add(j)
             break
@@ -236,7 +419,7 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """M 顶：两高近似等高，之后跌破 Vegas。与头肩去重（同触发柱优先保留 hs）。"""
+    """M 顶：量价背离 + 跌破中轨且至少回落谷深 50%。"""
     highs = [(i, float(df.iloc[i]["high"])) for i in range(len(df)) if bool(df.iloc[i]["is_swing_high"])]
     if len(highs) < 2:
         return []
@@ -245,37 +428,41 @@ def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
     for a in range(len(highs) - 1):
         i1, p1 = highs[a]
         i2, p2 = highs[a + 1]
-        if p1 <= 0:
+        peak_lo = min(p1, p2)
+        if peak_lo <= 0:
             continue
-        # 两峰接近，且间隔足够
-        if abs(p1 - p2) / p1 > HS_SHOULDER_TOL:
+        if abs(p1 - p2) / peak_lo > M_TOP_PEAK_TOL:
             continue
         if i2 - i1 < SWING_ORDER:
             continue
-        # 中间有明显回落
         mid_lo = float(df.iloc[i1:i2]["low"].min())
-        if mid_lo >= min(p1, p2) * 0.985:
+        if mid_lo > peak_lo * M_TOP_VALLEY_MAX:
             continue
+        if float(df.iloc[i2]["volume"]) > float(df.iloc[i1]["volume"]) * M_TOP_PEAK2_VOL_MAX:
+            continue
+        half_break = mid_lo + 0.5 * (peak_lo - mid_lo)
+
         end = min(len(df), i2 + 1 + HS_VEGAS_SCAN_BARS)
         for j in range(i2 + 1, end):
             if j in used:
                 continue
             row = df.iloc[j]
-            prev = df.iloc[j - 1]
             mid = float(row["vegas_mid"]) if pd.notna(row["vegas_mid"]) else None
-            prev_mid = float(prev["vegas_mid"]) if pd.notna(prev["vegas_mid"]) else None
-            if mid is None or prev_mid is None:
+            if mid is None:
                 continue
-            if not (float(row["close"]) < mid and float(prev["close"]) >= prev_mid):
+            close_j = float(row["close"])
+            if close_j >= mid or close_j >= half_break:
+                continue
+            entry = close_j
+            guard = max(p1, p2)
+            if not _top_common_ok(df, j, entry, guard):
                 continue
             vr = _vol_ratio(row)
-            if vr is None or vr < STRUCTURE_BREAK_VOL_MULT:
-                continue
             out.append({
                 "kind": "m_top_vegas_break",
                 "side": "bear",
                 "type_label": "顶部结构确认",
-                "pattern_label": "M顶 / 跌破维加斯通道",
+                "pattern_label": "M顶 / 跌破中轨+谷深50%",
                 "bar_index": j,
                 "head_high": max(p1, p2),
                 "left_shoulder": p1,
@@ -283,8 +470,9 @@ def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "neckline": mid_lo,
                 "vegas_mid": mid,
                 "vol_ratio": vr,
-                "defense": max(p1, p2),
+                "defense": guard,
                 "support_ref": mid_lo,
+                "risk_pct": round((guard - entry) / entry * 100, 4) if entry > 0 else None,
             })
             used.add(j)
             break
@@ -292,7 +480,7 @@ def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def _detect_bottom_reversal(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """恐慌放量插针 + 二次回踩阳线确认。"""
+    """恐慌放量插针 + 二次回踩阳线确认（低位 W，6 道闸 + 可选 OI）。"""
     out: list[dict[str, Any]] = []
     used: set[int] = set()
     n = len(df)
@@ -308,47 +496,103 @@ def _detect_bottom_reversal(df: pd.DataFrame) -> list[dict[str, Any]]:
         vol_ok = float(row["volume"]) >= CLIMAX_VOL_MULT * ma
         wick_ok = lw > CLIMAX_WICK_RATIO * rng
         # 大阴线超跌也算
-        bear_body = float(row["close"]) < float(row["open"]) and (
-            float(row["body_top"]) - float(row["body_bottom"])
-        ) > 0.5 * rng
+        bear_body = float(row["close"]) < float(row["open"]) and _candle_body(row) > 0.5 * rng
         if not (vol_ok and (wick_ok or bear_body)):
             continue
         l1 = float(row["low"])
-        climax_vol_r = float(row["volume"]) / ma
-        end = min(n, i + BOTTOM_WAIT_BARS + 1)
-        for j in range(i + 3, end):
+        l1_vol = float(row["volume"])
+        l1_body = _candle_body(row)
+        vegas_mid_l1 = float(row["vegas_mid"]) if pd.notna(row.get("vegas_mid")) else None
+        if vegas_mid_l1 is None or l1 >= vegas_mid_l1:
+            continue
+        climax_vol_r = l1_vol / ma
+        end = min(n, i + BOTTOM_L2_MAX_GAP + 1)
+        for j in range(i + BOTTOM_L2_MIN_GAP, end):
             if j in used:
+                continue
+            gap = j - i
+            if gap < BOTTOM_L2_MIN_GAP or gap > BOTTOM_L2_MAX_GAP:
                 continue
             r2 = df.iloc[j]
             l2 = float(r2["low"])
             if not (BOTTOM_L2_LO * l1 <= l2 <= BOTTOM_L2_HI * l1):
                 continue
+            l2_vol = float(r2["volume"])
+            l2_body = _candle_body(r2)
+            if l2_vol > l1_vol * BOTTOM_L2_VOL_MAX_RATIO:
+                continue
+            if l1_body > 0 and l2_body > l1_body * BOTTOM_L2_BODY_MAX_RATIO:
+                continue
+            close_j = float(r2["close"])
+            open_j = float(r2["open"])
+            high_j = float(r2["high"])
+            low_j = float(r2["low"])
+            # 微破 L1（最多 -2%）：须收回 L1 之上，且量不得大于 L1
+            if l2 < l1:
+                if close_j < l1:
+                    continue
+                if l2_vol > l1_vol:
+                    continue
+                if close_j < open_j and l2_vol > l1_vol * BOTTOM_L2_VOL_MAX_RATIO:
+                    continue
+            floor_ref = min(l1, l2)
+            if low_j < floor_ref - 1e-12:
+                continue
             rng2 = float(r2["candle_range"] or 0) + 1e-8
-            close_pos = (float(r2["close"]) - float(r2["low"])) / rng2
-            is_bull = float(r2["close"]) > float(r2["open"]) and close_pos >= BOTTOM_CLOSE_PCT
-            # 阳包阴
+            close_pos = (close_j - low_j) / rng2
+            is_bull = close_j > open_j and close_pos >= BOTTOM_CLOSE_PCT
+            prev = df.iloc[j - 1]
+            prev_bear = float(prev["close"]) < float(prev["open"])
             engulf = (
-                float(r2["close"]) > float(r2["open"])
-                and float(df.iloc[j - 1]["close"]) < float(df.iloc[j - 1]["open"])
-                and float(r2["close"]) >= float(df.iloc[j - 1]["open"])
-                and float(r2["open"]) <= float(df.iloc[j - 1]["close"])
+                close_j > open_j
+                and prev_bear
+                and close_j >= float(prev["open"])
+                and open_j <= float(prev["close"])
             )
+            if engulf:
+                prev_body = _candle_body(prev)
+                if prev_body > 0 and _candle_body(r2) < BOTTOM_ENGULF_BODY_RATIO * prev_body:
+                    engulf = False
             if not (is_bull or engulf):
                 continue
-            vegas_lo = float(r2["vegas_fast_hi"]) if pd.notna(r2.get("vegas_fast_hi")) else None
+            ma_j = float(r2.get("vol_ma20") or 0)
+            if ma_j <= 0 or l2_vol < BOTTOM_CONFIRM_VOL_MULT * ma_j:
+                continue
+            if close_j <= l2 or close_j <= open_j:
+                continue
+            mid_axis = (l1 + open_j) / 2.0
+            if close_j < mid_axis:
+                continue
+            if close_j < floor_ref + BOTTOM_RECOVERY_CLOSE_RATIO * (high_j - floor_ref):
+                continue
+            entry = close_j
+            guard = floor_ref
+            risk = entry - guard
+            if risk <= 0 or risk > entry * BOTTOM_RISK_MAX_PCT:
+                continue
+            vegas_hi = float(r2["vegas_fast_hi"]) if pd.notna(r2.get("vegas_fast_hi")) else None
+            if vegas_hi is None:
+                continue
+            upside = vegas_hi - entry
+            if upside < risk * BOTTOM_RR_MIN:
+                continue
+            if not _bottom_reversal_oi_ok(df, i, j):
+                continue
             out.append({
                 "kind": "bottom_secondary_test",
                 "side": "bull",
                 "type_label": "底部二次探底确认",
-                "pattern_label": "恐慌抛售 + 阳线支撑确认 (Double Bottom)",
+                "pattern_label": "低位W · 恐慌抛售 + 缩量二次探底 + 阳线确认",
                 "bar_index": j,
                 "l1": l1,
                 "l2": l2,
                 "climax_vol_ratio": climax_vol_r,
                 "close_pct": close_pos,
-                "defense": min(l1, l2),
-                "resistance_ref": vegas_lo,
+                "defense": guard,
+                "resistance_ref": vegas_hi,
                 "vol_ratio": _vol_ratio(r2),
+                "risk_pct": round(risk / entry * 100, 4) if entry > 0 else None,
+                "rr_upside": round(upside / risk, 4) if risk > 0 else None,
             })
             used.add(j)
             break
@@ -407,7 +651,7 @@ def _detect_spring_2b(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """流动性掠夺：上影刺破前高后收在前高之下。"""
+    """流动性掠夺：浅刺前高 + 长上影收阴 + 收在前高之下。"""
     highs = [(i, float(df.iloc[i]["high"])) for i in range(len(df)) if bool(df.iloc[i]["is_swing_high"])]
     if not highs:
         return []
@@ -419,24 +663,32 @@ def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
         if not prior:
             continue
         pi, ph = prior[-1]
-        if i - pi > 25:
+        if i - pi > 25 or ph <= 0:
             continue
         row = df.iloc[i]
         rng = float(row["candle_range"] or 0)
         if rng <= 0:
             continue
+        high_i = float(row["high"])
+        close_j = float(row["close"])
+        pierce_lo = ph * (1 + SWEEP_PIERCE_LO)
+        pierce_hi = ph * (1 + SWEEP_PIERCE_HI)
+        if not (pierce_lo < high_i <= pierce_hi):
+            continue
+        if close_j >= ph or close_j >= ph * SWEEP_CLOSE_BELOW_PH:
+            continue
+        if not _close_in_lower_pct(row, SWEEP_CLOSE_LOWER_PCT):
+            continue
         uw = float(row["upper_wick"] or 0)
-        if float(row["high"]) <= ph * 1.0005:
-            continue
-        if float(row["close"]) >= ph:
-            continue
-        if float(row["close"]) >= float(row["open"]):
-            continue
-        if uw / rng < 0.25:
+        if uw / rng < SWEEP_WICK_MIN_PCT:
             continue
         vr = _vol_ratio(row)
         oi_on = bool(row.get("oi_anomaly")) if "oi_anomaly" in row.index else False
-        if not oi_on and (vr is None or vr < 1.3):
+        if not oi_on and (vr is None or vr < TOP_BREAK_VOL_MULT):
+            continue
+        entry = close_j
+        guard = high_i
+        if not _top_common_ok(df, i, entry, guard):
             continue
         if i in used:
             continue
@@ -447,15 +699,16 @@ def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
             "type_label": "顶部结构确认",
             "pattern_label": "流动性掠夺 (Liquidity Sweep / SFP)",
             "bar_index": i,
-            "head_high": float(row["high"]),
+            "head_high": high_i,
             "left_shoulder": ph,
             "right_shoulder": ph,
             "neckline": ph,
             "vegas_mid": mid,
             "vol_ratio": vr,
-            "defense": float(row["high"]),
+            "defense": guard,
             "support_ref": mid,
             "oi_anomaly": oi_on,
+            "risk_pct": round((guard - entry) / entry * 100, 4) if entry > 0 else None,
         })
         used.add(i)
     return out
