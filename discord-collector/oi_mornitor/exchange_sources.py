@@ -522,6 +522,74 @@ async def fetch_bybit_klines_range(
     return sorted(by_open.values(), key=lambda r: int(r[0]))
 
 
+async def fetch_binance_klines_range(
+    session: aiohttp.ClientSession,
+    *,
+    base_url: str,
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+    limit: int = 1500,
+    page_sleep: float = 0.15,
+    as_of_ms: int | None = None,
+) -> list[list[Any]]:
+    """币安 U 本位合约 K 线分页（与 live 核实同源）。"""
+    if end_ms <= start_ms:
+        return []
+    interval_ms = _INTERVAL_MS.get(interval, 300_000)
+    cap = min(max(int(limit), 1), 1500)
+    start_ms = int(start_ms)
+    end_ms = int(end_ms)
+    as_of = int(as_of_ms if as_of_ms is not None else __import__("time").time() * 1000)
+    sym = normalize_usdt_symbol(symbol)
+    by_open: dict[int, list[Any]] = {}
+    cursor = start_ms
+
+    while cursor < end_ms:
+        batch: list[list[Any]] = []
+        for cand in symbol_lookup_candidates(sym, "binance"):
+            url = (
+                f"{base_url.rstrip('/')}/fapi/v1/klines"
+                f"?symbol={cand}&interval={interval}&limit={cap}"
+                f"&startTime={cursor}&endTime={end_ms}"
+            )
+            status, data = await http_backoff.get_json(
+                session,
+                url,
+                timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SEC),
+                max_attempts=2,
+                label=f"Binance-klines-range:{cand}",
+            )
+            if status in (429, 418) or status != 200 or not isinstance(data, list):
+                continue
+            parsed = [row for row in data if isinstance(row, list) and len(row) >= 7]
+            if parsed:
+                batch = parsed
+                break
+        if not batch:
+            break
+        last_open: int | None = None
+        for row in batch:
+            try:
+                open_ms = int(row[0])
+            except (TypeError, ValueError):
+                continue
+            if open_ms + interval_ms > as_of:
+                continue
+            by_open[open_ms] = row
+            last_open = open_ms if last_open is None else max(last_open, open_ms)
+        if last_open is None:
+            break
+        next_cursor = last_open + interval_ms
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        await asyncio.sleep(max(0.05, float(page_sleep)))
+
+    return sorted(by_open.values(), key=lambda r: int(r[0]))
+
+
 async def _fetch_okx_klines(
     session: aiohttp.ClientSession,
     *,

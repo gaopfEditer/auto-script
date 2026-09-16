@@ -415,6 +415,25 @@ async def handle_backtest_structure_get(request: web.Request) -> web.Response:
     )
 
 
+async def handle_backtest_structure_latest(_request: web.Request) -> web.Response:
+    """最近一次形态回测任务（刷新后恢复用）。"""
+    from oi_mornitor.structure_backtest import get_latest_backtest_job, job_to_dict
+
+    job = get_latest_backtest_job()
+    if job is None:
+        return _json_response({"ok": True, "job": None})
+    return _json_response({"ok": True, "job": job_to_dict(job, page=1, page_size=100)})
+
+
+async def handle_backtest_structure_jobs(request: web.Request) -> web.Response:
+    """回测历史列表（开始时间 + 回测区间）。"""
+    from oi_mornitor.structure_backtest import list_backtest_jobs
+
+    q = request.query
+    limit = int(q.get("limit") or "40") if str(q.get("limit") or "40").isdigit() else 40
+    return _json_response({"ok": True, "jobs": list_backtest_jobs(limit)})
+
+
 async def handle_backtest_kline_prefetch_start(request: web.Request) -> web.Response:
     """分段拉取 K 线到本地 Parquet。"""
     from oi_mornitor.backtest_prefetch import prefetch_job_to_dict, start_kline_prefetch
@@ -1149,6 +1168,8 @@ def create_app() -> web.Application:
     app.router.add_put("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
 
     app.router.add_get("/api/backtest/structure/options", handle_backtest_structure_options)
+    app.router.add_get("/api/backtest/structure/latest", handle_backtest_structure_latest)
+    app.router.add_get("/api/backtest/structure/jobs", handle_backtest_structure_jobs)
     app.router.add_post("/api/backtest/structure", handle_backtest_structure_start)
     app.router.add_get("/api/backtest/structure/{job_id}", handle_backtest_structure_get)
     app.router.add_post("/api/backtest/kline/prefetch", handle_backtest_kline_prefetch_start)

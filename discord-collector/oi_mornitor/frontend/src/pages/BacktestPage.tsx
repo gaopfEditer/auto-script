@@ -27,6 +27,23 @@ type BacktestSummary = {
 
 type ByIntervalRow = BacktestSummary & { interval: string; count: number };
 
+type ByTypeRow = BacktestSummary & { typeLabel?: string; label?: string; count: number };
+
+type BacktestListRow = {
+  id: string;
+  status: string;
+  error?: string | null;
+  startedAt?: number;
+  finishedAt?: number;
+  startMs?: number;
+  endMs?: number;
+  intervals?: string[];
+  partial?: boolean;
+  total?: number;
+  winRate?: number | null;
+  totalPnlPct?: number | null;
+};
+
 type BacktestItem = {
   symbol: string;
   interval: string;
@@ -56,8 +73,18 @@ type BacktestJob = {
   };
   summary?: BacktestSummary | null;
   filteredSummary?: BacktestSummary | null;
+  intervalSummary?: BacktestSummary | null;
   byInterval?: ByIntervalRow[];
-  params?: { universe?: { count?: number; note?: string }; coverage?: CoverageInfo };
+  byType?: ByTypeRow[];
+  params?: {
+    startMs?: number;
+    endMs?: number;
+    universe?: { count?: number; note?: string };
+    coverage?: CoverageInfo;
+    partial?: boolean;
+  };
+  startedAt?: number;
+  finishedAt?: number;
   storageStats?: { mb?: number };
   items?: BacktestItem[];
   total?: number;
@@ -113,6 +140,8 @@ type SavedPrefetchPrefs = {
   selectedIntervals?: string[];
   jobId?: string;
   btJobId?: string;
+  btSnapshot?: BacktestJob | null;
+  btJobList?: BacktestListRow[];
   coverage?: CoverageInfo;
   coverageSegments?: PrefetchSegment[];
   prefetchSnapshot?: PrefetchJob | null;
@@ -148,6 +177,51 @@ function savePrefs(patch: SavedPrefetchPrefs) {
   } catch {
     /* ignore */
   }
+}
+
+function jobToListRow(j: BacktestJob): BacktestListRow {
+  return {
+    id: j.id,
+    status: j.status,
+    error: j.error,
+    startedAt: j.startedAt,
+    finishedAt: j.finishedAt,
+    startMs: j.params?.startMs,
+    endMs: j.params?.endMs,
+    partial: j.params?.partial,
+    total: j.totalAll ?? j.summary?.total ?? 0,
+    winRate: j.summary?.winRate ?? null,
+    totalPnlPct: j.summary?.totalPnlPct ?? null,
+  };
+}
+
+function upsertJobList(rows: BacktestListRow[], extra?: BacktestListRow | null): BacktestListRow[] {
+  const byId = new Map<string, BacktestListRow>();
+  for (const r of rows) {
+    if (r?.id) byId.set(r.id, r);
+  }
+  if (extra?.id) byId.set(extra.id, extra);
+  return [...byId.values()]
+    .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
+    .slice(0, 40);
+}
+
+function persistBtLocal(job: BacktestJob, prevList?: BacktestListRow[]): BacktestListRow[] {
+  const merged = upsertJobList(prevList ?? loadSavedPrefs().btJobList ?? [], jobToListRow(job));
+  const base = { ...loadSavedPrefs(), btJobId: job.id, btSnapshot: job, btJobList: merged };
+  try {
+    localStorage.setItem(BT_PREFETCH_LS, JSON.stringify(base));
+  } catch {
+    try {
+      localStorage.setItem(
+        BT_PREFETCH_LS,
+        JSON.stringify({ ...base, btSnapshot: { ...job, items: (job.items || []).slice(0, 40) } }),
+      );
+    } catch {
+      /* quota */
+    }
+  }
+  return merged;
 }
 
 function segBarPercent(seg: PrefetchSegment): number {
@@ -217,6 +291,64 @@ function fmtPct(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "—";
   const sign = v > 0 ? "+" : "";
   return `${sign}${v.toFixed(1)}%`;
+}
+
+function fmtPnlSum(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "合计 —";
+  return `合计 ${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
+
+function fmtExpect(total: number | null | undefined, count: number): string {
+  if (total == null || !Number.isFinite(total) || count <= 0) return "期望 —";
+  const ev = total / count;
+  return `期望 ${ev > 0 ? "+" : ""}${ev.toFixed(2)}%`;
+}
+
+type BtStatRow = { count?: number; winRate?: number | null; totalPnlPct?: number | null } | null;
+
+/** 类型/周期下拉：次数 · 盈率总和 · 均笔期望 */
+function formatBtTypeOption(label: string, row?: BtStatRow): string {
+  const n = row?.count ?? 0;
+  return `${label} · ${n}次 · ${fmtPnlSum(row?.totalPnlPct)} · ${fmtExpect(row?.totalPnlPct, n)}`;
+}
+
+function formatBtIntervalOption(iv: string, row?: BtStatRow): string {
+  if (!row) return iv;
+  const n = row.count ?? 0;
+  return `${iv} · ${n}次 · ${fmtPnlSum(row.totalPnlPct)} · ${fmtExpect(row.totalPnlPct, n)}`;
+}
+
+function fmtJobStarted(startedAt?: number | null): string {
+  if (startedAt == null || !Number.isFinite(startedAt) || startedAt <= 0) return "—";
+  const ms = startedAt < 1e12 ? startedAt * 1000 : startedAt;
+  return new Date(ms).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function fmtJobRange(startMs?: number | null, endMs?: number | null): string {
+  if (!startMs || !endMs) return "—";
+  const fmt = (ms: number) =>
+    new Date(ms).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  return `${fmt(startMs)} ~ ${fmt(endMs)}`;
+}
+
+function jobStatusLabel(row: { status?: string; partial?: boolean }): string {
+  if (row.status === "running") return "扫描中";
+  if (row.status === "pending") return "排队中";
+  if (row.status === "failed") return "失败";
+  if (row.status === "done" && row.partial) return "部分完成";
+  if (row.status === "done") return "已完成";
+  return row.status || "";
 }
 
 function fmtDateRange(startMs?: number, endMs?: number): string {
@@ -364,7 +496,11 @@ export function BacktestPage() {
   const autoResumePrefetchRef = useRef(false);
   const lastBarsStoredRef = useRef<{ ts: number; bars: number } | null>(null);
 
-  const [job, setJob] = useState<BacktestJob | null>(null);
+  const [job, setJob] = useState<BacktestJob | null>(() => initSaved.btSnapshot ?? null);
+  const [jobList, setJobList] = useState<BacktestListRow[]>(() => {
+    const list = initSaved.btJobList ?? [];
+    return initSaved.btSnapshot?.id ? upsertJobList(list, jobToListRow(initSaved.btSnapshot)) : list;
+  });
   const [page, setPage] = useState(1);
   const [typeFilter, setTypeFilter] = useState("all");
   const [intervalFilter, setIntervalFilter] = useState("all");
@@ -493,6 +629,69 @@ export function BacktestPage() {
     }
   }, [fetchStartLocal, fetchEndLocal, btStartLocal, btEndLocal, symbolScope, maxSymbols, maxDays, chunkDays]);
 
+  const loadJobList = useCallback(async () => {
+    const local = loadSavedPrefs();
+    let serverRows: BacktestListRow[] = [];
+    try {
+      const r = await fetch("/api/backtest/structure/jobs?limit=40");
+      const body = await r.json();
+      if (body?.ok && Array.isArray(body.jobs)) serverRows = body.jobs as BacktestListRow[];
+    } catch {
+      /* 服务重启时用本地列表 */
+    }
+    let merged = upsertJobList(local.btJobList ?? [], local.btSnapshot ? jobToListRow(local.btSnapshot) : null);
+    for (const row of serverRows) merged = upsertJobList(merged, row);
+    setJobList(merged);
+    savePrefs({ btJobList: merged });
+    return merged;
+  }, []);
+
+  const restoreBacktestJob = useCallback(async () => {
+    const saved = loadSavedPrefs();
+    const tryBt = async (jobId: string) => {
+      const qs = new URLSearchParams({
+        page: "1",
+        pageSize: "100",
+        type: "all",
+        interval: "all",
+      });
+      const r = await fetch(`/api/backtest/structure/${encodeURIComponent(jobId)}?${qs}`);
+      const body = await r.json();
+      if (!body?.ok) return null;
+      return body as BacktestJob;
+    };
+    const rows = await loadJobList();
+    const ids = [saved.btJobId, saved.btSnapshot?.id, rows[0]?.id].filter(
+      (id, i, arr) => Boolean(id) && arr.indexOf(id) === i,
+    ) as string[];
+    for (const id of ids) {
+      const live = await tryBt(id).catch(() => null);
+      if (live) {
+        setJob(live);
+        setJobList(persistBtLocal(live, rows));
+        return;
+      }
+    }
+    if (saved.btSnapshot?.id) {
+      setJob(saved.btSnapshot);
+      setJobList(upsertJobList(rows, jobToListRow(saved.btSnapshot)));
+      return;
+    }
+    try {
+      const latestRes = await fetch("/api/backtest/structure/latest");
+      const latestBody = await latestRes.json();
+      const latestId = String(latestBody?.job?.id || "").trim();
+      if (!latestBody?.ok || !latestId) return;
+      const live = await tryBt(latestId);
+      if (live) {
+        setJob(live);
+        setJobList(persistBtLocal(live, rows));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [loadJobList]);
+
   const restorePrefetchState = useCallback(async () => {
     if (!fetchStartLocal || !fetchEndLocal) return;
     void checkCoverage({ silent: true }).catch(() => undefined);
@@ -545,7 +744,8 @@ export function BacktestPage() {
     if (restoreOnceRef.current || !fetchStartLocal || !fetchEndLocal) return;
     restoreOnceRef.current = true;
     void restorePrefetchState().catch(() => undefined);
-  }, [fetchStartLocal, fetchEndLocal, restorePrefetchState]);
+    void restoreBacktestJob().catch(() => undefined);
+  }, [fetchStartLocal, fetchEndLocal, restorePrefetchState, restoreBacktestJob]);
 
   const pollPrefetch = useCallback(async (jobId: string) => {
     const r = await fetch(`/api/backtest/kline/prefetch/${encodeURIComponent(jobId)}`);
@@ -569,11 +769,30 @@ export function BacktestPage() {
       const r = await fetch(`/api/backtest/structure/${encodeURIComponent(jobId)}?${qs}`);
       const body = await r.json();
       if (!body?.ok) throw new Error(body?.error || "查询失败");
-      setJob(body as BacktestJob);
-      return body as BacktestJob;
+      const next = body as BacktestJob;
+      setJob(next);
+      setJobList(persistBtLocal(next));
+      return next;
     },
     [],
   );
+
+  const openHistoryJob = async (jobId: string) => {
+    if (!jobId) return;
+    setPage(1);
+    setTypeFilter("all");
+    setIntervalFilter("all");
+    try {
+      await pollJob(jobId, 1, "all", "all");
+    } catch (e) {
+      const saved = loadSavedPrefs().btSnapshot;
+      if (saved?.id === jobId) {
+        setJob(saved);
+        return;
+      }
+      setBootErr(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   useEffect(() => {
     if (
@@ -612,9 +831,14 @@ export function BacktestPage() {
   }, [job?.id, job?.status, page, typeFilter, intervalFilter, pollJob]);
 
   useEffect(() => {
-    if (!job?.id || job.status !== "done") return;
+    if (!job?.id) return;
+    if (job.status !== "done" && job.status !== "running" && job.status !== "failed") return;
     void pollJob(job.id, page, typeFilter, intervalFilter).catch(() => undefined);
   }, [job?.id, job?.status, page, typeFilter, intervalFilter, pollJob]);
+
+  useEffect(() => {
+    void loadJobList().catch(() => undefined);
+  }, [job?.id, job?.status, loadJobList]);
 
   const onFetch = async () => {
     setFetchLoading(true);
@@ -695,10 +919,12 @@ export function BacktestPage() {
       if (!body?.ok) throw new Error(body?.error || "回测启动失败");
       const btJob = body as BacktestJob;
       setJob(btJob);
+      setJobList(persistBtLocal(btJob));
       savePrefs({ btStartLocal, btEndLocal, btJobId: btJob.id });
       setPage(1);
       setTypeFilter("all");
       setIntervalFilter("all");
+      void loadJobList().catch(() => undefined);
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
       setBootErr(
@@ -748,10 +974,32 @@ export function BacktestPage() {
   }, [job?.progress]);
 
   const typeOptions = useMemo(() => {
+    const rows = job?.byType ?? [];
+    if (rows.length) {
+      return rows.map((row) => ({
+        label: String(row.typeLabel || row.label || ""),
+        count: row.count,
+        winRate: row.winRate,
+        totalPnlPct: row.totalPnlPct,
+      })).filter((r) => r.label);
+    }
     const labels = new Set<string>();
     for (const k of kindOptions) labels.add(k.label);
-    return [...labels].sort();
-  }, [kindOptions]);
+    return [...labels].sort().map((label) => ({
+      label,
+      count: 0,
+      winRate: null as number | null,
+      totalPnlPct: null as number | null,
+    }));
+  }, [job?.byType, kindOptions]);
+
+  useEffect(() => {
+    if (typeFilter === "all") return;
+    if (!typeOptions.some((t) => t.label === typeFilter)) {
+      setTypeFilter("all");
+      setPage(1);
+    }
+  }, [typeFilter, typeOptions]);
 
   const toggleKind = (id: string) => {
     setSelectedKinds((prev) => {
@@ -831,7 +1079,7 @@ export function BacktestPage() {
         <aside className="bt-sidebar">
           <h1 className="bt-title">结构形态回测</h1>
           <p className="bt-desc">
-            先分段拉 K 线入库，再选回测区间扫描。三周期分开看胜率。
+            先分段拉 K 线入库，再选回测区间扫描。三周期分开看合计盈亏与均笔期望。
           </p>
 
           <section className="bt-section">
@@ -1076,18 +1324,41 @@ export function BacktestPage() {
 
           <section className="bt-panel bt-panel-grow">
             <h2 className="bt-panel-title">回测结果</h2>
-            {!job ? (
-              <p className="bt-empty-inline">拉取完成后选择回测时间，点击「开始回测」。</p>
+            {jobList.length > 0 ? (
+              <ul className="bt-job-list">
+                {jobList.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      className={`bt-job-row ${job?.id === row.id ? "active" : ""} ${row.status}`}
+                      onClick={() => void openHistoryJob(row.id)}
+                    >
+                      <span className="bt-job-started">{fmtJobStarted(row.startedAt)}</span>
+                      <span className="bt-job-range">{fmtJobRange(row.startMs, row.endMs)}</span>
+                      <span className={`bt-status ${row.status}`}>{jobStatusLabel(row)}</span>
+                      <span className="bt-job-meta">
+                        {row.total ? `${row.total} 信号` : "—"}
+                        {row.totalPnlPct != null ? ` · ${fmtPct(row.totalPnlPct)}` : ""}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {!job && jobList.length === 0 ? (
+              <p className="bt-empty-inline">拉取完成后选择回测时间，点击「开始回测」。完成后会出现在上方列表。</p>
+            ) : !job ? (
+              <p className="bt-empty-inline">点选上方一次回测，查看明细。</p>
             ) : (
               <>
                 <div className="bt-status-bar">
                   <span className={`bt-status ${job.status}`}>
                     {job.status === "running" && "扫描中"}
-                    {job.status === "done" && "已完成"}
+                    {job.status === "done" && (job.params?.partial ? "部分完成" : "已完成")}
                     {job.status === "failed" && "失败"}
                     {job.status === "pending" && "排队中"}
                   </span>
-                  {job.status === "running" ? (
+                  {job.status === "running" || job.status === "pending" ? (
                     <>
                       <div className="bt-progress">
                         <div className="bt-progress-fill" style={{ width: `${scanPct}%` }} />
@@ -1098,19 +1369,75 @@ export function BacktestPage() {
                       </span>
                     </>
                   ) : null}
+                  {job.summary ? (
+                    <span className="bt-live-wr">
+                      {job.status === "running" ? "实时合计 " : "合计 "}
+                      {fmtPct(job.summary.totalPnlPct)}
+                      {job.summary.total > 0 && job.summary.totalPnlPct != null
+                        ? ` · 期望 ${fmtPct(job.summary.totalPnlPct / job.summary.total)}`
+                        : ""}
+                      {job.totalAll != null ? ` · ${job.totalAll} 次` : ""}
+                    </span>
+                  ) : job.status === "running" ? (
+                    <span className="bt-muted">实时合计 —（尚无已结算信号）</span>
+                  ) : null}
                   {job.error ? <span className="bt-error">{job.error}</span> : null}
                 </div>
+                {job.params?.startMs && job.params?.endMs ? (
+                  <p className="bt-rules">
+                    开始 {fmtJobStarted(job.startedAt)} · 区间 {fmtJobRange(job.params.startMs, job.params.endMs)}
+                  </p>
+                ) : null}
+                {job.params?.partial ? (
+                  <p className="bt-rules">扫描中断，以下为已扫部分。可重新点「开始回测」补全。</p>
+                ) : null}
+
+                {job.summary ? (
+                  <div className="bt-summary-grid">
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">{job.summary.total}</span>
+                      <span className="bt-stat-lab">{job.status === "running" ? "已扫信号" : "信号"}</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {job.summary.winRate == null ? "—" : `${(job.summary.winRate * 100).toFixed(1)}%`}
+                      </span>
+                      <span className="bt-stat-lab">{job.status === "running" ? "实时胜率" : "胜率"}</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className={`bt-stat-val ${(job.summary.totalPnlPct ?? 0) >= 0 ? "up" : "down"}`}>
+                        {fmtPct(job.summary.totalPnlPct)}
+                      </span>
+                      <span className="bt-stat-lab">合计盈亏</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {job.summary.wins}/{job.summary.losses}
+                      </span>
+                      <span className="bt-stat-lab">胜 / 负</span>
+                    </div>
+                  </div>
+                ) : null}
 
                 {job.byInterval && job.byInterval.length > 0 ? (
                   <div className="bt-by-interval">
                     <div className="bt-interval-grid">
                       {job.byInterval.map((row) => (
-                        <div key={row.interval} className="bt-interval-card">
+                        <button
+                          key={row.interval}
+                          type="button"
+                          className={`bt-interval-card ${intervalFilter === row.interval ? "active" : ""}`}
+                          onClick={() => {
+                            setIntervalFilter((prev) => (prev === row.interval ? "all" : row.interval));
+                            setTypeFilter("all");
+                            setPage(1);
+                          }}
+                        >
                           <div className="bt-interval-head">{row.interval}</div>
                           <div className="bt-interval-stats">
                             <div>
                               <span className="bt-stat-val">{row.count}</span>
-                              <span className="bt-stat-lab">信号</span>
+                              <span className="bt-stat-lab">触发</span>
                             </div>
                             <div>
                               <span className="bt-stat-val">
@@ -1125,15 +1452,51 @@ export function BacktestPage() {
                               <span className="bt-stat-lab">合计</span>
                             </div>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
                 ) : null}
 
-                {job.status === "done" ? (
+                {job.status === "done" || job.status === "failed" || (job.totalAll ?? 0) > 0 ? (
                   <>
                     <div className="pattern-wr-filters bt-wr-filters">
+                      <label className="pattern-wr-type-filter">
+                        <span>周期</span>
+                        <select
+                          value={intervalFilter}
+                          onChange={(e) => {
+                            setIntervalFilter(e.target.value);
+                            setTypeFilter("all");
+                            setPage(1);
+                          }}
+                          aria-label="按周期筛选类型统计"
+                        >
+                          <option value="all">
+                            {formatBtIntervalOption(
+                              "全部周期",
+                              job.summary
+                                ? {
+                                    count: job.summary.total,
+                                    winRate: job.summary.winRate,
+                                    totalPnlPct: job.summary.totalPnlPct,
+                                  }
+                                : null,
+                            )}
+                          </option>
+                          {(job.byInterval?.length
+                            ? job.byInterval.map((row) => row.interval)
+                            : intervals
+                          ).map((iv) => {
+                            const row = job.byInterval?.find((r) => r.interval === iv);
+                            return (
+                              <option key={iv} value={iv}>
+                                {formatBtIntervalOption(iv, row)}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </label>
                       <label className="pattern-wr-type-filter">
                         <span>类型</span>
                         <select
@@ -1142,28 +1505,18 @@ export function BacktestPage() {
                             setTypeFilter(e.target.value);
                             setPage(1);
                           }}
+                          aria-label="按类型筛选（当前周期）"
                         >
-                          <option value="all">全部类型</option>
+                          <option value="all">
+                            {formatBtTypeOption("全部类型", {
+                              count: job.intervalSummary?.total ?? 0,
+                              winRate: job.intervalSummary?.winRate ?? null,
+                              totalPnlPct: job.intervalSummary?.totalPnlPct ?? null,
+                            })}
+                          </option>
                           {typeOptions.map((t) => (
-                            <option key={t} value={t}>
-                              {t}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="pattern-wr-type-filter">
-                        <span>周期</span>
-                        <select
-                          value={intervalFilter}
-                          onChange={(e) => {
-                            setIntervalFilter(e.target.value);
-                            setPage(1);
-                          }}
-                        >
-                          <option value="all">全部周期</option>
-                          {intervals.map((iv) => (
-                            <option key={iv} value={iv}>
-                              {iv}
+                            <option key={t.label} value={t.label}>
+                              {formatBtTypeOption(t.label, t)}
                             </option>
                           ))}
                         </select>
@@ -1171,8 +1524,11 @@ export function BacktestPage() {
                       {listSummary ? (
                         <span className="bt-filter-summary">
                           筛选 {listSummary.total} 条
+                          {listSummary.totalPnlPct != null ? ` · 合计 ${fmtPct(listSummary.totalPnlPct)}` : ""}
+                          {listSummary.total > 0 && listSummary.totalPnlPct != null
+                            ? ` · 期望 ${fmtPct(listSummary.totalPnlPct / listSummary.total)}`
+                            : ""}
                           {listSummary.winRate != null ? ` · 胜率 ${(listSummary.winRate * 100).toFixed(1)}%` : ""}
-                          {listSummary.totalPnlPct != null ? ` · ${fmtPct(listSummary.totalPnlPct)}` : ""}
                           {job.totalAll != null && job.total !== job.totalAll
                             ? `（共 ${job.totalAll}）`
                             : ""}
@@ -1182,7 +1538,9 @@ export function BacktestPage() {
 
                     <div className="pattern-wr-table-wrap">
                       {(job.items || []).length === 0 ? (
-                        <p className="pattern-wr-empty">该筛选下暂无信号</p>
+                        <p className="pattern-wr-empty">
+                          {job.status === "running" ? "扫描中，该筛选下暂无已结算信号" : "该筛选下暂无信号"}
+                        </p>
                       ) : (
                         <table className="pattern-wr-table">
                           <thead>

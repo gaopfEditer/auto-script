@@ -26,6 +26,7 @@ from trade_signal_detect import (
     log_signal_skip,
     looks_like_trade_message,
     parse_trade_text,
+    resolve_sender_name,
     signal_skip_reason,
 )
 from ui_feed_pusher import parse_main_sender_patterns, sender_matches_main
@@ -296,8 +297,12 @@ class TradeCardPusher:
             if merged is None:
                 print(f"    · [card_pusher] merged is None, skip", flush=True)
                 return
-            if not merged.sender:
-                merged.sender = sender or profile.get("name") or title
+            merged.sender = resolve_sender_name(
+                merged.sender,
+                sender,
+                str(profile.get("name") or ""),
+                str(title or ""),
+            )
             skip = signal_skip_reason(merged, body, sender=sender)
             if skip and not is_push_bypass_message(body):
                 log_signal_skip(

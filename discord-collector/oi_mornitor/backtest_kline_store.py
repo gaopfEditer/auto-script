@@ -11,7 +11,7 @@ import aiohttp
 import pandas as pd
 
 from oi_mornitor.config import PATTERN_STATE_DB
-from oi_mornitor.exchange_sources import _INTERVAL_MS, fetch_bybit_klines_range
+from oi_mornitor.exchange_sources import _INTERVAL_MS, fetch_binance_klines_range, fetch_bybit_klines_range
 from oi_mornitor.symbol_aliases import normalize_usdt_symbol
 
 logger = logging.getLogger(__name__)
@@ -255,25 +255,40 @@ class BacktestKlineStore:
         end_ms: int,
         *,
         as_of_ms: int | None = None,
+        source: str = "bybit",
+        binance_base_url: str | None = None,
     ) -> int:
-        """本地 Parquet 已有足够数据则跳过；否则 Bybit 分页补全。"""
+        """本地 Parquet 已有足够数据则跳过；否则分页补全。"""
         sym = normalize_usdt_symbol(symbol)
         if self.has_sufficient_coverage(sym, interval, start_ms, end_ms):
             return self.count_in_range(sym, interval, start_ms, end_ms)
 
-        fetched = await fetch_bybit_klines_range(
-            session,
-            symbol=sym,
-            interval=interval,
-            start_ms=int(start_ms),
-            end_ms=int(end_ms),
-            page_sleep=_BYBIT_PAGE_SLEEP,
-            as_of_ms=as_of_ms,
-        )
+        fetched: list[list[Any]] = []
+        if source == "binance" and binance_base_url:
+            fetched = await fetch_binance_klines_range(
+                session,
+                base_url=binance_base_url,
+                symbol=sym,
+                interval=interval,
+                start_ms=int(start_ms),
+                end_ms=int(end_ms),
+                as_of_ms=as_of_ms,
+            )
+        else:
+            fetched = await fetch_bybit_klines_range(
+                session,
+                symbol=sym,
+                interval=interval,
+                start_ms=int(start_ms),
+                end_ms=int(end_ms),
+                page_sleep=_BYBIT_PAGE_SLEEP,
+                as_of_ms=as_of_ms,
+            )
         if fetched:
             self.upsert_rows(sym, interval, fetched)
             logger.info(
-                "回测 K 线入库 Bybit %s %s +%d → parquet",
+                "回测 K 线入库 %s %s %s +%d → parquet",
+                source,
                 sym,
                 interval,
                 len(fetched),

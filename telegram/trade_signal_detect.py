@@ -12,7 +12,8 @@ from dataclasses import dataclass, field, replace
 
 # —— 繁→简字符表（按需小集合；覆盖常见交易关键字与方向/币名） ——
 _T2S = str.maketrans({
-    "場": "场", "進": "进", "佈": "布", "價": "价", "幣": "币", "點": "点",
+    "場": "场", "進": "进", "佈": "布", "價": "价", "幣": "币", "點": "点", "屬": "属",
+    "獲": "获",
     "倉": "仓", "槓": "杠", "桿": "杆", "損": "损", "盈": "盈",
     "數": "数", "據": "据", "訊": "讯", "單": "单", "車": "车",
     "發": "发", "車": "车", "頭": "头", "倉": "仓", "頂": "顶",
@@ -94,9 +95,15 @@ _ENTRY_POINT = re.compile(
     r"(?:📌\s*)?(?:进[场場][点點]|入[场場][点點])\s*[:：]?\s*([^\n]{1,40})",
     re.I,
 )
-# 专门处理「「进场」 ENTRY: 市价」这种格式（括号里嵌的关键字会被主正则误捕获）
+# 「进场」 ENTRY / 📍 进场 ENTRY（括号可选；T2S 后统一为简体「进场」）
 _ENTRY_WITH_LABEL = re.compile(
-    r"「[^」]*进场[^」]*」\s*ENTRY\s*[:：]?\s*(市[价價]|现价|[0-9]+(?:\.[0-9]+)?)",
+    r"(?:📍\s*)?(?:「[^」]*进[场場][^」]*」\s*)?"
+    r"(?:进[场場]|入[场場])?\s*"
+    r"ENTRY\s*[:：]?\s*(市[价價]|现价|[0-9]+(?:\.[0-9]+)?)",
+    re.I,
+)
+_STRATEGY_ATTR = re.compile(
+    r"策略属性\s*[:：]\s*(市[价價]|限[价價]|现价)",
     re.I,
 )
 _TP = re.compile(
@@ -326,6 +333,15 @@ def _normalize_sender_name(sender: str) -> str:
     return s
 
 
+def resolve_sender_name(*candidates: str) -> str:
+    """按顺序取第一个有效发言人（过滤 None/null 等占位）。"""
+    for raw in candidates:
+        name = _normalize_sender_name(raw)
+        if name:
+            return name
+    return ""
+
+
 def is_spam_or_recap_message(text: str) -> bool:
     """营销话术、历史战绩回顾等非开仓消息。"""
     t = _t2s(text or "")
@@ -354,7 +370,7 @@ def signal_skip_reason(
     src = text or sig.source_text or ""
     if is_spam_or_recap_message(src):
         return "营销/战绩回顾"
-    who = _normalize_sender_name(sig.sender or sender)
+    who = resolve_sender_name(sender, sig.sender)
     if not who:
         return f"发送者无效({(sender or sig.sender)!r})"
     sym = (sig.symbol or "").upper()
@@ -432,7 +448,7 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
     sig = TradeSignal(
         symbol=_pick_symbol(body),
         direction=_pick_direction(body),
-        sender=(sender or "").strip(),
+        sender=resolve_sender_name(sender),
         is_departure=bool(
             _FARE.search(body)
             or _MARKET_DIR_LONG.search(body)
@@ -462,6 +478,8 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
             sig.entry = _clean_field(mp.group(1))
         elif re.search(r"市[价價]\s*[多空]|市[价價][多空]", body):
             sig.entry = "市价"
+        elif (sa := _STRATEGY_ATTR.search(body)):
+            sig.entry = _clean_field(sa.group(1))
         elif re.search(r"入场\s*[:：]?\s*现价|现价\s*入场|市价\s*开", body):
             sig.entry = "现价"
 
@@ -522,6 +540,8 @@ def looks_like_trade_message(text: str) -> bool:
     if _ENTRY.search(t) or _ENTRY_POINT.search(t) or _FARE.search(t):
         return True
     if _SYM_LABEL.search(t) or _DIR_LINE.search(t):
+        return True
+    if _STRATEGY_ATTR.search(t) or _ENTRY_WITH_LABEL.search(t) or _ENTRY_EN.search(t):
         return True
     if _TP_LEVELS.search(t):
         return True

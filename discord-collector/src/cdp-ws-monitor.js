@@ -238,7 +238,7 @@ function scoreDiscordPageForChannelNav(url, g, c) {
   }
   const host = u.hostname.toLowerCase();
   if (!host.includes("discord.com") && !host.includes("discordapp.com")) return -1;
-  let score = 0;
+  let score = 1;
   const chMatch = (u.pathname || "").match(/\/channels\/([^/]+)\/([^/]+)/);
   if (chMatch) {
     const [, a, b] = chMatch;
@@ -250,6 +250,49 @@ function scoreDiscordPageForChannelNav(url, g, c) {
     score = 1;
   }
   return score;
+}
+
+/**
+ * 在已连接的 Chrome 里找 Discord 标签，绝不新建。
+ * @param {import('playwright').Browser} br
+ * @param {string} targetUrl
+ * @returns {{ page: import('playwright').Page, ctx: import('playwright').BrowserContext, url: string, score: number } | null}
+ */
+function pickExistingDiscordPage(br, targetUrl) {
+  const parsed = parseDiscordChannelUrl(targetUrl);
+  /** @type {{ page: import('playwright').Page, ctx: import('playwright').BrowserContext, url: string, score: number } | null} */
+  let best = null;
+  let bestScore = -1;
+  for (const ctx of br.contexts()) {
+    for (const page of ctx.pages()) {
+      if (page.isClosed()) continue;
+      let u = "";
+      try {
+        u = page.url();
+      } catch {
+        continue;
+      }
+      let score = -1;
+      if (parsed) {
+        if (isAlreadyOnDiscordChannel(u, targetUrl)) score = 1000;
+        else score = scoreDiscordPageForChannelNav(u, parsed.guildId, parsed.channelId);
+      } else if (/discord\.com|discordapp\.com/i.test(u)) {
+        score = 10;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = { page, ctx, url: u, score };
+      }
+    }
+  }
+  return bestScore >= 0 ? best : null;
+}
+
+/** @param {import('playwright').Browser} br */
+function countBrowserPages(br) {
+  let n = 0;
+  for (const ctx of br.contexts()) n += ctx.pages().length;
+  return n;
 }
 
 /** Document / API / WS 升级请求，便于判断页面是否真的在拉接口 */
@@ -962,7 +1005,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *
  * - **无头模式**（未设置 `cdpConnectUrl`）：Playwright 自启 Chromium，`goto(startUrl)`，可选定时 reload。
  * - **附加模式**（设置 `CDP_CONNECT_URL`）：`connectOverCDP` 连接你已打开的 Chrome（需带 `--remote-debugging-port`），
- *   对所有已有标签页 + 之后新开的标签页挂载 Network 监听；你在该浏览器里**刷新页面**产生的 WS 帧会被收到。
+ *   对已有标签页 + 之后新开的标签页挂载 Network 监听；保活/切频道只复用已有 discord.com 标签，绝不 newPage。
  *
  * @param {{
  *   startUrl: string,
@@ -989,6 +1032,8 @@ export async function startCdpWebSocketMonitor(opts, log) {
   const attached = new WeakSet();
   /** 会话是否已主动 close（阻止自动重连） */
   let sessionClosed = false;
+  /** 串行化 Discord 标签导航，避免保活/轮询/重连并发抢同一页 */
+  let discordNavLock = Promise.resolve();
 
   /**
    * @param {import('playwright').Page} page
@@ -1045,84 +1090,102 @@ export async function startCdpWebSocketMonitor(opts, log) {
   }
 
   /**
-   * 附加模式下打开/刷新保活频道。
+   * 附加模式下在**已有** Discord 标签上打开/刷新频道。
+   * 找不到现成 discord.com 页时拒绝 newPage / newContext，避免标签堆积把系统打崩。
    * @param {import('playwright').Browser} br
    * @param {string} targetUrl
    * @param {{ forceReload?: boolean }} [navOpts]
    */
   async function openOrRefreshDiscordUrl(br, targetUrl, navOpts = {}) {
-    if (!br?.isConnected?.()) throw new Error("browser disconnected");
-    const url = String(targetUrl || "").trim();
-    if (!url) throw new Error("empty target url");
+    const run = async () => {
+      if (!br?.isConnected?.()) throw new Error("browser disconnected");
+      const url = String(targetUrl || "").trim();
+      if (!url) throw new Error("empty target url");
 
-    /** @type {import('playwright').BrowserContext} */
-    let ctx = br.contexts()[0];
-    if (!ctx) ctx = await br.newContext();
+      const picked = pickExistingDiscordPage(br, url);
+      if (!picked) {
+        const tabCount = countBrowserPages(br);
+        const msg = `未找到已打开的 Discord 标签（当前 Chrome ${tabCount} 个标签），拒绝新建以免堆积崩溃。请在调试 Chrome 中保留至少一个 discord.com 网页。`;
+        log.warn(`CDP ${msg}`);
+        throw new Error(msg);
+      }
 
-    /** @type {import('playwright').Page | null} */
-    let page = null;
-    let bestScore = -1;
-    for (const c of br.contexts()) {
-      for (const p of c.pages()) {
-        let u = "";
+      const page = picked.page;
+      await attachToPage(page);
+
+      const cur = (() => {
         try {
-          u = p.url();
+          return page.url();
         } catch {
-          continue;
+          return "";
         }
-        if (isAlreadyOnDiscordChannel(u, url)) {
-          page = p;
-          ctx = c;
-          bestScore = 1000;
-          break;
+      })();
+      const already = isAlreadyOnDiscordChannel(cur, url);
+      opts.diagnosticSink?.({
+        kind: "cdp_keepalive",
+        phase: navOpts.forceReload ? "reload" : already ? "already_on_channel" : "goto",
+        targetUrl: url,
+        currentUrl: cur,
+        reusedTab: true,
+        tabCount: countBrowserPages(br),
+      });
+
+      const pagesBefore = new Set();
+      for (const c of br.contexts()) {
+        for (const p of c.pages()) pagesBefore.add(p);
+      }
+
+      if (navOpts.forceReload && already) {
+        log.info(`CDP 保活刷新已有标签 ${shortenUrl(url, 160)}`);
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 });
+      } else if (!already || navOpts.forceReload) {
+        log.info(`CDP 在已有标签打开频道 ${shortenUrl(cur, 80)} → ${shortenUrl(url, 160)}`);
+        try {
+          await page.evaluate((next) => {
+            window.location.assign(next);
+          }, url);
+        } catch (e) {
+          const msg = String(/** @type {Error} */ (e).message ?? e);
+          if (/context was destroyed|Target closed|Execution context/i.test(msg)) {
+            log.info(`CDP 已有标签正在跳转（${msg}）`);
+          } else {
+            log.warn(`CDP location.assign 失败，同一标签 reload: ${msg}`);
+            await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 });
+          }
         }
-        const parsed = parseDiscordChannelUrl(url);
-        const sc = parsed
-          ? scoreDiscordPageForChannelNav(u, parsed.guildId, parsed.channelId)
-          : /discord\.com/i.test(u)
-            ? 10
-            : 0;
-        if (sc > bestScore) {
-          bestScore = sc;
-          page = p;
-          ctx = c;
+        await page.waitForLoadState("domcontentloaded", { timeout: 90_000 }).catch(() => {});
+      } else {
+        log.info(`CDP 已在目标频道 ${shortenUrl(cur, 160)}`);
+      }
+
+      for (const c of br.contexts()) {
+        for (const p of c.pages()) {
+          if (pagesBefore.has(p) || p === page || p.isClosed()) continue;
+          let extraUrl = "";
+          try {
+            extraUrl = p.url();
+          } catch {
+            continue;
+          }
+          if (!/discord\.com|discordapp\.com|^about:blank$/i.test(extraUrl)) continue;
+          log.warn(`CDP 导航期间多开标签，已关闭 ${shortenUrl(extraUrl, 120)}`);
+          await p.close().catch(() => {});
         }
       }
-      if (bestScore >= 1000) break;
-    }
+      return page;
+    };
 
-    if (!page) {
-      page = await ctx.newPage();
-      log.info(`CDP 新建标签 → ${shortenUrl(url, 160)}`);
-    }
-
-    await attachToPage(page);
-
-    const cur = (() => {
-      try {
-        return page.url();
-      } catch {
-        return "";
-      }
-    })();
-    const already = isAlreadyOnDiscordChannel(cur, url);
-    opts.diagnosticSink?.({
-      kind: "cdp_keepalive",
-      phase: navOpts.forceReload ? "reload" : already ? "already_on_channel" : "goto",
-      targetUrl: url,
-      currentUrl: cur,
+    const prev = discordNavLock;
+    let release = () => {};
+    discordNavLock = new Promise((resolve) => {
+      release = resolve;
     });
-
-    if (navOpts.forceReload && already) {
-      log.info(`CDP 保活刷新 ${shortenUrl(url, 160)}`);
-      await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 });
-    } else if (!already || navOpts.forceReload) {
-      log.info(`CDP 打开频道 ${shortenUrl(url, 160)}`);
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
-    } else {
-      log.info(`CDP 已在目标频道 ${shortenUrl(cur, 160)}`);
+    await prev.catch(() => {});
+    try {
+      return await run();
+    } finally {
+      release();
     }
-    return page;
   }
 
   /** @type {import('playwright').Browser | undefined} */
@@ -1234,7 +1297,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
       if (reloadMs > 0) {
         if (!isReconnect) {
           log.info(
-            `CDP 保活刷新已启用：每 ${Math.round(reloadMs / 1000)}s 打开/刷新 ${shortenUrl(keepUrl, 120)}`
+            `CDP 保活刷新已启用：每 ${Math.round(reloadMs / 1000)}s 在已有 Discord 标签上刷新 ${shortenUrl(keepUrl, 120)}（不会新开标签）`
           );
         }
         reloadTimer = setInterval(() => {
@@ -1425,7 +1488,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
       return mounted;
     },
     /**
-     * 在已挂载 CDP 的 Discord 页签里执行 `goto` 打开目标频道。
+     * 在已有 Discord 页签上打开目标频道（不新建标签）。
      * 使用 `https://discord.com/channels/{guildId}/{channelId}`。
      * @param {string} guildId
      * @param {string} channelId
@@ -1443,40 +1506,20 @@ export async function startCdpWebSocketMonitor(opts, log) {
       if (!g || !c) {
         return { ok: false, error: "guildId 与 channelId 不能为空" };
       }
-      if (!g || !c) {
-        return { ok: false, error: "guildId 与 channelId 不能为空" };
-      }
       const targetUrl = discordChannelUrl(g, c);
-      if (mounted.length === 0) {
-        return { ok: false, error: "尚无已挂载 CDP 的页面" };
+      if (!browser?.isConnected?.()) {
+        return { ok: false, error: "CDP 浏览器未连接" };
       }
-      /** @type {{ page: import("playwright").Page; score: number }[]} */
-      const ranked = [];
-      for (const { page } of mounted) {
-        let url = "";
-        try {
-          url = page.url();
-        } catch {
-          ranked.push({ page, score: -1 });
-          continue;
-        }
-        const sc = scoreDiscordPageForChannelNav(url, g, c);
-        ranked.push({ page, score: sc >= 0 ? sc : 0 });
+      const picked = pickExistingDiscordPage(browser, targetUrl);
+      if (!picked) {
+        return {
+          ok: false,
+          error: "未找到已打开的 Discord 标签，拒绝新建。请在调试 Chrome 中保留 discord.com 网页。",
+        };
       }
-      ranked.sort((a, b) => b.score - a.score);
-      const top = ranked[0];
-      const page = top?.page;
-      if (!page) {
-        return { ok: false, error: "无法选择浏览器标签页" };
-      }
-      let pickedPageUrl = "";
-      try {
-        pickedPageUrl = page.url();
-      } catch {
-        pickedPageUrl = "";
-      }
+      const pickedPageUrl = picked.url;
       log.info(
-        `[discord-channel] CDP 已选标签 score=${top?.score ?? "?"} mounted=${mounted.length} page=${shortenUrl(pickedPageUrl, 200)} → goto ${shortenUrl(targetUrl, 200)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`
+        `[discord-channel] 复用已有标签 score=${picked.score} tabs=${countBrowserPages(browser)} page=${shortenUrl(pickedPageUrl, 200)} → ${shortenUrl(targetUrl, 200)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`
       );
       opts.diagnosticSink?.({
         kind: "discord_channel_pick_page",
@@ -1484,18 +1527,19 @@ export async function startCdpWebSocketMonitor(opts, log) {
         channelId: c,
         targetUrl,
         pickedPageUrl,
-        pickScore: top?.score ?? null,
+        pickScore: picked.score,
         mountedCount: mounted.length,
+        reusedTab: true,
         ...trace,
       });
       if (isAlreadyOnDiscordChannel(pickedPageUrl, targetUrl)) {
         log.info(
-          `[discord-channel] 已在目标频道，跳过 goto${clientTraceId ? ` trace=${clientTraceId}` : ""}`
+          `[discord-channel] 已在目标频道，跳过跳转${clientTraceId ? ` trace=${clientTraceId}` : ""}`
         );
         return { ok: true, skipped: true, reason: "already_on_channel", finalUrl: pickedPageUrl };
       }
       try {
-        log.info(`[discord-channel] page.goto 开始 …${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
+        log.info(`[discord-channel] 在已有标签打开频道 …${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
         opts.diagnosticSink?.({
           kind: "discord_channel_nav_begin",
           guildId: g,
@@ -1504,9 +1548,9 @@ export async function startCdpWebSocketMonitor(opts, log) {
           pickedPageUrl,
           ...trace,
         });
-        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 90_000 });
+        const page = await openOrRefreshDiscordUrl(browser, targetUrl, { forceReload: false });
         const finalUrl = page.url();
-        log.info(`[discord-channel] page.goto 完成 final=${shortenUrl(finalUrl, 200)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
+        log.info(`[discord-channel] 完成 final=${shortenUrl(finalUrl, 200)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
         opts.diagnosticSink?.({
           kind: "discord_channel_nav_done",
           guildId: g,
@@ -1519,7 +1563,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
         return { ok: true, finalUrl };
       } catch (e) {
         const err = /** @type {Error} */ (e);
-        log.warn(`[discord-channel] page.goto 失败: ${err.message}${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
+        log.warn(`[discord-channel] 打开频道失败: ${err.message}${clientTraceId ? ` trace=${clientTraceId}` : ""}`);
         opts.diagnosticSink?.({
           kind: "discord_channel_nav_done",
           guildId: g,
