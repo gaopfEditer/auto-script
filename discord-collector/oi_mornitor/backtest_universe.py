@@ -9,7 +9,8 @@ from typing import Any
 
 import aiohttp
 
-from oi_mornitor.config import BYBIT_BASE_URL, PATTERN_STATE_DB
+from oi_mornitor import http_backoff
+from oi_mornitor.config import BYBIT_BASE_URL, HTTP_TIMEOUT_SEC, PATTERN_STATE_DB
 from oi_mornitor.symbol_aliases import is_stablecoin_symbol, normalize_usdt_symbol
 
 logger = logging.getLogger(__name__)
@@ -27,15 +28,16 @@ async def _fetch_instruments(session: aiohttp.ClientSession) -> list[dict[str, A
         url = f"{BYBIT_BASE_URL}/v5/market/instruments-info?category=linear&limit=1000"
         if cursor:
             url += f"&cursor={cursor}"
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
-                if resp.status != 200:
-                    break
-                payload = await resp.json()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("instruments-info 失败: %s", exc)
+        status, payload = await http_backoff.get_json(
+            session,
+            url,
+            timeout=aiohttp.ClientTimeout(total=min(12, max(8, HTTP_TIMEOUT_SEC))),
+            max_attempts=2,
+            label="Bybit/instruments-info",
+        )
+        if status != 200 or not isinstance(payload, dict):
             break
-        if int(payload.get("retCode") or -1) != 0:
+        if int(payload.get("retCode", -1)) != 0:
             break
         result = payload.get("result") or {}
         for item in result.get("list") or []:
@@ -59,15 +61,16 @@ async def _fetch_instruments(session: aiohttp.ClientSession) -> list[dict[str, A
 
 async def _fetch_ticker_map(session: aiohttp.ClientSession) -> dict[str, dict[str, float]]:
     url = f"{BYBIT_BASE_URL}/v5/market/tickers?category=linear"
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
-            if resp.status != 200:
-                return {}
-            payload = await resp.json()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("tickers 失败: %s", exc)
+    status, payload = await http_backoff.get_json(
+        session,
+        url,
+        timeout=aiohttp.ClientTimeout(total=min(12, max(8, HTTP_TIMEOUT_SEC))),
+        max_attempts=2,
+        label="Bybit/tickers",
+    )
+    if status != 200 or not isinstance(payload, dict):
         return {}
-    if int(payload.get("retCode") or -1) != 0:
+    if int(payload.get("retCode", -1)) != 0:
         return {}
     out: dict[str, dict[str, float]] = {}
     for item in (payload.get("result") or {}).get("list") or []:
@@ -120,6 +123,10 @@ async def select_backtest_universe(
     min_age_ms = int(min_listing_days) * 86400 * 1000
     instruments = await _fetch_instruments(session)
     tickers = await _fetch_ticker_map(session)
+    if not instruments:
+        logger.warning("Bybit instruments-info 为空，Top200 将降级为 BTC/ETH/SOL")
+    elif not tickers:
+        logger.warning("Bybit tickers 为空，Top200 将降级为 BTC/ETH/SOL")
 
     eligible: list[dict[str, Any]] = []
     for inst in instruments:
@@ -170,7 +177,7 @@ async def select_backtest_universe(
         "meta": meta,
         "note": "当前截面 top200；非严格历史时点名单，近1～2年回测可接受，长周期注意存活者偏差",
     }
-    if save_snapshot:
+    if save_snapshot and len(picked) > 3:
         _save_universe_snapshot(payload)
     return payload
 

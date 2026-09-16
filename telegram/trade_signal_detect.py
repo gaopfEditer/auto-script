@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 
 # —— 繁→简字符表（按需小集合；覆盖常见交易关键字与方向/币名） ——
 _T2S = str.maketrans({
-    "場": "场", "進": "进", "佈": "布", "價": "价", "幣": "币",
+    "場": "场", "進": "进", "佈": "布", "價": "价", "幣": "币", "點": "点",
     "倉": "仓", "槓": "杠", "桿": "杆", "損": "损", "盈": "盈",
     "數": "数", "據": "据", "訊": "讯", "單": "单", "車": "车",
     "發": "发", "車": "车", "頭": "头", "倉": "仓", "頂": "顶",
@@ -79,10 +79,19 @@ _SYM_TICKER = re.compile(
     r"(?<![A-Za-z0-9])\$?([A-Za-z]{2,12})(?:/USDT|/USD|USDT|USD)?(?![A-Za-z0-9])",
 )
 _SYM_CN = re.compile("|".join(sorted(map(re.escape, _CN_COIN.keys()), key=len, reverse=True)))
+_SYM_LABEL = re.compile(
+    r"币[种種]\s*[:：]\s*\$?([A-Za-z]{2,12})(?:/USDT|/USD|USDT|USD)?",
+    re.I,
+)
+_DIR_LINE = re.compile(r"方向\s*[:：]\s*([^\n]{1,40})", re.I)
 
 _ENTRY = re.compile(
-    r"(?:入场价格|入场|建仓|开仓|挂单|上车|进场)\s*[:：]?\s*"
+    r"(?:入场价格|入场点|进场点|入场|建仓|开仓|挂单|上车|进场)(?!点)\s*[:：]?\s*"
     r"([^\n，,；;]*?(?=\s*(?:ENTRY|EXIT|TP|SL|止盈|止损|止損|\n|$)|$))",
+    re.I,
+)
+_ENTRY_POINT = re.compile(
+    r"(?:📌\s*)?(?:进[场場][点點]|入[场場][点點])\s*[:：]?\s*([^\n]{1,40})",
     re.I,
 )
 # 专门处理「「进场」 ENTRY: 市价」这种格式（括号里嵌的关键字会被主正则误捕获）
@@ -91,11 +100,28 @@ _ENTRY_WITH_LABEL = re.compile(
     re.I,
 )
 _TP = re.compile(
-    r"(?:止盈|目标|TP|take\s*profit)\s*[:：]?\s*([^\n止損损]{1,40})",
+    r"(?:止盈|目标)\s*[:：]\s*([^\n止損损]{1,40})"
+    r"|(?:TP|take\s*profit)\s*[:：]?\s*([^\n止損损]{1,40})",
+    re.I,
+)
+_RECAP_PROMO = re.compile(
+    r"均止盈|连胜|連勝|累计发布|累計發佈|公开频道|公開頻道|会员群|會員群|"
+    r"联系助理|聯繫助理|限时活动|限時活動|详情看置顶|詳情看置頂|"
+    r"跟单完全不收费|跟單完全不收費|欢迎来内部|歡迎來內部|"
+    r"稳定输出|穩定輸出|免费体验|免費體驗",
+    re.I,
+)
+_RECAP_TP_HIT = re.compile(r"TP\s*\d?\s*[+＋]\s*\d", re.I)
+_TP_PROFIT = re.compile(
+    r"(?:✔\s*)?(?:获利目标|获利目標|獲利目标|獲利目標)\s*[:：]?\s*([^\n止損止损]{1,60})",
     re.I,
 )
 _SL = re.compile(
     r"(?:止损|止損|SL|stop\s*loss)\s*[:：]?\s*([^\n]{1,40})",
+    re.I,
+)
+_SL_POS = re.compile(
+    r"(?:❌\s*)?(?:止损位置|止損位置|止损点|止損點)\s*[:：]?\s*([^\n]{1,40})",
     re.I,
 )
 _POS = re.compile(
@@ -195,6 +221,10 @@ class TradeSignal:
     def has_tpsl(self) -> bool:
         return bool(self.take_profit or self.stop_loss)
 
+    @property
+    def has_numeric_tpsl(self) -> bool:
+        return _has_numeric_price(self.take_profit) or _has_numeric_price(self.stop_loss)
+
     def merge_from(self, other: "TradeSignal") -> "TradeSignal":
         """用 other 补全空字段（保留已有）。"""
         return replace(
@@ -224,6 +254,11 @@ def _norm_sym(raw: str) -> str:
 
 
 def _pick_symbol(text: str) -> str:
+    lm = _SYM_LABEL.search(text)
+    if lm:
+        cand = _norm_sym(lm.group(1))
+        if cand and cand not in _SYM_BLOCK and len(cand) >= 2:
+            return cand
     hm = _SYM_HASH.search(text)
     if hm:
         cand = _norm_sym(hm.group(1))
@@ -247,6 +282,13 @@ def _pick_symbol(text: str) -> str:
 
 
 def _pick_direction(text: str) -> str:
+    dl = _DIR_LINE.search(text)
+    if dl:
+        chunk = dl.group(1) or ""
+        if _DIR_SHORT.search(chunk) or "👇" in chunk:
+            return "空"
+        if _DIR_LONG.search(chunk) or "👆" in chunk:
+            return "多"
     longs = list(_DIR_LONG.finditer(text))
     shorts = list(_DIR_SHORT.finditer(text))
     # loose 模式：#SYMBOL 后紧接 📉空/📈多 这类
@@ -273,8 +315,90 @@ def _pick_direction(text: str) -> str:
     return ""
 
 
+def _has_numeric_price(s: str) -> bool:
+    return bool(re.search(r"\d", s or ""))
+
+
+def _normalize_sender_name(sender: str) -> str:
+    s = (sender or "").strip()
+    if not s or s.lower() in ("none", "null", "unknown", "nan"):
+        return ""
+    return s
+
+
+def is_spam_or_recap_message(text: str) -> bool:
+    """营销话术、历史战绩回顾等非开仓消息。"""
+    t = _t2s(text or "")
+    if not t.strip():
+        return True
+    if _RECAP_PROMO.search(t):
+        return True
+    tp_hits = len(_RECAP_TP_HIT.findall(t))
+    has_entry = bool(_ENTRY_POINT.search(t) or _ENTRY.search(t) or _ENTRY_EN.search(t))
+    if tp_hits >= 2 and not has_entry:
+        return True
+    if tp_hits >= 1 and re.search(r"[+＋]\s*\d+(?:\.\d+)?\s*%", t) and not has_entry:
+        return True
+    return False
+
+
+def signal_skip_reason(
+    sig: TradeSignal | None,
+    text: str = "",
+    *,
+    sender: str = "",
+) -> str | None:
+    """不应推送时返回原因；可推送返回 None。无止盈止损的开仓信号仍可通过。"""
+    if sig is None:
+        return "无法解析为交易信号"
+    src = text or sig.source_text or ""
+    if is_spam_or_recap_message(src):
+        return "营销/战绩回顾"
+    who = _normalize_sender_name(sig.sender or sender)
+    if not who:
+        return f"发送者无效({(sender or sig.sender)!r})"
+    sym = (sig.symbol or "").upper()
+    if not sym or sym in _SYM_BLOCK or len(sym) < 2 or len(sym) > 12:
+        return f"币种无效({sig.symbol!r})"
+    if sig.is_prom and sig.direction:
+        return None
+    if sig.has_core:
+        return None
+    if (sig.entry or "").strip() or sig.has_tpsl:
+        return None
+    return "缺少币种/方向"
+
+
+def is_actionable_trade_signal(sig: TradeSignal | None, text: str = "", *, sender: str = "") -> bool:
+    return signal_skip_reason(sig, text, sender=sender) is None
+
+
+def log_signal_skip(
+    reason: str,
+    *,
+    chat_id: int,
+    title: str = "",
+    profile_name: str = "",
+    sender: str = "",
+    msg_id: int | None = None,
+    body: str = "",
+    preview: int = 160,
+) -> None:
+    """记录被跳过的消息来源，便于手动加 main 过滤或调整监听群。"""
+    ch = (profile_name or title or str(chat_id)).strip()
+    prev = (body or "").replace("\n", " ").strip()
+    if len(prev) > preview:
+        prev = prev[:preview] + "…"
+    mid = f" msg_id={msg_id}" if msg_id is not None else ""
+    print(
+        f"[signal-skip] {reason} | chat={chat_id}「{ch}」sender={sender!r}{mid} | {prev}",
+        flush=True,
+    )
+
+
 def _clean_field(v: str) -> str:
     s = (v or "").strip()
+    s = s.replace("—", "-").replace("–", "-").replace("−", "-")
     s = re.sub(r"\s+", " ", s)
     s = re.split(r"[|｜]{2,}|\s{2,}", s)[0].strip()
     # 截断误吞的止损等后续字段
@@ -319,11 +443,14 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
         source_text=body[:500],
         msg_ids=[int(msg_id)] if msg_id is not None else [],
     )
-    # 优先级：带标签的 ENTRY(「进场」 ENTRY: 市价) > _ENTRY_EN > _MARKET_PRICE > 中文 _ENTRY
+    # 优先级：进场点/📌 > 带标签 ENTRY > _ENTRY_EN > _MARKET_PRICE > 中文 _ENTRY
+    em_point = _ENTRY_POINT.search(body)
     em_label = _ENTRY_WITH_LABEL.search(body)
     em_en = _ENTRY_EN.search(body)
     em = _ENTRY.search(body)
-    if em_label:
+    if em_point:
+        sig.entry = _clean_field(em_point.group(1))
+    elif em_label:
         sig.entry = _clean_field(em_label.group(1))
     elif em_en and (not em or em_en.start() <= em.start()):
         sig.entry = _clean_field(em_en.group(1))
@@ -339,6 +466,7 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
             sig.entry = "现价"
 
     levels = _pick_tp_levels(body)
+    tm_profit = _TP_PROFIT.search(body)
     tm = _TP.search(body)
     if levels:
         # 若通用止盈行也有内容，合并去重
@@ -347,10 +475,16 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
             sig.take_profit = f"{levels},{base}" if not re.search(r"tp\s*[123]", base, re.I) else levels
         else:
             sig.take_profit = levels
+    elif tm_profit:
+        raw_tp = _clean_field(tm_profit.group(1))
+        sig.take_profit = raw_tp.replace("-", "—") if "—" in (tm_profit.group(1) or "") else raw_tp
     elif tm:
-        sig.take_profit = _clean_field(tm.group(1))
+        sig.take_profit = _clean_field(tm.group(1) or tm.group(2) or "")
+    sm_pos = _SL_POS.search(body)
     sm = _SL.search(body)
-    if sm:
+    if sm_pos:
+        sig.stop_loss = _clean_field(sm_pos.group(1))
+    elif sm:
         sig.stop_loss = _clean_field(sm.group(1))
     pm = _POS.search(body)
     if pm:
@@ -370,6 +504,8 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
 
 def looks_like_trade_message(text: str) -> bool:
     """粗筛：是否值得进窗口分析。"""
+    if is_spam_or_recap_message(text):
+        return False
     t = _t2s(text or "")
     if _PROM_TAG.search(t):
         return True
@@ -381,7 +517,11 @@ def looks_like_trade_message(text: str) -> bool:
         return True
     if _DIR_LONG_LOOSE.search(t) or _DIR_SHORT_LOOSE.search(t):
         return True
-    if _TP.search(t) or _SL.search(t) or _ENTRY.search(t) or _FARE.search(t):
+    if _TP.search(t) or _TP_PROFIT.search(t) or _SL.search(t) or _SL_POS.search(t):
+        return True
+    if _ENTRY.search(t) or _ENTRY_POINT.search(t) or _FARE.search(t):
+        return True
+    if _SYM_LABEL.search(t) or _DIR_LINE.search(t):
         return True
     if _TP_LEVELS.search(t):
         return True
@@ -422,7 +562,7 @@ def format_signal_push(sig: TradeSignal, *, phase: str = "full") -> str:
       止损：2525
       备注：15m 突破站稳
     """
-    who = strip_username_in_parens((sig.sender or "未知").strip())
+    who = strip_username_in_parens(_normalize_sender_name(sig.sender) or "未知")
     if who.startswith("【") and who.endswith("】"):
         header = who
     else:

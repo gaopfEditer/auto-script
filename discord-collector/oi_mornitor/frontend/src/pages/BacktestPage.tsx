@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MercuHeader } from "../components/MercuHeader";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useSpecialFocus } from "../hooks/useSpecialFocus";
@@ -71,6 +71,9 @@ type CoverageInfo = {
   total: number;
   ready: number;
   percent: number;
+  barsExpected?: number;
+  barsStored?: number;
+  barPercent?: number;
   missingSample?: string[];
 };
 
@@ -81,7 +84,94 @@ type PrefetchSegment = {
   status: string;
   done: number;
   total: number;
+  percent?: number;
+  barPercent?: number;
+  barsExpected?: number;
+  barsStored?: number;
+  ready?: number;
+  pairTotal?: number;
 };
+
+/** 每 5 分钟从本地库刷新入库进度 */
+const COVERAGE_REFRESH_MS = 5 * 60 * 1000;
+
+type StorageStats = { mb?: number; files?: number; bytes?: number };
+
+const BT_PREFETCH_LS = "oi_bt_prefetch_v2";
+const BT_PREFETCH_LS_LEGACY = "oi_bt_prefetch_v1";
+
+type SavedPrefetchPrefs = {
+  fetchStartLocal?: string;
+  fetchEndLocal?: string;
+  btStartLocal?: string;
+  btEndLocal?: string;
+  chunkDays?: number;
+  symbolScope?: string;
+  maxSymbols?: number;
+  maxDays?: number;
+  selectedKinds?: string[];
+  selectedIntervals?: string[];
+  jobId?: string;
+  btJobId?: string;
+  coverage?: CoverageInfo;
+  coverageSegments?: PrefetchSegment[];
+  prefetchSnapshot?: PrefetchJob | null;
+};
+
+function defaultDateLocals() {
+  const end = new Date();
+  const btStart = new Date(end.getTime() - 30 * 86400_000);
+  const fetchStart = new Date(end.getTime() - 180 * 86400_000);
+  return {
+    fetchEndLocal: toLocalInputValue(end),
+    fetchStartLocal: toLocalInputValue(fetchStart),
+    btEndLocal: toLocalInputValue(end),
+    btStartLocal: toLocalInputValue(btStart),
+  };
+}
+
+function loadSavedPrefs(): SavedPrefetchPrefs {
+  try {
+    let raw = localStorage.getItem(BT_PREFETCH_LS);
+    if (!raw) raw = localStorage.getItem(BT_PREFETCH_LS_LEGACY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as SavedPrefetchPrefs;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs(patch: SavedPrefetchPrefs) {
+  try {
+    localStorage.setItem(BT_PREFETCH_LS, JSON.stringify({ ...loadSavedPrefs(), ...patch }));
+  } catch {
+    /* ignore */
+  }
+}
+
+function segBarPercent(seg: PrefetchSegment): number {
+  if (seg.barPercent != null && Number.isFinite(seg.barPercent)) return seg.barPercent;
+  if (seg.percent != null && Number.isFinite(seg.percent)) return seg.percent;
+  if (seg.total > 0) return Math.round((seg.done / seg.total) * 1000) / 10;
+  return 0;
+}
+
+function segStatusLabel(seg: PrefetchSegment): string {
+  const pct = segBarPercent(seg);
+  if (seg.status === "done") return `完成 ${pct}%`;
+  if (seg.status === "running") return `进行中 ${pct}%`;
+  if (seg.status === "partial") return `部分 ${pct}%`;
+  if (seg.status === "failed") return "失败";
+  return "待拉";
+}
+
+function fmtCompactNum(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}k`;
+  return n.toLocaleString("zh-CN");
+}
 
 type PrefetchJob = {
   id: string;
@@ -97,6 +187,7 @@ type PrefetchJob = {
     total?: number;
     current?: string;
     coverage?: CoverageInfo;
+    barsStored?: number;
   };
   segments?: PrefetchSegment[];
   params?: {
@@ -108,6 +199,10 @@ type PrefetchJob = {
   };
   storageStats?: { mb?: number };
 };
+
+function isPrefetchInterrupted(job: PrefetchJob | null | undefined): boolean {
+  return job?.status === "failed" && String(job.error || "").includes("服务重启");
+}
 
 function toLocalInputValue(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -211,26 +306,63 @@ function fmtPnl(rec: AlertStatsRecord): { text: string; cls: string; title?: str
 export function BacktestPage() {
   const { snapshot, online } = useRadarSSE();
   const { symbols: focusSymbols, remove: removeFocus } = useSpecialFocus();
+  const initSaved = useMemo(() => loadSavedPrefs(), []);
+  const initDates = useMemo(() => defaultDateLocals(), []);
 
   const [kindOptions, setKindOptions] = useState<KindOption[]>([]);
-  const [intervals, setIntervals] = useState<string[]>(["15m", "1h", "4h"]);
-  const [selectedKinds, setSelectedKinds] = useState<Set<string>>(new Set());
-  const [selectedIntervals, setSelectedIntervals] = useState<Set<string>>(new Set(["15m", "1h", "4h"]));
-  const [symbolScope, setSymbolScope] = useState<"top200" | "pool" | "majors" | "all">("top200");
-  const [maxSymbols, setMaxSymbols] = useState(200);
-  const [maxDays, setMaxDays] = useState(730);
-  const [chunkDays, setChunkDays] = useState(30);
+  const [intervals, setIntervals] = useState<string[]>(
+    () => initSaved.selectedIntervals?.length ? initSaved.selectedIntervals : ["15m", "1h", "4h"],
+  );
+  const [selectedKinds, setSelectedKinds] = useState<Set<string>>(
+    () => new Set(initSaved.selectedKinds || []),
+  );
+  const [selectedIntervals, setSelectedIntervals] = useState<Set<string>>(
+    () => new Set(initSaved.selectedIntervals || ["15m", "1h", "4h"]),
+  );
+  const [symbolScope, setSymbolScope] = useState<"top200" | "pool" | "majors" | "all">(
+    () => (initSaved.symbolScope as "top200" | "pool" | "majors" | "all" | undefined) || "top200",
+  );
+  const [maxSymbols, setMaxSymbols] = useState(() => initSaved.maxSymbols ?? 200);
+  const [maxDays, setMaxDays] = useState(() => initSaved.maxDays ?? 730);
+  const [chunkDays, setChunkDays] = useState(() => initSaved.chunkDays ?? 30);
   const [universeNote, setUniverseNote] = useState("");
-  const [fetchStartLocal, setFetchStartLocal] = useState("");
-  const [fetchEndLocal, setFetchEndLocal] = useState("");
-  const [btStartLocal, setBtStartLocal] = useState("");
-  const [btEndLocal, setBtEndLocal] = useState("");
+  const [fetchStartLocal, setFetchStartLocal] = useState(
+    () => initSaved.fetchStartLocal || initDates.fetchStartLocal,
+  );
+  const [fetchEndLocal, setFetchEndLocal] = useState(
+    () => initSaved.fetchEndLocal || initDates.fetchEndLocal,
+  );
+  const [btStartLocal, setBtStartLocal] = useState(
+    () => initSaved.btStartLocal || initDates.btStartLocal,
+  );
+  const [btEndLocal, setBtEndLocal] = useState(() => initSaved.btEndLocal || initDates.btEndLocal);
   const [settleRules, setSettleRules] = useState("");
   const [klineNote, setKlineNote] = useState("");
 
-  const [prefetchJob, setPrefetchJob] = useState<PrefetchJob | null>(null);
-  const [coverage, setCoverage] = useState<CoverageInfo | null>(null);
+  const [prefetchJob, setPrefetchJob] = useState<PrefetchJob | null>(() => {
+    const snap = initSaved.prefetchSnapshot ?? null;
+    if (!snap) return null;
+    if (isPrefetchInterrupted(snap)) {
+      return {
+        ...snap,
+        status: "pending",
+        error: null,
+        progress: { ...snap.progress, current: "服务已恢复，继续拉取…" },
+      };
+    }
+    return snap;
+  });
+  const [coverageSegments, setCoverageSegments] = useState<PrefetchSegment[] | null>(
+    () => initSaved.coverageSegments ?? null,
+  );
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
+  const [coverage, setCoverage] = useState<CoverageInfo | null>(() => initSaved.coverage ?? null);
   const [coverageLoading, setCoverageLoading] = useState(false);
+  const [coverageUpdatedAt, setCoverageUpdatedAt] = useState<number | null>(null);
+  const [ingestBarsPerMin, setIngestBarsPerMin] = useState<number | null>(null);
+  const restoreOnceRef = useRef(false);
+  const autoResumePrefetchRef = useRef(false);
+  const lastBarsStoredRef = useRef<{ ts: number; bars: number } | null>(null);
 
   const [job, setJob] = useState<BacktestJob | null>(null);
   const [page, setPage] = useState(1);
@@ -241,16 +373,7 @@ export function BacktestPage() {
   const [bootErr, setBootErr] = useState("");
 
   useEffect(() => {
-    const end = new Date();
-    const start = new Date(end.getTime() - 30 * 86400_000);
-    const fetchStart = new Date(end.getTime() - 180 * 86400_000);
-    setFetchEndLocal(toLocalInputValue(end));
-    setFetchStartLocal(toLocalInputValue(fetchStart));
-    setBtEndLocal(toLocalInputValue(end));
-    setBtStartLocal(toLocalInputValue(start));
-  }, []);
-
-  useEffect(() => {
+    const saved = loadSavedPrefs();
     fetch("/api/backtest/structure/options")
       .then((r) => r.json())
       .then((body) => {
@@ -259,45 +382,180 @@ export function BacktestPage() {
         const ivs: string[] = body.intervals || ["15m", "1h", "4h"];
         setKindOptions(kinds);
         setIntervals(ivs);
-        setSelectedKinds(new Set((body.defaultKinds as string[]) || kinds.map((k) => k.id)));
-        setSelectedIntervals(new Set(ivs));
+        const defaultKinds = (body.defaultKinds as string[]) || kinds.map((k) => k.id);
+        if (saved.selectedKinds?.length) {
+          const valid = saved.selectedKinds.filter((id) => kinds.some((k) => k.id === id));
+          setSelectedKinds(new Set(valid.length ? valid : defaultKinds));
+        } else {
+          setSelectedKinds(new Set(defaultKinds));
+        }
+        if (saved.selectedIntervals?.length) {
+          const validIv = saved.selectedIntervals.filter((iv) => ivs.includes(iv));
+          setSelectedIntervals(new Set(validIv.length ? validIv : ivs));
+        } else {
+          setSelectedIntervals(new Set(ivs));
+        }
         setSettleRules(String(body.settleRules || ""));
         setKlineNote(String(body.klineSourceNote || ""));
         setUniverseNote(String(body.universeNote || ""));
-        if (body.defaultSymbolScope) setSymbolScope(body.defaultSymbolScope);
-        if (body.defaultMaxSymbols) setMaxSymbols(Number(body.defaultMaxSymbols));
-        if (body.defaultMaxDays) setMaxDays(Number(body.defaultMaxDays));
+        if (!saved.symbolScope && body.defaultSymbolScope) {
+          setSymbolScope(body.defaultSymbolScope);
+        }
+        if (!saved.maxSymbols && body.defaultMaxSymbols) {
+          setMaxSymbols(Number(body.defaultMaxSymbols));
+        }
+        if (!saved.maxDays && body.defaultMaxDays) {
+          setMaxDays(Number(body.defaultMaxDays));
+        }
+        if (body.storageStats) setStorageStats(body.storageStats as StorageStats);
       })
       .catch((e) => setBootErr(e instanceof Error ? e.message : String(e)));
   }, []);
 
-  const checkCoverage = useCallback(async () => {
-    setCoverageLoading(true);
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      savePrefs({
+        fetchStartLocal,
+        fetchEndLocal,
+        btStartLocal,
+        btEndLocal,
+        chunkDays,
+        symbolScope,
+        maxSymbols,
+        maxDays,
+        selectedKinds: [...selectedKinds],
+        selectedIntervals: [...selectedIntervals],
+        coverage: coverage ?? undefined,
+        coverageSegments: coverageSegments ?? undefined,
+      });
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [
+    fetchStartLocal,
+    fetchEndLocal,
+    btStartLocal,
+    btEndLocal,
+    chunkDays,
+    symbolScope,
+    maxSymbols,
+    maxDays,
+    selectedKinds,
+    selectedIntervals,
+    coverage,
+    coverageSegments,
+  ]);
+
+  const checkCoverage = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false;
+    if (!silent) setCoverageLoading(true);
     try {
       const startMs = parseLocalInputMs(fetchStartLocal);
       const endMs = parseLocalInputMs(fetchEndLocal);
       const r = await fetch("/api/backtest/kline/coverage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startMs, endMs, symbolScope, maxSymbols }),
+        body: JSON.stringify({ startMs, endMs, symbolScope, maxSymbols, chunkDays }),
       });
       const body = await r.json();
       if (!body?.ok) throw new Error(body?.error || "覆盖率查询失败");
-      setCoverage(body.coverage as CoverageInfo);
+      const cov = body.coverage as CoverageInfo;
+      const segs = Array.isArray(body.segments) ? (body.segments as PrefetchSegment[]) : null;
+      const now = Date.now();
+      const barsStored = cov.barsStored ?? 0;
+      const prev = lastBarsStoredRef.current;
+      if (prev && barsStored >= prev.bars) {
+        const mins = (now - prev.ts) / 60_000;
+        if (mins >= 0.5) {
+          setIngestBarsPerMin(Math.round((barsStored - prev.bars) / mins));
+        }
+      }
+      lastBarsStoredRef.current = { ts: now, bars: barsStored };
+      setCoverageUpdatedAt(now);
+      setCoverage(cov);
+      setCoverageSegments(segs);
+      if (body.storageStats) setStorageStats(body.storageStats as StorageStats);
+      savePrefs({
+        fetchStartLocal,
+        fetchEndLocal,
+        btStartLocal,
+        btEndLocal,
+        chunkDays,
+        symbolScope,
+        maxSymbols,
+        maxDays,
+        coverage: cov,
+        coverageSegments: segs ?? undefined,
+      });
     } catch (e) {
-      setBootErr(e instanceof Error ? e.message : String(e));
+      if (!silent) setBootErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setCoverageLoading(false);
+      if (!silent) setCoverageLoading(false);
     }
-  }, [fetchStartLocal, fetchEndLocal, symbolScope, maxSymbols]);
+  }, [fetchStartLocal, fetchEndLocal, btStartLocal, btEndLocal, symbolScope, maxSymbols, maxDays, chunkDays]);
+
+  const restorePrefetchState = useCallback(async () => {
+    if (!fetchStartLocal || !fetchEndLocal) return;
+    void checkCoverage({ silent: true }).catch(() => undefined);
+    const saved = loadSavedPrefs();
+    const tryJob = async (jobId: string) => {
+      const r = await fetch(`/api/backtest/kline/prefetch/${encodeURIComponent(jobId)}`);
+      const body = await r.json();
+      if (!body?.ok) return null;
+      return body as PrefetchJob;
+    };
+    if (saved.jobId) {
+      const liveJob = await tryJob(saved.jobId).catch(() => null);
+      if (liveJob) {
+        setPrefetchJob(liveJob);
+        savePrefs({ jobId: liveJob.id, prefetchSnapshot: liveJob });
+        if (isPrefetchInterrupted(liveJob) && !autoResumePrefetchRef.current) {
+          autoResumePrefetchRef.current = true;
+          setPrefetchJob({
+            ...liveJob,
+            status: "pending",
+            error: null,
+            progress: { ...liveJob.progress, current: "服务已恢复，继续拉取…" },
+          });
+          const startMs = parseLocalInputMs(fetchStartLocal);
+          const endMs = parseLocalInputMs(fetchEndLocal);
+          const r = await fetch("/api/backtest/kline/prefetch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ startMs, endMs, chunkDays, symbolScope, maxSymbols, maxDays: 1095 }),
+          });
+          const body = await r.json();
+          if (body?.ok) {
+            setPrefetchJob(body as PrefetchJob);
+            savePrefs({ jobId: body.id, prefetchSnapshot: body });
+          }
+        }
+        return;
+      }
+    }
+    const latestRes = await fetch("/api/backtest/kline/prefetch/latest");
+    const latestBody = await latestRes.json();
+    const latest = latestBody?.job as PrefetchJob | null | undefined;
+    if (latest?.id && (latest.status === "running" || latest.status === "pending")) {
+      setPrefetchJob(latest);
+      savePrefs({ jobId: latest.id, prefetchSnapshot: latest });
+    }
+  }, [checkCoverage, fetchStartLocal, fetchEndLocal, chunkDays, symbolScope, maxSymbols]);
+
+  useEffect(() => {
+    if (restoreOnceRef.current || !fetchStartLocal || !fetchEndLocal) return;
+    restoreOnceRef.current = true;
+    void restorePrefetchState().catch(() => undefined);
+  }, [fetchStartLocal, fetchEndLocal, restorePrefetchState]);
 
   const pollPrefetch = useCallback(async (jobId: string) => {
     const r = await fetch(`/api/backtest/kline/prefetch/${encodeURIComponent(jobId)}`);
     const body = await r.json();
     if (!body?.ok) throw new Error(body?.error || "拉取查询失败");
-    setPrefetchJob(body as PrefetchJob);
-    if (body.params?.coverage) setCoverage(body.params.coverage as CoverageInfo);
-    return body as PrefetchJob;
+    const job = body as PrefetchJob;
+    setPrefetchJob(job);
+    if (job.params?.coverage) setCoverage(job.params.coverage as CoverageInfo);
+    savePrefs({ jobId: job.id, prefetchSnapshot: job });
+    return job;
   }, []);
 
   const pollJob = useCallback(
@@ -318,12 +576,32 @@ export function BacktestPage() {
   );
 
   useEffect(() => {
-    if (!prefetchJob?.id || prefetchJob.status === "done" || prefetchJob.status === "failed") return;
+    if (
+      !prefetchJob?.id ||
+      prefetchJob.id === "starting" ||
+      prefetchJob.status === "done" ||
+      (prefetchJob.status === "failed" && !isPrefetchInterrupted(prefetchJob))
+    ) {
+      if (prefetchJob?.status === "done") {
+        void checkCoverage({ silent: true }).catch(() => undefined);
+        savePrefs({ jobId: prefetchJob.id, prefetchSnapshot: prefetchJob });
+      } else if (prefetchJob?.status === "failed") {
+        savePrefs({ jobId: prefetchJob.id, prefetchSnapshot: prefetchJob });
+      }
+      return;
+    }
     const id = setInterval(() => {
       void pollPrefetch(prefetchJob.id).catch(() => undefined);
     }, 1200);
     return () => clearInterval(id);
-  }, [prefetchJob?.id, prefetchJob?.status, pollPrefetch]);
+  }, [prefetchJob?.id, prefetchJob?.status, pollPrefetch, checkCoverage]);
+
+  useEffect(() => {
+    if (!fetchStartLocal || !fetchEndLocal) return;
+    const tick = () => void checkCoverage({ silent: true }).catch(() => undefined);
+    const id = window.setInterval(tick, COVERAGE_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [fetchStartLocal, fetchEndLocal, symbolScope, maxSymbols, chunkDays, checkCoverage]);
 
   useEffect(() => {
     if (!job?.id || job.status === "done" || job.status === "failed") return;
@@ -331,7 +609,7 @@ export function BacktestPage() {
       void pollJob(job.id, page, typeFilter, intervalFilter).catch(() => undefined);
     }, 1500);
     return () => clearInterval(id);
-  }, [job?.id, job.status, page, typeFilter, intervalFilter, pollJob]);
+  }, [job?.id, job?.status, page, typeFilter, intervalFilter, pollJob]);
 
   useEffect(() => {
     if (!job?.id || job.status !== "done") return;
@@ -341,6 +619,11 @@ export function BacktestPage() {
   const onFetch = async () => {
     setFetchLoading(true);
     setBootErr("");
+    setPrefetchJob({
+      id: "starting",
+      status: "pending",
+      progress: { current: "正在启动拉取任务…" },
+    });
     try {
       const startMs = parseLocalInputMs(fetchStartLocal);
       const endMs = parseLocalInputMs(fetchEndLocal);
@@ -351,9 +634,33 @@ export function BacktestPage() {
       });
       const body = await r.json();
       if (!body?.ok) throw new Error(body?.error || "拉取启动失败");
-      setPrefetchJob(body as PrefetchJob);
+      const job = body as PrefetchJob;
+      setPrefetchJob(job);
+      lastBarsStoredRef.current = null;
+      setIngestBarsPerMin(null);
+      void checkCoverage({ silent: true }).catch(() => undefined);
+      savePrefs({
+        jobId: job.id,
+        prefetchSnapshot: job,
+        fetchStartLocal,
+        fetchEndLocal,
+        btStartLocal,
+        btEndLocal,
+        chunkDays,
+        symbolScope,
+        maxSymbols,
+        maxDays,
+      });
     } catch (e) {
-      setBootErr(e instanceof Error ? e.message : String(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      const msg =
+        raw === "Failed to fetch"
+          ? "无法连接 OI 后端（8765），请确认服务在线后重试"
+          : raw;
+      setBootErr(msg);
+      setPrefetchJob((prev) =>
+        prev?.id === "starting" ? { ...prev, status: "failed", error: msg } : prev,
+      );
     } finally {
       setFetchLoading(false);
     }
@@ -386,28 +693,53 @@ export function BacktestPage() {
       });
       const body = await r.json();
       if (!body?.ok) throw new Error(body?.error || "回测启动失败");
-      setJob(body as BacktestJob);
+      const btJob = body as BacktestJob;
+      setJob(btJob);
+      savePrefs({ btStartLocal, btEndLocal, btJobId: btJob.id });
       setPage(1);
       setTypeFilter("all");
       setIntervalFilter("all");
     } catch (e) {
-      setBootErr(e instanceof Error ? e.message : String(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      setBootErr(
+        raw === "Failed to fetch"
+          ? "无法连接 OI 后端（8765 正忙或刚重启）。覆盖率扫描不再堵死接口，请刷新后再点「开始回测」"
+          : raw,
+      );
     } finally {
       setBtLoading(false);
     }
   };
 
   const prefetchPct = useMemo(() => {
-    const segs = prefetchJob?.segments || [];
-    if (!segs.length) {
-      const done = prefetchJob?.progress?.done ?? 0;
-      const total = prefetchJob?.progress?.total ?? 0;
-      return total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const jobRunning = prefetchJob?.status === "running" || prefetchJob?.status === "pending";
+    const bars = Math.max(coverage?.barsStored ?? 0, prefetchJob?.progress?.barsStored ?? 0);
+    if (jobRunning && bars <= 0) {
+      const prog = prefetchJob?.progress;
+      const st = prog?.segmentTotal ?? prefetchJob?.segments?.length ?? 0;
+      const idx = prog?.segmentIndex ?? 0;
+      const tot = prog?.total ?? 0;
+      const done = prog?.done ?? 0;
+      if (st > 0 && tot > 0) {
+        return Math.min(100, Math.round(((idx * tot + done) / (st * tot)) * 1000) / 10);
+      }
     }
-    const segTotal = segs.reduce((s, g) => s + (g.total || 0), 0);
-    const segDone = segs.reduce((s, g) => s + (g.done || 0), 0);
-    return segTotal ? Math.min(100, Math.round((segDone / segTotal) * 100)) : 0;
-  }, [prefetchJob]);
+    if (coverage?.barPercent != null && Number.isFinite(coverage.barPercent)) {
+      return Math.min(100, Math.round(coverage.barPercent * 10) / 10);
+    }
+    const segs = coverageSegments || [];
+    if (segs.length) {
+      const totalBars = segs.reduce((s, g) => s + (g.barsExpected ?? g.total ?? 0), 0);
+      const storedBars = segs.reduce((s, g) => s + (g.barsStored ?? 0), 0);
+      if (totalBars > 0) {
+        return Math.min(100, Math.round((storedBars / totalBars) * 1000) / 10);
+      }
+    }
+    const prog = prefetchJob?.progress;
+    const done = prog?.done ?? 0;
+    const total = prog?.total ?? 0;
+    return total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  }, [coverage, coverageSegments, prefetchJob?.progress, prefetchJob?.segments, prefetchJob?.status]);
 
   const scanPct = useMemo(() => {
     const done = job?.progress?.done ?? 0;
@@ -440,6 +772,50 @@ export function BacktestPage() {
   };
 
   const listSummary = job?.filteredSummary ?? job?.summary;
+
+  const displaySegments = useMemo(() => {
+    const jobRunning = prefetchJob?.status === "running" || prefetchJob?.status === "pending";
+    const jobSegs = prefetchJob?.segments;
+    if (jobRunning && jobSegs?.length) {
+      return jobSegs.map((seg) => {
+        const cov = coverageSegments?.find((c) => c.index === seg.index);
+        const barsStored = cov?.barsStored ?? seg.barsStored ?? 0;
+        const barsExpected = cov?.barsExpected ?? seg.barsExpected;
+        return {
+          ...seg,
+          barsStored,
+          barsExpected,
+          barPercent:
+            barsExpected && barsExpected > 0
+              ? Math.round((barsStored / barsExpected) * 1000) / 10
+              : undefined,
+        };
+      });
+    }
+    const base = coverageSegments?.length ? coverageSegments : jobSegs ?? null;
+    if (!base?.length || prefetchJob?.status !== "running") return base;
+    const segIdx = prefetchJob.progress?.segmentIndex;
+    if (segIdx == null) return base;
+    return base.map((seg) =>
+      seg.index === segIdx && seg.status !== "done" ? { ...seg, status: "running" } : seg,
+    );
+  }, [coverageSegments, prefetchJob?.segments, prefetchJob?.status, prefetchJob?.progress?.segmentIndex]);
+
+  const coverageRefreshLabel = useMemo(() => {
+    if (!coverageUpdatedAt) return null;
+    const t = new Date(coverageUpdatedAt).toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const speed =
+      ingestBarsPerMin != null && ingestBarsPerMin > 0
+        ? ` · 入库 ${fmtCompactNum(ingestBarsPerMin)} 条/分`
+        : "";
+    return `入库进度 ${t} 更新${speed} · 每 5 分钟刷新`;
+  }, [coverageUpdatedAt, ingestBarsPerMin]);
+
+  const showKlinePanel =
+    prefetchJob != null || (coverage != null && coverage.total > 0) || (displaySegments?.length ?? 0) > 0;
 
   return (
     <div className="mercu-app">
@@ -500,13 +876,44 @@ export function BacktestPage() {
               <button type="button" className="bt-run secondary" disabled={coverageLoading} onClick={() => void checkCoverage()}>
                 {coverageLoading ? "检查中…" : "检查覆盖率"}
               </button>
-              <button type="button" className="bt-run" disabled={fetchLoading} onClick={() => void onFetch()}>
-                {fetchLoading ? "启动中…" : "拉取 K 线"}
+              <button
+                type="button"
+                className="bt-run"
+                disabled={fetchLoading}
+                onClick={() => void onFetch()}
+              >
+                {fetchLoading || prefetchJob?.status === "running" || prefetchJob?.status === "pending"
+                  ? prefetchJob?.status === "running"
+                    ? "拉取中…"
+                    : "启动中…"
+                  : "拉取 K 线"}
               </button>
             </div>
+            {prefetchJob?.status === "running" || prefetchJob?.status === "pending" ? (
+              <p className="bt-rules">
+                {prefetchJob.progress?.current || "正在连接行情源…"}
+                {prefetchJob.progress?.total
+                  ? ` · ${prefetchJob.progress.done ?? 0}/${prefetchJob.progress.total}`
+                  : ""}
+              </p>
+            ) : null}
+            {prefetchJob?.status === "failed" && prefetchJob.error ? (
+              <p className="bt-error">{prefetchJob.error}</p>
+            ) : null}
+            {bootErr ? <p className="bt-error">{bootErr}</p> : null}
+            {storageStats?.mb != null ? (
+              <p className="bt-rules">
+                本地库 {storageStats.mb} MB
+                {storageStats.files != null ? ` · ${storageStats.files} 文件` : ""}
+                {coverage
+                  ? ` · 当前范围覆盖 ${coverage.ready}/${coverage.total}（${coverage.percent}%）`
+                  : " · 刷新后会按本地库恢复分段进度"}
+              </p>
+            ) : null}
             {coverage ? (
               <p className="bt-rules">
-                本地覆盖 {coverage.ready}/{coverage.total}（{coverage.percent}%）
+                入库 {fmtCompactNum(coverage.barsStored)}/{fmtCompactNum(coverage.barsExpected)}（
+                {coverage.barPercent ?? coverage.percent}%）
                 {coverage.percent < 82 ? " · 建议先拉取" : " · 可回测"}
               </p>
             ) : null}
@@ -575,49 +982,92 @@ export function BacktestPage() {
         <main className="bt-main">
           <section className="bt-panel">
             <h2 className="bt-panel-title">K 线拉取进度</h2>
-            {!prefetchJob ? (
+            {!showKlinePanel ? (
               <p className="bt-empty-inline">选择拉取时间后点击「拉取 K 线」；长区间会按段依次入库。</p>
             ) : (
               <>
-                <div className="bt-status-bar">
-                  <span className={`bt-status ${prefetchJob.status}`}>
-                    {prefetchJob.status === "running" && "拉取中"}
-                    {prefetchJob.status === "done" && "拉取完成"}
-                    {prefetchJob.status === "failed" && "拉取失败"}
-                    {prefetchJob.status === "pending" && "排队中"}
-                  </span>
-                  {prefetchJob.status === "running" ? (
-                    <>
-                      <div className="bt-progress">
-                        <div className="bt-progress-fill" style={{ width: `${prefetchPct}%` }} />
-                      </div>
-                      <span className="bt-muted">
-                        段 {((prefetchJob.progress?.segmentIndex ?? 0) + 1)}/
-                        {prefetchJob.progress?.segmentTotal ?? "?"}{" "}
-                        · {prefetchJob.progress?.done ?? 0}/{prefetchJob.progress?.total ?? 0}
-                        {prefetchJob.progress?.current ? ` · ${prefetchJob.progress.current}` : ""}
-                      </span>
-                    </>
-                  ) : null}
-                  {prefetchJob.error ? <span className="bt-error">{prefetchJob.error}</span> : null}
-                </div>
-                {prefetchJob.segments && prefetchJob.segments.length > 0 ? (
+                {prefetchJob ? (
+                  <div className="bt-status-bar">
+                    <span className={`bt-status ${prefetchJob.status}`}>
+                      {prefetchJob.status === "running" && "拉取中"}
+                      {prefetchJob.status === "done" && "拉取完成"}
+                      {prefetchJob.status === "failed" && "拉取失败"}
+                      {prefetchJob.status === "pending" && "排队中"}
+                    </span>
+                    {prefetchJob.status === "running" || prefetchJob.status === "pending" ? (
+                      <>
+                        <div className="bt-progress">
+                          <div className="bt-progress-fill" style={{ width: `${prefetchPct}%` }} />
+                        </div>
+                        <span className="bt-muted">
+                          {Math.max(coverage?.barsStored ?? 0, prefetchJob.progress?.barsStored ?? 0) > 0
+                            ? "入库"
+                            : "任务"}{" "}
+                          {prefetchPct}%
+                          {coverage?.barsExpected != null ? (
+                            <>
+                              {" "}
+                              · {fmtCompactNum(Math.max(coverage.barsStored ?? 0, prefetchJob.progress?.barsStored ?? 0))}/
+                              {fmtCompactNum(coverage.barsExpected)} 条
+                            </>
+                          ) : prefetchJob.progress?.barsStored ? (
+                            <> · {fmtCompactNum(prefetchJob.progress.barsStored)} 条</>
+                          ) : null}
+                          {prefetchJob.progress?.total
+                            ? ` · ${prefetchJob.progress.done ?? 0}/${prefetchJob.progress.total} 对`
+                            : null}
+                          {prefetchJob.progress?.current
+                            ? ` · ${prefetchJob.progress.current}`
+                            : " · 正在连接行情源…"}
+                        </span>
+                      </>
+                    ) : null}
+                    {prefetchJob.error ? <span className="bt-error">{prefetchJob.error}</span> : null}
+                  </div>
+                ) : displaySegments && displaySegments.length > 0 ? (
+                  <div className="bt-status-bar">
+                    <span className="bt-status done">本地缓存</span>
+                    <div className="bt-progress">
+                      <div className="bt-progress-fill" style={{ width: `${prefetchPct}%` }} />
+                    </div>
+                    <span className="bt-muted">覆盖进度 {prefetchPct}% · 刷新后从本地库恢复</span>
+                  </div>
+                ) : (
+                  <p className="bt-rules">
+                    无进行中的拉取任务；选择时间后会自动检查本地库分段覆盖。
+                  </p>
+                )}
+                {coverageRefreshLabel ? (
+                  <p className="bt-rules bt-coverage-refresh">{coverageRefreshLabel}</p>
+                ) : null}
+                {displaySegments && displaySegments.length > 0 ? (
                   <ul className="bt-segments">
-                    {prefetchJob.segments.map((seg) => (
+                    {displaySegments.map((seg) => (
                       <li key={seg.index} className={`bt-seg bt-seg-${seg.status}`}>
                         <span>段 {seg.index + 1}</span>
                         <span>{fmtDateRange(seg.startMs, seg.endMs)}</span>
-                        <span>{seg.done}/{seg.total || "—"}</span>
-                        <span>{seg.status === "done" ? "完成" : seg.status === "running" ? "进行中" : "待拉"}</span>
+                        <span>
+                          {seg.barsExpected != null
+                            ? `${fmtCompactNum(seg.barsStored ?? 0)}/${fmtCompactNum(seg.barsExpected)} 条`
+                            : `${fmtCompactNum(seg.done)}/${fmtCompactNum(seg.total)} 对`}
+                          （{segBarPercent(seg)}%）
+                        </span>
+                        <span>{segStatusLabel(seg)}</span>
                       </li>
                     ))}
                   </ul>
                 ) : null}
-                {prefetchJob.params?.coverage ? (
+                {prefetchJob?.params?.coverage ? (
                   <p className="bt-rules">
                     拉取后覆盖 {prefetchJob.params.coverage.ready}/{prefetchJob.params.coverage.total}（
                     {prefetchJob.params.coverage.percent}%）
                     {prefetchJob.storageStats?.mb != null ? ` · 库 ${prefetchJob.storageStats.mb} MB` : ""}
+                  </p>
+                ) : coverage ? (
+                  <p className="bt-rules">
+                    入库 {fmtCompactNum(coverage.barsStored)}/{fmtCompactNum(coverage.barsExpected)}（
+                    {coverage.barPercent ?? coverage.percent}%）
+                    {storageStats?.mb != null ? ` · 库 ${storageStats.mb} MB` : ""}
                   </p>
                 ) : null}
               </>

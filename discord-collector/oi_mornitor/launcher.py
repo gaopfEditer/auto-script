@@ -16,7 +16,8 @@ logger = logging.getLogger("OI_Launcher")
 
 _PKG_ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = _PKG_ROOT / "frontend"
-DIST_INDEX = _PKG_ROOT / "static" / "dist" / "index.html"
+# vite build → public/oi-dist（与 server.py STATIC_DIST 一致）
+DIST_INDEX = _PKG_ROOT / "public" / "oi-dist" / "index.html"
 DEV_PORT = 5173
 
 

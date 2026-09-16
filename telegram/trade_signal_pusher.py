@@ -20,12 +20,18 @@ from typing import TYPE_CHECKING
 
 from trade_context_buffer import TradeContextBuffer, WindowMessage
 from trade_notify import push_aggregate_text
+from config import resolve_channel_profile
 from trade_signal_detect import (
     TradeSignal,
     format_signal_push,
+    is_push_bypass_message,
+    is_spam_or_recap_message,
+    log_signal_skip,
     looks_like_trade_message,
     parse_trade_text,
+    signal_skip_reason,
 )
+from ui_feed_pusher import parse_main_sender_patterns, sender_matches_main
 
 if TYPE_CHECKING:
     from telethon import TelegramClient
@@ -136,6 +142,31 @@ class TradeSignalPusher:
         body = (text or "").strip()
         if not body:
             return
+        profile = resolve_channel_profile(chat_id, fallback_title=title or str(chat_id))
+        profile_name = str(profile.get("name") or title or chat_id)
+        if is_spam_or_recap_message(body):
+            log_signal_skip(
+                "营销/战绩回顾",
+                chat_id=chat_id,
+                title=title,
+                profile_name=profile_name,
+                sender=sender,
+                msg_id=msg_id,
+                body=body,
+            )
+            return
+        main_patterns = parse_main_sender_patterns(profile.get("main") or "")
+        if main_patterns and not sender_matches_main(sender, main_patterns):
+            log_signal_skip(
+                f"发言人未命中 main 白名单（配置: {','.join(main_patterns)}）",
+                chat_id=chat_id,
+                title=title,
+                profile_name=profile_name,
+                sender=sender,
+                msg_id=msg_id,
+                body=body,
+            )
+            return
 
         self._buffer.add(
             chat_id,
@@ -170,7 +201,19 @@ class TradeSignalPusher:
             if current and current.has_core and current.symbol == merged.symbol:
                 merged = merged.merge_from(current)
             if not merged.sender:
-                merged.sender = sender
+                merged.sender = sender or profile.get("name") or title
+            skip = signal_skip_reason(merged, body, sender=sender)
+            if skip and not is_push_bypass_message(body):
+                log_signal_skip(
+                    skip,
+                    chat_id=chat_id,
+                    title=title,
+                    profile_name=profile_name,
+                    sender=sender,
+                    msg_id=msg_id,
+                    body=body,
+                )
+                return
 
             key = self._pending_key(chat_id, merged)
             if key in self._pending:

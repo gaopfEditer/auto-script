@@ -17,6 +17,26 @@ from oi_mornitor.symbol_aliases import normalize_usdt_symbol
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(PATTERN_STATE_DB).resolve().parent / "backtest_klines"
+
+
+def require_parquet_engine() -> None:
+    """写入 Parquet 必须有 pyarrow / fastparquet；缺了会静默丢 K 线。"""
+    try:
+        import pyarrow  # noqa: F401
+        return
+    except ImportError:
+        pass
+    try:
+        import fastparquet  # noqa: F401
+        return
+    except ImportError:
+        pass
+    raise RuntimeError(
+        "当前 Python 环境没有 pyarrow，K 线无法写入本地库。"
+        "请在 OI 使用的 venv 里执行: pip install pyarrow"
+    )
+
+
 _PARQUET_ROOT = _ROOT / "parquet"
 _META_DB = _ROOT / "meta.db"
 _BYBIT_PAGE_SLEEP = 0.3
@@ -171,6 +191,7 @@ class BacktestKlineStore:
     def upsert_rows(self, symbol: str, interval: str, rows: list[list[Any]]) -> int:
         if not rows:
             return 0
+        require_parquet_engine()
         sym = normalize_usdt_symbol(symbol)
         new_rows = []
         for row in rows:
@@ -259,14 +280,15 @@ class BacktestKlineStore:
             )
         return self.count_in_range(sym, interval, start_ms, end_ms)
 
-    def load_5m_bars(
+    def load_interval_bars(
         self,
         symbol: str,
+        interval: str,
         signal_at_ms: int,
         end_ms: int,
     ) -> list[dict[str, float]]:
         start_ms = signal_at_ms - 60_000
-        rows = self.load_rows(symbol, "5m", start_ms, end_ms)
+        rows = self.load_rows(symbol, interval, start_ms, end_ms)
         return [
             {
                 "ts": int(row[0]),
@@ -276,3 +298,11 @@ class BacktestKlineStore:
             }
             for row in rows
         ]
+
+    def load_5m_bars(
+        self,
+        symbol: str,
+        signal_at_ms: int,
+        end_ms: int,
+    ) -> list[dict[str, float]]:
+        return self.load_interval_bars(symbol, "5m", signal_at_ms, end_ms)

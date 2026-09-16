@@ -103,11 +103,19 @@ async def main() -> None:
     if secondary_ids:
         print(f"[+] 次要闲聊群 → push_chat: {sorted(secondary_ids)}", flush=True)
     cdp_send_ids = load_cdp_send_chat_ids()
+    cdp_send_set = set(cdp_send_ids)
+    card_route_ids = main_ids | cdp_send_set
     if cdp_send_ids:
         print(
             f"[+] CDP 发布白名单（channel_profiles.send）: {sorted(cdp_send_ids)}",
             flush=True,
         )
+        extra = sorted(cdp_send_set - main_ids)
+        if extra:
+            print(
+                f"[+] send 群走建卡 API（归档后推 TG + CDP）: {extra}",
+                flush=True,
+            )
     if profile_ids:
         print(f"[+] UI 实时页群（channel_profiles）: {sorted(profile_ids)}", flush=True)
         for cid in sorted(profile_ids):
@@ -138,17 +146,18 @@ async def main() -> None:
     elif profile_ids:
         print("[!] channel_profiles 已配置，但 CARDS API base 无效，UI 实时推送关闭", flush=True)
 
-    if main_ids:
+    if card_route_ids:
         card_pusher = TradeCardPusher(client=client)
         if card_pusher.enabled():
             print(
-                f"[+] 主群建卡: {get_cards_api_base_url()}/api/v1/cards "
-                f"（名称/头像见 channel_profiles.json，可后补）",
+                f"[+] 建卡 API: {get_cards_api_base_url()}/api/v1/cards "
+                f"（main_monitored + channel_profiles.send；归档后推 TG + CDP）",
                 flush=True,
             )
         else:
             print(
-                "[!] 已配置 main_monitored，但未设置 CARDS_API_KEY，主群不会建卡",
+                "[!] 已配置 main_monitored 或 channel_profiles.send，但未设置 CARDS_API_KEY，"
+                "不会建卡/CDP",
                 flush=True,
             )
             card_pusher = None
@@ -176,6 +185,8 @@ async def main() -> None:
         chat = await event.get_chat()
         title = getattr(chat, "title", None) or getattr(chat, "username", "") or str(event.chat_id)
         nick = await sender_display(client, msg)
+        if not nick or str(nick).strip().lower() in ("none", "null"):
+            nick = str(title) or f"TG {chat_id}"
         await format_message_console(
             client,
             msg,
@@ -211,7 +222,7 @@ async def main() -> None:
         if not text or chat_id in push_ids:
             return
 
-        if chat_id in main_ids:
+        if chat_id in card_route_ids:
             if card_pusher is not None:
                 await card_pusher.on_group_message(
                     chat_id,
@@ -222,9 +233,10 @@ async def main() -> None:
                     at=msg.date,
                 )
             elif looks_like_trade_message(text):
+                where = "send 白名单" if chat_id in cdp_send_set else "主发车群"
                 print(
-                    "[!] 主群交易信号但未建卡：请配置 CARDS_API_KEY（discord-collector/.env）"
-                    "并确保 collect:ui 在运行",
+                    f"[!] {where} 交易信号但未建卡：请配置 CARDS_API_KEY（discord-collector/.env）"
+                    "、TRADE_SIGNAL_AI_PUBLISH=1，并确保 collect:ui 在运行",
                     flush=True,
                 )
             return

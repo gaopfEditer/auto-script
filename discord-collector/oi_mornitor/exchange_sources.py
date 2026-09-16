@@ -84,13 +84,15 @@ async def _get_json(
     url: str,
     *,
     source: str,
+    max_attempts: int = 3,
+    timeout_sec: float | None = None,
 ) -> Any | None:
-    timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SEC)
+    timeout = aiohttp.ClientTimeout(total=timeout_sec if timeout_sec is not None else HTTP_TIMEOUT_SEC)
     status, data = await http_backoff.get_json(
         session,
         url,
         timeout=timeout,
-        max_attempts=3,
+        max_attempts=max_attempts,
         label=source,
     )
     if status == 200:
@@ -446,7 +448,7 @@ async def _fetch_bybit_klines(
     if end_time is not None and end_time > 0:
         url += f"&end={int(end_time)}"
     payload = await _get_json(session, url, source="Bybit-klines")
-    if not isinstance(payload, dict) or int(payload.get("retCode") or -1) != 0:
+    if not isinstance(payload, dict) or int(payload.get("retCode", -1)) != 0:
         return []
     rows_raw = (payload.get("result") or {}).get("list") or []
     out: list[list[Any]] = []
@@ -487,8 +489,14 @@ async def fetch_bybit_klines_range(
             f"?category=linear&symbol={symbol}&interval={iv}&limit={cap}"
             f"&start={start_ms}&end={end_cursor}"
         )
-        payload = await _get_json(session, url, source="Bybit-klines-range")
-        if not isinstance(payload, dict) or int(payload.get("retCode") or -1) != 0:
+        payload = await _get_json(
+            session,
+            url,
+            source="Bybit-klines-range",
+            max_attempts=2,
+            timeout_sec=12,
+        )
+        if not isinstance(payload, dict) or int(payload.get("retCode", -1)) != 0:
             break
         rows_raw = (payload.get("result") or {}).get("list") or []
         if not rows_raw:

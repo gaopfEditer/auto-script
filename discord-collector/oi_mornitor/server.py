@@ -342,7 +342,7 @@ async def handle_backtest_structure_options(_request: web.Request) -> web.Respon
             "defaultSymbolScope": "top200",
             "defaultMaxSymbols": 200,
             "defaultMaxDays": 730,
-            "settleRules": "BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% · 信号后 3h · 5m K 线核实",
+            "settleRules": "BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% · 信号后 3h · 15m K 线核实",
             "klineSource": "bybit_v5_parquet",
             "klineSourceNote": (
                 f"K 线：Bybit V5 分页 → Parquet（{size_hint}）；"
@@ -437,7 +437,12 @@ async def handle_backtest_kline_prefetch_start(request: web.Request) -> web.Resp
 
 
 async def handle_backtest_kline_prefetch_get(request: web.Request) -> web.Response:
-    from oi_mornitor.backtest_prefetch import get_prefetch_job, prefetch_job_to_dict
+    from oi_mornitor.backtest_prefetch import (
+        get_prefetch_job,
+        maybe_resume_prefetch_job,
+        prefetch_job_to_dict,
+    )
+    from oi_mornitor.radar import get_service
 
     job_id = str(request.match_info.get("job_id") or "").strip()
     if not job_id:
@@ -445,7 +450,24 @@ async def handle_backtest_kline_prefetch_get(request: web.Request) -> web.Respon
     job = get_prefetch_job(job_id)
     if job is None:
         return _json_response({"ok": False, "error": "job not found"}, status=404)
+    job = await maybe_resume_prefetch_job(job, lambda: get_service().radar.last_all_rows)
     return _json_response({"ok": True, **prefetch_job_to_dict(job)})
+
+
+async def handle_backtest_kline_prefetch_latest(_request: web.Request) -> web.Response:
+    """最近一次 K 线拉取任务。"""
+    from oi_mornitor.backtest_prefetch import (
+        get_latest_prefetch_job,
+        maybe_resume_prefetch_job,
+        prefetch_job_to_dict,
+    )
+    from oi_mornitor.radar import get_service
+
+    job = get_latest_prefetch_job()
+    if job is None:
+        return _json_response({"ok": True, "job": None})
+    job = await maybe_resume_prefetch_job(job, lambda: get_service().radar.last_all_rows)
+    return _json_response({"ok": True, "job": prefetch_job_to_dict(job)})
 
 
 async def handle_backtest_kline_coverage(request: web.Request) -> web.Response:
@@ -1060,10 +1082,20 @@ async def handle_stream(request: web.Request) -> web.StreamResponse:
 
 
 async def on_startup(app: web.Application) -> None:
-
     await get_service().start_background(SCAN_INTERVAL_SEC)
-
     logger.info("雷达后台扫描已挂载到 Web 服务")
+
+    async def _resume_kline_prefetch() -> None:
+        from oi_mornitor.backtest_prefetch import resume_interrupted_prefetch
+
+        try:
+            job = await resume_interrupted_prefetch(lambda: get_service().radar.last_all_rows)
+            if job is not None:
+                logger.info("已恢复中断的 K 线拉取 %s", job.id)
+        except Exception:  # noqa: BLE001
+            logger.exception("恢复 K 线拉取失败")
+
+    asyncio.create_task(_resume_kline_prefetch())
 
 
 
@@ -1120,6 +1152,7 @@ def create_app() -> web.Application:
     app.router.add_post("/api/backtest/structure", handle_backtest_structure_start)
     app.router.add_get("/api/backtest/structure/{job_id}", handle_backtest_structure_get)
     app.router.add_post("/api/backtest/kline/prefetch", handle_backtest_kline_prefetch_start)
+    app.router.add_get("/api/backtest/kline/prefetch/latest", handle_backtest_kline_prefetch_latest)
     app.router.add_get("/api/backtest/kline/prefetch/{job_id}", handle_backtest_kline_prefetch_get)
     app.router.add_post("/api/backtest/kline/coverage", handle_backtest_kline_coverage)
 

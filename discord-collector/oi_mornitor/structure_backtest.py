@@ -10,7 +10,9 @@ from typing import Any, Callable
 
 import aiohttp
 
-from oi_mornitor.backtest_common import kline_window_ms, parse_ms, resolve_backtest_symbols
+from oi_mornitor.backtest_common import kline_window_ms, parse_ms, resolve_backtest_symbols, resolve_local_backtest_symbols
+from oi_mornitor.config import BYBIT_BASE_URL
+from oi_mornitor.http_session import http_session_with_fallback
 from oi_mornitor.backtest_kline_store import BacktestKlineStore, storage_stats
 from oi_mornitor.backtest_prefetch import _prefetch_klines
 from oi_mornitor.breakout_detector import klines_to_df
@@ -120,14 +122,14 @@ def _scan_symbol_interval(
         defense: Any,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        settle_end = signal_at_ms + _VERIFY_DELAY_MS + 5 * 60_000
-        bars_5m = store.load_5m_bars(symbol, signal_at_ms, settle_end)
+        settle_end = signal_at_ms + _VERIFY_DELAY_MS + 15 * 60_000
+        bars_settle = store.load_interval_bars(symbol, "15m", signal_at_ms, settle_end)
         settled = settle_signal_by_5m_bars(
             side=side,
             entry=entry,
             symbol=symbol,
             signal_at_ms=signal_at_ms,
-            bars_5m=bars_5m,
+            bars_5m=bars_settle,
             now_ms=settle_end,
         )
         row: dict[str, Any] = {
@@ -263,36 +265,43 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
     skip_fetch = bool(p.get("skipFetch", True))
     store = BacktestKlineStore()
 
-    async with aiohttp.ClientSession() as session:
-        symbols, universe_meta = await resolve_backtest_symbols(
-            session,
+    if skip_fetch:
+        symbols, universe_meta = resolve_local_backtest_symbols(
             scope=scope,
             max_symbols=max_symbols,
-            end_ms=end_ms,
             get_pool_rows=get_pool_rows,
         )
-        if not symbols:
-            job.status = "failed"
-            job.error = "无可用币种（pool 为空时可改用 top200 / majors / all）"
-            job.finished_at = time.time()
-            return
-        if universe_meta:
-            job.params["universe"] = universe_meta
-        job.params["symbols"] = symbols
-
-        if not skip_fetch:
-            fetch_sem = asyncio.Semaphore(2)
-            job.progress = {"phase": "fetch", "done": 0, "total": 0}
-            await _prefetch_klines(
+    else:
+        async with http_session_with_fallback(BYBIT_BASE_URL) as session:
+            symbols, universe_meta = await resolve_backtest_symbols(
                 session,
-                store,
-                symbols=symbols,
-                intervals=intervals,
-                start_ms=start_ms,
+                scope=scope,
+                max_symbols=max_symbols,
                 end_ms=end_ms,
-                progress=job.progress,
-                fetch_sem=fetch_sem,
+                get_pool_rows=get_pool_rows,
             )
+            if symbols:
+                fetch_sem = asyncio.Semaphore(2)
+                job.progress = {"phase": "fetch", "done": 0, "total": 0}
+                await _prefetch_klines(
+                    session,
+                    store,
+                    symbols=symbols,
+                    intervals=intervals,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    progress=job.progress,
+                    fetch_sem=fetch_sem,
+                )
+
+    if not symbols:
+        job.status = "failed"
+        job.error = "无可用币种（pool 为空时可改用 top200 / majors / all）"
+        job.finished_at = time.time()
+        return
+    if universe_meta:
+        job.params["universe"] = universe_meta
+    job.params["symbols"] = symbols
 
     tasks = [(sym, iv) for sym in symbols for iv in intervals]
     total = len(tasks)
@@ -306,10 +315,11 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
     }
     all_items: list[dict[str, Any]] = []
 
-    for sym, iv in tasks:
+    for i, (sym, iv) in enumerate(tasks):
         job.progress["current"] = f"扫描 {sym} {iv}"
         try:
-            chunk = _scan_symbol_interval(
+            chunk = await asyncio.to_thread(
+                _scan_symbol_interval,
                 store,
                 symbol=sym,
                 interval=iv,
@@ -321,7 +331,9 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
                 all_items.extend(chunk)
         except Exception as exc:  # noqa: BLE001
             logger.debug("回测扫描失败 %s %s: %s", sym, iv, exc)
-        job.progress["done"] = int(job.progress.get("done") or 0) + 1
+        job.progress["done"] = i + 1
+        if i % 4 == 3:
+            await asyncio.sleep(0)
 
     all_items.sort(key=lambda x: int(x.get("signalAt") or 0), reverse=True)
     job.items = all_items
@@ -435,7 +447,7 @@ def job_to_dict(
         "pages": pages,
         "startedAt": job.started_at,
         "finishedAt": job.finished_at,
-        "settleRules": "BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% · 信号后 3h · 5m K 线核实",
+        "settleRules": "BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% · 信号后 3h · 15m K 线核实",
         "klineSource": "bybit_v5_parquet",
         "storageStats": storage_stats(),
         "kindOptions": KIND_OPTIONS,

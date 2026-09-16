@@ -16,15 +16,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 
 from cards_client import post_card, signal_to_card_payload
-from config import get_cards_api_key
+from config import get_cards_api_key, resolve_channel_profile
 from trade_context_buffer import TradeContextBuffer, WindowMessage
 from trade_signal_detect import (
     TradeSignal,
     format_signal_push,
     is_push_bypass_message,
+    is_spam_or_recap_message,
+    log_signal_skip,
     looks_like_trade_message,
     parse_trade_text,
+    signal_skip_reason,
 )
+from ui_feed_pusher import parse_main_sender_patterns, sender_matches_main
 
 # #prom 开仓后允许补充止盈/止损/币种的窗口
 _PROM_MERGE_WINDOW = timedelta(minutes=10)
@@ -234,6 +238,31 @@ class TradeCardPusher:
         body = (text or "").strip()
         if not body:
             return
+        profile = resolve_channel_profile(chat_id, fallback_title=title or str(chat_id))
+        profile_name = str(profile.get("name") or title or chat_id)
+        if is_spam_or_recap_message(body):
+            log_signal_skip(
+                "营销/战绩回顾",
+                chat_id=chat_id,
+                title=title,
+                profile_name=profile_name,
+                sender=sender,
+                msg_id=msg_id,
+                body=body,
+            )
+            return
+        main_patterns = parse_main_sender_patterns(profile.get("main") or "")
+        if main_patterns and not sender_matches_main(sender, main_patterns):
+            log_signal_skip(
+                f"发言人未命中 main 白名单（配置: {','.join(main_patterns)}）",
+                chat_id=chat_id,
+                title=title,
+                profile_name=profile_name,
+                sender=sender,
+                msg_id=msg_id,
+                body=body,
+            )
+            return
         print(f"    · [card_pusher] chat={chat_id} body[:80]={body[:80]!r}", flush=True)
 
         self._buffer.add(
@@ -255,7 +284,6 @@ class TradeCardPusher:
             snap = win.snapshot_for_ai()
 
             if not looks_like_trade_message(body):
-                print(f"    · [card_pusher] looks_like_trade_message=False, body={body!r}", flush=True)
                 return
 
             current = parse_trade_text(body, sender=sender, msg_id=msg_id)
@@ -269,7 +297,19 @@ class TradeCardPusher:
                 print(f"    · [card_pusher] merged is None, skip", flush=True)
                 return
             if not merged.sender:
-                merged.sender = sender
+                merged.sender = sender or profile.get("name") or title
+            skip = signal_skip_reason(merged, body, sender=sender)
+            if skip and not is_push_bypass_message(body):
+                log_signal_skip(
+                    skip,
+                    chat_id=chat_id,
+                    title=title,
+                    profile_name=profile_name,
+                    sender=sender,
+                    msg_id=msg_id,
+                    body=body,
+                )
+                return
 
             signal_at = at if isinstance(at, datetime) else now
             if signal_at.tzinfo is None:

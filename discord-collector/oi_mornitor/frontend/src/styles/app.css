@@ -3723,6 +3723,7 @@ button {
 }
 
 .bt-seg-running { color: var(--yellow); }
+.bt-seg-partial { color: var(--accent, #6eb5ff); }
 .bt-seg-done { color: var(--green); }
 
 .bt-wr-filters {

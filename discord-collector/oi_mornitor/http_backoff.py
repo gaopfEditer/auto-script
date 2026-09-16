@@ -252,7 +252,11 @@ async def get_json(
             last_status = 0
 
         if attempt + 1 < attempts:
-            delay = min(compute_backoff_sec(attempt, None), BACKOFF_BASE_SEC)
+            # 币安限频才走 60s 起跳；Bybit/OKX 超时用短间隔，避免回测拉取卡死在 0%
+            if scope == "binance":
+                delay = min(compute_backoff_sec(attempt, None), BACKOFF_BASE_SEC)
+            else:
+                delay = min(1.5 * (attempt + 1), 4.0)
             await asyncio.sleep(delay)
 
     return last_status, None
