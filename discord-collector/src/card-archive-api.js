@@ -16,6 +16,7 @@ import { runBatchLiquidation, runBatchClearLiquidation } from "./card-liquidatio
 import { signalCardToClient } from "./discord-signal-card-service.js";
 import { createCardArchiveListCache } from "./card-archive-list-cache.js";
 import { requireLocalRequest } from "./local-request.js";
+import { formatPipelineLog } from "./signal-pipeline-log.js";
 
 /**
  * 卡片正文：优先 body / content / 原文 / 正文，兼容 rawContent / description。
@@ -248,6 +249,7 @@ export function requireOpenApiKey(req, res, next) {
  */
 export function registerCardArchiveRoutes(app, store, archiveService, broadcast) {
   const liquidationLog = createLogger("card-liquidate");
+  const pipelineLog = createLogger("signal-pipeline");
   const listCache = createCardArchiveListCache(store, createLogger("card-list-cache"));
 
   /** @param {number} id */
@@ -650,6 +652,17 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
         });
       }
       const input = normalizeOpenCardInput(body);
+      const sourceType = normalizeCardSourceType(input.sourceType);
+      if (sourceType === "telegram" || String(body.source ?? "").trim().toLowerCase() === "telegram") {
+        pipelineLog.info(
+          formatPipelineLog("archive_ingest", {
+            channelId: input.channelId,
+            channelName: input.channelName,
+            symbol: input.symbol,
+            sourceRef: input.sourceRef ? String(input.sourceRef) : "",
+          }),
+        );
+      }
       const execution = normalizeExecution(
         {
           symbol: input.symbol,
@@ -690,6 +703,17 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
         images: input.images,
         mergeWindowMs: input.mergeWindowMs,
       });
+      if (sourceType === "telegram" || String(body.source ?? "").trim().toLowerCase() === "telegram") {
+        pipelineLog.info(
+          formatPipelineLog("archive_ok", {
+            cardId: card?.id ?? "?",
+            channelId: input.channelId,
+            channelName: input.channelName,
+            symbol: input.symbol ?? execution.symbol,
+            sourceRef: input.sourceRef ? String(input.sourceRef) : "",
+          }),
+        );
+      }
       listCache.onClientCardChanged(card);
       res.status(201).json({
         ok: true,

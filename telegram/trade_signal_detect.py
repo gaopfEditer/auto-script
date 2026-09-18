@@ -25,7 +25,7 @@ _T2S = str.maketrans({
     "塊": "块", "幣": "币", "匯": "汇", "總": "总", "開": "开",
     "關": "关", "時": "时", "間": "间", "週": "周", "報": "报",
     "見": "见", "覽": "览", "響": "响", "應": "应", "當": "当",
-    "樣": "样", "檢": "检", "測": "测", "設": "设", "計": "计",
+    "樣": "样", "檢": "检", "測": "测", "設": "设", "計": "计", "輕": "轻",
     "畫": "画", "畫": "画", "視": "视", "頻": "频", "變": "变",
     "顏": "颜", "色": "色", "邊": "边", "邊": "边", "畫": "画",
 })
@@ -289,6 +289,16 @@ def _pick_symbol(text: str) -> str:
 
 
 def _pick_direction(text: str) -> str:
+    if re.search(r"轻[仓倉]多|重[仓倉]多", text):
+        return "多"
+    if re.search(r"轻[仓倉]空|重[仓倉]空", text):
+        return "空"
+    hm = re.search(r"#[A-Za-z]{2,12}.{0,24}?多(?![A-Za-z0-9])", text)
+    if hm and not re.search(r"空", hm.group(0)):
+        return "多"
+    hm = re.search(r"#[A-Za-z]{2,12}.{0,24}?空(?![A-Za-z0-9])", text)
+    if hm:
+        return "空"
     dl = _DIR_LINE.search(text)
     if dl:
         chunk = dl.group(1) or ""
@@ -373,13 +383,16 @@ def signal_skip_reason(
     who = resolve_sender_name(sender, sig.sender)
     if not who:
         return f"发送者无效({(sender or sig.sender)!r})"
-    sym = (sig.symbol or "").upper()
-    if not sym or sym in _SYM_BLOCK or len(sym) < 2 or len(sym) > 12:
-        return f"币种无效({sig.symbol!r})"
     if sig.is_prom and sig.direction:
         return None
     if sig.has_core:
         return None
+    # 仅止盈止损的补充消息：允许无币种，由 pending / 窗口合并
+    if sig.has_tpsl and not sig.symbol:
+        return None
+    sym = (sig.symbol or "").upper()
+    if not sym or sym in _SYM_BLOCK or len(sym) < 2 or len(sym) > 12:
+        return f"币种无效({sig.symbol!r})"
     if (sig.entry or "").strip() or sig.has_tpsl:
         return None
     return "缺少币种/方向"
@@ -401,14 +414,19 @@ def log_signal_skip(
     preview: int = 160,
 ) -> None:
     """记录被跳过的消息来源，便于手动加 main 过滤或调整监听群。"""
+    from signal_pipeline_log import log_pipeline
+
     ch = (profile_name or title or str(chat_id)).strip()
     prev = (body or "").replace("\n", " ").strip()
     if len(prev) > preview:
         prev = prev[:preview] + "…"
-    mid = f" msg_id={msg_id}" if msg_id is not None else ""
-    print(
-        f"[signal-skip] {reason} | chat={chat_id}「{ch}」sender={sender!r}{mid} | {prev}",
-        flush=True,
+    log_pipeline(
+        "skip",
+        chat_id=chat_id,
+        msg_id=msg_id,
+        sender=sender or ch,
+        reason=reason,
+        body=prev,
     )
 
 

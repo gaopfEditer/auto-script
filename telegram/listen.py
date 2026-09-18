@@ -1,16 +1,16 @@
 """
 实时监听新消息（events.NewMessage），适合信号/推送场景，避免轮询。
 
-监听与建卡来源（唯一）：
+监听与建卡来源：
   - channel_profiles.json → send 白名单
+  - channel_profiles.json → 含 only_names 的群（按发言人模糊匹配后建卡推 TG）
 
-推送目标（唯一）：
+推送目标：
   - discord-collector 归档卡片 → TELEGRAM_PUSH_CHAT_ID（collect:ui）
-
-不再使用 monitored_groups.txt 的 main_monitored / monitored / push_chat 做监听或推送。
+  - CDP 发布仍仅 send 白名单群
 
 覆盖与例外：
-  - TELEGRAM_TARGET_CHAT_IDS：非空时只监听其中 id（须落在 send 白名单内）
+  - TELEGRAM_TARGET_CHAT_IDS：非空时只监听其中 id（须落在上述来源内）
   - TELEGRAM_LISTEN_ALL=1：恢复监听所有已加入对话（流量大，慎用）
 
 用法:
@@ -28,56 +28,66 @@ from telethon import events
 from config import (
     get_cards_api_base_url,
     get_target_chat_ids,
-    load_cdp_send_chat_ids,
-    resolve_channel_profile,
 )
 from logging_setup import setup_telethon_logging
 from message_format import download_message_images, format_message_console, sender_display
 from session import create_and_start_client
+from signal_pipeline_log import log_pipeline
 from trade_card_pusher import TradeCardPusher
 from trade_signal_detect import looks_like_trade_message
 from ui_feed_pusher import (
     UiFeedPusher,
-    parse_main_sender_patterns,
+    get_profile_meta,
+    load_card_route_chat_ids,
+    load_cdp_send_chat_ids,
+    load_only_names_chat_ids,
+    parse_only_names_patterns,
+    sender_filter_patterns,
 )
 
 
-def _resolve_listen_targets(send_ids: list[int]) -> tuple[list[int] | None, str]:
-    """监听 chat 列表；建卡仍仅限 send 白名单。"""
+def _resolve_listen_targets(route_ids: list[int]) -> tuple[list[int] | None, str]:
+    """监听 chat 列表；建卡范围与 route_ids 一致。"""
     override = get_target_chat_ids()
-    if override is not None:
-        allowed = set(send_ids)
+    # 未设置 TELEGRAM_TARGET_CHAT_IDS 时 get_target_chat_ids() 返回 []，不能当作 override
+    if override:
+        allowed = set(route_ids)
         filtered = [cid for cid in override if cid in allowed]
         skipped = [cid for cid in override if cid not in allowed]
         if skipped:
             print(
-                f"[!] TELEGRAM_TARGET_CHAT_IDS 中不在 send 白名单，已忽略: {skipped}",
+                f"[!] TELEGRAM_TARGET_CHAT_IDS 中不在监听来源，已忽略: {skipped}",
                 flush=True,
             )
         if not filtered:
             print(
-                "[!] TELEGRAM_TARGET_CHAT_IDS 与 send 白名单无交集，"
-                "请检查 channel_profiles.json → send",
+                "[!] TELEGRAM_TARGET_CHAT_IDS 与监听来源无交集，"
+                "已回退为 send ∪ only_names",
                 flush=True,
             )
-            return [], "TELEGRAM_TARGET_CHAT_IDS∩send"
-        return sorted(filtered), "TELEGRAM_TARGET_CHAT_IDS∩send"
+            return route_ids, "card_route(fallback)"
+        return sorted(filtered), "TELEGRAM_TARGET_CHAT_IDS∩route"
     if os.environ.get("TELEGRAM_LISTEN_ALL", "").strip().lower() in ("1", "true", "yes", "on"):
         return None, "TELEGRAM_LISTEN_ALL"
-    return send_ids, "channel_profiles.send"
+    return route_ids, "send∪only_names"
 
 
 async def main() -> None:
     send_ids = load_cdp_send_chat_ids()
-    targets, source = _resolve_listen_targets(send_ids)
+    only_names_ids = load_only_names_chat_ids()
+    route_ids = load_card_route_chat_ids()
+    targets, source = _resolve_listen_targets(route_ids)
     listen_all = targets is None and source == "TELEGRAM_LISTEN_ALL"
 
     if listen_all:
-        print("[!] 监听范围: TELEGRAM_LISTEN_ALL（全部已加入对话；建卡仍仅 send 白名单）", flush=True)
-    elif not send_ids:
         print(
-            "[!] 未配置 send 白名单。\n"
-            "  请在 channel_profiles.json 的 \"send\" 数组中填写来源群 id。",
+            "[!] 监听范围: TELEGRAM_LISTEN_ALL（全部已加入对话；建卡仍仅 send∪only_names）",
+            flush=True,
+        )
+    elif not route_ids:
+        print(
+            "[!] 未配置监听来源。\n"
+            "  请在 channel_profiles.json 配置 send 和/或 only_names 群。",
             flush=True,
         )
         raise SystemExit(2)
@@ -85,18 +95,27 @@ async def main() -> None:
         raise SystemExit(2)
     else:
         print(f"[+] 信号来源（{source}）: {targets}", flush=True)
+        if only_names_ids:
+            extra = sorted(set(only_names_ids) - set(send_ids))
+            if extra:
+                print(f"[+] only_names 群（发言人过滤后建卡推 TG）: {extra}", flush=True)
+        if send_ids:
+            print(f"[+] send 白名单（建卡 + TG + CDP）: {sorted(send_ids)}", flush=True)
 
     send_set = set(send_ids)
-    card_route_ids = send_set
+    card_route_ids = set(route_ids)
 
-    for cid in sorted(send_set):
-        profile = resolve_channel_profile(cid)
+    for cid in sorted(card_route_ids):
+        profile = get_profile_meta(cid)
         name = profile.get("name") or str(cid)
-        main_raw = (profile.get("main") or "").strip()
-        patterns = parse_main_sender_patterns(main_raw)
+        patterns = sender_filter_patterns(profile)
         line = f"    · chat={cid}「{name}」"
-        if patterns:
+        if parse_only_names_patterns(profile.get("only_names")):
+            line += f" only_names 过滤: {patterns}"
+        elif patterns:
             line += f" main 过滤发言人: {patterns}"
+        if cid in send_set:
+            line += " [CDP]"
         print(line, flush=True)
 
     push_chat = os.environ.get("TELEGRAM_PUSH_CHAT_ID", "").strip()
@@ -118,26 +137,26 @@ async def main() -> None:
     chats = targets
     card_pusher: TradeCardPusher | None = None
     ui_feed = UiFeedPusher()
-    if ui_feed.enabled() and send_set:
+    if ui_feed.enabled() and card_route_ids:
         print(
             f"[+] UI 实时推送 → {get_cards_api_base_url()}/api/telegram/live/ingest "
-            f"（仅 send 白名单群；前端 /telegram）",
+            f"（send∪only_names 群；前端 /telegram）",
             flush=True,
         )
-    elif send_set:
-        print("[!] send 白名单已配置，但 CARDS API base 无效，UI 实时推送关闭", flush=True)
+    elif card_route_ids:
+        print("[!] 监听来源已配置，但 CARDS API base 无效，UI 实时推送关闭", flush=True)
 
     if card_route_ids:
         card_pusher = TradeCardPusher(client=client)
         if card_pusher.enabled():
             print(
                 f"[+] 建卡 API: {get_cards_api_base_url()}/api/v1/cards "
-                f"（仅 channel_profiles.send → 归档 → TG + CDP）",
+                f"（send∪only_names → 归档 → TG；CDP 仅 send）",
                 flush=True,
             )
         else:
             print(
-                "[!] send 白名单已配置，但未设置 CARDS_API_KEY，不会建卡/推送/CDP",
+                "[!] 监听来源已配置，但未设置 CARDS_API_KEY，不会建卡/推送/CDP",
                 flush=True,
             )
             card_pusher = None
@@ -161,7 +180,7 @@ async def main() -> None:
 
         text = (msg.message or "").strip()
 
-        if chat_id in send_set:
+        if chat_id in card_route_ids:
             image_paths: list[str] = []
             if getattr(msg, "media", None):
                 image_paths = await download_message_images(client, msg)
@@ -180,6 +199,15 @@ async def main() -> None:
                     at=msg.date,
                     image_paths=image_paths,
                 )
+
+        if chat_id in card_route_ids and text:
+            log_pipeline(
+                "received",
+                chat_id=chat_id,
+                msg_id=int(msg.id),
+                sender=nick,
+                body=text,
+            )
 
         if not text or chat_id not in card_route_ids:
             return

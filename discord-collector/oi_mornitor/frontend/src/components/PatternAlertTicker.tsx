@@ -4,6 +4,7 @@ import type { ChartAlertEntryFocus, PatternAlert } from "../types";
 import { formatAlertHoverDetail } from "../utils/alertHoverDetail";
 import { isOiOperator } from "../utils/oiOperator";
 import {
+  ALERT_SETTLE_RULES_SUMMARY,
   loadAlertStats,
   outcomeLabel,
   formatAlertTotalPnlPct,
@@ -457,8 +458,8 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
       const base = it.detailText || formatAlertHoverDetail(it.alert);
       const statsLine =
         oc && oc !== "pending"
-          ? `\n--------\n核实结果: ${outcomeLabel(oc)}（信号后 3h · 卡片清算规则）`
-          : `\n--------\n核实: 信号满 3 小时后按卡片规则核算（±5% · 主流100x/山寨20x）`;
+          ? `\n--------\n核实结果: ${outcomeLabel(oc)}（分批 TP + Runner · 最长 3h）`
+          : `\n--------\n核实: 每 15m 步进 · TP 3%/7% 分批 · Runner 跟踪 · 止损 ±5%`;
       setHover({
         text: `${base}${statsLine}`,
         dir: it.dir,
@@ -782,7 +783,7 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
         className="pattern-alert-winrate"
         role="button"
         tabIndex={0}
-        title={`双击查看信号列表与回溯盈亏\n形态信号胜率（对齐卡片清算）\nBTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% TP/SL\n信号满 3 小时后核实\n${wrDetail}`}
+        title={`双击查看信号列表与回溯盈亏\n${ALERT_SETTLE_RULES_SUMMARY}\n${wrDetail}`}
         onDoubleClick={(e) => {
           e.preventDefault();
           e.stopPropagation();

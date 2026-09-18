@@ -297,6 +297,25 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
     return _json_response({"ok": True, **payload})
 
 
+async def handle_pattern_alert_stats_record_card(request: web.Request) -> web.Response:
+    """Telegram 交易卡片归档后登记胜率库。body: { card: {...} }"""
+    from oi_mornitor.pattern_alert_stats import record_card_from_archive
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        return _json_response({"ok": False, "error": "body must be object"}, status=400)
+    card = body.get("card")
+    if not isinstance(card, dict):
+        return _json_response({"ok": False, "error": "card must be object"}, status=400)
+    rec = record_card_from_archive(card)
+    if rec is None:
+        return _json_response({"ok": False, "error": "card not eligible for stats"}, status=400)
+    return _json_response({"ok": True, "record": rec})
+
+
 async def handle_pattern_alert_stats_post(request: web.Request) -> web.Response:
     """结算结果回写 / 补登记。body: { updates: AlertStatsRecord[] }"""
     from oi_mornitor.pattern_alert_stats import apply_settle_updates, summarize
@@ -342,7 +361,10 @@ async def handle_backtest_structure_options(_request: web.Request) -> web.Respon
             "defaultSymbolScope": "top200",
             "defaultMaxSymbols": 200,
             "defaultMaxDays": 730,
-            "settleRules": "BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% · 信号后 3h · 15m K 线核实",
+            "settleRules": (
+                "BTC/ETH/SOL 100x · 山寨 20x · TP 3%/7% 分批 30%+30% · "
+                "Runner 40% 跟踪 · 止损 ±5% · 每 15m 核实 · 最长 3h"
+            ),
             "klineSource": "bybit_v5_parquet",
             "klineSourceNote": (
                 f"K 线：Bybit V5 分页 → Parquet（{size_hint}）；"
@@ -1164,6 +1186,7 @@ def create_app() -> web.Application:
     app.router.add_post("/api/focus-symbols", handle_focus_symbols_put)
 
     app.router.add_get("/api/pattern-alert-stats", handle_pattern_alert_stats_get)
+    app.router.add_post("/api/pattern-alert-stats/record-card", handle_pattern_alert_stats_record_card)
     app.router.add_post("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
     app.router.add_put("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
 

@@ -16,6 +16,7 @@ from config import (
     resolve_channel_profile,
     telegram_avatar_dir,
 )
+from signal_pipeline_log import log_pipeline
 from trade_signal_detect import TradeSignal, format_signal_push
 
 
@@ -131,6 +132,16 @@ def post_card(payload: dict[str, Any]) -> dict[str, Any]:
     if not key:
         raise RuntimeError("未配置 CARDS_API_KEY（请在 discord-collector/.env 或根 .env 设置）")
     url = f"{get_cards_api_base_url()}/api/v1/cards"
+    source_ref = str(payload.get("sourceRef") or "")
+    log_pipeline(
+        "card_post",
+        chat_id=payload.get("channelId"),
+        symbol=payload.get("symbol"),
+        direction=payload.get("direction"),
+        source_ref=source_ref or None,
+        url=url,
+        body=str(payload.get("body") or ""),
+    )
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -149,7 +160,31 @@ def post_card(payload: dict[str, Any]) -> dict[str, Any]:
                 raise RuntimeError(f"HTTP {resp.status}: {raw[:300]}")
             if isinstance(body, dict) and body.get("ok") is False:
                 raise RuntimeError(str(body.get("error") or body))
+            card = body.get("card") if isinstance(body, dict) else None
+            card_id = card.get("id") if isinstance(card, dict) else None
+            log_pipeline(
+                "card_ok",
+                chat_id=payload.get("channelId"),
+                card_id=card_id,
+                source_ref=source_ref or None,
+                symbol=payload.get("symbol"),
+            )
             return body if isinstance(body, dict) else {"ok": True, "raw": body}
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")[:300]
+        log_pipeline(
+            "card_fail",
+            chat_id=payload.get("channelId"),
+            source_ref=source_ref or None,
+            reason=f"HTTP {e.code}",
+            detail=err_body,
+        )
         raise RuntimeError(f"HTTP {e.code}: {err_body}") from e
+    except Exception as e:
+        log_pipeline(
+            "card_fail",
+            chat_id=payload.get("channelId"),
+            source_ref=source_ref or None,
+            reason=str(e),
+        )
+        raise

@@ -3913,6 +3913,17 @@ button {
   font-size: 0.78rem;
 }
 
+.bt-warn-banner {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #ffb86c;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(255, 184, 108, 0.08);
+  border: 1px solid rgba(255, 184, 108, 0.35);
+  margin-top: 6px;
+}
+
 .bt-run {
   margin-top: 4px;
   padding: 10px 14px;

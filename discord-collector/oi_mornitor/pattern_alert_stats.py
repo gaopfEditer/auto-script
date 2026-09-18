@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -20,7 +21,9 @@ _STATS_FILE = Path(PATTERN_STATE_DB).resolve().parent / "pattern_alert_stats.jso
 _MAX_ITEMS = int(os.environ.get("PATTERN_ALERT_STATS_MAX", "50000"))
 _PAGE_SIZE_DEFAULT = 100
 _VERIFY_DELAY_MS = 3 * 60 * 60 * 1000
-_DEFAULT_TP_SL_PCT = 5.0
+_VERIFY_INTERVAL_MS = 15 * 60 * 1000
+_DEFAULT_TP_SL_PCT = 3.0
+_DEFAULT_SL_PCT = 5.0
 _LEV_100 = frozenset({"BTC", "ETH", "SOL"})
 
 _TIME_FILTER_MS: dict[str, int] = {
@@ -362,6 +365,173 @@ def list_alert_stats_page(
         "typeLabels": [x["label"] for x in type_opts],
     }
 
+def card_stats_key(card_id: str | int) -> str:
+    """TG 交易卡片胜率 key（与前端 settle 核实一致）。"""
+    cid = str(card_id or "").strip()
+    return f"tg_card:{cid}" if cid else ""
+
+
+_SHORT_NOISE_RE = re.compile(
+    r"清空|空气|空调|空间|太空|空白|空泛|空想|空洞|空仓观望|空仓等待|空仓中|空方力量|多空博弈|多空|空头回补"
+)
+
+
+def _side_from_direction(raw: Any) -> str | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    lead = re.match(
+        r"^(做多|做空|多单|空单|LONG|SHORT|多|空)(?=$|[\s:：·,，/|（(\[【]|\d)",
+        text,
+        re.I,
+    )
+    if lead:
+        return "short" if re.search(r"空|SHORT", lead.group(1), re.I) else "long"
+    scrub = _SHORT_NOISE_RE.sub("·", text)
+    if re.search(r"做空|空单|進空|\bSHORT\b", scrub, re.I):
+        return "short"
+    if re.search(r"做多|多单|進多|\bLONG\b", scrub, re.I):
+        return "long"
+    if re.search(r"(^|[^\u4e00-\u9fff])空([^\u4e00-\u9fff]|$)", scrub):
+        return "short"
+    if re.search(r"(^|[^\u4e00-\u9fff])多([^\u4e00-\u9fff]|$)", scrub):
+        return "long"
+    if re.search(r"\bsell\b", scrub, re.I) and not re.search(r"\bbuy\b", scrub, re.I):
+        return "short"
+    if re.search(r"\bbuy\b", scrub, re.I):
+        return "long"
+    return None
+
+
+def _entry_from_card(card: dict[str, Any]) -> float | None:
+    ex = card.get("execution")
+    if not isinstance(ex, dict):
+        ex = {}
+    planned = ex.get("planned")
+    if not isinstance(planned, dict):
+        planned = {}
+    for k in ("entryPrice", "entry_price", "entry"):
+        try:
+            n = float(planned.get(k) if k in planned else card.get(k))
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            return n
+    parsed = card.get("parsedJson") or card.get("parsed_json")
+    if isinstance(parsed, dict):
+        try:
+            n = float(parsed.get("entry") or parsed.get("entryPrice"))
+            if n > 0:
+                return n
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def record_card_from_archive(card: dict[str, Any]) -> dict[str, Any] | None:
+    """Telegram 交易卡片归档后登记待核实信号（分批 TP / Runner 回溯与形态信号同口径）。"""
+    if not isinstance(card, dict):
+        return None
+    card_id = card.get("id") or card.get("cardId") or card.get("card_id")
+    if card_id is None or str(card_id).strip() == "":
+        return None
+    key = card_stats_key(card_id)
+    if not key:
+        return None
+
+    ex = card.get("execution")
+    if not isinstance(ex, dict):
+        ex = {}
+    direction = ex.get("direction") or card.get("direction")
+    parsed = card.get("parsedJson") or card.get("parsed_json")
+    if not direction and isinstance(parsed, dict):
+        direction = parsed.get("direction")
+    side = _side_from_direction(direction)
+    if side not in ("long", "short"):
+        return None
+    entry = _entry_from_card(card)
+    if entry is None:
+        return None
+
+    sym_raw = str(ex.get("symbol") or card.get("symbol") or "").strip()
+    if not sym_raw and isinstance(parsed, dict):
+        sym_raw = str(parsed.get("symbol") or "").strip()
+    if not sym_raw:
+        return None
+
+    signal_raw = (
+        card.get("signalAt")
+        or card.get("signal_at")
+        or card.get("createdAt")
+        or card.get("created_at")
+    )
+    signal_at = _to_ms(signal_raw)
+    trade_symbol = normalize_usdt_symbol(sym_raw)
+    channel_id = str(card.get("channelId") or card.get("channel_id") or "").strip()
+    channel_name = str(card.get("channelName") or card.get("channel_name") or "").strip()
+    if not channel_name and isinstance(parsed, dict):
+        channel_name = str(parsed.get("channelName") or "").strip()
+    type_label = channel_name or channel_id or "TG交易卡"
+    dir_cn = "多" if side == "long" else "空"
+
+    with _LOCK:
+        items = _load()
+        existing = next((r for r in items if r.get("key") == key), None)
+        if existing:
+            patched = dict(existing)
+            changed = False
+            if not patched.get("entry") and entry:
+                patched["entry"] = entry
+                changed = True
+            if patched.get("side") not in ("long", "short") and side:
+                patched["side"] = side
+                patched["dir"] = dir_cn
+                changed = True
+            if not patched.get("typeLabel") and type_label:
+                patched["typeLabel"] = type_label
+                changed = True
+            if not patched.get("tradeSymbol") and trade_symbol:
+                patched["tradeSymbol"] = trade_symbol
+                changed = True
+            if not patched.get("channelId") and channel_id:
+                patched["channelId"] = channel_id
+                changed = True
+            if changed and str(patched.get("outcome") or "pending") == "pending":
+                items = [patched if r.get("key") == key else r for r in items]
+                _save(items)
+                return patched
+            return existing
+
+        rec = {
+            "key": key,
+            "symbol": _display_symbol(sym_raw),
+            "tradeSymbol": trade_symbol,
+            "dir": dir_cn,
+            "side": side,
+            "signalAt": signal_at,
+            "entry": entry,
+            "tier": _detect_tier(sym_raw),
+            "stepPct": _DEFAULT_TP_SL_PCT,
+            "verifyAt": signal_at + _VERIFY_DELAY_MS,
+            "outcome": "pending",
+            "typeLabel": type_label,
+            "interval": "15m",
+            "source": "telegram_card",
+            "cardId": str(card_id),
+            "channelId": channel_id,
+            "recordedAt": _now_ms(),
+        }
+        _save([rec, *items])
+        logger.info(
+            "TG交易卡胜率入库 #%s %s %s @%s",
+            card_id,
+            rec["symbol"],
+            type_label,
+            signal_at,
+        )
+        return rec
+
+
 def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
     """TG 推送形态/结构卡片时登记一条待核实信号。"""
     if not isinstance(alert, dict):
@@ -462,6 +632,14 @@ def apply_settle_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "stepPct",
         "tier",
         "verifyAt",
+        "lastSettleCheckAt",
+        "source",
+        "cardId",
+        "channelId",
+        "typeLabel",
+        "entry",
+        "side",
+        "dir",
     }
     with _LOCK:
         items = _load()
@@ -517,5 +695,7 @@ def summarize(items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         "errors": errors,
         "winRate": (wins / settled) if settled else None,
         "totalPnlPct": round(total_pnl, 2) if pnl_n else None,
-        "leverageHint": "BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% TP/SL",
+        "leverageHint": (
+            "BTC/ETH/SOL 100x · 山寨 20x · TP 3%/7% 分批 · Runner 跟踪 · 止损 ±5%"
+        ),
     }

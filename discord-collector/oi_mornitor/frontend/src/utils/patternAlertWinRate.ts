@@ -1,9 +1,8 @@
 /**
- * 形态 ticker 信号胜率：对齐 Discord 卡片清算口径。
- * - 信号后满 3h 核实
- * - 仅有方向时默认 ±5% 止盈/止损（与 LIQUIDATION_DEFAULT_TP_SL_PCT 一致）
+ * 形态 ticker 信号胜率：三档分批 + Runner 跟踪止盈。
+ * - TP1 3%（30%）· TP2 7%（30%）· Runner 40% 跟踪（5% 回撤，多上移/空下移）
+ * - 止损 ±5% · 每 15m 步进核实 · 最长 3h
  * - 杠杆：BTC/ETH/SOL 100x，其余山寨 20x
- * - K 线时序先触 SL / TP；窗口内未触达则按收盘价相对入场结算
  */
 import type { ChartAlertEntryFocus, PatternAlert, PatternChartMarker } from "../types";
 import { fetchBinanceFuturesKlines } from "./binanceKlines";
@@ -42,6 +41,13 @@ export type AlertStatsRecord = {
   maxProfitPrice?: number;
   /** 最大浮盈时间 ms */
   maxProfitAt?: number;
+  /** 15m 步进核实的上次检查时间（仍为 pending 时写入） */
+  lastSettleCheckAt?: number;
+  /** telegram_push | telegram_card */
+  source?: string;
+  /** TG 交易卡片 id（source=telegram_card） */
+  cardId?: string;
+  channelId?: string;
 };
 
 export type AlertWinRateSummary = {
@@ -61,16 +67,24 @@ const STATS_CACHE_KEY = "oi_pattern_alert_stats_v1";
 const LOCAL_STATS_SOFT_MAX = 2000;
 /** 弹窗列表每页条数 */
 export const ALERT_STATS_PAGE_SIZE = 100;
-/** 与卡片核实窗口一致：信号后满 3h */
+/** 核实窗口最长 3h */
 export const ALERT_VERIFY_DELAY_MS = 3 * 60 * 60_000;
-/** 与 card-liquidation-engine LIQUIDATION_DEFAULT_TP_SL_PCT 一致 */
-export const ALERT_DEFAULT_TP_SL_PCT = 5;
+/** 15m 步进核实 */
+export const ALERT_VERIFY_INTERVAL_MS = 15 * 60_000;
+/** TP1 档位 %（展示 / 兜底） */
+export const ALERT_DEFAULT_TP_SL_PCT = 3;
+export const ALERT_TP1_PCT = 3;
+export const ALERT_TP2_PCT = 7;
+export const ALERT_TP_LEVELS = [3, 7, 12, 17] as const;
+export const ALERT_BATCH_WEIGHTS = [0.3, 0.3, 0.4] as const;
+export const ALERT_SL_PCT = 5;
+export const ALERT_RUNNER_TRAIL_PCT = 5;
 /** BTC/ETH/SOL 100x；其余 20x（对齐 resolveLiquidationLeverage） */
 const LEV_100_BASES = new Set(["BTC", "ETH", "SOL"]);
 
 /** 弹窗头部展示用：核算规则摘要 */
 export const ALERT_SETTLE_RULES_SUMMARY =
-  `核算规则：BTC/ETH/SOL 100x · 山寨 20x · 默认 ±${ALERT_DEFAULT_TP_SL_PCT}% 止盈/止损 · 信号后 3h 核实 · 先触止损/止盈，未触则按窗口末价结算`;
+  "核算规则：BTC/ETH/SOL 100x · 山寨 20x · TP 3%/7% 分批 30%+30% · Runner 40% 跟踪止盈 · 止损 ±5% · 信号后每 15m 核实 · 最长 3h · 未平则按窗口末价结算";
 
 let memoryStats: AlertStatsRecord[] = [];
 /** 串行核实队列：避免 busy 时重拉被静默丢弃 */
@@ -553,7 +567,7 @@ export function summarizeAlertWinRate(records: AlertStatsRecord[]): AlertWinRate
     else if (r.outcome === "flat") flats++;
     else errors++;
 
-    // 与 alertStatsPnlPct 同口径；缺 movePct 时用 stepPct（默认 ±5%）兜底，避免合计空白
+    // 与 alertStatsPnlPct 同口径；缺 movePct 时用 stepPct（TP1 3%）兜底，避免合计空白
     if (r.outcome !== "pending" && r.outcome !== "error") {
       let priceMove: number | null =
         r.movePct != null && Number.isFinite(r.movePct) ? Number(r.movePct) : null;
@@ -665,6 +679,38 @@ export function upsertAlertForStats(input: {
 
 type Bar = { ts: number; high: number; low: number; close: number };
 
+function tpPrice(entry: number, pct: number, isShort: boolean): number {
+  const step = pct / 100;
+  return isShort ? entry * (1 - step) : entry * (1 + step);
+}
+
+function slPrice(entry: number, pct: number, isShort: boolean): number {
+  const step = pct / 100;
+  return isShort ? entry * (1 + step) : entry * (1 - step);
+}
+
+/** 5m → 15m 聚合（回测/旧缓存兼容） */
+function aggregateTo15m(bars: Bar[]): Bar[] {
+  if (bars.length < 2) return bars;
+  const deltas = bars.slice(0, Math.min(8, bars.length - 1)).map((b, i) => bars[i + 1]!.ts - b.ts);
+  const med = [...deltas].sort((a, b) => a - b)[Math.floor(deltas.length / 2)] ?? 0;
+  if (med >= 14 * 60_000) return bars;
+  const bucketMs = 15 * 60_000;
+  const buckets = new Map<number, Bar>();
+  for (const b of bars) {
+    const key = Math.floor(b.ts / bucketMs);
+    const cur = buckets.get(key);
+    if (!cur) {
+      buckets.set(key, { ts: key * bucketMs, high: b.high, low: b.low, close: b.close });
+    } else {
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      cur.close = b.close;
+    }
+  }
+  return [...buckets.keys()].sort((a, b) => a - b).map((k) => buckets.get(k)!);
+}
+
 /** 将 K 线 OHLC 对齐到入场价量级（1000SHIB 合约价 ↔ SHIB 人类价） */
 function alignBarsToEntry(bars: Bar[], entry: number): Bar[] {
   if (!(entry > 0) || !bars.length) return bars;
@@ -722,8 +768,8 @@ function trackMaxProfit(
 }
 
 /**
- * 对齐卡片清算：时序先触 SL/TP（默认 ±5%）。
- * 同时记录窗内最大浮盈（杠杆 % + 价格），供悬停展示。
+ * 三档分批 + Runner 跟踪止盈（对齐 pattern_settle.py）。
+ * movePct = 各档加权价格变动 %；同时记录窗内最大浮盈。
  */
 export function settleAlertByKlines(
   rec: AlertStatsRecord,
@@ -731,17 +777,24 @@ export function settleAlertByKlines(
   now = Date.now(),
 ): AlertStatsRecord {
   const isShort = rec.side === "short";
-  const stepPct = rec.stepPct > 0 ? rec.stepPct : ALERT_DEFAULT_TP_SL_PCT;
-  const step = stepPct / 100;
+  const stepPct = rec.stepPct > 0 ? rec.stepPct : ALERT_TP1_PCT;
   const entry = rec.entry;
-  const tp = isShort ? entry * (1 - step) : entry * (1 + step);
-  const sl = isShort ? entry * (1 + step) : entry * (1 - step);
+  const tp1 = tpPrice(entry, ALERT_TP1_PCT, isShort);
+  const tp2 = tpPrice(entry, ALERT_TP2_PCT, isShort);
+  const sl = slPrice(entry, ALERT_SL_PCT, isShort);
   const windowEnd = Math.min(now, rec.verifyAt);
-  // 先对齐量级，再比价：避免入场 0.000005、K 线 0.005 算出十万倍盈亏
-  const aligned = alignBarsToEntry(bars, entry);
+  const aligned = aggregateTo15m(alignBarsToEntry(bars, entry));
   const sorted = [...aligned]
     .filter((b) => b.ts >= rec.signalAt - 1 && b.ts <= windowEnd + 60_000)
     .sort((a, b) => a.ts - b.ts);
+
+  const rem = [...ALERT_BATCH_WEIGHTS];
+  let weightedMove = 0;
+  let runnerActive = false;
+  let extreme = entry;
+  let runnerStop: number | null = null;
+  let exitPrice = entry;
+  let hitAt: number | undefined;
 
   const finish = (
     partial: Partial<AlertStatsRecord> & { hitAt?: number },
@@ -758,76 +811,112 @@ export function settleAlertByKlines(
     };
   };
 
-  for (const k of sorted) {
-    if (isShort) {
-      if (k.high >= sl) {
-        return finish({
-          outcome: "stop_loss",
-          hitAt: k.ts,
-          exitPrice: sl,
-          movePct: priceMovePct(entry, sl, isShort),
-        });
+  for (const bar of sorted) {
+    const remaining = rem[0]! + rem[1]! + rem[2]!;
+    if (remaining <= 1e-9) break;
+
+    const slHit = isShort ? bar.high >= sl : bar.low <= sl;
+    if (slHit) {
+      const move = priceMovePct(entry, sl, isShort);
+      weightedMove += move * remaining;
+      rem[0] = rem[1] = rem[2] = 0;
+      exitPrice = sl;
+      hitAt = bar.ts;
+      break;
+    }
+
+    if (rem[0]! > 0) {
+      const hit = isShort ? bar.low <= tp1 : bar.high >= tp1;
+      if (hit) {
+        weightedMove += priceMovePct(entry, tp1, isShort) * rem[0]!;
+        rem[0] = 0;
       }
-      if (k.low <= tp) {
-        return finish({
-          outcome: "take_profit",
-          hitAt: k.ts,
-          exitPrice: tp,
-          movePct: priceMovePct(entry, tp, isShort),
-        });
+    }
+
+    if (rem[1]! > 0) {
+      const hit = isShort ? bar.low <= tp2 : bar.high >= tp2;
+      if (hit) {
+        weightedMove += priceMovePct(entry, tp2, isShort) * rem[1]!;
+        rem[1] = 0;
+        runnerActive = true;
       }
-    } else {
-      if (k.low <= sl) {
-        return finish({
-          outcome: "stop_loss",
-          hitAt: k.ts,
-          exitPrice: sl,
-          movePct: priceMovePct(entry, sl, isShort),
-        });
+    }
+
+    if (rem[2]! > 0) {
+      if (!runnerActive) {
+        const act = isShort ? bar.low <= tp2 : bar.high >= tp2;
+        if (act) runnerActive = true;
       }
-      if (k.high >= tp) {
-        return finish({
-          outcome: "take_profit",
-          hitAt: k.ts,
-          exitPrice: tp,
-          movePct: priceMovePct(entry, tp, isShort),
-        });
+      if (runnerActive) {
+        if (isShort) {
+          extreme = Math.min(extreme, bar.low);
+          const newStop = extreme * (1 + ALERT_RUNNER_TRAIL_PCT / 100);
+          runnerStop = runnerStop == null ? newStop : Math.min(runnerStop, newStop);
+          if (bar.high >= runnerStop) {
+            weightedMove += priceMovePct(entry, runnerStop, isShort) * rem[2]!;
+            rem[2] = 0;
+            exitPrice = runnerStop;
+            hitAt = bar.ts;
+          }
+        } else {
+          extreme = Math.max(extreme, bar.high);
+          const newStop = extreme * (1 - ALERT_RUNNER_TRAIL_PCT / 100);
+          runnerStop = runnerStop == null ? newStop : Math.max(runnerStop, newStop);
+          if (bar.low <= runnerStop) {
+            weightedMove += priceMovePct(entry, runnerStop, isShort) * rem[2]!;
+            rem[2] = 0;
+            exitPrice = runnerStop;
+            hitAt = bar.ts;
+          }
+        }
       }
     }
   }
 
-  // 满 3h 仍未触达：按窗口末收盘相对入场结算（对齐卡片 classifyOutcomeByExit）
-  if (now < rec.verifyAt) return rec;
-  const last = sorted[sorted.length - 1];
-  if (!last) {
-    return { ...rec, outcome: "error", error: "no_klines", verifiedAt: now };
+  const remaining = rem[0]! + rem[1]! + rem[2]!;
+  if (remaining > 1e-9 && now < rec.verifyAt) return rec;
+
+  if (remaining > 1e-9) {
+    const last = sorted[sorted.length - 1];
+    if (!last) {
+      return { ...rec, outcome: "error", error: "no_klines", verifiedAt: now };
+    }
+    const move = priceMovePct(entry, last.close, isShort);
+    weightedMove += move * remaining;
+    exitPrice = last.close;
+    hitAt = last.ts;
   }
-  const move = priceMovePct(entry, last.close, isShort);
-  if (Math.abs(move) < 1e-4) {
-    return finish({
-      outcome: "flat",
-      exitPrice: last.close,
-      movePct: move,
-      hitAt: last.ts,
-    });
+
+  if (Math.abs(weightedMove) < 1e-4) {
+    return finish({ outcome: "flat", exitPrice, movePct: weightedMove, hitAt });
   }
   return finish({
-    outcome: move > 0 ? "take_profit" : "stop_loss",
-    exitPrice: last.close,
-    movePct: move,
-    hitAt: last.ts,
+    outcome: weightedMove > 0 ? "take_profit" : "stop_loss",
+    exitPrice,
+    movePct: weightedMove,
+    hitAt,
   });
+}
+
+function isAlertDueForSettleCheck(rec: AlertStatsRecord, now: number): boolean {
+  if (rec.outcome !== "pending") return false;
+  if (now >= rec.verifyAt) return true;
+  const age = now - rec.signalAt;
+  if (age < ALERT_VERIFY_INTERVAL_MS) return false;
+  const last = rec.lastSettleCheckAt || 0;
+  if (last && now - last < ALERT_VERIFY_INTERVAL_MS - 5_000) return false;
+  return true;
 }
 
 async function fetchBarsForRecord(
   rec: AlertStatsRecord,
 ): Promise<{ bars: Bar[]; resolvedSymbol: string }> {
-  const endMs = Math.min(Date.now(), rec.verifyAt + 5 * 60_000);
+  const endMs = Math.min(Date.now(), rec.verifyAt) + 5 * 60_000;
   const sym = rec.tradeSymbol || toUsdtSymbol(rec.symbol) || rec.symbol;
   if (isStablecoinSymbol(sym)) {
     throw new Error("稳定币已排除回溯");
   }
-  const { candles, resolvedSymbol } = await fetchBinanceFuturesKlines(sym, "5m", {
+  const { candles, resolvedSymbol } = await fetchBinanceFuturesKlines(sym, "15m", {
     startTimeMs: Math.max(0, rec.signalAt - 60_000),
     endTimeMs: endMs,
     limit: 500,
@@ -933,23 +1022,21 @@ export async function reverifyAlertStatsByKeys(
   });
 }
 
-/** 核实所有已到期的 pending 信号；串行避免打爆币安 */
+/** 核实 pending 信号：每 15m 步进；满 3h 或全平则落最终结果 */
 export async function verifyDueAlertStats(
   onUpdate?: (summary: AlertWinRateSummary) => void,
 ): Promise<AlertWinRateSummary> {
   const summary = () => summarizeAlertWinRate(loadAlertStats());
   const list = loadAlertStats();
   const now = Date.now();
-  const due = list.filter((r) => r.outcome === "pending" && now >= r.verifyAt);
+  const due = list.filter((r) => isAlertDueForSettleCheck(r, now));
   if (!due.length) return summary();
 
   return withVerifyLock(async () => {
     // 排队后重新取，避免与重拉打架
     let working = loadAlertStats();
     const dueNow = Date.now();
-    const stillDue = working.filter(
-      (r) => r.outcome === "pending" && dueNow >= r.verifyAt,
-    );
+    const stillDue = working.filter((r) => isAlertDueForSettleCheck(r, dueNow));
     const touched: AlertStatsRecord[] = [];
     for (const rec of stillDue) {
       try {
@@ -958,10 +1045,13 @@ export async function verifyDueAlertStats(
           resolvedSymbol && resolvedSymbol !== rec.tradeSymbol
             ? { ...rec, tradeSymbol: resolvedSymbol }
             : rec;
-        const settled = settleAlertByKlines(withSym, bars, dueNow);
+        let settled = settleAlertByKlines(withSym, bars, dueNow);
+        if (settled.outcome === "pending") {
+          settled = { ...settled, lastSettleCheckAt: dueNow };
+        }
         working = working.map((r) => (r.key === rec.key ? settled : r));
         persistStats(working);
-        touched.push(settled);
+        if (settled.outcome !== "pending") touched.push(settled);
         onUpdate?.(summarizeAlertWinRate(working));
       } catch (e) {
         const err = e instanceof Error ? e.message : String(e);

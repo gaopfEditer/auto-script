@@ -7,6 +7,7 @@ import {
   stripTelegramAtUsernameMentions,
   isSpamMessage,
 } from "./discord-telegram-push-config.js";
+import { formatPipelineLog } from "./signal-pipeline-log.js";
 
 /**
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
@@ -28,12 +29,27 @@ export function createDiscordSignalTelegramPush(log) {
     body = stripTelegramAtUsernameMentions(body);
     // 过滤"引导私聊/转账"类垃圾消息
     if (isSpamMessage(body)) {
-      log.debug(`[telegram] 过滤垃圾消息 cardId=${meta.cardId ?? "?"} kind=${meta.kind ?? ""}`);
+      log.info(
+        formatPipelineLog("tg_http_skip", {
+          cardId: meta.cardId ?? "?",
+          channelId: meta.channelId ?? "?",
+          chatId,
+          reason: "spam",
+        }),
+      );
       return { skipped: "spam" };
     }
     if (!body) return { skipped: "empty" };
 
-    log.info(`[telegram] POST ${sendUrl} chat=${chatId} channel=${meta.channelId ?? "?"}${meta.cardId != null ? ` card=${meta.cardId}` : ""}`);
+    log.info(
+      formatPipelineLog("tg_http_post", {
+        cardId: meta.cardId ?? "?",
+        channelId: meta.channelId ?? "?",
+        channelName: meta.channelName ?? "",
+        chatId,
+        detail: sendUrl,
+      }),
+    );
     log.info(`[telegram] content:\n${body}`);
 
     const controller = new AbortController();
@@ -49,6 +65,13 @@ export function createDiscordSignalTelegramPush(log) {
       if (!r.ok) {
         throw new Error(`HTTP ${r.status}${resp ? `: ${resp.slice(0, 200)}` : ""}`);
       }
+      log.info(
+        formatPipelineLog("tg_http_ok", {
+          cardId: meta.cardId ?? "?",
+          channelId: meta.channelId ?? "?",
+          chatId,
+        }),
+      );
       return { ok: true };
     } finally {
       clearTimeout(timer);

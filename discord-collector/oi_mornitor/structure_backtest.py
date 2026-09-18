@@ -33,7 +33,8 @@ from oi_mornitor.backtest_kline_store import BacktestKlineStore, storage_stats
 from oi_mornitor.backtest_prefetch import _prefetch_klines
 from oi_mornitor.breakout_detector import klines_to_df
 from oi_mornitor.pattern_detector import enrich_indicators
-from oi_mornitor.pattern_settle import settle_signal_by_5m_bars
+from oi_mornitor.pattern_monitor import fetch_open_interest_hist
+from oi_mornitor.pattern_settle import settle_rules_summary, settle_signal_by_5m_bars
 from oi_mornitor.pattern_alert_stats import summarize
 from oi_mornitor.strategy.candle_signals import iter_candle_card_hits_in_range
 from oi_mornitor.strategy.structure_signals import (
@@ -310,6 +311,18 @@ def _bar_close_ms(row: Any) -> int:
     return int(row["open_time"])
 
 
+def _attach_oi_column(df: Any, oi_map: dict[int, float] | None) -> Any:
+    """与 Live _emit_structure 一致：挂 OI 列供结构检测过滤。"""
+    if df is None or df.empty or not oi_map:
+        return df
+    work = df.copy()
+    work["oi"] = [
+        oi_map.get(int(ot // 1000), float("nan"))
+        for ot in work["open_time"].tolist()
+    ]
+    return work
+
+
 def _align_signal_at_ms(close_time_ms: int) -> int:
     """收盘后对齐到下一根 5m open，与 live scan_ts + 5m 核实网格一致。"""
     if close_time_ms <= 0:
@@ -391,6 +404,7 @@ def _scan_symbol_interval(
     live_funnel: bool = False,
     daily_alt_pools: dict[int, frozenset[str]] | None = None,
     funnel: CardFunnelState | None = None,
+    oi_map: dict[int, float] | None = None,
 ) -> list[dict[str, Any]]:
     if live_funnel and not interval_allowed_for_job(interval):
         return []
@@ -490,7 +504,8 @@ def _scan_symbol_interval(
         hits.append(row)
 
     if structure_kinds:
-        events = detect_structure_events(df)
+        struct_df = _attach_oi_column(df, oi_map if live_funnel else None)
+        events = detect_structure_events(struct_df)
         n = len(df)
         for bar_index in range(_WARMUP_BARS, n):
             row = df.iloc[bar_index]
@@ -706,15 +721,25 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
         await _persist_job_async(job)
 
         if live_funnel:
-            daily_alt_pools = await asyncio.to_thread(
+            pool_rows = get_pool_rows() or []
+            daily_alt_pools, alt_pool_source = await asyncio.to_thread(
                 build_daily_alt_pools,
                 store,
                 symbols,
                 start_ms,
                 end_ms,
+                pool_rows=pool_rows or None,
             )
             scan_jobs = build_live_scan_jobs(union_alt_symbols(daily_alt_pools))
-            job.params["funnel"] = live_funnel_meta(daily_alt_pools, scan_jobs)
+            job.params["funnel"] = live_funnel_meta(
+                daily_alt_pools,
+                scan_jobs,
+                alt_pool_source=alt_pool_source,
+            )
+            if alt_pool_source == "kline_approx" and not pool_rows:
+                job.params["funnelNote"] = (
+                    "雷达 pool 未就绪，山寨池用 K 线近似；结果可能与 Live 有偏差"
+                )
         else:
             scan_jobs = [(sym, iv, sym.upper() in _MAJORS) for sym in symbols for iv in intervals]
 
@@ -727,6 +752,8 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
         all_items: list[dict[str, Any]] = []
         job.items = all_items
         settled_5m: set[str] = set()
+        oi_cache: dict[tuple[str, str], dict[int, float]] = {}
+        need_structure_oi = live_funnel and bool(kinds - CANDLE_KINDS)
         px = proxy_url()
         fetch_session = make_http_session(trust_env=False, default_proxy=px)
 
@@ -765,6 +792,23 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
                     "fetch5mDone": len(settled_5m),
                     "fetch5mTotal": fetch5m_total,
                 }
+                oi_map: dict[int, float] | None = None
+                if need_structure_oi and iv in STRUCTURE_CARD_INTERVALS:
+                    oi_key = (sym, iv)
+                    if oi_key not in oi_cache:
+                        try:
+                            oi_cache[oi_key] = await fetch_open_interest_hist(
+                                fetch_session,
+                                base_url=FAPI_BASE_URL,
+                                symbol=sym,
+                                interval=iv,
+                                limit=500,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug("回测 OI 拉取失败 %s %s: %s", sym, iv, exc)
+                            oi_cache[oi_key] = {}
+                    oi_map = oi_cache.get(oi_key) or None
+
                 try:
                     chunk = await asyncio.to_thread(
                         _scan_symbol_interval,
@@ -778,6 +822,7 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
                         live_funnel=live_funnel,
                         daily_alt_pools=daily_alt_pools if live_funnel else None,
                         funnel=funnel,
+                        oi_map=oi_map,
                     )
                     if chunk:
                         all_items.extend(chunk)
@@ -935,6 +980,16 @@ def _filter_items(
     return out
 
 
+def _settle_rules_text(job: BacktestJob) -> str:
+    base = settle_rules_summary()
+    if not job.params.get("liveFunnel"):
+        return f"{base} · 5m 聚合 15m · 收盘对齐下一 5m"
+    funnel = job.params.get("funnel") if isinstance(job.params.get("funnel"), dict) else {}
+    alt_src = str(funnel.get("altPoolSource") or "kline_approx")
+    alt_note = "雷达 pool 山寨池" if alt_src == "radar_pool" else "K 线近似山寨池"
+    return f"Live 漏斗 · {alt_note} · 结构 OI 过滤 · {base} · Binance 5m→15m"
+
+
 def job_to_dict(
     job: BacktestJob,
     *,
@@ -985,11 +1040,7 @@ def job_to_dict(
         "pages": pages,
         "startedAt": job.started_at,
         "finishedAt": job.finished_at,
-        "settleRules": (
-            "Live漏斗 · BTC/ETH/SOL 100x · 山寨 20x · ±5% · 3h · Binance 5m · 收盘+下一5m"
-            if job.params.get("liveFunnel")
-            else "BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% · 信号后 3h · 5m K 核实 · 收盘对齐下一 5m"
-        ),
+        "settleRules": _settle_rules_text(job),
         "klineSource": "bybit_v5_parquet",
         "storageStats": storage_stats(),
         "kindOptions": KIND_OPTIONS,

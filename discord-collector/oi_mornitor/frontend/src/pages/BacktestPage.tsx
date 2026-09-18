@@ -82,6 +82,15 @@ type BacktestJob = {
     universe?: { count?: number; note?: string };
     coverage?: CoverageInfo;
     partial?: boolean;
+    liveFunnel?: boolean;
+    funnel?: {
+      mode?: string;
+      altPoolSource?: string;
+      uniqueAltSymbols?: number;
+      scanJobs?: number;
+      structureOiFilter?: boolean;
+    };
+    funnelNote?: string;
   };
   startedAt?: number;
   finishedAt?: number;
@@ -913,6 +922,7 @@ export function BacktestPage() {
           maxSymbols,
           maxDays,
           skipFetch: true,
+          liveFunnel: true,
         }),
       });
       const body = await r.json();
@@ -1079,7 +1089,7 @@ export function BacktestPage() {
         <aside className="bt-sidebar">
           <h1 className="bt-title">结构形态回测</h1>
           <p className="bt-desc">
-            先分段拉 K 线入库，再选回测区间扫描。三周期分开看合计盈亏与均笔期望。
+            先分段拉 K 线入库，再选回测区间扫描。回测默认走 Live 漏斗（雷达山寨池 + 结构 OI 过滤 + 推送冷却），与实时形态卡片对齐。
           </p>
 
           <section className="bt-section">
@@ -1386,10 +1396,28 @@ export function BacktestPage() {
                 {job.params?.startMs && job.params?.endMs ? (
                   <p className="bt-rules">
                     开始 {fmtJobStarted(job.startedAt)} · 区间 {fmtJobRange(job.params.startMs, job.params.endMs)}
+                    {job.params.liveFunnel !== false ? (
+                      <>
+                        {" · "}
+                        Live 漏斗
+                        {job.params.funnel?.altPoolSource === "radar_pool"
+                          ? " · 山寨池=雷达"
+                          : job.params.funnel?.altPoolSource === "kline_approx"
+                            ? " · 山寨池=K线近似"
+                            : ""}
+                        {job.params.funnel?.structureOiFilter ? " · 结构+OI" : ""}
+                      </>
+                    ) : null}
                   </p>
                 ) : null}
+                {job.settleRules ? <p className="bt-rules">{job.settleRules}</p> : null}
+                {job.params?.funnelNote ? (
+                  <p className="bt-warn-banner">{job.params.funnelNote}</p>
+                ) : null}
                 {job.params?.partial ? (
-                  <p className="bt-rules">扫描中断，以下为已扫部分。可重新点「开始回测」补全。</p>
+                  <p className="bt-warn-banner">
+                    扫描未完成（部分结果）。合计盈亏/胜率不代表全区间，请重新点「开始回测」跑完再评估。
+                  </p>
                 ) : null}
 
                 {job.summary ? (

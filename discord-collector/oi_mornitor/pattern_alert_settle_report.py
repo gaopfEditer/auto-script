@@ -211,7 +211,10 @@ def format_settle_report(slot: datetime, rows: list[dict[str, Any]] | None = Non
     lines.append("")
     day_label = day_start.strftime("%m-%d")
     lines.append(f"当日累计 {day_label} " + _fmt_summary_line(summarize(day_rows)))
-    lines.append("核算：BTC/ETH/SOL 100x · 山寨 20x · 默认 ±5% · 信号后 3h 核实")
+    lines.append(
+        "核算：BTC/ETH/SOL 100x · 山寨 20x · TP 3%/7% 分批 · Runner 跟踪 · "
+        "止损 ±5% · 每 15m 核实 · 最长 3h"
+    )
     return "\n".join(lines)
 
 

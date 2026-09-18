@@ -17,6 +17,7 @@ from datetime import datetime, timezone, timedelta
 
 from cards_client import post_card, signal_to_card_payload
 from config import get_cards_api_key, resolve_channel_profile
+from signal_pipeline_log import log_pipeline
 from trade_context_buffer import TradeContextBuffer, WindowMessage
 from trade_signal_detect import (
     TradeSignal,
@@ -29,7 +30,12 @@ from trade_signal_detect import (
     resolve_sender_name,
     signal_skip_reason,
 )
-from ui_feed_pusher import parse_main_sender_patterns, sender_matches_main
+from ui_feed_pusher import (
+    get_profile_meta,
+    parse_only_names_patterns,
+    sender_allowed_for_profile,
+    sender_filter_patterns,
+)
 
 # #prom 开仓后允许补充止盈/止损/币种的窗口
 _PROM_MERGE_WINDOW = timedelta(minutes=10)
@@ -113,6 +119,23 @@ class TradeCardPusher:
             ):
                 continue
             return p
+        return None
+
+    def _find_core_pending_by_sender(
+        self, chat_id: int, sender: str, now: datetime
+    ) -> PendingCard | None:
+        """同群同发言人、窗口内已发开仓卡 pending → 等待补 TP/SL。"""
+        who = (sender or "").strip().lower() or "_"
+        for p in self._pending.values():
+            if p.chat_id != chat_id or p.is_tponly_pending or p.is_prom:
+                continue
+            if now - p.opened_at > _PROM_MERGE_WINDOW:
+                continue
+            p_who = (p.signal.sender or "").strip().lower() or "_"
+            if p_who != who:
+                continue
+            if p.signal.symbol and (p.signal.direction or p.signal.entry):
+                return p
         return None
 
     def _find_tponly_pending(
@@ -239,7 +262,7 @@ class TradeCardPusher:
         body = (text or "").strip()
         if not body:
             return
-        profile = resolve_channel_profile(chat_id, fallback_title=title or str(chat_id))
+        profile = get_profile_meta(chat_id, fallback_title=title or str(chat_id))
         profile_name = str(profile.get("name") or title or chat_id)
         if is_spam_or_recap_message(body):
             log_signal_skip(
@@ -252,10 +275,15 @@ class TradeCardPusher:
                 body=body,
             )
             return
-        main_patterns = parse_main_sender_patterns(profile.get("main") or "")
-        if main_patterns and not sender_matches_main(sender, main_patterns):
+        filter_patterns = sender_filter_patterns(profile)
+        if filter_patterns and not sender_allowed_for_profile(profile, sender):
+            label = (
+                "only_names"
+                if parse_only_names_patterns(profile.get("only_names"))
+                else "main"
+            )
             log_signal_skip(
-                f"发言人未命中 main 白名单（配置: {','.join(main_patterns)}）",
+                f"发言人未命中 {label} 白名单（配置: {','.join(filter_patterns)}）",
                 chat_id=chat_id,
                 title=title,
                 profile_name=profile_name,
@@ -288,14 +316,35 @@ class TradeCardPusher:
                 return
 
             current = parse_trade_text(body, sender=sender, msg_id=msg_id)
-            print(
-                f"    · [card_pusher] parsed: symbol={current.symbol!r} dir={current.direction!r} "
-                f"entry={current.entry!r} has_tpsl={current.has_tpsl}",
-                flush=True,
+            if current is None:
+                log_pipeline(
+                    "skip",
+                    chat_id=chat_id,
+                    msg_id=msg_id,
+                    sender=sender,
+                    reason="looks_like 但 parse 失败",
+                    body=body,
+                )
+                return
+            log_pipeline(
+                "parsed",
+                chat_id=chat_id,
+                msg_id=msg_id,
+                sender=sender,
+                symbol=current.symbol,
+                direction=current.direction,
+                body=body,
             )
             merged = self._merge_snap_with_current(snap, current, prefer_sender=sender)
             if merged is None:
-                print(f"    · [card_pusher] merged is None, skip", flush=True)
+                log_pipeline(
+                    "skip",
+                    chat_id=chat_id,
+                    msg_id=msg_id,
+                    sender=sender,
+                    reason="合并窗口无有效信号",
+                    body=body,
+                )
                 return
             merged.sender = resolve_sender_name(
                 merged.sender,
@@ -374,6 +423,27 @@ class TradeCardPusher:
 
             # —— TP/SL-only 路径（无币种/方向，只有止盈止损）——
             if merged.has_tpsl and not merged.has_core:
+                core_pf = self._find_core_pending_by_sender(chat_id, sender, now)
+                if core_pf:
+                    merged = core_pf.signal.merge_from(merged)
+                    raw_body = self._combine_raw_for_signal(
+                        snap, merged, prefer_sender=sender
+                    )
+                    await self._post_card(
+                        merged,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="update",
+                        raw_body=raw_body,
+                    )
+                    self._clear_pending(core_pf.key)
+                    print(
+                        f"    · 开仓卡已补充 TP/SL → {merged.symbol}做{merged.direction}，"
+                        "更新卡片",
+                        flush=True,
+                    )
+                    return
                 tp_pf = self._find_tponly_pending(chat_id, merged, now)
                 if tp_pf:
                     # 后续 core 消息补充进来：合并后 POST update 覆盖待补充 symbol
@@ -449,6 +519,15 @@ class TradeCardPusher:
                     )
                     return
                 if pf:
+                    log_pipeline(
+                        "pending",
+                        chat_id=chat_id,
+                        msg_id=msg_id,
+                        sender=sender,
+                        symbol=merged.symbol,
+                        direction=merged.direction,
+                        reason="已有开仓 pending，等待止盈止损补充",
+                    )
                     return
                 await self._post_card(
                     merged,
@@ -630,10 +709,26 @@ class TradeCardPusher:
             f"{phase}:{body_text}:{payload.get('symbol')}:{payload.get('sourceRef')}"
         )
         if digest in self._pushed_digest and not is_push_bypass_message(body_text):
+            log_pipeline(
+                "dedup",
+                chat_id=chat_id,
+                source_ref=payload.get("sourceRef"),
+                symbol=payload.get("symbol"),
+                phase=phase,
+                reason="本进程 digest 去重",
+            )
             return False
         try:
             result = await asyncio.to_thread(post_card, payload)
         except Exception as e:
+            log_pipeline(
+                "card_fail",
+                chat_id=chat_id,
+                source_ref=payload.get("sourceRef"),
+                symbol=sig.symbol,
+                phase=phase,
+                reason=str(e),
+            )
             print(f"[!] 建卡失败 chat={chat_id}: {e}", flush=True)
             return False
         self._pushed_digest.add(digest)

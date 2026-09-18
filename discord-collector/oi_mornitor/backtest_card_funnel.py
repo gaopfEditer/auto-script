@@ -13,6 +13,7 @@ from oi_mornitor.config import (
     CANDLE_CARD_MAJOR_INTERVALS,
     CANDLE_CARD_MAJOR_SYMBOLS,
 )
+from oi_mornitor.pattern_monitor import pick_candle_card_alt_symbols
 from oi_mornitor.strategy.structure_signals import (
     STRUCTURE_CARD_INTERVALS,
     STRUCTURE_PUSH_COOLDOWN_BARS,
@@ -135,13 +136,30 @@ def build_daily_alt_pools(
     start_ms: int,
     end_ms: int,
     *,
+    pool_rows: list[dict[str, Any]] | None = None,
     majors: set[str] | None = None,
     top_n: int | None = None,
     rank_tf: str | None = None,
-) -> dict[int, frozenset[str]]:
-    """UTC 自然日 → 当日山寨池（用前一日收盘时刻排名，避免窥视）。"""
+) -> tuple[dict[int, frozenset[str]], str]:
+    """UTC 自然日 → 当日山寨池。优先 radar pool_rows（与 Live 一致），否则 K 线近似。"""
     majors = majors or _MAJORS
-    pools: dict[int, frozenset[str]] = {}
+    if pool_rows:
+        alts = pick_candle_card_alt_symbols(
+            pool_rows,
+            majors=majors,
+            top_n=int(top_n if top_n is not None else CANDLE_CARD_ALT_TOP_N),
+            tf=rank_tf or CANDLE_CARD_ALT_RANK_TF,
+        )
+        alt_set = frozenset(s.upper() for s in alts)
+        pools: dict[int, frozenset[str]] = {}
+        day = _day_key(start_ms)
+        last_day = _day_key(end_ms)
+        while day <= last_day:
+            pools[day] = alt_set
+            day += 1
+        return pools, "radar_pool"
+
+    pools = {}
     day = _day_key(start_ms)
     last_day = _day_key(end_ms)
     while day <= last_day:
@@ -158,7 +176,7 @@ def build_daily_alt_pools(
         )
         pools[day] = frozenset(syms)
         day += 1
-    return pools
+    return pools, "kline_approx"
 
 
 def union_alt_symbols(pools: dict[int, frozenset[str]]) -> list[str]:
@@ -264,9 +282,15 @@ class CardFunnelState:
         return True
 
 
-def live_funnel_meta(pools: dict[int, frozenset[str]], jobs: list[tuple[str, str, bool]]) -> dict[str, Any]:
+def live_funnel_meta(
+    pools: dict[int, frozenset[str]],
+    jobs: list[tuple[str, str, bool]],
+    *,
+    alt_pool_source: str = "kline_approx",
+) -> dict[str, Any]:
     return {
         "mode": "live_card_funnel",
+        "altPoolSource": alt_pool_source,
         "majorSymbols": sorted(_MAJORS),
         "majorIntervals": list(CANDLE_CARD_MAJOR_INTERVALS),
         "altIntervals": list(CANDLE_CARD_ALT_INTERVALS),
@@ -276,4 +300,5 @@ def live_funnel_meta(pools: dict[int, frozenset[str]], jobs: list[tuple[str, str
         "uniqueAltSymbols": len(union_alt_symbols(pools)),
         "scanJobs": len(jobs),
         "disabledIntervals": sorted(_LIVE_DISABLED_INTERVALS),
+        "structureOiFilter": True,
     }

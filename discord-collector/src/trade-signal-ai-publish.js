@@ -11,6 +11,7 @@ import {
   isTelegramPushBypassMessage,
   resolveTelegramMessageRef,
 } from "./telegram-card-push-dedup.js";
+import { formatSendCdpLog } from "./signal-pipeline-log.js";
 
 /** @type {Map<string, number>} */
 const recentPublish = new Map();
@@ -71,9 +72,25 @@ function buildDedupKey(card, event, ingestSourceRef) {
  * @param {Record<string, unknown>} card
  * @param {{ event?: string, log?: { info: Function, warn: Function }, narrativeOverride?: string }} [opts]
  */
-/** @param {{ log?: { info: Function, warn: Function, debug?: Function } }} opts @param {string} reason */
-function skipCdp(opts, reason) {
-  opts.log?.info?.(`trade-signal CDP 跳过: ${reason}`);
+/**
+ * @param {Record<string, unknown>} card
+ * @param {{ log?: { info: Function, warn: Function, debug?: Function }, event?: string, ingestSourceRef?: string }} opts
+ * @param {string} reason
+ */
+function skipCdp(card, opts, reason) {
+  const channelId = String(card?.channelId ?? "").trim();
+  if (!isCdpSendChannel(channelId)) return;
+  const msgRef = resolveTelegramMessageRef(card, opts.ingestSourceRef);
+  opts.log?.info?.(
+    formatSendCdpLog("cdp_skip", {
+      cardId: card?.id ?? "?",
+      channelId,
+      symbol: String(card?.symbol ?? ""),
+      sourceRef: msgRef || String(card?.sourceRef ?? ""),
+      event: String(opts.event || "entry").trim() || "entry",
+      reason,
+    }),
+  );
 }
 
 /**
@@ -82,24 +99,25 @@ function skipCdp(opts, reason) {
  * @returns {boolean} 是否已发起请求
  */
 export function notifyTradeSignalAiPublish(card, opts = {}) {
+  const channelId = String(card?.channelId ?? "").trim();
+  const inSendWhitelist = isCdpSendChannel(channelId);
+
   if (!config.tradeSignalAiPublishEnabled) {
-    skipCdp(opts, "TRADE_SIGNAL_AI_PUBLISH=0（请在 .env 设为 1 并重启 collect:ui）");
+    skipCdp(card, opts, "TRADE_SIGNAL_AI_PUBLISH=0（请在 .env 设为 1 并重启 collect:ui）");
     return false;
   }
   if (!isTelegramSource(card?.sourceType ?? card?.source_type ?? "")) {
-    skipCdp(opts, `非 Telegram 来源 sourceType=${card?.sourceType ?? card?.source_type ?? "?"}`);
+    skipCdp(card, opts, `非 Telegram 来源 sourceType=${card?.sourceType ?? card?.source_type ?? "?"}`);
     return false;
   }
 
-  const channelId = String(card?.channelId ?? "").trim();
-  if (!isCdpSendChannel(channelId)) {
-    skipCdp(opts, `chat=${channelId || "?"} 不在 channel_profiles.json send 白名单`);
+  if (!inSendWhitelist) {
     return false;
   }
 
   const symbol = String(card?.symbol ?? "").trim();
   if (!symbol || symbol === "待补充") {
-    skipCdp(opts, `symbol 无效 (${symbol || "空"})`);
+    skipCdp(card, opts, `symbol 无效 (${symbol || "空"})`);
     return false;
   }
 
@@ -113,7 +131,7 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
       : {};
   const direction = String(ex.direction ?? card?.direction ?? "").trim();
   if (!direction) {
-    skipCdp(opts, `卡片 #${card?.id ?? "?"} 缺少 direction`);
+    skipCdp(card, opts, `卡片 #${card?.id ?? "?"} 缺少 direction`);
     return false;
   }
 
@@ -128,12 +146,16 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
     card?.note,
   );
   if (event === "update" && !config.tradeSignalAiPublishOnUpdate && !bypass) {
-    skipCdp(opts, "合并更新默认不重复 CDP（TRADE_SIGNAL_AI_PUBLISH_ON_UPDATE=1 可开）");
+    skipCdp(card, opts, "合并更新默认不重复 CDP（TRADE_SIGNAL_AI_PUBLISH_ON_UPDATE=1 可开）");
     return false;
   }
   const dedupKey = buildDedupKey(card, event, opts.ingestSourceRef);
   if (!bypass && wasRecentlyPublished(dedupKey)) {
-    skipCdp(opts, `同一条 TG 消息已 CDP ref=${resolveTelegramMessageRef(card, opts.ingestSourceRef) || dedupKey}`);
+    skipCdp(
+      card,
+      opts,
+      `同一条 TG 消息已 CDP ref=${resolveTelegramMessageRef(card, opts.ingestSourceRef) || dedupKey}`,
+    );
     return false;
   }
 
@@ -177,9 +199,30 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
 
   if (!bypass) markPublished(dedupKey);
   const log = opts.log;
+  const msgRef = resolveTelegramMessageRef(card, opts.ingestSourceRef);
   if (bypass) {
-    log?.info?.("trade-signal CDP 测试 bypass：正文含 TELEGRAM_PUSH_BYPASS_MARKERS，跳过去重");
+    log?.info?.(
+      formatSendCdpLog("cdp_bypass", {
+        cardId: card?.id ?? "?",
+        channelId,
+        symbol,
+        sourceRef: msgRef || String(card?.sourceRef ?? ""),
+        event,
+        reason: "测试标记跳过去重",
+      }),
+    );
   }
+  log?.info?.(
+    formatSendCdpLog("cdp_post", {
+      cardId: card?.id ?? "?",
+      channelId,
+      symbol,
+      direction,
+      sourceRef: msgRef || String(card?.sourceRef ?? ""),
+      event,
+      detail: url,
+    }),
+  );
   void fetch(url, {
     method: "POST",
     headers: {
@@ -202,17 +245,43 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
       if (!r.ok || j?.success === false) {
         recentPublish.delete(dedupKey);
         log?.warn?.(
-          `trade-signal CDP 发布失败: HTTP ${r.status} ${j?.error || text.slice(0, 160)}`,
+          formatSendCdpLog("cdp_fail", {
+            cardId: card?.id ?? "?",
+            channelId,
+            symbol,
+            direction,
+            sourceRef: msgRef || String(card?.sourceRef ?? ""),
+            event,
+            reason: `HTTP ${r.status} ${j?.error || text.slice(0, 160)}`,
+          }),
         );
         return;
       }
       log?.info?.(
-        `trade-signal CDP 已排队: ${symbol} ${direction} event=${event} channel=${channelId} job=${j?.job_id || "?"}`,
+        formatSendCdpLog("cdp_ok", {
+          cardId: card?.id ?? "?",
+          channelId,
+          symbol,
+          direction,
+          sourceRef: msgRef || String(card?.sourceRef ?? ""),
+          event,
+          jobId: j?.job_id || "?",
+        }),
       );
     })
     .catch((e) => {
       recentPublish.delete(dedupKey);
-      log?.warn?.(`trade-signal CDP 发布异常: ${e?.message || e}`);
+      log?.warn?.(
+        formatSendCdpLog("cdp_fail", {
+          cardId: card?.id ?? "?",
+          channelId,
+          symbol,
+          direction,
+          sourceRef: msgRef || String(card?.sourceRef ?? ""),
+          event,
+          reason: String(e?.message || e),
+        }),
+      );
     });
   return true;
 }

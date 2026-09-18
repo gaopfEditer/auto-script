@@ -21,6 +21,17 @@ from cards_client import _channel_avatar_for_api
 from config import get_cards_api_base_url, load_cdp_send_chat_ids, resolve_channel_profile
 
 
+def _dedupe_ids(ids: list[int]) -> list[int]:
+    seen: set[int] = set()
+    out: list[int] = []
+    for cid in ids:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        out.append(cid)
+    return out
+
+
 def channel_profiles_path() -> Path:
     return Path(__file__).resolve().parent / "channel_profiles.json"
 
@@ -80,6 +91,81 @@ def parse_main_sender_patterns(raw: str | None) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def parse_only_names_patterns(raw: object) -> list[str]:
+    """only_names：数组或逗号分隔字符串。"""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    if isinstance(raw, str):
+        return parse_main_sender_patterns(raw)
+    return []
+
+
+def _raw_profile_entry(chat_id: int) -> dict[str, Any]:
+    path = channel_profiles_path()
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    key = str(chat_id)
+    alt = key.lstrip("-")
+    entry = raw.get(key) or raw.get(alt)
+    return entry if isinstance(entry, dict) else {}
+
+
+def get_profile_meta(chat_id: int, *, fallback_title: str = "") -> dict[str, Any]:
+    base = resolve_channel_profile(chat_id, fallback_title=fallback_title)
+    entry = _raw_profile_entry(chat_id)
+    only_names = parse_only_names_patterns(entry.get("only_names"))
+    return {**base, "only_names": only_names}
+
+
+def load_only_names_chat_ids() -> list[int]:
+    path = channel_profiles_path()
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    out: list[int] = []
+    for k, v in raw.items():
+        if k in _PROFILE_RESERVED_KEYS or not isinstance(v, dict):
+            continue
+        if not parse_only_names_patterns(v.get("only_names")):
+            continue
+        try:
+            out.append(int(str(k).strip()))
+        except ValueError:
+            continue
+    return out
+
+
+def load_card_route_chat_ids() -> list[int]:
+    """send 白名单 + 配置了 only_names 的群（建卡并推 TG；CDP 仍仅 send）。"""
+    return _dedupe_ids([*load_cdp_send_chat_ids(), *load_only_names_chat_ids()])
+
+
+def sender_filter_patterns(profile: dict[str, Any]) -> list[str]:
+    """only_names 优先于 main；均无则不过滤。"""
+    only = parse_only_names_patterns(profile.get("only_names"))
+    if only:
+        return only
+    return parse_main_sender_patterns(profile.get("main") or "")
+
+
+def sender_allowed_for_profile(profile: dict[str, Any], sender: str) -> bool:
+    patterns = sender_filter_patterns(profile)
+    return sender_matches_main(sender, patterns)
+
+
 def _norm_sender_token(s: str) -> str:
     t = (s or "").strip().lower()
     # 去掉展示名里的 (@username)
@@ -130,10 +216,8 @@ class UiFeedPusher:
         return bool(self._base)
 
     def should_push_sender(self, chat_id: int, sender: str, *, title: str = "") -> bool:
-        """无 main 配置则推；有则仅匹配名单。"""
-        profile = resolve_channel_profile(chat_id, fallback_title=title or str(chat_id))
-        patterns = parse_main_sender_patterns(profile.get("main") or "")
-        return sender_matches_main(sender, patterns)
+        profile = get_profile_meta(chat_id, fallback_title=title or str(chat_id))
+        return sender_allowed_for_profile(profile, sender)
 
     def push_message(
         self,
@@ -165,9 +249,8 @@ class UiFeedPusher:
         urls = uniq
         if not text and not urls:
             return False
-        profile = resolve_channel_profile(chat_id, fallback_title=title or str(chat_id))
-        patterns = parse_main_sender_patterns(profile.get("main") or "")
-        if patterns and not sender_matches_main(sender, patterns):
+        profile = get_profile_meta(chat_id, fallback_title=title or str(chat_id))
+        if not sender_allowed_for_profile(profile, sender):
             return False
         avatar_resolved = profile.get("avatar") or ""
         avatar_url = _channel_avatar_for_api(str(avatar_resolved))
