@@ -3,7 +3,7 @@
  * 若被旁路/旧实例占用则接管并拉起本目录进程。
  */
 import { spawn, execSync } from "node:child_process";
-import { existsSync, mkdirSync, createWriteStream } from "node:fs";
+import { existsSync, mkdirSync, createWriteStream, renameSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -151,6 +151,21 @@ export function startOiSupervisor(opts = {}) {
   const logDir = resolve(OI_DIR, "data");
   if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
   const logPath = resolve(logDir, "oi-supervisor.log");
+  const logMaxBytes = Number(process.env.OI_SUPERVISOR_LOG_MAX_MB ?? 80) * 1024 * 1024;
+
+  function rotateLogIfNeeded() {
+    if (!logMaxBytes || logMaxBytes < 1024 * 1024) return;
+    try {
+      if (!existsSync(logPath)) return;
+      if (statSync(logPath).size < logMaxBytes) return;
+      const bak = `${logPath}.1`;
+      if (existsSync(bak)) renameSync(bak, `${logPath}.2`);
+      renameSync(logPath, bak);
+      log.info?.(`[oi-supervisor] 日志轮转 ${logPath} → ${bak}`);
+    } catch (e) {
+      log.warn?.(`[oi-supervisor] 日志轮转失败: ${/** @type {Error} */ (e).message}`);
+    }
+  }
 
   function spawnOi() {
     if (stopping || starting) return;
@@ -159,6 +174,7 @@ export function startOiSupervisor(opts = {}) {
     if (now - lastStartAt < 15_000 && child && !child.killed) return;
     starting = true;
     lastStartAt = now;
+    rotateLogIfNeeded();
 
     const out = createWriteStream(logPath, { flags: "a" });
     out.write(`\n---- spawn ${new Date().toISOString()} ----\n`);

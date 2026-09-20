@@ -68,25 +68,96 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  justify-content: center;
+  justify-content: flex-start;
   overflow: hidden;
 }
 
-.mercu-focus-label {
+.mercu-focus-select-wrap {
   flex-shrink: 0;
+  position: relative;
+}
+
+.mercu-focus-select {
+  appearance: none;
+  background: #161616;
+  border: 1px solid var(--border-soft);
+  color: var(--accent);
   font-size: 0.68rem;
+  font-weight: 600;
+  padding: 5px 24px 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 112px;
+  letter-spacing: 0.02em;
+}
+
+.mercu-focus-select-wrap::after {
+  content: "▾";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.62rem;
   color: var(--muted);
-  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.mercu-focus-select:hover {
+  border-color: rgba(184, 255, 60, 0.35);
+}
+
+.mercu-focus-select:focus-visible {
+  outline: 1px solid rgba(184, 255, 60, 0.5);
+  outline-offset: 1px;
 }
 
 .mercu-focus-list {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: nowrap;
   overflow-x: auto;
+  overflow-y: hidden;
   max-width: 100%;
   scrollbar-width: thin;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+  padding: 2px 0;
+}
+
+.mercu-focus-list::-webkit-scrollbar {
+  height: 4px;
+}
+
+.mercu-focus-list::-webkit-scrollbar-thumb {
+  background: rgba(158, 158, 158, 0.35);
+  border-radius: 4px;
+}
+
+.mercu-focus-rank {
+  font-size: 0.58rem;
+  color: #666;
+  padding-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mercu-focus-badge {
+  font-size: 0.58rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0 6px 0 2px;
+  color: #9e9e9e;
+}
+
+.mercu-focus-badge.up {
+  color: var(--green);
+}
+
+.mercu-focus-badge.down {
+  color: var(--red);
 }
 
 .mercu-focus-empty {
@@ -2997,6 +3068,17 @@ button {
 .pattern-oi-sub-canvas {
   width: 100%;
   height: 100%;
+}
+
+.pattern-crosshair-vline {
+  display: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed rgba(158, 158, 158, 0.55);
+  pointer-events: none;
+  z-index: 4;
 }
 
 .pattern-crosshair-price {

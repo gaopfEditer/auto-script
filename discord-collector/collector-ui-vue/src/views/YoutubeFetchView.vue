@@ -115,6 +115,111 @@ const coinActions = computed(() => {
   return Array.isArray(list) ? list : [];
 });
 
+/** @typedef {{ timeLabel: string, timeRange: string, overview: string, analysis: string[], coins: Record<string, unknown>[] }} PreviewSegment */
+
+/** 按时间段串联的段落卡片 */
+const previewSegments = computed(() => {
+  const raw = pastePreview.value?.segments;
+  if (Array.isArray(raw) && raw.length) {
+    return raw.map((item, i) => {
+      const row = /** @type {Record<string, unknown>} */ (item ?? {});
+      const coinsRaw = row.coins ?? row.coinActions;
+      return {
+        timeLabel: String(row.timeLabel ?? `片段 ${i + 1}`),
+        timeRange: String(row.timeRange ?? ""),
+        overview: String(row.overview ?? ""),
+        analysis: asStringList(row.analysis),
+        coins: Array.isArray(coinsRaw) ? coinsRaw : [],
+      };
+    });
+  }
+  const list = coinActions.value;
+  if (list.length) {
+    return list.map((coin, i) => {
+      const c = /** @type {Record<string, unknown>} */ (coin);
+      return {
+        timeLabel: `片段 ${i + 1}`,
+        timeRange: "",
+        overview: String(c.description ?? `${c.symbol} · ${actionTypeLabel(String(c.actionType))}`),
+        analysis: [],
+        coins: [c],
+      };
+    });
+  }
+  const hint = String(pastePreview.value?.title ?? "").trim();
+  return [
+    {
+      timeLabel: "全文",
+      timeRange: "",
+      overview: hint || "文稿概要见下方",
+      analysis: [],
+      coins: [],
+    },
+  ];
+});
+
+/** 全文概要：始终有内容（旧缓存无 summary 时前端兜底） */
+const previewSummary = computed(() => {
+  const direct = asStringList(pastePreview.value?.summary);
+  if (direct.length) return direct;
+  /** @type {string[]} */
+  const lines = [];
+  for (const seg of previewSegments.value) {
+    if (seg.overview) lines.push(seg.overview);
+    lines.push(...seg.analysis);
+  }
+  if (lines.length) return [...new Set(lines)].slice(0, 8);
+  const raw = pasteFullTextDisplay.value;
+  if (raw) {
+    return raw
+      .split(/\n+/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 24)
+      .slice(0, 3)
+      .map((l) => l.slice(0, 160));
+  }
+  return ["文稿已解析，详见下方时间段卡片。"];
+});
+
+/** 全文概要下方：文稿提到的每条币种操作（可点击跳转） */
+const previewCoinNav = computed(() => {
+  /** @type {Map<string, number>} */
+  const seen = new Map();
+  return coinActions.value.map((coin, i) => {
+    const c = /** @type {Record<string, unknown>} */ (coin);
+    const sym = String(c.symbol ?? "").trim() || "—";
+    const entry = String(c.entry ?? "").trim();
+    const n = (seen.get(sym) ?? 0) + 1;
+    seen.set(sym, n);
+    const dupCount = coinActions.value.filter(
+      (x) => String(/** @type {Record<string, unknown>} */ (x).symbol ?? "").trim() === sym,
+    ).length;
+    return {
+      index: i,
+      symbol: sym,
+      display: dupCount > 1 ? `${sym} #${n}` : sym,
+      sub: actionTypeLabel(String(c.actionType)),
+      hint: entry ? entry.slice(0, 16) : String(c.description ?? "").slice(0, 16),
+      anchorId: coinAnchorId(i),
+    };
+  });
+});
+
+/** @param {number} flatIndex */
+function coinAnchorId(flatIndex) {
+  return `paste-coin-${flatIndex}`;
+}
+
+/** @param {number} flatIndex */
+function scrollToCoin(flatIndex) {
+  activeCoinNav.value = flatIndex;
+  const el = document.getElementById(coinAnchorId(flatIndex));
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  el.classList.add("coin-anchor-flash");
+  window.setTimeout(() => el.classList.remove("coin-anchor-flash"), 1400);
+}
+
 const coinEvalEditing = computed(() => {
   const key = coinEvalEditingKey.value;
   if (!key) return null;
@@ -133,6 +238,7 @@ const coinEvalTpByKey = reactive({});
 const coinEvalNoteByKey = reactive({});
 const coinEvalEditingKey = ref("");
 const coinWatchMsg = ref("");
+const activeCoinNav = ref(-1);
 
 /** @param {Record<string, unknown>} coin @param {number} i */
 function coinEvalKey(coin, i) {
@@ -251,6 +357,7 @@ watch(
   () => {
     resetCoinEvalDrafts();
     syncCoinEvalDrafts();
+    activeCoinNav.value = -1;
     // 同步仅在「解析完成」后触发，选中已有文件不自动同步
   }
 );
@@ -294,8 +401,39 @@ function coinActionDetail(coin) {
   if (coin.entry) parts.push(`入场 ${coin.entry}`);
   if (coin.stopLoss) parts.push(`止损 ${coin.stopLoss}`);
   if (Array.isArray(coin.targets) && coin.targets.length) parts.push(`目标 ${coin.targets.join(" / ")}`);
+  if (coin.exit) parts.push(`出场 ${coin.exit}`);
   if (coin.pnl) parts.push(String(coin.pnl));
   return parts.join(" · ") || "—";
+}
+
+/** @param {Record<string, unknown>} coin */
+function coinTargetsText(coin) {
+  const t = coin.targets;
+  if (Array.isArray(t) && t.length) return t.map((x) => String(x)).join(" / ");
+  return "—";
+}
+
+/** @param {Record<string, unknown>} coin */
+function coinExitText(coin) {
+  const exit = String(coin.exit ?? "").trim();
+  if (exit) return exit;
+  if (String(coin.actionType) === "end") return String(coin.pnl ?? "已结束").trim() || "已平仓";
+  if (String(coin.actionType) === "toend") return "临近止盈 / 准备出场";
+  const pnl = String(coin.pnl ?? "").trim();
+  return pnl || "—";
+}
+
+/** @param {Record<string, unknown>} coin */
+function findCoinFlatIndex(coin) {
+  return coinActions.value.findIndex((c) => {
+    const row = /** @type {Record<string, unknown>} */ (c);
+    return (
+      String(row.symbol) === String(coin.symbol) &&
+      String(row.actionType) === String(coin.actionType) &&
+      String(row.entry ?? "") === String(coin.entry ?? "") &&
+      String(row.description ?? "") === String(coin.description ?? "")
+    );
+  });
 }
 
 /** @type {ReturnType<typeof setInterval> | null} */
@@ -884,57 +1022,140 @@ https://youtu.be/..."
         <div v-if="pasteDetailTab === 'cards'" class="detail-tab-body">
           <div v-if="pastePreview" class="preview-wrap">
             <div class="preview-upper">
-              <div v-if="asStringList(pastePreview.summary).length" class="summary-block">
+              <section class="summary-block summary-block-top">
                 <div class="fn">全文概要</div>
                 <ul>
-                  <li v-for="(line, i) in asStringList(pastePreview.summary)" :key="i">{{ line }}</li>
+                  <li v-for="(line, i) in previewSummary" :key="`sum-${i}`">{{ line }}</li>
                 </ul>
-              </div>
+              </section>
 
-              <div v-if="coinActions.length" class="coin-actions">
-                <div class="coin-actions-head">
-                  <span class="fn">币种操作</span>
-                  <span class="coin-count">{{ coinActions.length }} 条</span>
+              <nav v-if="previewCoinNav.length" class="coin-nav-strip" aria-label="币种快捷跳转">
+                <span class="fn coin-nav-label">提及币种</span>
+                <div class="coin-nav-scroll">
+                  <button
+                    v-for="item in previewCoinNav"
+                    :key="item.anchorId"
+                    type="button"
+                    class="coin-nav-chip"
+                    :class="{ active: activeCoinNav === item.index }"
+                    :title="[item.sub, item.hint].filter(Boolean).join(' · ')"
+                    @click="scrollToCoin(item.index)"
+                  >
+                    <span class="coin-nav-sym">{{ item.display }}</span>
+                    <span class="coin-nav-sub">{{ item.sub }}</span>
+                  </button>
+                </div>
+              </nav>
+
+              <section class="timeline-section">
+                <div class="timeline-head">
+                  <span class="fn">时间段 · 横向时间轴</span>
+                  <span class="coin-count">{{ coinActions.length }} 条 · {{ previewSegments.length }} 段</span>
                 </div>
                 <p v-if="coinWatchMsg" class="coin-watch-msg">{{ coinWatchMsg }}</p>
-                <article
-                  v-for="(coin, i) in coinActions"
-                  :key="`${coin.symbol}-${coin.actionType}-${i}`"
-                  class="coin-action-card"
-                  role="button"
-                  tabindex="0"
-                  @click="openCoinEdit(coinEvalKey(coin, i))"
-                  @keydown.enter="openCoinEdit(coinEvalKey(coin, i))"
-                >
-                  <header class="coin-action-top">
-                    <strong class="coin-sym">{{ coin.symbol }}</strong>
-                    <span class="action-badge" :class="actionTypeClass(String(coin.actionType))">
-                      {{ actionTypeLabel(String(coin.actionType)) }}
-                    </span>
-                    <span v-if="coin.direction" class="coin-dir">{{ coin.direction }}</span>
-                    <span v-if="coin.entry" class="coin-watch-badge">监听 ±5%</span>
-                  </header>
-                  <p class="coin-brief-line">
-                    <span class="coin-brief-label">入场</span>
-                    {{ coin.entry || "—" }}
-                  </p>
-                  <p class="coin-brief-line coin-brief-note">
-                    <span class="coin-brief-label">备注</span>
-                    {{ coinBriefNote(coin, coinEvalKey(coin, i)) }}
-                  </p>
-                  <p v-if="coinEvalByKey[coinEvalKey(coin, i)]" class="coin-brief-eval">
-                    {{ coinEvalSummaryLine(coinEvalKey(coin, i)) }}
-                  </p>
-                  <button
-                    type="button"
-                    class="coin-edit-btn"
-                    @click.stop="openCoinEdit(coinEvalKey(coin, i))"
+                <div class="timeline timeline-h">
+                  <article
+                    v-for="(seg, si) in previewSegments"
+                    :key="`${seg.timeLabel}-${si}`"
+                    class="segment-block segment-block-h"
                   >
-                    编辑评价
-                  </button>
-                </article>
-              </div>
-              <p v-else class="muted">未识别到币种操作。</p>
+                    <div class="segment-time-row">
+                      <span class="segment-dot" aria-hidden="true" />
+                      <h4 class="segment-time">
+                        {{ seg.timeLabel }}
+                        <span v-if="seg.timeRange" class="segment-range">{{ seg.timeRange }}</span>
+                      </h4>
+                    </div>
+                    <p v-if="seg.overview" class="segment-overview">{{ seg.overview }}</p>
+                    <ul v-if="seg.analysis.length" class="segment-analysis">
+                      <li v-for="(pt, pi) in seg.analysis" :key="`a-${si}-${pi}`">{{ pt }}</li>
+                    </ul>
+
+                    <div v-if="seg.coins.length" class="segment-coins segment-coins-v">
+                      <article
+                        v-for="(coin, ci) in seg.coins"
+                        :id="
+                          findCoinFlatIndex(coin) >= 0
+                            ? coinAnchorId(findCoinFlatIndex(coin))
+                            : `paste-coin-seg-${si}-${ci}`
+                        "
+                        :key="`${seg.timeLabel}-${coin.symbol}-${ci}`"
+                        class="coin-action-card segment-trade-card"
+                        :class="{
+                          clickable: findCoinFlatIndex(coin) >= 0,
+                          'coin-anchor-active':
+                            findCoinFlatIndex(coin) >= 0 && activeCoinNav === findCoinFlatIndex(coin),
+                        }"
+                        role="button"
+                        tabindex="0"
+                        @click="
+                          findCoinFlatIndex(coin) >= 0 &&
+                            openCoinEdit(coinEvalKey(coin, findCoinFlatIndex(coin)))
+                        "
+                        @keydown.enter="
+                          findCoinFlatIndex(coin) >= 0 &&
+                            openCoinEdit(coinEvalKey(coin, findCoinFlatIndex(coin)))
+                        "
+                      >
+                        <header class="coin-action-top">
+                          <strong class="coin-sym">{{ coin.symbol }}</strong>
+                          <span class="action-badge" :class="actionTypeClass(String(coin.actionType))">
+                            {{ actionTypeLabel(String(coin.actionType)) }}
+                          </span>
+                          <span v-if="coin.direction" class="coin-dir">{{ coin.direction }}</span>
+                          <span v-if="coin.entry" class="coin-watch-badge">监听 ±5%</span>
+                        </header>
+                        <dl class="trade-fields">
+                          <div class="trade-field">
+                            <dt>入场</dt>
+                            <dd>{{ coin.direction || "—" }}</dd>
+                          </div>
+                          <div class="trade-field">
+                            <dt>入场点</dt>
+                            <dd>{{ coin.entry || "—" }}</dd>
+                          </div>
+                          <div class="trade-field">
+                            <dt>止损</dt>
+                            <dd>{{ coin.stopLoss || "—" }}</dd>
+                          </div>
+                          <div class="trade-field">
+                            <dt>止盈</dt>
+                            <dd>{{ coinTargetsText(coin) }}</dd>
+                          </div>
+                          <div class="trade-field">
+                            <dt>出场</dt>
+                            <dd>{{ coinExitText(coin) }}</dd>
+                          </div>
+                        </dl>
+                        <p v-if="coin.description" class="coin-brief-line coin-brief-note">
+                          <span class="coin-brief-label">定位</span>
+                          {{ coin.description }}
+                        </p>
+                        <p
+                          v-if="
+                            findCoinFlatIndex(coin) >= 0 &&
+                            coinEvalByKey[coinEvalKey(coin, findCoinFlatIndex(coin))]
+                          "
+                          class="coin-brief-eval"
+                        >
+                          {{ coinEvalSummaryLine(coinEvalKey(coin, findCoinFlatIndex(coin))) }}
+                        </p>
+                        <button
+                          v-if="findCoinFlatIndex(coin) >= 0"
+                          type="button"
+                          class="coin-edit-btn"
+                          @click.stop="openCoinEdit(coinEvalKey(coin, findCoinFlatIndex(coin)))"
+                        >
+                          编辑评价
+                        </button>
+                      </article>
+                    </div>
+                    <p v-else-if="!seg.overview && !seg.analysis.length" class="muted segment-empty">
+                      本段无明确币种操作
+                    </p>
+                  </article>
+                </div>
+              </section>
 
               <div v-if="previewCardFields" class="embed-preview">
                 <h3>{{ displayName(previewCardFields.title ?? pastePreview.title) || "—" }}</h3>
@@ -1267,6 +1488,198 @@ https://youtu.be/..."
   color: #dbdee1;
   font-size: 0.85rem;
   line-height: 1.55;
+}
+.summary-block-top {
+  background: #2b2d31;
+  border: 1px solid #3f4147;
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+}
+.coin-nav-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: #2b2d31;
+  border: 1px solid #3f4147;
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+}
+.coin-nav-label {
+  flex-shrink: 0;
+}
+.coin-nav-scroll {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+  scrollbar-width: thin;
+}
+.coin-nav-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  border: 1px solid #3f4147;
+  background: #1e1f22;
+  color: #dbdee1;
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.coin-nav-chip:hover,
+.coin-nav-chip.active {
+  border-color: #5865f2;
+  background: #232428;
+  box-shadow: 0 0 0 1px rgba(88, 101, 242, 0.35);
+}
+.coin-nav-sym {
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: #fff;
+}
+.coin-nav-sub {
+  font-size: 0.68rem;
+  color: #949ba4;
+}
+.timeline-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.timeline {
+  margin-top: 0.25rem;
+}
+.timeline-h {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0.65rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35rem 0.15rem 0.65rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+.segment-block-h {
+  position: relative;
+  flex: 0 0 min(300px, 78vw);
+  max-width: 340px;
+  scroll-snap-align: start;
+  margin: 0;
+  padding: 0.65rem 0.7rem 0.75rem;
+  background: #2b2d31;
+  border: 1px solid #3f4147;
+  border-radius: 10px;
+  border-top: 3px solid #5865f2;
+}
+.segment-block-h::after {
+  content: "→";
+  position: absolute;
+  right: -0.45rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #4e5058;
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+.segment-block-h:last-child::after {
+  content: none;
+}
+.segment-time-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.segment-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5865f2;
+  flex-shrink: 0;
+}
+.segment-time {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #aeb4ff;
+}
+.segment-range {
+  margin-left: 0.35rem;
+  font-weight: 500;
+  font-size: 0.72rem;
+  color: #949ba4;
+}
+.segment-overview {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: #dbdee1;
+  line-height: 1.5;
+}
+.segment-analysis {
+  margin: 0.35rem 0 0;
+  padding-left: 1rem;
+  color: #b5bac1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.segment-coins-v {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.segment-trade-card {
+  width: 100%;
+  scroll-margin: 12px;
+}
+.segment-trade-card.clickable {
+  cursor: pointer;
+}
+.segment-trade-card.coin-anchor-active,
+.segment-trade-card.coin-anchor-flash {
+  border-color: #5865f2;
+  box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.45);
+}
+@keyframes coin-anchor-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(88, 101, 242, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(88, 101, 242, 0);
+  }
+}
+.segment-trade-card.coin-anchor-flash {
+  animation: coin-anchor-pulse 1.2s ease-out;
+}
+.trade-fields {
+  display: grid;
+  grid-template-columns: 3.2rem 1fr;
+  gap: 0.2rem 0.55rem;
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+}
+.trade-field dt {
+  margin: 0;
+  color: #949ba4;
+}
+.trade-field dd {
+  margin: 0;
+  color: #dbdee1;
+  word-break: break-word;
+}
+.segment-empty {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
 }
 .coin-actions {
   display: flex;

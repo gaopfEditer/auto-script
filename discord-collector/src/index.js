@@ -72,21 +72,23 @@ async function collect() {
         void discordIngest.onWsFrame(payload).catch((e) => {
           log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
         });
-        void store
-          .insertFrame({
-            receivedAt: proc.receivedAt,
-            payloadHash: hashBuffer(buf),
-            opcode: meta.opcode,
-            requestId: meta.requestId || null,
-            rawPayload: buf,
-            parsedJson: proc.ok ? proc.parsedJson : null,
-            parseError: proc.ok ? null : proc.parseError,
-          })
-          .then((r) => {
-            if (r.inserted) insertOk += 1;
-            else if (r.duplicate) insertDup += 1;
-          })
-          .catch((err) => log.error(`MySQL 写入失败: ${err.message}`));
+        if (config.framePersist) {
+          void store
+            .insertFrame({
+              receivedAt: proc.receivedAt,
+              payloadHash: hashBuffer(buf),
+              opcode: meta.opcode,
+              requestId: meta.requestId || null,
+              rawPayload: buf,
+              parsedJson: proc.ok ? proc.parsedJson : null,
+              parseError: proc.ok ? null : proc.parseError,
+            })
+            .then((r) => {
+              if (r.inserted) insertOk += 1;
+              else if (r.duplicate) insertDup += 1;
+            })
+            .catch((err) => log.error(`MySQL 写入失败: ${err.message}`));
+        }
       },
     },
     createLogger("cdp")

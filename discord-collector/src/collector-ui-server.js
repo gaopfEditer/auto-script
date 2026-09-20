@@ -1187,17 +1187,19 @@ async function main() {
               void discordIngest.onWsFrame(payload).catch((e) => {
                 log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
               });
-              void store
-                .insertFrame({
-                  receivedAt: proc.receivedAt,
-                  payloadHash: hashBuffer(buf),
-                  opcode: meta.opcode,
-                  requestId: meta.requestId || null,
-                  rawPayload: buf,
-                  parsedJson: proc.ok ? proc.parsedJson : null,
-                  parseError: proc.ok ? null : proc.parseError,
-                })
-                .catch((err) => log.error(`MySQL: ${err.message}`));
+              if (config.framePersist) {
+                void store
+                  .insertFrame({
+                    receivedAt: proc.receivedAt,
+                    payloadHash: hashBuffer(buf),
+                    opcode: meta.opcode,
+                    requestId: meta.requestId || null,
+                    rawPayload: buf,
+                    parsedJson: proc.ok ? proc.parsedJson : null,
+                    parseError: proc.ok ? null : proc.parseError,
+                  })
+                  .catch((err) => log.error(`MySQL: ${err.message}`));
+              }
             }
           },
         },

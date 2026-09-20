@@ -175,6 +175,10 @@ export const config = {
   )
     ? false
     : true,
+  /** 默认关：勿把每条 Gateway WS 帧写入 MySQL frames（曾膨胀至 100GB+） */
+  framePersist: ["1", "true", "yes", "on"].includes(
+    String(process.env.COLLECTOR_FRAME_PERSIST ?? "0").toLowerCase()
+  ),
   /** youtube-fetch 本地归档目录（前端文稿预览） */
   youtubeArchivesDir: (process.env.YOUTUBE_ARCHIVES_DIR ?? "").trim()
     ? path.resolve(process.env.YOUTUBE_ARCHIVES_DIR.trim())

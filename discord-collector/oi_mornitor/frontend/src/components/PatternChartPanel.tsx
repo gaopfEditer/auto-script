@@ -3,6 +3,7 @@ import {
   ColorType,
   CrosshairMode,
   createChart,
+  LineStyle,
   type CandlestickData,
   type HistogramData,
   type IChartApi,
@@ -57,6 +58,18 @@ import {
   DERIV_OI_LINE_COLOR,
   fetchChartDerivSubplots,
 } from "../utils/chartDerivSubplots";
+import {
+  buildOiMaLine,
+  buildSignedHistMaLine,
+  buildVolumeMaData,
+  NET_BUY_MA_COLOR,
+  NET_BUY_MA_PERIOD,
+  OI_MA_COLOR,
+  OI_MA_PERIOD,
+  VOLUME_MA_COLOR,
+  VOLUME_MA_PERIOD,
+  volumeLiveUpdate,
+} from "../utils/chartMaSeries";
 
 /** 仅当左缘已贴到数据起点附近（几乎要露空白）才预取；真正空白是 from < 0 */
 const LEFT_HISTORY_PAD = 5;
@@ -160,7 +173,7 @@ const DEFAULT_LAYERS: ChartLayers = {
 
 const LAYER_TOGGLES: { key: keyof ChartLayers; label: string }[] = [
   { key: "bb", label: "布林" },
-  { key: "volume", label: "量能" },
+  { key: "volume", label: `量能·MA${VOLUME_MA_PERIOD}` },
   { key: "macd", label: "MACD" },
   { key: "candlePattern", label: "K线形态" },
   { key: "structure", label: "形态线" },
@@ -332,15 +345,6 @@ function toCandleData(candles: PatternCandle[]): CandlestickData[] {
   }));
 }
 
-function toVolumeData(candles: PatternCandle[]): HistogramData[] {
-  return candles.map((c) => ({
-    time: c.time as UTCTimestamp,
-    value: c.volume ?? 0,
-    // 半透明，叠在 K 线下沿时仍能看清影线/实体
-    color: c.close >= c.open ? "rgba(0, 230, 118, 0.28)" : "rgba(255, 82, 82, 0.28)",
-  }));
-}
-
 /** 量能柱从 0 起算，按当前可见区内最大量撑满分配高度 */
 function volumeAutoscaleInfoProvider(
   original: () => { priceRange: { minValue: number; maxValue: number } | null } | null,
@@ -400,6 +404,40 @@ function buildMacdCrossMarkers(
 }
 
 /** MACD 对称扩展，可见区内柱线充分利用分区高度 */
+/** 副图十字线锚点：与主图 K 线等长，value=0 不参与 autoscale */
+function buildCrosshairAnchorLine(times: number[]): LineData[] {
+  return times.map((t) => ({ time: t as UTCTimestamp, value: 0 }));
+}
+
+function addCrosshairAnchorSeries(chart: IChartApi): ISeriesApi<"Line"> {
+  return chart.addLineSeries({
+    color: "transparent",
+    lineWidth: 0,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    crosshairMarkerVisible: false,
+    autoscaleInfoProvider: () => null,
+  });
+}
+
+function positionSharedCrosshairVLine(
+  lineEl: HTMLDivElement | null,
+  wrapEl: HTMLDivElement | null,
+  canvasEl: HTMLDivElement | null,
+  pointX: number | undefined,
+  visible: boolean,
+) {
+  if (!lineEl || !wrapEl || !canvasEl) return;
+  if (!visible || pointX == null || !Number.isFinite(pointX) || pointX < 0) {
+    lineEl.style.display = "none";
+    return;
+  }
+  const wrapRect = wrapEl.getBoundingClientRect();
+  const canvasRect = canvasEl.getBoundingClientRect();
+  lineEl.style.display = "block";
+  lineEl.style.left = `${canvasRect.left - wrapRect.left + pointX}px`;
+}
+
 function macdAutoscaleInfoProvider(
   original: () => { priceRange: { minValue: number; maxValue: number } | null } | null,
 ) {
@@ -476,6 +514,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const chartRef = useRef<HTMLDivElement>(null);
   const chartWrapRef = useRef<HTMLDivElement>(null);
   const crosshairPriceRef = useRef<HTMLDivElement>(null);
+  /** 贯穿主图 + 全部副图的共享竖线（数据为空时 LWC 副图十字线会断） */
+  const crosshairVLineRef = useRef<HTMLDivElement>(null);
   const oiChartElRef = useRef<HTMLDivElement>(null);
   const spotNetElRef = useRef<HTMLDivElement>(null);
   const futNetElRef = useRef<HTMLDivElement>(null);
@@ -483,8 +523,15 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const spotNetChartApi = useRef<IChartApi | null>(null);
   const futNetChartApi = useRef<IChartApi | null>(null);
   const oiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const oiMaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const spotNetSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const spotNetMaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const futNetSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const futNetMaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** 副图十字线锚点：每根 K 线 time 均有 value=0，避免 OI/净买入缺数时竖线中断 */
+  const oiCrossAnchorRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const spotCrossAnchorRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const futCrossAnchorRef = useRef<ISeriesApi<"Line"> | null>(null);
   const derivSyncingRef = useRef(false);
   /** 防止 setCrosshairPosition 触发的 move 事件回环 */
   const crosshairSyncingRef = useRef(false);
@@ -498,6 +545,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const midRef = useRef<ISeriesApi<"Line"> | null>(null);
   const lowerRef = useRef<ISeriesApi<"Line"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const volumeMaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const macdLineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -724,7 +772,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         }
 
         if (volumeRef.current) {
-          volumeRef.current.setData(toVolumeData(sortedCandles));
+          const volPack = buildVolumeMaData(sortedCandles);
+          volumeRef.current.setData(volPack.bars);
+          volumeMaRef.current?.setData(volPack.ma);
         }
 
         if (macdHistRef.current) {
@@ -976,14 +1026,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       });
 
       if (volumeRef.current && candle.volume != null) {
-        volumeRef.current.update({
-          time: candle.time as UTCTimestamp,
-          value: candle.volume,
-          color:
-            candle.close >= candle.open
-              ? "rgba(0, 230, 118, 0.28)"
-              : "rgba(255, 82, 82, 0.28)",
-        });
+        const live = volumeLiveUpdate(candle, candlesRef.current);
+        volumeRef.current.update(live.bar);
+        if (live.ma && volumeMaRef.current) volumeMaRef.current.update(live.ma);
       }
 
       const candles = candlesRef.current;
@@ -1017,6 +1062,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     midRef.current?.applyOptions({ visible: next.bb });
     lowerRef.current?.applyOptions({ visible: next.bb });
     volumeRef.current?.applyOptions({ visible: next.volume });
+    volumeMaRef.current?.applyOptions({ visible: next.volume });
     macdHistRef.current?.applyOptions({ visible: next.macd });
     macdLineRef.current?.applyOptions({ visible: next.macd });
     macdSignalRef.current?.applyOptions({ visible: next.macd });
@@ -1301,6 +1347,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       midRef.current = null;
       lowerRef.current = null;
       volumeRef.current = null;
+      volumeMaRef.current = null;
       macdHistRef.current = null;
       macdLineRef.current = null;
       macdSignalRef.current = null;
@@ -1400,6 +1447,16 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       volumeRef.current = chart.addHistogramSeries({
         priceScaleId: "volume",
         priceFormat: { type: "volume" },
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.volume,
+        autoscaleInfoProvider: volumeAutoscaleInfoProvider,
+      });
+      volumeMaRef.current = chart.addLineSeries({
+        priceScaleId: "volume",
+        color: VOLUME_MA_COLOR,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
         priceLineVisible: false,
         lastValueVisible: false,
         visible: layersRef.current.volume,
@@ -1570,6 +1627,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         midRef.current = null;
         lowerRef.current = null;
         volumeRef.current = null;
+        volumeMaRef.current = null;
         macdHistRef.current = null;
         macdLineRef.current = null;
         macdSignalRef.current = null;
@@ -1648,8 +1706,15 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       spotNetChartApi.current = null;
       futNetChartApi.current = null;
       oiSeriesRef.current = null;
+      oiMaSeriesRef.current = null;
       spotNetSeriesRef.current = null;
+      spotNetMaSeriesRef.current = null;
       futNetSeriesRef.current = null;
+      futNetMaSeriesRef.current = null;
+      oiCrossAnchorRef.current = null;
+      spotCrossAnchorRef.current = null;
+      futCrossAnchorRef.current = null;
+      if (crosshairVLineRef.current) crosshairVLineRef.current.style.display = "none";
       return;
     }
 
@@ -1685,13 +1750,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         },
         crosshair: {
           mode: CrosshairMode.Normal,
-          // 副图主要跟主图联动竖线（时间轴）；横线弱化
+          // 竖线由 chartWrap 共享 DOM 层绘制，避免 OI/净买入缺数时 LWC 竖线中断
           vertLine: {
-            visible: true,
+            visible: false,
             labelVisible: false,
-            style: 2, // Dashed
-            color: "rgba(158, 158, 158, 0.55)",
-            width: 1,
           },
           horzLine: {
             visible: true,
@@ -1724,8 +1786,22 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       priceLineVisible: false,
       lastValueVisible: true,
     });
+    const oiMaSeries = oiChart.addLineSeries({
+      color: OI_MA_COLOR,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
     const spotSeries = spotChart.addHistogramSeries({
       priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const spotMaSeries = spotChart.addLineSeries({
+      color: NET_BUY_MA_COLOR,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
       priceLineVisible: false,
       lastValueVisible: false,
     });
@@ -1734,19 +1810,44 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       priceLineVisible: false,
       lastValueVisible: false,
     });
+    const futMaSeries = futChart.addLineSeries({
+      color: NET_BUY_MA_COLOR,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
     oiSeriesRef.current = oiSeries;
+    oiMaSeriesRef.current = oiMaSeries;
     spotNetSeriesRef.current = spotSeries;
+    spotNetMaSeriesRef.current = spotMaSeries;
     futNetSeriesRef.current = futSeries;
+    futNetMaSeriesRef.current = futMaSeries;
+
+    const oiCrossAnchor = addCrosshairAnchorSeries(oiChart);
+    const spotCrossAnchor = addCrosshairAnchorSeries(spotChart);
+    const futCrossAnchor = addCrosshairAnchorSeries(futChart);
+    oiCrossAnchorRef.current = oiCrossAnchor;
+    spotCrossAnchorRef.current = spotCrossAnchor;
+    futCrossAnchorRef.current = futCrossAnchor;
+
+    const anchorTimes = candlesRef.current.map((c) => c.time);
+    if (anchorTimes.length) {
+      const anchorData = buildCrosshairAnchorLine(anchorTimes);
+      oiCrossAnchor.setData(anchorData);
+      spotCrossAnchor.setData(anchorData);
+      futCrossAnchor.setData(anchorData);
+    }
 
     const subCharts = [oiChart, spotChart, futChart];
     const crosshairTargets: Array<{
       chart: IChartApi;
-      series: ISeriesApi<"Line"> | ISeriesApi<"Histogram">;
-      values: { current: Map<number, number> };
+      series: ISeriesApi<"Line">;
+      canvasEl: HTMLDivElement;
     }> = [
-      { chart: oiChart, series: oiSeries, values: oiValueByTimeRef },
-      { chart: spotChart, series: spotSeries, values: spotNetByTimeRef },
-      { chart: futChart, series: futSeries, values: futNetByTimeRef },
+      { chart: oiChart, series: oiCrossAnchor, canvasEl: oiEl },
+      { chart: spotChart, series: spotCrossAnchor, canvasEl: spotEl },
+      { chart: futChart, series: futCrossAnchor, canvasEl: futEl },
     ];
 
     const clearAllSubCrosshairs = () => {
@@ -1777,14 +1878,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       }
       crosshairSyncingRef.current = true;
       try {
-        for (const { chart, series, values } of crosshairTargets) {
-          const price = values.current.get(t);
-          // 无点位时仍用 0 定位竖线（时间轴虚线）
-          chart.setCrosshairPosition(
-            price != null && Number.isFinite(price) ? price : 0,
-            t as UTCTimestamp,
-            series,
-          );
+        for (const { chart, series } of crosshairTargets) {
+          // 锚点序列每根 K 线均有 value，与 OI/净买入是否为空无关
+          chart.setCrosshairPosition(0, t as UTCTimestamp, series);
         }
       } catch {
         /* disposed */
@@ -1793,16 +1889,33 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       }
     };
 
-    const onMainCrosshair = (param: { time?: unknown }) => {
+    const onMainCrosshair = (param: { time?: unknown; point?: { x: number; y: number } }) => {
+      const hasTime = param.time !== undefined && param.time !== null;
+      positionSharedCrosshairVLine(
+        crosshairVLineRef.current,
+        chartWrapRef.current,
+        chartRef.current,
+        param.point?.x,
+        hasTime,
+      );
       syncCrosshairToSubs(param.time);
     };
     main.subscribeCrosshairMove(onMainCrosshair);
 
     // 副图悬停时同样把竖线打到其余副图（主图由用户指针主导，不回写以免抢焦点）
     const onSubCrosshair =
-      (self: IChartApi) => (param: { time?: unknown }) => {
+      (self: IChartApi, canvasEl: HTMLDivElement) =>
+      (param: { time?: unknown; point?: { x: number; y: number } }) => {
         if (crosshairSyncingRef.current) return;
-        if (param.time === undefined) {
+        const hasTime = param.time !== undefined && param.time !== null;
+        positionSharedCrosshairVLine(
+          crosshairVLineRef.current,
+          chartWrapRef.current,
+          canvasEl,
+          param.point?.x,
+          hasTime,
+        );
+        if (!hasTime) {
           for (const { chart } of crosshairTargets) {
             if (chart !== self) {
               try {
@@ -1812,20 +1925,18 @@ export const PatternChartPanel = memo(function PatternChartPanel({
               }
             }
           }
+          if (!hasTime) {
+            crosshairVLineRef.current && (crosshairVLineRef.current.style.display = "none");
+          }
           return;
         }
         const t = typeof param.time === "number" ? param.time : Number(param.time);
         if (!Number.isFinite(t)) return;
         crosshairSyncingRef.current = true;
         try {
-          for (const { chart, series, values } of crosshairTargets) {
+          for (const { chart, series } of crosshairTargets) {
             if (chart === self) continue;
-            const price = values.current.get(t);
-            chart.setCrosshairPosition(
-              price != null && Number.isFinite(price) ? price : 0,
-              t as UTCTimestamp,
-              series,
-            );
+            chart.setCrosshairPosition(0, t as UTCTimestamp, series);
           }
         } catch {
           /* ignore */
@@ -1833,9 +1944,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           crosshairSyncingRef.current = false;
         }
       };
-    const onOiCross = onSubCrosshair(oiChart);
-    const onSpotCross = onSubCrosshair(spotChart);
-    const onFutCross = onSubCrosshair(futChart);
+    const onOiCross = onSubCrosshair(oiChart, oiEl);
+    const onSpotCross = onSubCrosshair(spotChart, spotEl);
+    const onFutCross = onSubCrosshair(futChart, futEl);
     oiChart.subscribeCrosshairMove(onOiCross);
     spotChart.subscribeCrosshairMove(onSpotCross);
     futChart.subscribeCrosshairMove(onFutCross);
@@ -1905,8 +2016,15 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       spotNetChartApi.current = null;
       futNetChartApi.current = null;
       oiSeriesRef.current = null;
+      oiMaSeriesRef.current = null;
       spotNetSeriesRef.current = null;
+      spotNetMaSeriesRef.current = null;
       futNetSeriesRef.current = null;
+      futNetMaSeriesRef.current = null;
+      oiCrossAnchorRef.current = null;
+      spotCrossAnchorRef.current = null;
+      futCrossAnchorRef.current = null;
+      if (crosshairVLineRef.current) crosshairVLineRef.current.style.display = "none";
     };
   }, [layers.oi, symbol, timeframe]);
 
@@ -1926,9 +2044,16 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
     // 先用与主图等长的 whitespace 占位，避免续载/切换后 bar 数不一致导致拖动错位
     const placeholders = times.map((t) => ({ time: t as UTCTimestamp }));
+    const anchorData = buildCrosshairAnchorLine(times);
     oiSeriesRef.current?.setData(placeholders);
+    oiMaSeriesRef.current?.setData([]);
     spotNetSeriesRef.current?.setData(placeholders);
+    spotNetMaSeriesRef.current?.setData([]);
     futNetSeriesRef.current?.setData(placeholders);
+    futNetMaSeriesRef.current?.setData([]);
+    oiCrossAnchorRef.current?.setData(anchorData);
+    spotCrossAnchorRef.current?.setData(anchorData);
+    futCrossAnchorRef.current?.setData(anchorData);
     {
       const range = chartApi.current?.timeScale().getVisibleLogicalRange();
       if (range && chartApi.current) {
@@ -1959,8 +2084,15 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           if (cancelled) return;
         }
         oiSeriesRef.current?.setData(payload.oi);
+        oiMaSeriesRef.current?.setData(buildOiMaLine(payload.oi));
         spotNetSeriesRef.current?.setData(payload.spotNet);
+        spotNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.spotNet));
         futNetSeriesRef.current?.setData(payload.futuresNet);
+        futNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.futuresNet));
+        const anchorLine = buildCrosshairAnchorLine(times);
+        oiCrossAnchorRef.current?.setData(anchorLine);
+        spotCrossAnchorRef.current?.setData(anchorLine);
+        futCrossAnchorRef.current?.setData(anchorLine);
 
         const fillMap = (
           rows: Array<{ time?: unknown; value?: unknown }>,
@@ -2292,6 +2424,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           className={`pattern-chart-wrap${layers.oi ? " with-oi-subs" : ""}`}
           ref={chartWrapRef}
         >
+          <div ref={crosshairVLineRef} className="pattern-crosshair-vline" aria-hidden />
           <div className="pattern-chart-main-pane">
             <div className="pattern-chart-canvas" ref={chartRef} />
             <div
@@ -2308,15 +2441,21 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 </p>
               ) : null}
               <div className="pattern-oi-sub">
-                <div className="pattern-oi-sub-label">持仓量 OI</div>
+                <div className="pattern-oi-sub-label">
+                  持仓量 OI · MA{OI_MA_PERIOD}
+                </div>
                 <div className="pattern-oi-sub-canvas" ref={oiChartElRef} />
               </div>
               <div className="pattern-oi-sub">
-                <div className="pattern-oi-sub-label">现货净买入</div>
+                <div className="pattern-oi-sub-label">
+                  现货净买入 · MA{NET_BUY_MA_PERIOD}
+                </div>
                 <div className="pattern-oi-sub-canvas" ref={spotNetElRef} />
               </div>
               <div className="pattern-oi-sub">
-                <div className="pattern-oi-sub-label">合约净买入</div>
+                <div className="pattern-oi-sub-label">
+                  合约净买入 · MA{NET_BUY_MA_PERIOD}
+                </div>
                 <div className="pattern-oi-sub-canvas" ref={futNetElRef} />
               </div>
             </div>

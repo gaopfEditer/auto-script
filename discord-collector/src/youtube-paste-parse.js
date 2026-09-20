@@ -6,12 +6,33 @@ import { analyzeTranscriptWithOllama } from "../../youtube-fetch/src/ollama-anal
 import { config as ytFetchConfig } from "../../youtube-fetch/src/config.js";
 import { buildDiscordCardFields, normalizeSymbol } from "./card-fields.js";
 
-export const PASTE_PARSE_PROMPT = `你是加密货币/交易类文稿分析器。根据下面文稿，提取**文中提到的每一个币种**及其操作信息。
+export const PASTE_PARSE_PROMPT = `你是加密货币/交易类文稿分析器。根据下面文稿，按**时间顺序**整理交易信息与分析要点。
 
 输出**合法 JSON 对象**（不要 markdown 代码块），结构如下：
 {
-  "summary": ["全文核心观点，每条一句，最多 5 条"],
+  "summary": ["全文核心观点，每条一句，3～8 条；**必填**，即使文中没有明确价位也要写清讲了什么、整体态度"],
   "titleHint": "一句话标题",
+  "segments": [
+    {
+      "timeLabel": "时间段标签，如 开场/前段/中段/后段，或 约00:08/约12:30",
+      "timeRange": "可选，如 00:00-05:30",
+      "overview": "本段 1～2 句主旨（必填）",
+      "analysis": ["本段分析要点，每条一句，可含盘面/结构/心态，无则 []"],
+      "coinActions": [
+        {
+          "symbol": "BTC",
+          "actionType": "new",
+          "direction": "做多/做空/观望，无则空字符串",
+          "entry": "入场条件或价位，如 跌破88做空 / 97做多",
+          "stopLoss": "止损价，无则空字符串",
+          "targets": ["止盈1", "止盈2"],
+          "exit": "出场/止盈说明，如 到90走 / 冲不上去就走",
+          "pnl": "涨跌幅或盈亏，无则空字符串",
+          "description": "20字内定位说明"
+        }
+      ]
+    }
+  ],
   "coinActions": [
     {
       "symbol": "BTC",
@@ -20,6 +41,7 @@ export const PASTE_PARSE_PROMPT = `你是加密货币/交易类文稿分析器�
       "entry": "入场价或区间，如 61800-62000",
       "stopLoss": "止损价，无则空字符串",
       "targets": ["止盈1", "止盈2"],
+      "exit": "出场/止盈说明",
       "pnl": "涨跌幅或盈亏描述，如 +5%、小赚、小亏，无则空字符串",
       "description": "简短描述，便于在原文中定位该操作（20字内）"
     }
@@ -33,10 +55,12 @@ export const PASTE_PARSE_PROMPT = `你是加密货币/交易类文稿分析器�
 - **end**：已止盈、已止损、平仓、该币种操作结束
 
 **要求：**
-1. 文中提到的每个币种都要在 coinActions 里出现，可有多条（同一币种不同时间点）
-2. 按文稿出现顺序排列
-3. 不要编造文稿没有的价位；没有的信息用空字符串或空数组
-4. description 要写清楚「在说什么」，方便人工回原文查找
+1. **summary 必填**，放全文概要，与是否有明确币种无关
+2. **segments 按文稿时间顺序**串联；每段含 overview + analysis + 该段 coinActions（无币种也保留段，coinActions 可为 []）
+3. coinActions（顶层）= 全文所有币种操作扁平列表，与 segments 内合并一致，按出现顺序
+4. 不要编造文稿没有的价位；没有的信息用空字符串或空数组
+5. entry/stopLoss/targets/exit 分开填；「跌破 X 才空」写入 entry，「止损 Y」写入 stopLoss，「到 Z 走/止盈」写入 targets 或 exit
+6. description 要写清楚「在说什么」，方便人工回原文查找
 
 【标题】{{title}}
 【正文】
@@ -85,8 +109,17 @@ export function normalizeActionType(raw) {
  *   stopLoss: string,
  *   targets: string[],
  *   pnl: string,
+ *   exit: string,
  *   description: string,
  * }} CoinAction */
+
+/** @typedef {{
+ *   timeLabel: string,
+ *   timeRange: string,
+ *   overview: string,
+ *   analysis: string[],
+ *   coins: CoinAction[],
+ * }} PasteSegment */
 
 /** @param {unknown} parsed */
 export function normalizeCoinActions(parsed) {
@@ -104,6 +137,7 @@ export function normalizeCoinActions(parsed) {
         stopLoss: String(legacy?.stopLoss ?? ""),
         targets: asStringList(legacy?.targets),
         pnl: "",
+        exit: "",
         description: String(legacy?.titleHint ?? "主信号"),
       },
     ];
@@ -126,10 +160,95 @@ export function normalizeCoinActions(parsed) {
       stopLoss: String(row.stopLoss ?? row.sl ?? ""),
       targets: asStringList(row.targets ?? row.takeProfit),
       pnl: String(row.pnl ?? row.change ?? row.profit ?? ""),
+      exit: String(row.exit ?? row.exitNote ?? row.takeProfitNote ?? "").trim(),
       description: String(row.description ?? row.note ?? row.summary ?? "").trim(),
     });
   }
   return out;
+}
+
+/** @param {unknown} parsed @param {CoinAction[]} coinActions @param {string} content */
+export function ensureSummary(parsed, coinActions, content) {
+  const direct = asStringList(parsed?.summary);
+  if (direct.length) return direct.slice(0, 8);
+
+  /** @type {string[]} */
+  const fromSeg = [];
+  const segs = parsed?.segments;
+  if (Array.isArray(segs)) {
+    for (const item of segs) {
+      if (!item || typeof item !== "object") continue;
+      const row = /** @type {Record<string, unknown>} */ (item);
+      const ov = String(row.overview ?? row.summary ?? "").trim();
+      if (ov) fromSeg.push(ov);
+      fromSeg.push(...asStringList(row.analysis));
+    }
+  }
+  if (fromSeg.length) return [...new Set(fromSeg)].slice(0, 8);
+
+  if (coinActions.length) {
+    return coinActions
+      .slice(0, 5)
+      .map((c) => {
+        const parts = [c.symbol, c.direction, c.entry, c.description].filter(Boolean);
+        return parts.join(" · ") || c.symbol;
+      });
+  }
+
+  const lines = String(content ?? "")
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 24);
+  if (lines.length) return lines.slice(0, 3).map((l) => l.slice(0, 160));
+
+  const hint = String(parsed?.titleHint ?? "").trim();
+  if (hint) return [hint];
+  return ["文稿已解析，详见下方时间段卡片。"];
+}
+
+/** @param {unknown} parsed @param {CoinAction[]} coinActions @param {string} content */
+export function normalizeSegments(parsed, coinActions, content) {
+  const raw = parsed?.segments;
+  if (Array.isArray(raw) && raw.length) {
+    /** @type {PasteSegment[]} */
+    const out = [];
+    for (let i = 0; i < raw.length; i++) {
+      const item = raw[i];
+      if (!item || typeof item !== "object") continue;
+      const row = /** @type {Record<string, unknown>} */ (item);
+      const coins = normalizeCoinActions({ coinActions: row.coinActions ?? row.coins });
+      const overview = String(row.overview ?? row.summary ?? row.theme ?? "").trim();
+      const analysis = asStringList(row.analysis ?? row.notes ?? row.points);
+      const timeLabel =
+        String(row.timeLabel ?? row.time ?? row.phase ?? row.label ?? "").trim() ||
+        `片段 ${i + 1}`;
+      const timeRange = String(row.timeRange ?? row.time_range ?? "").trim();
+      if (!overview && !analysis.length && !coins.length) continue;
+      out.push({ timeLabel, timeRange, overview, analysis, coins });
+    }
+    if (out.length) return out;
+  }
+
+  if (coinActions.length) {
+    return coinActions.map((coin, i) => ({
+      timeLabel: `片段 ${i + 1}`,
+      timeRange: "",
+      overview: coin.description || `${coin.symbol} · ${coin.actionType}`,
+      analysis: [],
+      coins: [coin],
+    }));
+  }
+
+  const summary = ensureSummary(parsed, coinActions, content);
+  return [
+    {
+      timeLabel: "全文",
+      timeRange: "",
+      overview: summary[0] ?? "",
+      analysis: summary.slice(1),
+      coins: [],
+    },
+  ];
 }
 
 /**
@@ -140,7 +259,8 @@ export function normalizeCoinActions(parsed) {
  * @param {Record<string, unknown>} analysisMeta
  */
 export function buildPastePreviewCard(title, content, parsed, coinActions, analysisMeta) {
-  const summary = asStringList(parsed?.summary);
+  const segments = normalizeSegments(parsed, coinActions, content);
+  const summary = ensureSummary(parsed, coinActions, content);
   const primaryNew = coinActions.find((c) => c.actionType === "new") ?? coinActions[0] ?? null;
 
   const cardFields = buildDiscordCardFields({
@@ -168,6 +288,7 @@ export function buildPastePreviewCard(title, content, parsed, coinActions, analy
     parsed: parsed ?? null,
     keyLevels: asStringList(parsed?.keyLevels),
     summary,
+    segments,
     analysis: analysisMeta,
     generatedAt: new Date().toISOString(),
   };

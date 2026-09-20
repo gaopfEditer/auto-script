@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -34,6 +35,9 @@ from oi_mornitor.config import (
 from oi_mornitor.matrix_breakout import collect_matrix_leaderboard
 
 logger = logging.getLogger("OI_Radar")
+
+TV_ALERT_LOG_KEEP_DAYS = int(os.environ.get("TV_ALERT_LOG_KEEP_DAYS", "30"))
+TV_ALERT_LOG_MAX_ROWS = int(os.environ.get("TV_ALERT_LOG_MAX_ROWS", "50000"))
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -115,6 +119,19 @@ class TvAlertSync:
         with _connect(self._db) as conn:
             _init_db(conn)
 
+    def _prune_log(self, conn: sqlite3.Connection) -> None:
+        cutoff = time.time() - TV_ALERT_LOG_KEEP_DAYS * 86400
+        conn.execute("DELETE FROM tv_alert_log WHERE created_at < ?", (cutoff,))
+        if TV_ALERT_LOG_MAX_ROWS > 0:
+            conn.execute(
+                """
+                DELETE FROM tv_alert_log WHERE id NOT IN (
+                    SELECT id FROM tv_alert_log ORDER BY id DESC LIMIT ?
+                )
+                """,
+                (TV_ALERT_LOG_MAX_ROWS,),
+            )
+
     def _log_row(
         self,
         conn: sqlite3.Connection,
@@ -141,6 +158,7 @@ class TvAlertSync:
                 time.time(),
             ),
         )
+        self._prune_log(conn)
 
     def list_active(self) -> list[dict[str, Any]]:
         with _connect(self._db) as conn:

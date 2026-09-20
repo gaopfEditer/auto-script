@@ -129,6 +129,22 @@ async def handle_matrix(_request: web.Request) -> web.Response:
     return _json_response(matrix)
 
 
+async def handle_binance_leaderboards(request: web.Request) -> web.Response:
+    """顶栏榜单：币安 U 本位永续 24h 涨跌幅 / 成交 / 持仓 / 热门。"""
+    from oi_mornitor.binance_leaderboards import get_binance_leaderboards
+
+    force = str(request.query.get("force") or "").lower() in ("1", "true", "yes")
+    snap = get_service().get_snapshot()
+    payload = await get_binance_leaderboards(
+        force=force,
+        radar_fallback={
+            "all_tickers": snap.get("all_tickers") or [],
+            "hot_tickers": snap.get("hot_tickers") or [],
+        },
+    )
+    return _json_response(payload)
+
+
 
 
 
@@ -1169,6 +1185,8 @@ def create_app() -> web.Application:
     app.router.add_get("/api/hot", handle_hot)
 
     app.router.add_get("/api/matrix", handle_matrix)
+
+    app.router.add_get("/api/binance/leaderboards", handle_binance_leaderboards)
 
     app.router.add_get("/api/patterns", handle_patterns)
     app.router.add_get("/api/moonshot", handle_moonshot)
