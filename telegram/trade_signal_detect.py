@@ -132,7 +132,8 @@ _SL_POS = re.compile(
     re.I,
 )
 _POS = re.compile(
-    r"(?:仓位|倉位|杠杆|槓桿|倍数)\s*[:：]?\s*([^\n]{1,40})",
+    r"(?:仓位|倉位|倍数)\s*[:：]?\s*([^\n，,；;止盈止损]{1,40})"
+    r"|(?:建议|建議)?(?:杠杆|槓桿)[^\n，,；;止盈止损]{0,16}?(?:不超过|不超過)?\s*(\d+\s*[xX])",
     re.I,
 )
 _NOTE = re.compile(
@@ -289,9 +290,9 @@ def _pick_symbol(text: str) -> str:
 
 
 def _pick_direction(text: str) -> str:
-    if re.search(r"轻[仓倉]多|重[仓倉]多", text):
+    if re.search(r"轻[仓倉](?:入)?多|重[仓倉](?:入)?多|入多(?![A-Za-z0-9])", text):
         return "多"
-    if re.search(r"轻[仓倉]空|重[仓倉]空", text):
+    if re.search(r"轻[仓倉](?:入)?空|重[仓倉](?:入)?空|入空(?![A-Za-z0-9])", text):
         return "空"
     hm = re.search(r"#[A-Za-z]{2,12}.{0,24}?多(?![A-Za-z0-9])", text)
     if hm and not re.search(r"空", hm.group(0)):
@@ -524,7 +525,7 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
         sig.stop_loss = _clean_field(sm.group(1))
     pm = _POS.search(body)
     if pm:
-        sig.position = _clean_field(pm.group(1))
+        sig.position = _clean_field(pm.group(1) or pm.group(2) or "")
     nm = _NOTE.search(body)
     if nm:
         sig.note = _clean_field(nm.group(1))
