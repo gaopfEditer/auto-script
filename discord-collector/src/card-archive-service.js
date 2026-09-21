@@ -43,6 +43,7 @@ import {
   shouldSkipTelegramCardPushDuplicate,
 } from "./telegram-card-push-dedup.js";
 import { isCdpSendChannel } from "./telegram-channel-profiles.js";
+import { sanitizeTelegramPushText } from "./telegram-content-sanitize.js";
 import { recordTelegramCardAlertStats } from "./telegram-card-alert-stats.js";
 import { formatPipelineLog, formatSendCdpLog } from "./signal-pipeline-log.js";
 
@@ -454,7 +455,11 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       return { skipped: "not_pushable_source" };
     }
 
-    const text = pickCardSinkText(clientCard) || formatCardAsChannelMessage(clientCard);
+    const platform = resolveSourcePlatform(sourceType);
+    let text = pickCardSinkText(clientCard) || formatCardAsChannelMessage(clientCard);
+    if (platform === "telegram") {
+      text = sanitizeTelegramPushText(text);
+    }
     if (!String(text ?? "").trim()) {
       log.info(
         formatPipelineLog("tg_push_skip", {
@@ -464,8 +469,6 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       );
       return { skipped: "empty" };
     }
-
-    const platform = resolveSourcePlatform(sourceType);
 
     const trace = formatTelegramCardSourceTrace(clientCard);
     const bodyText = String(text).trim();

@@ -111,8 +111,29 @@ _TP = re.compile(
     r"|(?:TP|take\s*profit)\s*[:：]?\s*([^\n止損损]{1,40})",
     re.I,
 )
+# 整行删除：会员引流、活动入口、#xxx會員專屬策略 等（保留同条消息里的真实信号行）
+_PROMO_LINE = re.compile(
+    r"(?:"
+    r"会员|會員|"
+    r"专属策略|專屬策略|"
+    r"活动入口|活動入口|"
+    r"翻[仓倉][^\n]{0,16}(?:活动|活動)|"
+    r"联系助理|聯繫助理|"
+    r"限时活动|限時活動|"
+    r"详情看置顶|詳情看置頂|"
+    r"公开频道|公開頻道|"
+    r"跟单完全不收费|跟單完全不收費|"
+    r"欢迎来内部|歡迎來內部|"
+    r"免费体验|免費體驗|"
+    r"稳定输出|穩定輸出|"
+    r"累计发布|累計發佈|"
+    r"均止盈|连胜|連勝|"
+    r"私信|入群|开户|带单|開戶|帶单|帶單"
+    r")",
+    re.I,
+)
 _RECAP_PROMO = re.compile(
-    r"均止盈|连胜|連勝|累计发布|累計發佈|公开频道|公開頻道|会员群|會員群|"
+    r"均止盈|连胜|連勝|累计发布|累計發佈|"
     r"联系助理|聯繫助理|限时活动|限時活動|详情看置顶|詳情看置頂|"
     r"跟单完全不收费|跟單完全不收費|欢迎来内部|歡迎來內部|"
     r"稳定输出|穩定輸出|免费体验|免費體驗",
@@ -353,12 +374,28 @@ def resolve_sender_name(*candidates: str) -> str:
     return ""
 
 
+def strip_promotional_lines(text: str) -> str:
+    """删除含会员引流/活动入口等字样的整行，保留同条消息中的交易信号。"""
+    raw = text or ""
+    if not raw.strip():
+        return ""
+    kept: list[str] = []
+    for line in raw.splitlines():
+        chunk = line.strip()
+        if not chunk:
+            continue
+        if _PROMO_LINE.search(_t2s(chunk)):
+            continue
+        kept.append(line.rstrip())
+    return "\n".join(kept).strip()
+
+
 def is_spam_or_recap_message(text: str) -> bool:
     """营销话术、历史战绩回顾等非开仓消息。"""
-    t = _t2s(text or "")
+    t = _t2s(strip_promotional_lines(text))
     if not t.strip():
         return True
-    if _RECAP_PROMO.search(t):
+    if _RECAP_PROMO.search(t) and not _looks_like_trade_message_inner(t):
         return True
     tp_hits = len(_RECAP_TP_HIT.findall(t))
     has_entry = bool(_ENTRY_POINT.search(t) or _ENTRY.search(t) or _ENTRY_EN.search(t))
@@ -457,9 +494,33 @@ def _pick_tp_levels(text: str) -> str:
     return ",".join(found[k] for k in sorted(found.keys()))
 
 
+def _looks_like_trade_message_inner(t: str) -> bool:
+    if _PROM_TAG.search(t):
+        return True
+    if _SYM_HASH.search(t):
+        return True
+    if _MARKET_DIR_LONG.search(t) or _MARKET_DIR_SHORT.search(t):
+        return True
+    if _DIR_LONG.search(t) or _DIR_SHORT.search(t):
+        return True
+    if _DIR_LONG_LOOSE.search(t) or _DIR_SHORT_LOOSE.search(t):
+        return True
+    if _TP.search(t) or _TP_PROFIT.search(t) or _SL.search(t) or _SL_POS.search(t):
+        return True
+    if _ENTRY.search(t) or _ENTRY_POINT.search(t) or _FARE.search(t):
+        return True
+    if _SYM_LABEL.search(t) or _DIR_LINE.search(t):
+        return True
+    if _STRATEGY_ATTR.search(t) or _ENTRY_WITH_LABEL.search(t) or _ENTRY_EN.search(t):
+        return True
+    if _TP_LEVELS.search(t):
+        return True
+    return False
+
+
 def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) -> TradeSignal | None:
     """单条消息解析；无有效交易字段则返回 None。"""
-    body = _t2s((text or "").strip())
+    body = _t2s(strip_promotional_lines(text).strip())
     if not body:
         return None
 
@@ -543,28 +604,8 @@ def looks_like_trade_message(text: str) -> bool:
     """粗筛：是否值得进窗口分析。"""
     if is_spam_or_recap_message(text):
         return False
-    t = _t2s(text or "")
-    if _PROM_TAG.search(t):
-        return True
-    if _SYM_HASH.search(t):
-        return True
-    if _MARKET_DIR_LONG.search(t) or _MARKET_DIR_SHORT.search(t):
-        return True
-    if _DIR_LONG.search(t) or _DIR_SHORT.search(t):
-        return True
-    if _DIR_LONG_LOOSE.search(t) or _DIR_SHORT_LOOSE.search(t):
-        return True
-    if _TP.search(t) or _TP_PROFIT.search(t) or _SL.search(t) or _SL_POS.search(t):
-        return True
-    if _ENTRY.search(t) or _ENTRY_POINT.search(t) or _FARE.search(t):
-        return True
-    if _SYM_LABEL.search(t) or _DIR_LINE.search(t):
-        return True
-    if _STRATEGY_ATTR.search(t) or _ENTRY_WITH_LABEL.search(t) or _ENTRY_EN.search(t):
-        return True
-    if _TP_LEVELS.search(t):
-        return True
-    return False
+    t = _t2s(strip_promotional_lines(text))
+    return _looks_like_trade_message_inner(t)
 
 
 def has_prom_tag(text: str) -> bool:

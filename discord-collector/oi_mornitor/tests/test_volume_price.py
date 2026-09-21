@@ -9,6 +9,12 @@ import pandas as pd
 from oi_mornitor.volume_price.classify import ClassifyThresholds, classify_bars, fit_classify_thresholds
 from oi_mornitor.volume_price.features import add_volume_price_features
 from oi_mornitor.volume_price.signals import generate_signals
+from oi_mornitor.volume_price.ticker_bridge import (
+    klines_map_to_vp_df,
+    scan_volume_price_ticker_alerts,
+    volume_price_signal_to_alert,
+)
+from oi_mornitor.volume_price.signals import VolumePriceSignal
 
 
 def _make_bars(n: int, *, symbol: str = "BTCUSDT", tf: str = "15m") -> pd.DataFrame:
@@ -121,6 +127,41 @@ class VolumePriceSignalsTest(unittest.TestCase):
         signals, enriched = generate_signals(full, signal_tfs=("15m",))
         self.assertIsInstance(signals, list)
         self.assertFalse(enriched.empty)
+
+
+class VolumePriceTickerBridgeTest(unittest.TestCase):
+    def test_klines_map_to_vp_df(self) -> None:
+        k15 = {
+            "BTCUSDT": [
+                [1_700_000_000_000, "100", "101", "99", "100.5", "1000", 1_700_000_899_999],
+            ]
+        }
+        df = klines_map_to_vp_df(k15, klines_map_1h={"BTCUSDT": k15["BTCUSDT"]})
+        self.assertEqual(len(df), 2)
+        self.assertIn("close_time", df.columns)
+
+    def test_volume_price_signal_to_alert_types(self) -> None:
+        sig = VolumePriceSignal(
+            ts=1,
+            symbol="BTCUSDT",
+            tf="15m",
+            side="long",
+            kind="continuation",
+            entry_hint=100.0,
+            invalid_level=99.0,
+            reason="1h偏多 + thrust 向上",
+            score=0.8,
+            observation_only=False,
+            bar_class="thrust",
+            signal_bar_index=10,
+        )
+        alert = volume_price_signal_to_alert(sig, kline_close_time=999, scan_ts=1.0)
+        assert alert is not None
+        self.assertEqual(alert["type"], "vp_cont_thrust")
+        self.assertEqual(alert["type_label"], "量价推进·多")
+
+    def test_scan_volume_price_ticker_alerts_empty(self) -> None:
+        self.assertEqual(scan_volume_price_ticker_alerts({}), [])
 
 
 if __name__ == "__main__":

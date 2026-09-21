@@ -31,6 +31,7 @@ from trade_signal_detect import (
     parse_trade_text,
     resolve_sender_name,
     signal_skip_reason,
+    strip_promotional_lines,
 )
 from ui_feed_pusher import parse_main_sender_patterns, sender_matches_main
 
@@ -144,7 +145,7 @@ class TradeSignalPusher:
     ) -> None:
         if not self.enabled():
             return
-        body = (text or "").strip()
+        body = strip_promotional_lines((text or "").strip())
         if not body:
             return
         profile = resolve_channel_profile(chat_id, fallback_title=title or str(chat_id))

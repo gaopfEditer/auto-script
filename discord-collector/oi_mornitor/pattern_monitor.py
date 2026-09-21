@@ -43,13 +43,9 @@ from oi_mornitor.matrix_breakout import collect_matrix_leaderboard
 from oi_mornitor.pattern_detector import (
     STATUS_EXPIRED,
     STATUS_LABELS,
-    STATUS_LH,
     STATUS_SEARCHING,
-    STATUS_TRIGGER,
-    STATUS_WAITING,
     build_pattern_chart_payload,
     enrich_indicators,
-    evaluate_pattern,
 )
 from oi_mornitor.breakout_detector import klines_to_df
 from oi_mornitor.derivatives_metrics import (
@@ -86,9 +82,7 @@ from oi_mornitor.tv_alert_sync import symbols_on_n_boards
 
 logger = logging.getLogger("OI_Radar")
 
-# 已进入形态阶段 / 已扳机：刷新 watchlist 时保留
-_PROTECTED_PATTERN_STATUSES = frozenset({STATUS_LH, STATUS_WAITING, STATUS_TRIGGER})
-# 涨幅∩持仓自动入池时，可被腾出的状态
+# 涨幅∩持仓自动入池时，可被腾出的状态（旧 LH/扳机状态机已移除）
 _EVICTABLE_PATTERN_STATUSES = frozenset({STATUS_SEARCHING, STATUS_EXPIRED})
 _SHORT_PATTERN_KINDS = frozenset({
     "shooting_star",
@@ -585,6 +579,22 @@ def find_oi_anomaly_multiboard(
 class PatternMonitorEngine:
     def __init__(self) -> None:
         self.tracker = PatternStateTracker()
+        try:
+            n_state = self.tracker.purge_breakout_states()
+            from oi_mornitor.pattern_alert_stats import purge_legacy_breakout_stats
+            from oi_mornitor.pattern_alert_ticker import purge_legacy_breakout_ticker_items
+
+            n_ticker = purge_legacy_breakout_ticker_items()
+            n_stats = purge_legacy_breakout_stats()
+            if n_state or n_ticker or n_stats:
+                logger.info(
+                    "已清理旧带量突破数据：状态 %d · ticker %d · 胜率 %d",
+                    n_state,
+                    n_ticker,
+                    n_stats,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("清理旧带量突破数据失败: %s", exc)
         self._last_alerts: list[dict[str, Any]] = []
         self._last_states: list[dict[str, Any]] = []
         self._last_scan_ts: float = 0.0
@@ -791,9 +801,6 @@ class PatternMonitorEngine:
 
     def _protected_symbols(self, protect_extra: set[str] | None = None) -> set[str]:
         protected = {s.upper() for s in (protect_extra or set())}
-        for st in self.tracker.list_states():
-            if st.status in _PROTECTED_PATTERN_STATUSES:
-                protected.add(st.symbol.upper())
         for w in self.tracker.list_watchlist():
             if w.is_pinned:
                 protected.add(w.symbol.upper())
@@ -817,7 +824,7 @@ class PatternMonitorEngine:
     ) -> list[str]:
         """
         每隔 PATTERN_WATCHLIST_REFRESH_SEC，用合约流入榜 + OI 爆发榜更新形态列表。
-        已进入 LH/等待 HL/扳机 的币，以及 protect_extra（如沙盒持仓）保留；其余可被替换。
+        置顶 / 手动槽 / protect_extra（如沙盒持仓）保留；其余可被替换。
         """
         now = time.time()
         if not force and self._last_watchlist_refresh_ts > 0:
@@ -1232,110 +1239,9 @@ class PatternMonitorEngine:
         )
 
         alerts: list[dict[str, Any]] = []
-        states: list[dict[str, Any]] = []
-
-        for item in watchlist:
-            sym = item.symbol
-            klines = klines_map.get(sym) or []
-            if not klines:
-                states.append(self._state_dict(sym, item.interval, None))
-                continue
-
-            kline_close_time = int(klines[-1][6])
-            row = self.tracker.get_state(sym)
-            current_status = row.status if row else STATUS_SEARCHING
-            state_data = {
-                "h_max": row.h_max if row else 0.0,
-                "lh_price": row.lh_price if row else 0.0,
-                "l1": row.l1 if row else 0.0,
-                "hl": row.hl if row else 0.0,
-                "trigger_price": row.trigger_price if row else 0.0,
-            }
-
-            if row and row.trigger_emitted:
-                states.append(self._state_dict(sym, item.interval, row))
-                continue
-
-            if row and kline_close_time <= row.last_kline_close_time:
-                states.append(self._state_dict(sym, item.interval, row))
-                continue
-
-            snap, fire = evaluate_pattern(
-                klines,
-                current_status=current_status,
-                state=state_data,
-            )
-
-            if snap.status == STATUS_LH and current_status in (STATUS_SEARCHING, ""):
-                mtf = await self._fetch_mtf_context(session, base_url=base_url, symbol=sym)
-                if not mtf.get("allow_short", True):
-                    logger.info(
-                        "MTF 过滤阶段1 %s: %s",
-                        sym,
-                        mtf.get("block_reason") or mtf.get("summary"),
-                    )
-                    states.append(self._state_dict(sym, item.interval, row))
-                    continue
-                self.tracker.save_state(
-                    sym,
-                    status=snap.status,
-                    h_max=snap.h_max,
-                    lh_price=snap.lh_price,
-                    kline_close_time=kline_close_time,
-                    message=snap.message,
-                )
-                logger.info("📐 形态阶段1 %s LH=%.6f Hmax=%.6f", sym, snap.lh_price, snap.h_max)
-
-            elif snap.status == STATUS_WAITING:
-                self.tracker.save_state(
-                    sym,
-                    status=snap.status,
-                    lh_price=snap.lh_price,
-                    l1=snap.l1,
-                    hl=snap.hl,
-                    trigger_price=snap.trigger_price,
-                    kline_close_time=kline_close_time,
-                    message=snap.message,
-                )
-
-            elif snap.status == STATUS_TRIGGER and fire:
-                self.tracker.mark_triggered(sym, kline_close_time)
-                # 单独字段：信号类型 / 关键价位
-                alert = {
-                    "symbol": sym,
-                    "type": "pattern_bull_continuation",
-                    "type_label": "带量突破",
-                    "interval": item.interval,
-                    "status": STATUS_TRIGGER,
-                    "status_label": STATUS_LABELS[STATUS_TRIGGER],
-                    "lh_price": snap.lh_price,
-                    "hl": snap.hl,
-                    "trigger_price": snap.trigger_price,
-                    "hh_price": snap.hh_price,
-                    "last_price": float(klines[-1][4]),
-                    "message": snap.message,
-                    "scan_ts": scan_ts or time.time(),
-                    "kline_close_time": kline_close_time,
-                }
-                alerts.append(alert)
-                logger.info("🚀 形态扳机 %s 突破 %.6f", sym, snap.trigger_price)
-
-            elif current_status not in (STATUS_SEARCHING,):
-                self.tracker.save_state(
-                    sym,
-                    status=snap.status,
-                    h_max=snap.h_max or state_data.get("h_max", 0.0),
-                    lh_price=snap.lh_price or state_data.get("lh_price", 0.0),
-                    l1=snap.l1 or state_data.get("l1", 0.0),
-                    hl=snap.hl or state_data.get("hl", 0.0),
-                    trigger_price=snap.trigger_price or state_data.get("trigger_price", 0.0),
-                    hh_price=snap.hh_price,
-                    kline_close_time=kline_close_time,
-                    message=snap.message,
-                )
-
-            updated = self.tracker.get_state(sym)
-            states.append(self._state_dict(sym, item.interval, updated))
+        states: list[dict[str, Any]] = [
+            self._state_dict(item.symbol, item.interval, None) for item in watchlist
+        ]
 
         # 潜力暴涨：复用本轮 15m K 更新 B/C，合并警报（不叠一堆形态箭头）
         if self.moonshot_engine is not None:
@@ -1396,10 +1302,34 @@ class PatternMonitorEngine:
 
         try:
             from oi_mornitor.pattern_alert_ticker import record_ticker_from_alerts
+            from oi_mornitor.volume_price.ticker_bridge import scan_volume_price_ticker_alerts
 
+            vp_alerts: list[dict[str, Any]] = []
+            try:
+                klines_1h_map = await asyncio.wait_for(
+                    fetch_pattern_klines_batch(
+                        session,
+                        base_url=base_url,
+                        symbols=symbols,
+                        interval="1h",
+                        limit=min(120, PATTERN_KLINE_LIMIT),
+                    ),
+                    timeout=45,
+                )
+                vp_alerts = scan_volume_price_ticker_alerts(
+                    klines_map,
+                    klines_map_1h=klines_1h_map,
+                    scan_ts=self._last_scan_ts,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("量价 ticker 1h K 线拉取超时（45s），跳过")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("量价 ticker 扫描失败: %s", exc)
+
+            n_vp = record_ticker_from_alerts(vp_alerts)
             n = record_ticker_from_alerts(self._last_alerts)
-            if n:
-                logger.info("形态 ticker 落盘 %d 条", n)
+            if n_vp or n:
+                logger.info("形态 ticker 落盘 %d 条（量价 %d）", n + n_vp, n_vp)
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态 ticker 落盘失败: %s", exc)
 
@@ -1986,19 +1916,12 @@ class PatternMonitorEngine:
         page_has_more = klines_page_has_more(len(klines), req_limit, kline_src)
 
         partial = end_time is not None
-        row = self.tracker.get_state(sym)
         state_dict: dict[str, Any] = {}
-        if row and not partial:
+        if not partial:
             state_dict = {
-                "status": row.status,
-                "status_label": STATUS_LABELS.get(row.status, row.status),
-                "h_max": row.h_max,
-                "lh_price": row.lh_price,
-                "l1": row.l1,
-                "hl": row.hl,
-                "trigger_price": row.trigger_price,
-                "hh_price": row.hh_price,
-                "message": row.message,
+                "status": STATUS_SEARCHING,
+                "status_label": STATUS_LABELS[STATUS_SEARCHING],
+                "message": "",
             }
 
         oi_by_time: dict[int, float] = {}
@@ -2081,26 +2004,11 @@ class PatternMonitorEngine:
         interval: str,
         row: Any,
     ) -> dict[str, Any]:
-        if row is None:
-            return {
-                "symbol": symbol,
-                "interval": interval,
-                "status": STATUS_SEARCHING,
-                "status_label": STATUS_LABELS[STATUS_SEARCHING],
-                "message": "等待 K 线",
-            }
+        del row
         return {
-            "symbol": row.symbol,
+            "symbol": symbol,
             "interval": interval,
-            "status": row.status,
-            "status_label": STATUS_LABELS.get(row.status, row.status),
-            "h_max": row.h_max,
-            "lh_price": row.lh_price,
-            "l1": row.l1,
-            "hl": row.hl,
-            "trigger_price": row.trigger_price,
-            "hh_price": row.hh_price,
-            "message": row.message,
-            "updated_at": row.updated_at,
-            "trigger_emitted": row.trigger_emitted,
+            "status": STATUS_SEARCHING,
+            "status_label": STATUS_LABELS[STATUS_SEARCHING],
+            "message": "",
         }

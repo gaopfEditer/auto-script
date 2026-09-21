@@ -158,33 +158,6 @@ async def handle_patterns(_request: web.Request) -> web.Response:
     )
 
 
-async def handle_moonshot(request: web.Request) -> web.Response:
-    """潜力暴涨列表（壳层顶栏用）：默认 score > 5。"""
-    from oi_mornitor.config import MOONSHOT_SCORE_DISPLAY
-
-    svc = get_service()
-    eng = getattr(svc, "moonshot_engine", None)
-    try:
-        min_score = float(request.rel_url.query.get("min_score") or MOONSHOT_SCORE_DISPLAY)
-    except (TypeError, ValueError):
-        min_score = float(MOONSHOT_SCORE_DISPLAY)
-    items = []
-    if eng is not None:
-        for row in eng.list_rows():
-            if float(row.score) > min_score:
-                items.append(row.to_dict())
-    return _json_response(
-        {
-            "ok": True,
-            "min_score": min_score,
-            "items": items,
-            "count": len(items),
-            "enabled": bool(getattr(eng, "enabled", False)) if eng else False,
-        }
-    )
-
-
-
 
 
 async def handle_patterns_watch_post(request: web.Request) -> web.Response:
@@ -1189,7 +1162,6 @@ def create_app() -> web.Application:
     app.router.add_get("/api/binance/leaderboards", handle_binance_leaderboards)
 
     app.router.add_get("/api/patterns", handle_patterns)
-    app.router.add_get("/api/moonshot", handle_moonshot)
 
     app.router.add_post("/api/patterns/watch", handle_patterns_watch_post)
 

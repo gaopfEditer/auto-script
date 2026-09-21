@@ -62,9 +62,6 @@ function fmtTradeEvents(events?: Array<Record<string, unknown>>, fallback?: stri
 
 const STATUS_CLASS: Record<string, string> = {
   SEARCHING_TOP: "pat-search",
-  STAGE_1_LH_DETECTED: "pat-lh",
-  WAITING_FOR_HL: "pat-wait",
-  TRIGGER_SIGNAL: "pat-fire",
   EXPIRED: "pat-expired",
 };
 
@@ -117,13 +114,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const sandboxExitAlerts = useMemo(
     () => sandboxAlerts.filter((a) => a.type === "exit"),
     [sandboxAlerts],
-  );
-  const watchingStates = useMemo(
-    () =>
-      states.filter(
-        (s) => s.status === "STAGE_1_LH_DETECTED" || s.status === "WAITING_FOR_HL",
-      ),
-    [states],
   );
   const sandboxOn = pattern?.sandbox_enabled !== false;
   const sandboxMaxConcurrent = pattern?.sandbox_max_concurrent ?? 20;
@@ -740,13 +730,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     </div>
                     <div className="pattern-status">{statusText}</div>
                     {st?.message && <div className="pattern-msg">{st.message}</div>}
-                    {st && (st.lh_price ?? 0) > 0 && (
-                      <div className="pattern-levels">
-                        <span>LH {st.lh_price!.toPrecision(4)}</span>
-                        {(st.hl ?? 0) > 0 && <span>HL {st.hl!.toPrecision(4)}</span>}
-                        {(st.trigger_price ?? 0) > 0 && <span>扳机 {st.trigger_price!.toPrecision(4)}</span>}
-                      </div>
-                    )}
                   </li>
                 );
               })
@@ -768,9 +751,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                 }}
               >
                 形态预警流
-                {(watchingStates.length > 0 || alerts.length > 0) && (
-                  <em>{watchingStates.length + alerts.length}</em>
-                )}
+                {alerts.length > 0 && <em>{alerts.length}</em>}
               </button>
               {sandboxOn && (
                 <button
@@ -827,97 +808,33 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
             />
           ) : mainTab === "pattern" ? (
                 <div className="pattern-flow pattern-tab-panel">
-                  <div className="strategy-brief-grid">
-                    <article className="strategy-brief">
-                      <header>
-                        <span className="strategy-brief-tag">阶段 1</span>
-                        <strong>次高点 LH</strong>
-                      </header>
-                      <p>
-                        两 pivot 高点形成后高 &lt; 前高 → LH / H_max；需 BB 上轨插针或 MACD 高位走弱确认。
-                      </p>
-                    </article>
-                    <article className="strategy-brief">
-                      <header>
-                        <span className="strategy-brief-tag">阶段 2</span>
-                        <strong>更高低点 HL</strong>
-                      </header>
-                      <p>
-                        LH 之后出现 HL &gt; L₁；扳机线 = L₁～HL 区间最高价（夹角高点）。
-                      </p>
-                    </article>
-                    <article className="strategy-brief">
-                      <header>
-                        <span className="strategy-brief-tag fire">爆发</span>
-                        <strong>带量突破扳机</strong>
-                      </header>
-                      <p>
-                        收盘突破扳机 + 量 ≥ SMA20×1.5 + MACD 金叉放大 → 多头爆发预警。
-                      </p>
-                    </article>
-                  </div>
-                  <p className="pattern-hint-main">← 点击左侧币种查看 15m K 线与形态拐点标注</p>
-
-                  {watchingStates.length > 0 && (
+                  <p className="pattern-hint-main">
+                    ← 点击左侧币种查看 15m K 线与蜡烛/结构标注；新信号见顶栏滚动条（形态卡片、结构、量价等）。
+                  </p>
+                  {alerts.length > 0 && (
                     <section className="pattern-section">
-                      <h3>观察中</h3>
-                      <div className="pattern-card-grid">
-                        {watchingStates.map((s) => (
-                          <button
-                            key={s.symbol}
-                            type="button"
-                            className="pattern-alert-card watch"
-                            onClick={() => setSelectedSymbol(s.symbol)}
-                          >
-                            <div className="pattern-alert-card-head">
-                              <CoinAvatar symbol={s.symbol} size="sm" />
-                              <strong>${displaySymbol(s.symbol)}</strong>
-                              <span className="pattern-alert-badge">{s.status_label}</span>
-                            </div>
-                            {s.message && <p className="pattern-alert-card-msg">{s.message}</p>}
-                            {(s.lh_price ?? 0) > 0 && (
-                              <div className="pattern-levels inline">
-                                <span>LH {s.lh_price!.toPrecision(4)}</span>
-                                {(s.hl ?? 0) > 0 && <span>HL {s.hl!.toPrecision(4)}</span>}
-                                {(s.trigger_price ?? 0) > 0 && (
-                                  <span>扳机 {s.trigger_price!.toPrecision(4)}</span>
-                                )}
-                              </div>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  <section className="pattern-section">
-                    <h3>扳机历史（本轮）</h3>
-                    {alerts.length === 0 ? (
-                      <p className="pattern-empty">暂无扳机信号，添加币种后自动扫描</p>
-                    ) : (
+                      <h3>本轮扫描告警</h3>
                       <div className="pattern-card-grid">
                         {alerts.map((a) => (
                           <button
-                            key={`${a.symbol}-${a.kline_close_time}`}
+                            key={`${a.symbol}-${a.kline_close_time}-${a.type}`}
                             type="button"
-                            className="pattern-alert-card fire"
+                            className="pattern-alert-card watch"
                             onClick={() => setSelectedSymbol(a.symbol)}
                           >
                             <div className="pattern-alert-card-head">
                               <CoinAvatar symbol={a.symbol} size="sm" />
                               <strong>${displaySymbol(a.symbol)}</strong>
-                              <span className="pat-fire-tag">多头爆发</span>
+                              <span className="pattern-alert-badge">
+                                {a.type_label || a.status_label || a.type}
+                              </span>
                             </div>
-                            <p className="pattern-alert-card-msg">{a.message}</p>
-                            <div className="pattern-levels inline">
-                              <span>HL {a.hl?.toPrecision(4)}</span>
-                              <span>突破 {a.trigger_price?.toPrecision(4)}</span>
-                            </div>
+                            {a.message && <p className="pattern-alert-card-msg">{a.message}</p>}
                           </button>
                         ))}
                       </div>
-                    )}
-                  </section>
+                    </section>
+                  )}
                 </div>
               ) : (
                 <div className="pattern-tab-panel sandbox-section">

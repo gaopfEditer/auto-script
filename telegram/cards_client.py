@@ -17,7 +17,7 @@ from config import (
     telegram_avatar_dir,
 )
 from signal_pipeline_log import log_pipeline
-from trade_signal_detect import TradeSignal, format_signal_push
+from trade_signal_detect import TradeSignal, format_signal_push, strip_promotional_lines
 
 
 def _split_targets(raw: str) -> list[str]:
@@ -86,7 +86,7 @@ def signal_to_card_payload(
     iso = at.isoformat().replace("+00:00", "Z")
 
     formatted = format_signal_push(sig, phase=phase if phase != "update" else "full")
-    body = (raw_body or "").strip() or formatted
+    body = strip_promotional_lines((raw_body or "").strip() or formatted)
     note_parts = []
     if sig.is_prom:
         note_parts.append("#prom")

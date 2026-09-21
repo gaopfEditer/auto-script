@@ -3,7 +3,7 @@
  * POST http://127.0.0.1:8787/api/v1/trade-signal/publish
  *
  * 白名单：telegram/channel_profiles.json 的 `send` 数组（来源群 id）。
- * 在 pushArchivedCardToTelegram 成功后触发；CDP 正文去掉首行【频道/人员名】（TG 推送仍保留）。
+ * 在 pushArchivedCardToTelegram 成功后触发；CDP 正文去掉【频道名】首行与会员引流行（TG 推送仅删引流行）。
  */
 import { config } from "./config.js";
 import { isCdpSendChannel } from "./telegram-channel-profiles.js";
@@ -12,20 +12,16 @@ import {
   resolveTelegramMessageRef,
 } from "./telegram-card-push-dedup.js";
 import { formatSendCdpLog } from "./signal-pipeline-log.js";
+import {
+  sanitizeCdpPlatformText,
+  stripCdpPlatformHeader,
+} from "./telegram-content-sanitize.js";
+
+export { stripCdpPlatformHeader } from "./telegram-content-sanitize.js";
 
 /** @type {Map<string, number>} */
 const recentPublish = new Map();
 const DEDUP_MS = Math.max(60_000, Number(process.env.TRADE_SIGNAL_AI_PUBLISH_DEDUP_MS ?? 600_000));
-
-/** CDP 发布到平台时去掉首行【频道名/发言人】 */
-const CDP_HEADER_LINE_RE = /^【[^】\n]{1,120}】\s*\n?/;
-
-/** @param {unknown} text */
-export function stripCdpPlatformHeader(text) {
-  const s = String(text ?? "").trim();
-  if (!s) return "";
-  return s.replace(CDP_HEADER_LINE_RE, "").trimStart();
-}
 
 /** @param {unknown} raw */
 function isTelegramSource(raw) {
@@ -180,7 +176,7 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
     String(opts.narrativeOverride ?? "").trim() ||
     String(card?.rawContent ?? "").trim() ||
     String(card?.note ?? "").trim();
-  const narrative = stripCdpPlatformHeader(narrativeRaw);
+  const narrative = sanitizeCdpPlatformText(narrativeRaw);
   const note = String(card?.note ?? "").trim();
 
   const base = String(config.tradeSignalAiPublishUrl || "http://127.0.0.1:8787").replace(/\/$/, "");

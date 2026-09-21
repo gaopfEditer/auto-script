@@ -130,24 +130,29 @@ function formatStructureBottomHover(a: PatternAlert): string {
   ].join("\n");
 }
 
-function formatTriggerHover(a: PatternAlert): string {
+function formatVolumePriceHover(a: PatternAlert): string {
   const pair = displaySymbol(a.symbol);
-  return [
-    `信号: 形态多头爆发 (看涨)`,
+  const typeLabel = String(a.type_label || "量价信号");
+  const side = sideLabel(a);
+  const obs = Boolean(a.observation_only);
+  const scoreRaw = Number(a.score);
+  const scoreS = Number.isFinite(scoreRaw) ? scoreRaw.toFixed(2) : "—";
+  const invalid = a.invalid_level;
+  const lines = [
+    `信号: ${typeLabel}${side ? ` (${side})` : ""}`,
     `交易对: ${pair}`,
     `周期: ${a.interval || "15m"}`,
     `时间: ${fmtTimeLabel(a)}`,
-    `--------`,
-    `触发原因:`,
-    `· LH/次高点确认后出现更高低点 HL`,
-    `· 收盘突破扳机线并放量 + MACD 放大`,
-    a.lh_price != null ? `· LH: ${fmtPrice(a.lh_price)}` : "",
-    a.hl != null ? `· HL: ${fmtPrice(a.hl)}` : "",
-    a.trigger_price != null ? `· 扳机线: ${fmtPrice(a.trigger_price)}` : "",
-    a.message ? `· ${a.message}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    `现价: ${fmtPrice(a.price ?? a.close ?? a.last_price)}`,
+    `评分: ${scoreS}${obs ? " · 观察档（缩量）" : ""}`,
+    "--------",
+    "触发原因:",
+    `· ${a.message || typeLabel}`,
+  ];
+  if (invalid != null && Number.isFinite(Number(invalid))) {
+    lines.push(`· 失效位: ${fmtPrice(invalid)}`);
+  }
+  return lines.join("\n");
 }
 
 function formatGenericHover(a: PatternAlert): string {
@@ -193,9 +198,6 @@ export function formatAlertHoverDetail(a: PatternAlert): string {
     }
     return formatStructureTopHover(a);
   }
-  if (type === "trigger" || a.status === "TRIGGER" || a.status === "TRIGGER_SIGNAL") {
-    return formatTriggerHover(a);
-  }
   if (type === "candle_pattern_oi") {
     return [
       `信号: 形态+OI异动 · 推荐${a.side_hint || "短线"}`,
@@ -207,6 +209,9 @@ export function formatAlertHoverDetail(a: PatternAlert): string {
       `触发原因:`,
       `· ${a.signal_text || a.message || kind || "形态+OI"}`,
     ].join("\n");
+  }
+  if (type.startsWith("vp_")) {
+    return formatVolumePriceHover(a);
   }
   return formatGenericHover(a);
 }

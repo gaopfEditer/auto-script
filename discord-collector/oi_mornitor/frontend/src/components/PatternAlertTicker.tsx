@@ -165,8 +165,7 @@ function alertDirection(a: PatternAlert): "多" | "空" | "—" {
 
   const label = `${a.status_label || ""} ${a.type_label || ""} ${a.message || ""}`;
   if (/看跌|做空|顶部|射击|头肩|M顶|掠夺/.test(label)) return "空";
-  if (/看涨|做多|底部|倒锤|探底|多头|扳机/.test(label)) return "多";
-  if (a.type === "trigger" || a.status === "TRIGGER") return "多";
+  if (/看涨|做多|底部|倒锤|探底|多头/.test(label)) return "多";
   return "—";
 }
 
@@ -179,7 +178,6 @@ function alertReason(a: PatternAlert): string {
     a.message ||
     "信号";
   let s = String(raw)
-    .replace(/形态多头爆发/g, "多头爆发")
     .replace(/顶部结构确认/g, "顶部")
     .replace(/底部二次探底确认/g, "二次探底")
     .replace(/破底翻确认/g, "破底翻")
@@ -372,6 +370,9 @@ function placeHoverTip(rect: DOMRect): { x: number; y: number; place: "above" | 
 
 function registerItemsForStats(items: TickerItem[]) {
   for (const it of items) {
+    const typ = String(it.alert?.type || "");
+    if (typ.startsWith("vp_")) continue;
+    if (typ === "pattern_bull_continuation" || typ === "trigger") continue;
     upsertAlertForStats({
       key: it.key || alertKey(it.alert),
       alert: it.alert,
@@ -846,11 +847,12 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
                     : oc === "pending"
                       ? " outcome-pending"
                       : "";
+              const obsClass = it.alert.observation_only ? " observation-only" : "";
               return (
                 <button
                   key={`${it.id}-${idx}`}
                   type="button"
-                  className={`pattern-alert-chip dir-${it.dir === "多" ? "long" : it.dir === "空" ? "short" : "flat"}${ocClass}`}
+                  className={`pattern-alert-chip dir-${it.dir === "多" ? "long" : it.dir === "空" ? "short" : "flat"}${ocClass}${obsClass}`}
                   onMouseEnter={(e) => showTip(it, e.currentTarget)}
                   onMouseLeave={hideTip}
                   onFocus={(e) => showTip(it, e.currentTarget)}

@@ -2220,6 +2220,11 @@ button {
   max-width: none !important;
 }
 
+.pattern-alert-chip.observation-only {
+  border-style: dashed;
+  opacity: 0.88;
+}
+
 .pattern-alert-outcome {
   font-style: normal;
   font-size: 0.62rem;

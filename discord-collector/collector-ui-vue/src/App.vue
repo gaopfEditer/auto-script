@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
+import { RouterLink, RouterView, useRoute } from "vue-router";
 import NewCardToastStack from "./components/NewCardToastStack.vue";
 import OnboardingGuide from "./components/OnboardingGuide.vue";
 import "./composables/useNewCardNotifications.js";
@@ -25,7 +25,6 @@ import {
 } from "./lib/uiMode.js";
 
 const route = useRoute();
-const router = useRouter();
 const { open: openOnboarding } = useOnboardingGuide();
 const { debugMode, setDebugMode } = useDebugMode();
 
@@ -55,47 +54,6 @@ const { status: wsStatus, error: wsError, disconnectedSince, reconnect: reconnec
 const nowTick = ref(Date.now());
 /** @type {ReturnType<typeof setInterval> | null} */
 let wsWarnTimer = null;
-/** @type {ReturnType<typeof setInterval> | null} */
-let moonshotTimer = null;
-
-/** 潜力暴涨（score > 5）顶栏条 */
-const moonshotItems = ref(
-  /** @type {Array<{ symbol: string, score: number, state_label?: string }>} */ ([])
-);
-
-function displayBase(sym) {
-  const s = String(sym || "").toUpperCase();
-  return s.replace(/USDT$/i, "").replace(/USDC$/i, "") || s;
-}
-
-async function refreshMoonshotBar() {
-  if (!showOiModule) {
-    moonshotItems.value = [];
-    return;
-  }
-  try {
-    const r = await fetch("/api/oi/moonshot?min_score=5");
-    const j = await r.json();
-    const rows = Array.isArray(j?.items) ? j.items : [];
-    moonshotItems.value = rows
-      .filter((x) => x && Number(x.score) > 5)
-      .slice(0, 24)
-      .map((x) => ({
-        symbol: String(x.symbol || "").toUpperCase(),
-        score: Number(x.score) || 0,
-        state_label: x.state_label ? String(x.state_label) : "",
-      }));
-  } catch {
-    /* OI 未起时保持上次列表 */
-  }
-}
-
-function openMoonshotSymbol(sym) {
-  const s = String(sym || "").trim().toUpperCase();
-  if (!s) return;
-  void router.push({ path: "/oi", query: { symbol: s } });
-}
-
 const wsDownMs = computed(() => {
   const since = disconnectedSince.value;
   if (!since || wsStatus.value === "open") return 0;
@@ -131,8 +89,6 @@ onMounted(() => {
   wsWarnTimer = setInterval(() => {
     nowTick.value = Date.now();
   }, 5_000);
-  void refreshMoonshotBar();
-  moonshotTimer = setInterval(() => void refreshMoonshotBar(), 30_000);
   if (!isContentStandalone.value && !isOnboardingCompleted()) {
     window.setTimeout(() => openOnboarding(0), 800);
   }
@@ -142,10 +98,6 @@ onUnmounted(() => {
   if (wsWarnTimer) {
     clearInterval(wsWarnTimer);
     wsWarnTimer = null;
-  }
-  if (moonshotTimer) {
-    clearInterval(moonshotTimer);
-    moonshotTimer = null;
   }
 });
 
@@ -206,24 +158,9 @@ async function toggleDebug() {
       <nav v-if="showSubNav" class="nav-links">
         <RouterLink v-for="p in navPages" :key="p.name" :to="p.path">{{ p.label }}</RouterLink>
       </nav>
-      <div v-else-if="isOi" class="oi-nav-spacer" aria-label="潜力暴涨">
-        <span class="oi-ms-label">潜力</span>
-        <template v-if="moonshotItems.length">
-          <button
-            v-for="m in moonshotItems"
-            :key="m.symbol"
-            type="button"
-            class="oi-ms-chip"
-            :title="`${m.symbol}${m.state_label ? ' · ' + m.state_label : ''}`"
-            @click="openMoonshotSymbol(m.symbol)"
-          >
-            <span class="oi-ms-sym">{{ displayBase(m.symbol) }}</span>
-            <span class="oi-ms-score">{{ m.score.toFixed(1) }}</span>
-          </button>
-        </template>
-        <span v-else class="oi-ms-empty">OI Monitor · 等待评分&gt;5 的压缩币</span>
+      <div v-else class="oi-nav-spacer">
+        {{ isOi ? "OI Monitor · 形态 / 雷达" : "平台热点 · 金十/PANews · 多源热榜" }}
       </div>
-      <div v-else class="oi-nav-spacer">平台热点 · 金十/PANews · 多源热榜</div>
       <button
         type="button"
         class="guide-btn"
@@ -344,52 +281,8 @@ async function toggleDebug() {
   font-weight: 600;
   min-width: 0;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: nowrap;
-}
-.oi-ms-label {
-  flex-shrink: 0;
-  color: #a78bfa;
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-}
-.oi-ms-empty {
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
-  color: #949ba4;
-}
-.oi-ms-chip {
-  appearance: none;
-  border: 1px solid #3f4147;
-  background: #1e1f22;
-  color: #dbdee1;
-  border-radius: 999px;
-  padding: 0.12rem 0.45rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.28rem;
-  flex-shrink: 0;
-  max-width: 7.5rem;
-}
-.oi-ms-chip:hover {
-  border-color: #a78bfa;
-  color: #fff;
-}
-.oi-ms-sym {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.oi-ms-score {
-  color: #c4b5fd;
-  font-variant-numeric: tabular-nums;
 }
 .ws-status {
   border: 1px solid #3f4147;

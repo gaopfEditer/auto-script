@@ -1,12 +1,10 @@
 """
-形态拐点检测 — 次高点(LH) + 更高低点(HL) + 多头延续(HH)。
+形态图表指标与 K 线标注（BB / Vegas / MACD / 蜡烛形态）。
 
-阶段 1：SEARCHING_TOP → STAGE_1_LH_DETECTED（BB-Wicks 上轨插针 / MACD 高位走弱）
-阶段 2：STAGE_1_LH_DETECTED → TRIGGER_SIGNAL（HL 抬高 + 带量突破夹角高点 + MACD 金叉放大）
+注：旧 LH→HL→带量突破扳机状态机已移除，仅保留图表渲染与蜡烛扫描所需指标。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -16,7 +14,6 @@ from oi_mornitor.config import (
     PATTERN_BB_LENGTH,
     PATTERN_BB_MULT,
     PATTERN_PIVOT_WINDOW,
-    PATTERN_STAGE2_VOL_MULT,
     PATTERN_WICK_RATIO,
     STRATEGY_VEGAS_FILTER,
     STRATEGY_VEGAS_PERIODS,
@@ -25,43 +22,12 @@ from oi_mornitor.strategy.candle_signals import collect_candle_signal_markers
 from oi_mornitor.strategy.sweep_momentum import evaluate_sweep_momentum_from_df
 
 STATUS_SEARCHING = "SEARCHING_TOP"
-STATUS_LH = "STAGE_1_LH_DETECTED"
-STATUS_WAITING = "WAITING_FOR_HL"
-STATUS_TRIGGER = "TRIGGER_SIGNAL"
 STATUS_EXPIRED = "EXPIRED"
 
 STATUS_LABELS: dict[str, str] = {
-    STATUS_SEARCHING: "寻找顶部",
-    STATUS_LH: "次高点确认",
-    STATUS_WAITING: "等待更高低点",
-    STATUS_TRIGGER: "多头爆发",
+    STATUS_SEARCHING: "监听中",
     STATUS_EXPIRED: "已过期",
 }
-
-
-@dataclass
-class PatternSnapshot:
-    status: str
-    h_max: float = 0.0
-    lh_price: float = 0.0
-    l1: float = 0.0
-    hl: float = 0.0
-    trigger_price: float = 0.0
-    hh_price: float = 0.0
-    message: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "status": self.status,
-            "status_label": STATUS_LABELS.get(self.status, self.status),
-            "h_max": self.h_max,
-            "lh_price": self.lh_price,
-            "l1": self.l1,
-            "hl": self.hl,
-            "trigger_price": self.trigger_price,
-            "hh_price": self.hh_price,
-            "message": self.message,
-        }
 
 
 def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -124,139 +90,6 @@ def _macd_bull_filter(df: pd.DataFrame) -> bool:
     golden = float(last["macd"]) > float(last["macd_signal"])
     hist_grow = float(last["macd_hist"]) > float(prev["macd_hist"])
     return golden and hist_grow
-
-
-def detect_stage1_lh(df: pd.DataFrame) -> PatternSnapshot | None:
-    """锁定次高点 + 顶部 BB-Wicks / MACD 共振。"""
-    pivot_highs = df[df["is_pivot_high"]].tail(2)
-    if len(pivot_highs) < 2:
-        return None
-
-    h_max = float(pivot_highs.iloc[0]["high"])
-    lh_price = float(pivot_highs.iloc[1]["high"])
-    if lh_price >= h_max:
-        return None
-
-    last = df.iloc[-1]
-    top_signal = _bb_upper_wick(last) or _macd_top_weak(df)
-    if not top_signal:
-        return None
-
-    signal = "BB-Wicks 上轨插针" if _bb_upper_wick(last) else "MACD 高位走弱"
-    return PatternSnapshot(
-        status=STATUS_LH,
-        h_max=h_max,
-        lh_price=lh_price,
-        message=f"次高点确立 · {signal}",
-    )
-
-
-def detect_stage2_trigger(
-    df: pd.DataFrame,
-    *,
-    lh_price: float,
-) -> PatternSnapshot | None:
-    """更高低点抬高 + 带量突破夹角高点 + MACD 金叉放大。"""
-    pivot_lows = df[df["is_pivot_low"]].tail(2)
-    if len(pivot_lows) < 2:
-        return None
-
-    l1 = float(pivot_lows.iloc[0]["low"])
-    hl = float(pivot_lows.iloc[1]["low"])
-    if hl <= l1:
-        return None
-
-    idx1 = pivot_lows.index[0]
-    idx2 = pivot_lows.index[1]
-    between = df.loc[idx1:idx2]
-    if between.empty:
-        return None
-
-    trigger_price = float(between["high"].max())
-    last = df.iloc[-1]
-    close = float(last["close"])
-    volume = float(last["volume"])
-    vol_sma = float(last["vol_sma20"]) if pd.notna(last["vol_sma20"]) else 0.0
-
-    if close <= trigger_price:
-        return PatternSnapshot(
-            status=STATUS_WAITING,
-            lh_price=lh_price,
-            l1=l1,
-            hl=hl,
-            trigger_price=trigger_price,
-            message=f"更高低点 {hl:.4g} > {l1:.4g}，待突破 {trigger_price:.4g}",
-        )
-
-    if vol_sma <= 0 or volume <= vol_sma * PATTERN_STAGE2_VOL_MULT:
-        return PatternSnapshot(
-            status=STATUS_WAITING,
-            lh_price=lh_price,
-            l1=l1,
-            hl=hl,
-            trigger_price=trigger_price,
-            message="结构成型，量能不足",
-        )
-
-    if not _macd_bull_filter(df):
-        return PatternSnapshot(
-            status=STATUS_WAITING,
-            lh_price=lh_price,
-            l1=l1,
-            hl=hl,
-            trigger_price=trigger_price,
-            message="结构成型，MACD 未共振",
-        )
-
-    return PatternSnapshot(
-        status=STATUS_TRIGGER,
-        lh_price=lh_price,
-        l1=l1,
-        hl=hl,
-        trigger_price=trigger_price,
-        hh_price=close,
-        message=f"带量突破 {trigger_price:.4g} · MACD 金叉放大",
-    )
-
-
-def evaluate_pattern(
-    klines: list[list],
-    *,
-    current_status: str,
-    state: dict[str, float],
-) -> tuple[PatternSnapshot, bool]:
-    """
-    单币种形态评估。
-    返回 (快照, 是否发射扳机告警)。
-    """
-    df = klines_to_df(klines)
-    if len(df) < PATTERN_BB_LENGTH + PATTERN_PIVOT_WINDOW:
-        return PatternSnapshot(status=current_status or STATUS_SEARCHING), False
-
-    df = enrich_indicators(df)
-    kline_close_time = int(df.iloc[-1]["close_time"])
-
-    if current_status in (STATUS_SEARCHING, STATUS_EXPIRED, ""):
-        snap = detect_stage1_lh(df)
-        if snap:
-            return snap, False
-        return PatternSnapshot(status=STATUS_SEARCHING), False
-
-    if current_status in (STATUS_LH, STATUS_WAITING):
-        lh_price = state.get("lh_price", 0.0)
-        snap = detect_stage2_trigger(df, lh_price=lh_price)
-        if snap and snap.status == STATUS_TRIGGER:
-            return snap, True
-        if snap:
-            return snap, False
-        return PatternSnapshot(
-            status=STATUS_LH,
-            h_max=state.get("h_max", 0.0),
-            lh_price=lh_price,
-            message="等待深V洗盘与二次回探",
-        ), False
-
-    return PatternSnapshot(status=current_status), False
 
 
 def _ts_sec(open_time_ms: int) -> int:
@@ -365,127 +198,17 @@ def build_pattern_chart_payload(
                 vegas[key].append({"time": t, "value": float(val)})
 
     markers: list[dict[str, Any]] = []
+    last = df.iloc[-1]
     analysis: dict[str, Any] = {
-        "status": state.get("status", STATUS_SEARCHING),
-        "status_label": STATUS_LABELS.get(state.get("status", ""), "寻找顶部"),
-        "message": state.get("message", ""),
+        "status": STATUS_SEARCHING,
+        "status_label": STATUS_LABELS[STATUS_SEARCHING],
+        "message": "",
     }
 
-    pivot_highs = df[df["is_pivot_high"]].tail(2)
-    pivot_lows = df[df["is_pivot_low"]].tail(2)
-
-    h_max = _safe_float(state.get("h_max"))
-    lh_price = _safe_float(state.get("lh_price"))
-    l1 = _safe_float(state.get("l1"))
-    hl = _safe_float(state.get("hl"))
-    trigger_price = _safe_float(state.get("trigger_price"))
-    hh_price = _safe_float(state.get("hh_price"))
-
-    if len(pivot_highs) >= 2:
-        h_row = pivot_highs.iloc[0]
-        lh_row = pivot_highs.iloc[1]
-        h_max = h_max or float(h_row["high"])
-        lh_price = lh_price or float(lh_row["high"])
-        markers.append({
-            "time": _ts_sec(int(h_row["open_time"])),
-            "position": "aboveBar",
-            "color": "#ff5252",
-            "shape": "arrowDown",
-            "text": "① H_max",
-            "price": h_max,
-            "kind": "h_max",
-        })
-        if lh_price < h_max:
-            markers.append({
-                "time": _ts_sec(int(lh_row["open_time"])),
-                "position": "aboveBar",
-                "color": "#ffc107",
-                "shape": "arrowDown",
-                "text": "② LH",
-                "price": lh_price,
-                "kind": "lh",
-            })
-
-    if len(pivot_lows) >= 1:
-        l1_row = pivot_lows.iloc[0]
-        l1 = l1 or float(l1_row["low"])
-        markers.append({
-            "time": _ts_sec(int(l1_row["open_time"])),
-            "position": "belowBar",
-            "color": "#ff5252",
-            "shape": "arrowUp",
-            "text": "L₁ 洗盘",
-            "price": l1,
-            "kind": "l1",
-        })
-
-    if len(pivot_lows) >= 2:
-        hl_row = pivot_lows.iloc[1]
-        hl = hl or float(hl_row["low"])
-        if hl > l1:
-            markers.append({
-                "time": _ts_sec(int(hl_row["open_time"])),
-                "position": "belowBar",
-                "color": "#00e676",
-                "shape": "arrowUp",
-                "text": "③ HL",
-                "price": hl,
-                "kind": "hl",
-            })
-            idx1 = pivot_lows.index[0]
-            idx2 = pivot_lows.index[1]
-            between = df.loc[idx1:idx2]
-            if not between.empty:
-                trigger_price = trigger_price or float(between["high"].max())
-                peak_row = between.loc[between["high"].idxmax()]
-                markers.append({
-                    "time": _ts_sec(int(peak_row["open_time"])),
-                    "position": "aboveBar",
-                    "color": "#64b5f6",
-                    "shape": "circle",
-                    "text": "夹角高点",
-                    "price": trigger_price,
-                    "kind": "mid_peak",
-                })
-
-    last = df.iloc[-1]
-    if hh_price > 0 or str(state.get("status", "")) == STATUS_TRIGGER:
-        markers.append({
-            "time": _ts_sec(int(last["open_time"])),
-            "position": "aboveBar",
-            "color": "#00e676",
-            "shape": "arrowUp",
-            "text": "④ HH",
-            "price": hh_price or float(last["close"]),
-            "kind": "hh",
-        })
-
-    if _bb_upper_wick(last):
-        markers.append({
-            "time": _ts_sec(int(last["open_time"])),
-            "position": "aboveBar",
-            "color": "#e040fb",
-            "shape": "circle",
-            "text": "BB-Wicks",
-            "price": float(last["high"]),
-            "kind": "bb_wick",
-        })
-
-    # 全量扫描：射击之星 / 倒锤子 / 连续插针 + V 前缀 + oi异动（对齐 BB-Wicks Pine）
+    # 射击之星 / 倒锤子 / 连续插针 + OI 异动
     markers.extend(collect_candle_signal_markers(df))
 
     price_lines: list[dict[str, Any]] = []
-    line_defs = [
-        ("h_max", h_max, "#ff5252", "H_max 供给墙"),
-        ("lh", lh_price, "#ffc107", "LH 次高点"),
-        ("l1", l1, "#ff8a80", "L₁ 洗盘低点"),
-        ("hl", hl, "#00e676", "HL 更高低点"),
-        ("trigger", trigger_price, "#64b5f6", "扳机线"),
-    ]
-    for kind, price, color, title in line_defs:
-        if price > 0:
-            price_lines.append({"kind": kind, "price": price, "color": color, "title": title})
-
     if derivatives_ctx:
         for lz in derivatives_ctx.get("liquidation_zones") or []:
             if isinstance(lz, dict) and float(lz.get("price") or 0) > 0:
@@ -493,12 +216,6 @@ def build_pattern_chart_payload(
 
     last_ts = _ts_sec(int(last["open_time"]))
     analysis.update({
-        "h_max": h_max,
-        "lh_price": lh_price,
-        "l1": l1,
-        "hl": hl,
-        "trigger_price": trigger_price,
-        "hh_price": hh_price,
         "last_price": float(last["close"]),
         "bb_wick_top": bool(_bb_upper_wick(last)),
         "macd_bull": bool(_macd_bull_filter(df)),

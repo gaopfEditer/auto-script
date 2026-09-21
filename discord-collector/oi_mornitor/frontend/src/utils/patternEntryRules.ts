@@ -76,19 +76,6 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
       "④ 入场价=信号柱收盘；下方防守≈前20低，上方参考=BB中轨",
     ],
   },
-  {
-    label: "形态多头爆发",
-    side: "多",
-    summary: "LH→HL 后带量突破夹角扳机线（经典拐点状态机）。",
-    impl: "pattern_detector Stage2 TRIGGER",
-    conditions: [
-      "① 阶段1：两 pivot high 形成 LH < H_max（可加 BB 上插针或 MACD 走弱滤波）",
-      "② 阶段2：LH 后出现 HL > L₁（更高低点）",
-      "③ 扳机线 = L₁～HL 区间最高价",
-      "④ 收盘突破扳机线，量 ≥ 1.5×SMA20，且 MACD 金叉放大",
-      "⑤ 触发后同币 trigger_emitted，不再重复扫",
-    ],
-  },
 ];
 
 /** 按 typeLabel 模糊匹配规则（列表文案可能带周期后缀） */

@@ -34,7 +34,7 @@ from message_format import download_message_images, format_message_console, send
 from session import create_and_start_client
 from signal_pipeline_log import log_pipeline
 from trade_card_pusher import TradeCardPusher
-from trade_signal_detect import looks_like_trade_message
+from trade_signal_detect import looks_like_trade_message, strip_promotional_lines
 from ui_feed_pusher import (
     UiFeedPusher,
     get_profile_meta,
@@ -178,7 +178,7 @@ async def main() -> None:
             omit_sender=True,
         )
 
-        text = (msg.message or "").strip()
+        text = strip_promotional_lines((msg.message or "").strip())
 
         if chat_id in card_route_ids:
             image_paths: list[str] = []

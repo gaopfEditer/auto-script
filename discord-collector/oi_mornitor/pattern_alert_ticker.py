@@ -12,7 +12,36 @@ from oi_mornitor.config import PATTERN_STATE_DB
 
 logger = logging.getLogger(__name__)
 
+_LEGACY_BREAKOUT_TYPES = frozenset({
+    "pattern_bull_continuation",
+    "trigger",
+    "breakout_trigger",
+})
+
+_LEGACY_BREAKOUT_LABELS = ("带量突破", "形态多头爆发", "多头爆发")
+
 _LOCK = threading.RLock()
+
+
+def _is_legacy_breakout_alert(alert: dict[str, Any]) -> bool:
+    typ = str(alert.get("type") or "").strip().lower()
+    if typ in _LEGACY_BREAKOUT_TYPES:
+        return True
+    label = str(
+        alert.get("type_label")
+        or alert.get("status_label")
+        or alert.get("message")
+        or ""
+    )
+    return any(x in label for x in _LEGACY_BREAKOUT_LABELS)
+
+
+def _is_legacy_breakout_item(row: dict[str, Any]) -> bool:
+    alert = row.get("alert")
+    if isinstance(alert, dict) and _is_legacy_breakout_alert(alert):
+        return True
+    key = str(row.get("key") or "")
+    return key.startswith("pattern_bull_continuation:") or key.startswith("trigger:")
 _TICKER_FILE = Path(PATTERN_STATE_DB).resolve().parent / "pattern_alert_ticker.json"
 # 与前端 PatternAlertTicker TICKER_TTL_MS / TICKER_MAX 对齐（4h）
 _TTL_MS = 4 * 60 * 60 * 1000
@@ -51,6 +80,8 @@ def _prune(items: list[dict[str, Any]], now: int | None = None) -> list[dict[str
     seen: set[str] = set()
     for r in items:
         if not isinstance(r, dict):
+            continue
+        if _is_legacy_breakout_item(r):
             continue
         key = _item_key(r)
         if not key or key in seen:
@@ -176,9 +207,22 @@ def _item_key_from_alert(alert: dict[str, Any]) -> str:
     return f"{typ}:{sym}:{close_t}:{msg}"
 
 
+def purge_legacy_breakout_ticker_items() -> int:
+    """移除 ticker 库中的旧带量突破 / 扳机信号。"""
+    with _LOCK:
+        before = _load()
+        kept = [r for r in before if not _is_legacy_breakout_item(r)]
+        removed = len(before) - len(kept)
+        if removed:
+            _save(kept)
+        return removed
+
+
 def record_ticker_from_alert(alert: dict[str, Any]) -> dict[str, Any] | None:
     """后端扫描出信号时直接写入 ticker（不依赖浏览器打开）。"""
     if not isinstance(alert, dict):
+        return None
+    if _is_legacy_breakout_alert(alert):
         return None
     sym = str(alert.get("symbol") or "").strip()
     if not sym:

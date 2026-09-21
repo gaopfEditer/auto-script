@@ -242,6 +242,11 @@ export interface PatternAlert {
   events?: Array<Record<string, unknown>>;
   exit_code?: string;
   exit_label?: string;
+  /** 量价 ticker：评分与观察档 */
+  score?: number;
+  observation_only?: boolean;
+  invalid_level?: number;
+  entry_hint?: number;
 }
 
 export interface SandboxTrade {

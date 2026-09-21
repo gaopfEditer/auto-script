@@ -17,13 +17,7 @@ from oi_mornitor.config import (
 
 SLOT_MANUAL = "manual"
 SLOT_DEFAULT = ""
-from oi_mornitor.pattern_detector import (
-    STATUS_EXPIRED,
-    STATUS_LH,
-    STATUS_SEARCHING,
-    STATUS_TRIGGER,
-    STATUS_WAITING,
-)
+from oi_mornitor.pattern_detector import STATUS_EXPIRED, STATUS_SEARCHING
 
 MAX_WATCH_SYMBOLS = max(1, int(PATTERN_WATCH_MAX))
 
@@ -493,23 +487,12 @@ class PatternStateTracker:
             )
             conn.commit()
 
-    def mark_triggered(self, symbol: str, kline_close_time: int) -> None:
-        state = self.get_state(symbol)
-        if not state:
-            return
-        self.save_state(
-            symbol,
-            status=STATUS_TRIGGER,
-            h_max=state.h_max,
-            lh_price=state.lh_price,
-            l1=state.l1,
-            hl=state.hl,
-            trigger_price=state.trigger_price,
-            hh_price=state.hh_price,
-            kline_close_time=kline_close_time,
-            message=state.message,
-            trigger_emitted=True,
-        )
+    def purge_breakout_states(self) -> int:
+        """清除旧 LH→HL→带量突破状态机持久化数据。"""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM pattern_state")
+            conn.commit()
+            return int(cur.rowcount or 0)
 
     def reset_symbol(self, symbol: str) -> None:
         self.save_state(
@@ -521,18 +504,8 @@ class PatternStateTracker:
         )
 
     def expire_stale(self, max_age_sec: float = PATTERN_WATCH_MAX_SEC) -> int:
-        cutoff = time.time() - max_age_sec
-        with self._connect() as conn:
-            cur = conn.execute(
-                """
-                UPDATE pattern_state
-                SET status = ?, message = '观察超时', updated_at = ?
-                WHERE status IN (?, ?) AND updated_at < ?
-                """,
-                (STATUS_EXPIRED, time.time(), STATUS_LH, STATUS_WAITING, cutoff),
-            )
-            conn.commit()
-            return cur.rowcount
+        del max_age_sec
+        return 0
 
     @staticmethod
     def _row_to_state(row: sqlite3.Row | dict[str, Any]) -> PatternStateRow:

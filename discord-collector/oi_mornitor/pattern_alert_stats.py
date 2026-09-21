@@ -15,7 +15,36 @@ from oi_mornitor.symbol_aliases import human_base_asset, normalize_usdt_symbol
 
 logger = logging.getLogger(__name__)
 
+_LEGACY_BREAKOUT_TYPES = frozenset({
+    "pattern_bull_continuation",
+    "trigger",
+    "breakout_trigger",
+})
+_LEGACY_BREAKOUT_LABELS = ("带量突破", "形态多头爆发", "多头爆发")
+
 _LOCK = threading.RLock()
+
+
+def _is_legacy_breakout_record(rec: dict[str, Any]) -> bool:
+    key = str(rec.get("key") or "")
+    if key.startswith("pattern_bull_continuation:") or key.startswith("trigger:"):
+        return True
+    typ = str(rec.get("type") or "").strip().lower()
+    if typ in _LEGACY_BREAKOUT_TYPES:
+        return True
+    label = str(rec.get("typeLabel") or rec.get("type_label") or "")
+    return any(x in label for x in _LEGACY_BREAKOUT_LABELS)
+
+
+def purge_legacy_breakout_stats() -> int:
+    """移除胜率库中的旧带量突破 / 扳机信号。"""
+    with _LOCK:
+        before = _load()
+        kept = [r for r in before if not _is_legacy_breakout_record(r)]
+        removed = len(before) - len(kept)
+        if removed:
+            _save(kept)
+        return removed
 _STATS_FILE = Path(PATTERN_STATE_DB).resolve().parent / "pattern_alert_stats.json"
 # 长期保存：不再按 7 天裁剪；仅软上限防文件无限膨胀（可 env 覆盖）
 _MAX_ITEMS = int(os.environ.get("PATTERN_ALERT_STATS_MAX", "50000"))
@@ -535,6 +564,8 @@ def record_card_from_archive(card: dict[str, Any]) -> dict[str, Any] | None:
 def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
     """TG 推送形态/结构卡片时登记一条待核实信号。"""
     if not isinstance(alert, dict):
+        return None
+    if _is_legacy_breakout_record({"key": alert_stats_key(alert), **alert}):
         return None
     # 彻底屏蔽已停用的 30m 周期和破底翻确认
     iv = str(alert.get("interval") or "").strip()
