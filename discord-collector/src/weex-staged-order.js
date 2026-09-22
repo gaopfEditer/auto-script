@@ -84,7 +84,8 @@ export async function executeWeexStagedMarketOpen(client, input) {
   if (!refPrice || refPrice <= 0) return { ok: false, reason: "no_market_price" };
 
   const contractMeta = input.dryRun ? parseWeexContractMeta(null) : await fetchContractMeta(client, symbol);
-  let leverage = resolveOrderLeverage(symbol);
+  let leverage =
+    Number(channelTrade.leverage) > 0 ? Number(channelTrade.leverage) : resolveOrderLeverage(symbol);
   if (contractMeta.maxLeverage > 0 && leverage > contractMeta.maxLeverage) {
     leverage = contractMeta.maxLeverage;
   }

@@ -8,6 +8,7 @@ import { resolveTradeDirection } from "./card-direction.js";
  *   entryPrice: string,
  *   takeProfitPrices: string[],
  *   stopLossPrice: string,
+ *   exitPlan?: Record<string, unknown>,
  * }} SignalTradeLeg */
 
 /** @typedef {{
@@ -30,7 +31,7 @@ import { resolveTradeDirection } from "./card-direction.js";
 
 /** @returns {SignalTradeLeg} */
 export function emptyTradeLeg() {
-  return { entryPrice: "", takeProfitPrices: [], stopLossPrice: "" };
+  return { entryPrice: "", takeProfitPrices: [], stopLossPrice: "", exitPlan: undefined };
 }
 
 /** @returns {SignalActualLeg} */
@@ -72,10 +73,15 @@ export function normalizePriceList(v) {
 export function normalizeTradeLeg(leg) {
   if (!leg || typeof leg !== "object") return emptyTradeLeg();
   const o = /** @type {Record<string, unknown>} */ (leg);
+  const exitPlan =
+    o.exitPlan && typeof o.exitPlan === "object" && !Array.isArray(o.exitPlan)
+      ? /** @type {Record<string, unknown>} */ (o.exitPlan)
+      : undefined;
   return {
     entryPrice: String(o.entryPrice ?? o.entry ?? "").trim(),
     takeProfitPrices: normalizePriceList(o.takeProfitPrices ?? o.takeProfits ?? o.targets),
     stopLossPrice: String(o.stopLossPrice ?? o.stopLoss ?? "").trim(),
+    ...(exitPlan ? { exitPlan } : {}),
   };
 }
 

@@ -17,7 +17,13 @@ from config import (
     telegram_avatar_dir,
 )
 from signal_pipeline_log import log_pipeline
-from trade_signal_detect import TradeSignal, format_signal_push, strip_promotional_lines
+from default_tpsl import apply_default_tpsl_if_needed
+from trade_signal_detect import (
+    TradeSignal,
+    format_signal_push,
+    refine_trade_text,
+    strip_promotional_lines,
+)
 
 
 def _split_targets(raw: str) -> list[str]:
@@ -85,9 +91,13 @@ def signal_to_card_payload(
         at = at.replace(tzinfo=timezone.utc)
     iso = at.isoformat().replace("+00:00", "Z")
 
+    sig, defaulted, exit_plan = apply_default_tpsl_if_needed(sig)
     formatted = format_signal_push(sig, phase=phase if phase != "update" else "full")
-    body = strip_promotional_lines((raw_body or "").strip() or formatted)
+    refined_raw = refine_trade_text(raw_body) if (raw_body or "").strip() else ""
+    body = strip_promotional_lines(refined_raw or formatted)
     note_parts = []
+    if defaulted:
+        note_parts.append("默认TP/SL(5/8/12%+5%止损·30/30/40)")
     if sig.is_prom:
         note_parts.append("#prom")
     if sig.note:
@@ -121,6 +131,20 @@ def signal_to_card_payload(
     if sig.sender:
         payload["authorKey"] = sig.sender.strip()
         payload["sender"] = sig.sender.strip()
+    parsed_json: dict[str, Any] = {
+        "parser": "telegram",
+        "signalPhase": "full",
+        "orderMode": "market",
+        "symbol": sig.symbol,
+        "direction": direction,
+        "entry": sig.entry or "",
+        "takeProfits": _split_targets(sig.take_profit),
+        "stopLoss": sig.stop_loss or "",
+    }
+    if exit_plan:
+        parsed_json["exitPlan"] = exit_plan
+        parsed_json["defaultTpsl"] = True
+    payload["parsedJson"] = parsed_json
     if not payload["channelAvatar"]:
         payload.pop("channelAvatar", None)
     return payload

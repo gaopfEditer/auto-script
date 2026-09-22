@@ -46,6 +46,16 @@ import { isCdpSendChannel } from "./telegram-channel-profiles.js";
 import { sanitizeTelegramPushText } from "./telegram-content-sanitize.js";
 import { recordTelegramCardAlertStats } from "./telegram-card-alert-stats.js";
 import { formatPipelineLog, formatSendCdpLog } from "./signal-pipeline-log.js";
+import {
+  isTelegramAutoTradeChannel,
+  prepareTelegramTradeParsed,
+  telegramTradeRequiresTpsl,
+} from "./telegram-auto-trade.js";
+import {
+  isAutoTradeChannel,
+  isAutoTradeExcludedMajorSymbol,
+  shouldPushToTradePlatform,
+} from "./trade-platform-toggles.js";
 
 /** Discord 雪花频道 ID（排除 api/youtube 等占位） */
 function isDiscordChannelId(id) {
@@ -361,12 +371,14 @@ export function shouldPushArchivedCardToTelegram(sourceType) {
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {(channel: string, payload: Record<string, unknown>) => void} [broadcast]
- * @param {{ cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink>, communityFeed?: ReturnType<typeof import("./community-feed-service.js").createCommunityFeedService>, telegram?: ReturnType<typeof import("./discord-signal-telegram.js").createDiscordSignalTelegramPush> }} [deps]
+ * @param {{ cardSink?: ReturnType<typeof import("./card-external-sink.js").createCardExternalSink>, communityFeed?: ReturnType<typeof import("./community-feed-service.js").createCommunityFeedService>, telegram?: ReturnType<typeof import("./discord-signal-telegram.js").createDiscordSignalTelegramPush>, bitgetOrder?: ReturnType<typeof import("./bitget-order-service.js").createBitgetOrderService>, weexOrder?: ReturnType<typeof import("./weex-order-service.js").createWeexOrderService> }} [deps]
  */
 export function createCardArchiveService(store, log, broadcast, deps = {}) {
   const cardSink = deps.cardSink ?? null;
   const communityFeed = deps.communityFeed ?? null;
   const telegram = deps.telegram ?? null;
+  const bitgetOrder = deps.bitgetOrder ?? null;
+  const weexOrder = deps.weexOrder ?? null;
 
   /**
    * channel_profiles.send 白名单 → python-ai-operate CDP（与 Telegram 群推送独立）。
@@ -410,6 +422,87 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     void recordTelegramCardAlertStats(clientCard).catch((e) => {
       log.warn(`TG交易卡胜率登记未捕获异常: ${String(/** @type {Error} */ (e).message ?? e)}`);
     });
+  }
+
+  /**
+   * channel_profiles.send 白名单 Telegram 卡片 → 按 Debug 勾选平台自动开单（须含止盈止损）。
+   * @param {ReturnType<typeof archiveCardToClient>} clientCard
+   * @param {ReturnType<typeof normalizeExecution>} executionJson
+   * @param {Record<string, unknown>} parsedJson
+   * @param {{ tradePlatforms?: { bitget?: boolean; weex?: boolean } }} [opts]
+   */
+  async function maybeAutoTradeTelegramCard(clientCard, executionJson, parsedJson, opts = {}) {
+    const channelId = String(clientCard?.channelId ?? "").trim();
+    if (resolveSourcePlatform(clientCard?.sourceType) !== "telegram") return {};
+    if (!isTelegramAutoTradeChannel(channelId) || !isAutoTradeChannel(channelId)) return {};
+
+    const cardId = extractSignalCardRowId(clientCard.id);
+    if (!cardId) return {};
+
+    const symbol = String(clientCard.symbol ?? executionJson.symbol ?? "").trim();
+    if (isAutoTradeExcludedMajorSymbol(symbol)) {
+      log.info(`Telegram 自动交易跳过主流币 symbol=${symbol} card=#${cardId}`);
+      return {
+        bitget: { skipped: "major_symbol_excluded", symbol },
+        weex: { skipped: "major_symbol_excluded", symbol },
+      };
+    }
+
+    let execution = normalizeExecution(executionJson, parsedJson);
+    const prepared = prepareTelegramTradeParsed(parsedJson, execution);
+    execution = prepared.execution;
+    const parsed = prepared.parsed;
+
+    if (!telegramTradeRequiresTpsl(execution)) {
+      log.warn(
+        `Telegram 自动交易跳过 card=#${cardId} channel=${channelId}：缺有效入场价或止盈止损（市价单需可解析入场/默认 TP/SL）`
+      );
+      return { bitget: { skipped: "missing_tpsl" }, weex: { skipped: "missing_tpsl" } };
+    }
+
+    /** @type {Record<string, unknown>} */
+    const results = {};
+    const tradeOpts = { tradePlatforms: opts.tradePlatforms };
+
+    if (bitgetOrder && shouldPushToTradePlatform("bitget", channelId, tradeOpts)) {
+      try {
+        results.bitget = await bitgetOrder.onSignalCardCreated({
+          cardId,
+          channelId,
+          parsed,
+          executionJson: execution,
+          symbol,
+          channelName: String(clientCard.channelName ?? ""),
+        });
+        log.info(
+          `Telegram Bitget 开单 card=#${cardId} symbol=${symbol} channel=${channelId} result=${JSON.stringify(results.bitget)?.slice(0, 200)}`
+        );
+      } catch (e) {
+        log.warn(`Telegram Bitget 自动下单异常 card=#${cardId}: ${String(/** @type {Error} */ (e).message ?? e)}`);
+      }
+    } else if (bitgetOrder && !shouldPushToTradePlatform("bitget", channelId, tradeOpts)) {
+      results.bitget = { skipped: "platform_toggle_off", platform: "bitget" };
+    }
+
+    if (weexOrder && shouldPushToTradePlatform("weex", channelId, tradeOpts)) {
+      try {
+        results.weex = await weexOrder.onSignalCardCreated({
+          cardId,
+          channelId,
+          parsed,
+          channelName: String(clientCard.channelName ?? ""),
+        });
+        log.info(
+          `Telegram WEEX 开单 card=#${cardId} symbol=${symbol} channel=${channelId} result=${JSON.stringify(results.weex)?.slice(0, 200)}`
+        );
+      } catch (e) {
+        log.warn(`Telegram WEEX 自动下单异常 card=#${cardId}: ${String(/** @type {Error} */ (e).message ?? e)}`);
+      }
+    } else if (weexOrder && !shouldPushToTradePlatform("weex", channelId, tradeOpts)) {
+      results.weex = { skipped: "platform_toggle_off", platform: "weex" };
+    }
+
+    return results;
   }
 
   /**
@@ -788,6 +881,17 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     const execution = normalizeExecution(input.execution ?? input.executionJson ?? input, input.parsedJson);
     const symbol = normalizeSymbol(input.symbol ?? execution.symbol ?? extractSymbolFromPayload(input.parsedJson, execution));
     if (symbol) execution.symbol = symbol.replace("USDT", "");
+    const parsedExitPlan =
+      input.parsedJson &&
+      typeof input.parsedJson === "object" &&
+      !Array.isArray(input.parsedJson) &&
+      input.parsedJson.exitPlan &&
+      typeof input.parsedJson.exitPlan === "object"
+        ? input.parsedJson.exitPlan
+        : null;
+    if (parsedExitPlan && execution.planned) {
+      execution.planned.exitPlan = parsedExitPlan;
+    }
 
     const rawContent = String(input.rawContent ?? "").trim();
     const channelNameIn = String(input.channelName ?? "").trim();
@@ -939,6 +1043,12 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
             ingestSourceRef: ingestRef,
           });
           maybeRecordTelegramCardAlertStats(clientCard);
+          await maybeAutoTradeTelegramCard(clientCard, mergedExecution, mergedParsed, {
+            tradePlatforms:
+              input.tradePlatforms && typeof input.tradePlatforms === "object"
+                ? /** @type {{ bitget?: boolean; weex?: boolean }} */ (input.tradePlatforms)
+                : undefined,
+          });
           return Object.assign(clientCard, { channelMessage: null, merged: true });
         }
       }
@@ -1055,6 +1165,12 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       ingestSourceRef: ingestRef,
     });
     maybeRecordTelegramCardAlertStats(clientCard);
+    await maybeAutoTradeTelegramCard(clientCard, execution, parsedJson, {
+      tradePlatforms:
+        input.tradePlatforms && typeof input.tradePlatforms === "object"
+          ? /** @type {{ bitget?: boolean; weex?: boolean }} */ (input.tradePlatforms)
+          : undefined,
+    });
 
     /** @type {Awaited<ReturnType<typeof publishCardToChannelFeed>> | null} */
     let channelMessage = null;

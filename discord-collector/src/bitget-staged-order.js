@@ -191,7 +191,8 @@ export async function executeStagedMarketOpen(client, input) {
 
   const productType = String(channelTrade.productType ?? "USDT-FUTURES");
   const marginCoin = "USDT";
-  const leverage = resolveOrderLeverage(symbol);
+  const leverage =
+    Number(channelTrade.leverage) > 0 ? Number(channelTrade.leverage) : resolveOrderLeverage(symbol);
   const initialSlPct = Number(channelTrade.initialSlPct ?? STAGED_INITIAL_SL_PCT);
 
   const refPrice = input.dryRun

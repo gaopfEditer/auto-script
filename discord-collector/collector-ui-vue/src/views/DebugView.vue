@@ -30,8 +30,6 @@ const tgResult = ref("");
 const tgResultOk = ref(/** @type {boolean | null} */ (null));
 const tgTestText = ref("");
 
-const simChannels = ref(/** @type {Array<{ id: string; name: string; parser: string }>} */ ([]));
-const simChannelId = ref("1444963506431463474");
 const simContent = ref("");
 const simLoading = ref(false);
 const simResult = ref("");
@@ -39,14 +37,16 @@ const simResultOk = ref(/** @type {boolean | null} */ (null));
 const simBitget = ref(/** @type {Record<string, unknown> | null} */ (null));
 const simWeex = ref(/** @type {Record<string, unknown> | null} */ (null));
 const simHints = ref(/** @type {string[]} */ ([]));
-const simExamples = ref(/** @type {Record<string, { open?: string; tpsl?: string }>} */ ({}));
 const simHistory = ref(
-  /** @type {Array<{ ts: number; content: string; phase?: string; skipped?: string; cardId?: number; ok: boolean }>} */ ([])
+  /** @type {Array<{ ts: number; content: string; skipped?: string; cardId?: number; ok: boolean }>} */ ([])
 );
+const telegramSendChannels = ref(/** @type {Array<{ id: string; name: string }>} */ ([]));
+const simSendLoadError = ref("");
+const exampleSignal = ref("");
 
 const TRADE_PLATFORMS_STORAGE_KEY = "discord-collector-trade-platforms";
 const tradePlatforms = ref({ bitget: true, weex: true });
-const requiredChannelIds = ref(/** @type {string[]} */ ([]));
+const tradeOrderSizeUsdt = ref(1);
 
 const oiTgOnline = ref(false);
 const oiTgLoading = ref(false);
@@ -70,6 +70,8 @@ function loadTradePlatformsFromStorage() {
         bitget: o.bitget !== false,
         weex: o.weex !== false,
       };
+      const sz = Number(o.orderSizeUsdt);
+      if (Number.isFinite(sz) && sz > 0) tradeOrderSizeUsdt.value = sz;
     }
   } catch {
     /* ignore */
@@ -78,7 +80,10 @@ function loadTradePlatformsFromStorage() {
 
 function saveTradePlatformsToStorage() {
   try {
-    localStorage.setItem(TRADE_PLATFORMS_STORAGE_KEY, JSON.stringify(tradePlatforms.value));
+    localStorage.setItem(
+      TRADE_PLATFORMS_STORAGE_KEY,
+      JSON.stringify({ ...tradePlatforms.value, orderSizeUsdt: tradeOrderSizeUsdt.value })
+    );
   } catch {
     /* ignore */
   }
@@ -89,7 +94,7 @@ async function syncTradePlatformsToServer() {
     await fetch("/api/debug/trade-platforms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(tradePlatforms.value),
+      body: JSON.stringify({ ...tradePlatforms.value, orderSizeUsdt: tradeOrderSizeUsdt.value }),
     });
   } catch {
     /* ignore */
@@ -196,54 +201,117 @@ async function sendOiTgTest(target) {
   }
 }
 
+/** @param {unknown} raw */
+function normalizeSendChannelList(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const o = /** @type {Record<string, unknown>} */ (item);
+      const id = String(o.id ?? o.chatId ?? "").trim();
+      if (!id) return null;
+      const name = String(o.name ?? o.channelName ?? id).trim() || id;
+      return { id, name };
+    })
+    .filter(Boolean);
+}
+
+/** 从 live/channels 的 sendChatIds + channels 组装白名单展示 */
+/** @param {Record<string, unknown>} data */
+function sendChannelsFromLiveApi(data) {
+  const sendIds = Array.isArray(data.sendChatIds) ? data.sendChatIds.map((x) => String(x).trim()).filter(Boolean) : [];
+  if (!sendIds.length) return [];
+  /** @type {Map<string, string>} */
+  const nameById = new Map();
+  for (const item of Array.isArray(data.channels) ? data.channels : []) {
+    if (!item || typeof item !== "object") continue;
+    const o = /** @type {Record<string, unknown>} */ (item);
+    const id = String(o.chatId ?? o.id ?? "").trim();
+    if (id) nameById.set(id, String(o.name ?? o.channelName ?? id).trim() || id);
+  }
+  return sendIds.map((id) => ({ id, name: nameById.get(id) ?? id }));
+}
+
+async function loadTelegramSendChannels() {
+  simSendLoadError.value = "";
+  /** @type {Array<{ id: string; name: string }>} */
+  let list = [];
+
+  for (const url of ["/api/debug/trade-platforms", "/api/debug/simulate-signal"]) {
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      list = normalizeSendChannelList(data.telegramSendChannels);
+      if (list.length) {
+        telegramSendChannels.value = list;
+        return;
+      }
+      if (data.channelProfilesError) {
+        simSendLoadError.value = String(data.channelProfilesError);
+      }
+    } catch (e) {
+      simSendLoadError.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  try {
+    const res = await fetch("/api/telegram/live/channels");
+    const data = await res.json();
+    list = sendChannelsFromLiveApi(data);
+    if (list.length) {
+      telegramSendChannels.value = list;
+      simSendLoadError.value = "";
+      return;
+    }
+    if (data.error) simSendLoadError.value = String(data.error);
+    else if (!data.profilesOk) simSendLoadError.value = "channel_profiles.json 读取失败";
+  } catch (e) {
+    if (!simSendLoadError.value) {
+      simSendLoadError.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  if (!list.length && !simSendLoadError.value) {
+    simSendLoadError.value = "send 数组为空，请检查 telegram/channel_profiles.json";
+  }
+}
+
 async function loadSimulateConfig() {
+  await loadTelegramSendChannels();
   try {
     const res = await fetch("/api/debug/simulate-signal");
     const data = await res.json();
     if (data.ok) {
-      simChannels.value = Array.isArray(data.channels) ? data.channels : [];
-      simChannelId.value = String(data.defaultChannelId ?? "1444963506431463474");
+      const fromApi = normalizeSendChannelList(data.telegramSendChannels);
+      if (fromApi.length) telegramSendChannels.value = fromApi;
       simBitget.value = data.bitget ?? null;
       simWeex.value = data.weex ?? null;
       simHints.value = Array.isArray(data.hints) ? data.hints : [];
-      simExamples.value = data.examples && typeof data.examples === "object" ? data.examples : {};
-      requiredChannelIds.value = Array.isArray(data.requiredChannelIds) ? data.requiredChannelIds : [];
+      exampleSignal.value = String(data.exampleSignal ?? "");
       if (data.tradePlatforms && typeof data.tradePlatforms === "object") {
         tradePlatforms.value = {
           bitget: data.tradePlatforms.bitget !== false,
           weex: data.tradePlatforms.weex !== false,
         };
       }
+      const sz = Number(data.orderSizeUsdt);
+      if (Number.isFinite(sz) && sz > 0) tradeOrderSizeUsdt.value = sz;
     }
   } catch {
-    simChannels.value = [
-      { id: "1444963506431463474", name: "山寨之王", parser: "altcoin_king" },
-      { id: "1444963372134301827", name: "seven", parser: "tw_opg" },
-    ];
+    /* loadTelegramSendChannels 已处理 send 列表 */
   }
 }
 
-const simParserKey = computed(() => {
-  const ch = simChannels.value.find((c) => c.id === simChannelId.value);
-  return ch?.parser ?? "altcoin_king";
-});
-
-const simExampleOpen = computed(() => simExamples.value[simParserKey.value]?.open ?? "#SOL 市价多");
-const simExampleTpsl = computed(
-  () => simExamples.value[simParserKey.value]?.tpsl ?? "止盈：4.71\n止損：4.9"
-);
-
-function fillSimExample(kind) {
-  simContent.value = kind === "tpsl" ? simExampleTpsl.value : simExampleOpen.value;
+function fillSimExample() {
+  simContent.value = exampleSignal.value || "";
 }
 
 const SKIP_HINTS = {
-  duplicate_content_4h: "4h 内相同正文（Debug 已应跳过，请重启 collect:ui）",
-  duplicate_symbol_4h: "4h 内同币种已开仓（Debug 已应跳过，请重启 collect:ui）",
-  duplicate_text: "正文完全相同",
-  parse_failed: "无法解析信号，检查格式",
-  not_signal_channel: "非信号频道",
+  parse_failed: "无法解析 Telegram 结构化信号（需币种、方向、进场/止盈/止损）",
+  send_list_empty: "channel_profiles.json send 白名单为空",
   major_symbol_excluded: "主流币 BTC/ETH 不自动交易",
+  missing_tpsl: "缺止盈止损或无法补默认 TP/SL",
+  platform_toggle_off: "平台未勾选",
 };
 
 async function submitSimulateSignal() {
@@ -259,54 +327,31 @@ async function submitSimulateSignal() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        channelId: simChannelId.value,
         content,
         tradePlatforms: tradePlatforms.value,
+        orderSizeUsdt: tradeOrderSizeUsdt.value,
       }),
       signal: controller.signal,
     });
     clearTimeout(timer);
     const data = await res.json();
     simBitget.value = data.bitget ?? simBitget.value;
-    const phase = String(data.parsed?.signalPhase ?? "");
-    const skipped = data.skipped ? String(data.skipped) : "";
+    simWeex.value = data.weex ?? simWeex.value;
     const cardId = Number(data.card?.id);
-    const bg = data.bitgetResult;
+    const errKey = data.error ? String(data.error) : "";
     let detail = "";
-    if (skipped) detail = SKIP_HINTS[skipped] ?? `跳过: ${skipped}`;
-    else if (data.merged) detail = `TP/SL 已合并 → 卡片 #${cardId || "?"}`;
-    else if (cardId) detail = `卡片 #${cardId} · phase=${phase || "?"}`;
-    if (bg && typeof bg === "object") {
-      const b = /** @type {Record<string, unknown>} */ (bg);
-      if (b.staged && b.record) {
-        const rec = /** @type {Record<string, unknown>} */ (b.record);
-        detail += ` · Bitget ${rec.status ?? "ok"} ${rec.symbol ?? ""} ${rec.leverage ?? "?"}x size=${rec.size ?? ""}`;
-        const sl = rec.presetStopLossPrice ?? rec.initialSlPrice;
-        if (sl) detail += ` SL=${sl}`;
-      } else if (b.failed) detail += ` · Bitget 失败: ${b.reason ?? "?"}`;
-      else if (b.skipped === "platform_toggle_off") detail += " · Bitget 未推送（Debug 勾选关闭）";
-      else if (b.skipped === "major_symbol_excluded") detail += " · Bitget 跳过主流币 BTC/ETH";
-      else if (b.skipped) detail += ` · Bitget 跳过: ${b.skipped}`;
-      else if (b.dryRun) detail += " · Bitget dry-run";
-    }
-    const wx = data.weexResult;
-    if (wx && typeof wx === "object") {
-      const w = /** @type {Record<string, unknown>} */ (wx);
-      if (w.staged && w.record) {
-        const rec = /** @type {Record<string, unknown>} */ (w.record);
-        detail += ` · WEEX ${rec.status ?? "ok"} ${rec.symbol ?? ""} ${rec.leverage ?? "?"}x`;
-      } else if (w.failed) detail += ` · WEEX 失败: ${w.reason ?? "?"}${w.error ? ` (${w.error})` : ""}`;
-      else if (w.skipped === "platform_toggle_off") detail += " · WEEX 未推送（Debug 勾选关闭）";
-      else if (w.skipped === "major_symbol_excluded") detail += " · WEEX 跳过主流币 BTC/ETH";
-      else if (w.skipped) detail += ` · WEEX 跳过: ${w.skipped}`;
+    if (!data.ok) {
+      detail = SKIP_HINTS[errKey] ?? data.hint ?? errKey ?? `HTTP ${res.status}`;
+    } else {
+      detail = `卡片 #${cardId || "?"} · ${data.channelName ?? "TG"} (${String(data.channelId ?? "").slice(-6)})`;
+      detail += ` · ${data.parsed?.symbol ?? ""} ${data.parsed?.direction ?? ""}`;
     }
     simResultOk.value = Boolean(data.ok);
-    simResult.value = detail || (data.error ? String(data.error) : res.ok ? "已处理" : `HTTP ${res.status}`);
+    simResult.value = detail || (res.ok ? "已处理" : `HTTP ${res.status}`);
     simHistory.value.unshift({
       ts: Date.now(),
       content: content.slice(0, 120),
-      phase,
-      skipped: skipped || undefined,
+      skipped: !data.ok ? errKey || "error" : undefined,
       cardId: cardId || undefined,
       ok: Boolean(data.ok),
     });
@@ -548,7 +593,7 @@ function isDiscordRow(row) {
       </div>
       <div class="tg-panel sim-panel">
         <div class="tg-head">
-          <span class="tg-label">信号模拟 · Bitget + WEEX</span>
+          <span class="tg-label">Telegram 自动开单</span>
           <span class="tg-badge" :class="{ on: simBitget && !simBitget.dryRun }">
             Bitget {{ simBitget?.dryRun ? "Dry-run" : simBitget?.enabled ? "实盘" : "关" }}
           </span>
@@ -556,45 +601,66 @@ function isDiscordRow(row) {
             WEEX {{ simWeex?.dryRun ? "Dry-run" : simWeex?.enabled ? "实盘" : "关" }}
           </span>
         </div>
-        <label class="sim-field">
-          <span class="sim-lbl">频道</span>
-          <select v-model="simChannelId" class="sim-select">
-            <option v-for="ch in simChannels" :key="ch.id" :value="ch.id">
-              {{ ch.name }} ({{ ch.id.slice(-6) }})
-            </option>
-          </select>
-        </label>
-        <div class="sim-platforms">
-          <span class="sim-lbl">推送平台</span>
-          <label class="sim-check">
-            <input v-model="tradePlatforms.bitget" type="checkbox" @change="onTradePlatformChange" />
-            Bitget
-          </label>
-          <label class="sim-check">
-            <input v-model="tradePlatforms.weex" type="checkbox" @change="onTradePlatformChange" />
-            WEEX
-          </label>
+        <div v-if="telegramSendChannels.length" class="sim-send-groups">
+          <span class="sim-send-title">send 白名单</span>
+          <div class="sim-send-chips">
+            <span v-for="ch in telegramSendChannels" :key="ch.id" class="sim-send-chip" :title="ch.id">
+              {{ ch.name }}
+              <em>{{ ch.id.slice(-6) }}</em>
+            </span>
+          </div>
         </div>
-        <p v-if="requiredChannelIds.length" class="sim-channel-hint">
-          自动交易频道白名单（.env 必填）：{{ requiredChannelIds.map((id) => id.slice(-6)).join(", ") }}
+        <p v-else class="sim-send-empty">
+          {{
+            simSendLoadError ||
+              "未读到 send 白名单（请确认 telegram/channel_profiles.json 含 send 数组，并重启 collect:ui）"
+          }}
         </p>
+        <div class="sim-trade-grid">
+          <div class="sim-trade-block">
+            <span class="sim-block-title">推送平台</span>
+            <div class="sim-platform-toggles">
+              <label class="sim-platform-card" :class="{ active: tradePlatforms.bitget }">
+                <input v-model="tradePlatforms.bitget" type="checkbox" @change="onTradePlatformChange" />
+                <span class="sim-platform-name">Bitget</span>
+              </label>
+              <label class="sim-platform-card" :class="{ active: tradePlatforms.weex }">
+                <input v-model="tradePlatforms.weex" type="checkbox" @change="onTradePlatformChange" />
+                <span class="sim-platform-name">WEEX</span>
+              </label>
+            </div>
+          </div>
+          <div class="sim-trade-block sim-amount-block">
+            <span class="sim-block-title">单笔保证金</span>
+            <div class="sim-amount-wrap">
+              <input
+                v-model.number="tradeOrderSizeUsdt"
+                class="sim-amount-input"
+                type="number"
+                min="0.1"
+                step="0.1"
+                @change="onTradePlatformChange"
+              />
+              <span class="sim-amount-unit">USDT</span>
+            </div>
+          </div>
+        </div>
         <textarea
           v-model="simContent"
           class="sim-textarea"
           rows="4"
-          placeholder="粘贴信号正文，回车提交…"
+          placeholder="可选：粘贴 Telegram 信号正文做本地模拟…"
           @keydown="onSimKeydown"
         />
         <div class="sim-actions">
-          <button type="button" class="sim-link" @click="fillSimExample('open')">示例·开仓</button>
-          <button type="button" class="sim-link" @click="fillSimExample('tpsl')">示例·TP/SL</button>
+          <button type="button" class="sim-link" @click="fillSimExample">填入示例信号</button>
           <button
             type="button"
             class="tg-btn sim-submit"
             :disabled="simLoading || !simContent.trim()"
             @click="submitSimulateSignal"
           >
-            {{ simLoading ? "处理中…" : "提交（Enter）" }}
+            {{ simLoading ? "处理中…" : "模拟提交（Enter）" }}
           </button>
         </div>
         <ul v-if="simHints.length" class="sim-hints">
@@ -604,7 +670,7 @@ function isDiscordRow(row) {
         <div v-if="simHistory.length" class="sim-history">
           <div v-for="(h, i) in simHistory" :key="i" class="sim-hist-row" :class="{ bad: !h.ok }">
             <span class="sim-hist-ts">{{ new Date(h.ts).toLocaleTimeString() }}</span>
-            <span>{{ h.skipped || h.phase || "—" }}</span>
+            <span>{{ h.skipped || "ok" }}</span>
             <span v-if="h.cardId">#{{ h.cardId }}</span>
             <span class="sim-hist-text">{{ h.content }}</span>
           </div>
@@ -747,49 +813,138 @@ function isDiscordRow(row) {
 .sim-panel {
   border-color: #faa61a55;
 }
-.sim-field {
-  display: block;
-  margin-bottom: 0.4rem;
+.sim-send-groups {
+  margin-bottom: 0.55rem;
 }
-.sim-platforms {
+.sim-send-title {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #949ba4;
+  margin-bottom: 0.35rem;
+}
+.sim-send-chips {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 0.75rem;
-  margin-bottom: 0.4rem;
+  gap: 0.35rem;
 }
-.sim-check {
+.sim-send-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  font-size: 0.72rem;
-  color: #dbdee1;
-  cursor: pointer;
-}
-.sim-check input {
-  accent-color: #5865f2;
-}
-.sim-channel-hint {
-  margin: 0 0 0.4rem;
-  font-size: 0.65rem;
-  color: #72767d;
-  line-height: 1.35;
-}
-.sim-lbl {
-  display: block;
+  gap: 0.35rem;
+  padding: 0.22rem 0.5rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2b2d31 0%, #1e1f22 100%);
+  border: 1px solid #3f4147;
   font-size: 0.68rem;
-  color: #949ba4;
-  margin-bottom: 0.2rem;
+  color: #dbdee1;
+  line-height: 1.3;
 }
-.sim-select {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.35rem 0.5rem;
+.sim-send-chip em {
+  font-style: normal;
+  font-size: 0.62rem;
+  color: #72767d;
+}
+.sim-send-empty {
+  margin: 0 0 0.5rem;
+  font-size: 0.68rem;
+  color: #faa61a;
+}
+.sim-trade-grid {
+  display: grid;
+  grid-template-columns: 1fr minmax(88px, 0.55fr);
+  gap: 0.45rem;
+  margin-bottom: 0.55rem;
+}
+@media (max-width: 420px) {
+  .sim-trade-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.sim-trade-block {
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  background: #111214;
+  border: 1px solid #3f4147;
+}
+.sim-block-title {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #949ba4;
+  margin-bottom: 0.35rem;
+}
+.sim-platform-toggles {
+  display: flex;
+  gap: 0.35rem;
+}
+.sim-platform-card {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.4rem;
   border-radius: 6px;
   border: 1px solid #3f4147;
-  background: #111214;
-  color: #dbdee1;
+  background: #1a1b1e;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.sim-platform-card input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.sim-platform-card.active {
+  border-color: #5865f2;
+  background: #5865f218;
+  box-shadow: inset 0 0 0 1px #5865f244;
+}
+.sim-platform-name {
   font-size: 0.72rem;
+  font-weight: 600;
+  color: #b5bac1;
+}
+.sim-platform-card.active .sim-platform-name {
+  color: #eef0ff;
+}
+.sim-amount-block {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+.sim-amount-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.05rem;
+}
+.sim-amount-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.38rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid #3f4147;
+  background: #1a1b1e;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.sim-amount-input:focus {
+  outline: none;
+  border-color: #5865f2;
+}
+.sim-amount-unit {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #72767d;
+  white-space: nowrap;
 }
 .sim-textarea {
   width: 100%;
@@ -828,11 +983,17 @@ function isDiscordRow(row) {
   min-width: 120px;
 }
 .sim-hints {
-  margin: 0.25rem 0 0;
-  padding-left: 1rem;
+  margin: 0.45rem 0 0;
+  padding: 0.45rem 0.55rem 0.45rem 1.15rem;
+  border-radius: 6px;
+  background: #111214;
+  border: 1px solid #2e3035;
   font-size: 0.65rem;
-  color: #72767d;
-  line-height: 1.35;
+  color: #949ba4;
+  line-height: 1.45;
+}
+.sim-hints li + li {
+  margin-top: 0.2rem;
 }
 .sim-history {
   margin-top: 0.45rem;

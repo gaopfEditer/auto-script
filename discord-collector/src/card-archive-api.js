@@ -103,6 +103,12 @@ export function normalizeOpenCardInput(body) {
     b.parsedJson && typeof b.parsedJson === "object" && !Array.isArray(b.parsedJson)
       ? /** @type {Record<string, unknown>} */ (b.parsedJson)
       : {};
+  const exitPlan =
+    b.exitPlan && typeof b.exitPlan === "object" && !Array.isArray(b.exitPlan)
+      ? /** @type {Record<string, unknown>} */ (b.exitPlan)
+      : prevParsed.exitPlan && typeof prevParsed.exitPlan === "object"
+        ? /** @type {Record<string, unknown>} */ (prevParsed.exitPlan)
+        : undefined;
 
   return {
     messageId: b.messageId,
@@ -121,6 +127,7 @@ export function normalizeOpenCardInput(body) {
       ...(images.length ? { images } : {}),
       ...(authorKey ? { authorKey } : {}),
       ...(sender ? { sender } : {}),
+      ...(exitPlan ? { exitPlan, defaultTpsl: prevParsed.defaultTpsl ?? true } : {}),
     },
     cardsByStyle: b.cardsByStyle,
     cardFields: b.cardFields ?? b.embed,

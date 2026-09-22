@@ -21,10 +21,15 @@ import { createDiscordTelegramMessagePush } from "./discord-telegram-message-pus
 import { createDiscordWebhookForward } from "./discord-webhook-forward.js";
 import { createSystemTelegramAlert } from "./discord-system-telegram.js";
 import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
-import { COIN_ACTION_SIGNAL_CHANNEL_ID, getSignalChannelConfig } from "./discord-signal-config.js";
+import { COIN_ACTION_SIGNAL_CHANNEL_ID } from "./discord-signal-config.js";
 import { getBitgetTradeStatus, loadBitgetTradeConfig } from "./bitget-trade-config.js";
 import { getWeexTradeStatus, loadWeexTradeConfig } from "./weex-trade-config.js";
-import { isStagedTradeChannel } from "./discord-signal-staged-trade.js";
+import { parseTelegramTradeTextLite, buildDefaultTelegramExitPlan } from "./telegram-auto-trade.js";
+import {
+  isCdpSendChannel,
+  listTelegramSendChannelsWithNames,
+  readTelegramChannelProfiles,
+} from "./telegram-channel-profiles.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
 import { isBlockedWsPayload, isForwardableFramePayload } from "./ws-noise-filter.js";
 import { createLogger, setLogLevel } from "./logger.js";
@@ -61,6 +66,8 @@ import { registerTwitterCdpRoutes } from "./twitter-cdp-api.js";
 import {
   getAutoTradeChannelIds,
   getTradePlatformToggles,
+  getTradeOrderSizeUsdt,
+  setTradeOrderSizeUsdt,
   setTradePlatformToggles,
 } from "./trade-platform-toggles.js";
 
@@ -216,6 +223,8 @@ async function main() {
     cardSink,
     communityFeed,
     telegram: signalCards.telegram,
+    bitgetOrder,
+    weexOrder,
   });
   const twitterCdp = createTwitterCdpService(store, createLogger("twitter-cdp"), broadcast, {
     communityFeed,
@@ -608,16 +617,18 @@ async function main() {
     }
   });
 
-  const DEBUG_SIMULATE_CHANNELS = [
-    { id: "1444963506431463474", name: "山寨之王", parser: "altcoin_king" },
-    { id: "1444963372134301827", name: "seven", parser: "tw_opg" },
-  ];
-
   app.get("/api/debug/trade-platforms", (_req, res) => {
+    const telegramSendChannels = listTelegramSendChannelsWithNames();
+    const profiles = readTelegramChannelProfiles();
     res.json({
       ok: true,
       platforms: getTradePlatformToggles(),
+      orderSizeUsdt: getTradeOrderSizeUsdt(),
       requiredChannelIds: getAutoTradeChannelIds(),
+      telegramSendChannels,
+      channelProfilesFile: profiles.file,
+      channelProfilesOk: profiles.ok,
+      channelProfilesError: profiles.error ?? null,
     });
   });
 
@@ -627,8 +638,18 @@ async function main() {
       bitget: typeof body.bitget === "boolean" ? body.bitget : undefined,
       weex: typeof body.weex === "boolean" ? body.weex : undefined,
     });
-    log.info(`[debug] trade platforms bitget=${platforms.bitget} weex=${platforms.weex}`);
-    res.json({ ok: true, platforms, requiredChannelIds: getAutoTradeChannelIds() });
+    if (body.orderSizeUsdt != null) {
+      setTradeOrderSizeUsdt(body.orderSizeUsdt);
+    }
+    log.info(
+      `[debug] trade platforms bitget=${platforms.bitget} weex=${platforms.weex} orderSizeUsdt=${getTradeOrderSizeUsdt()}`
+    );
+    res.json({
+      ok: true,
+      platforms,
+      orderSizeUsdt: getTradeOrderSizeUsdt(),
+      requiredChannelIds: getAutoTradeChannelIds(),
+    });
   });
 
   /** OI 形态卡片 Telegram 推送开关（代理到 oi_mornitor） */
@@ -713,89 +734,124 @@ async function main() {
   });
 
   app.get("/api/debug/simulate-signal", (_req, res) => {
+    const telegramSendChannels = listTelegramSendChannelsWithNames();
+    const profiles = readTelegramChannelProfiles();
     res.json({
       ok: true,
-      defaultChannelId: "1444963506431463474",
-      channels: DEBUG_SIMULATE_CHANNELS,
+      telegramSendChannels,
+      channelProfilesFile: profiles.file,
+      channelProfilesOk: profiles.ok,
+      channelProfilesError: profiles.error ?? null,
       tradePlatforms: getTradePlatformToggles(),
-      requiredChannelIds: getAutoTradeChannelIds(),
+      orderSizeUsdt: getTradeOrderSizeUsdt(),
       bitget: getBitgetTradeStatus(),
       weex: getWeexTradeStatus(),
-      examples: {
-        altcoin_king: {
-          open: "#ORDI 市價空 進場3.958",
-          tpsl: "止盈：3.799-3.685\n止损4.13",
-        },
-        tw_opg: {
-          open: "#EPIC 市價進空",
-          tpsl: "槓桿建議：穩健10x\n倉位建議：總資金的5%\n第二止盈：0.6294\n第三止盈：0.59\n止損：0.8411",
-        },
-      },
+      exampleSignal: `币種：ETH/USDT
+方向：🚀📈
+📌进场点：2570—2530
+✔️获利目标：2625—2690—2790
+❌止损位置：2490`,
       hints: [
-        "回车提交；Shift+Enter 换行",
-        "Debug 模式：跳过去重 / 不走 Ollama，响应更快",
-        "第 1 条通常为市价开仓（Bitget + WEEX 同步，BTC/ETH 100x / 山寨 30x）",
-        "开仓同时挂市价 -4.3% 初始止损",
-        "第 2 条通常为 TP/SL 补充（20 分钟内合并到同币种未完结卡片；山寨之王 / seven）",
-        "正式 Discord 信号仍保留 4h 同币种去重",
-        "下方勾选控制 Bitget / WEEX 是否下单（localStorage + 服务端同步）；频道须在 BITGET_AUTO_TRADE_CHANNEL_IDS",
-        "主流币 BTC/ETH 不自动交易，仅山寨币自动下单",
+        "白名单来源：telegram/channel_profiles.json 的 send 数组（下方群名）",
+        "listen.py 监听到上述群的结构化信号 → 建卡 + 推 TELEGRAM_PUSH_CHAT_ID + 按勾选平台开单",
+        "Bitget / WEEX 勾选与单笔保证金会同步到服务端（localStorage 备份）",
+        "Telegram 开单：20x · 市价 · 须挂 TP/SL；缺省为 5% 止损 + TP 5/8/12%（分批 30/30/40）",
+        "TP1 后止损移至开仓价，TP2 后移至 TP1；清算/回溯与 exitPlan 一致",
+        "BTC / ETH 主流币不自动开单；无数字入场且无法补默认 TP/SL 时跳过下单",
+        "下方可粘贴 Telegram 信号正文做本地模拟（Enter 提交，Shift+Enter 换行）",
       ],
     });
   });
 
   app.post("/api/debug/simulate-signal", async (req, res) => {
-    const channelId = String(req.body?.channelId ?? "1444963506431463474").trim();
     const content = String(req.body?.content ?? "").trim();
     if (!content) {
       res.status(400).json({ ok: false, error: "content_required" });
       return;
     }
-    if (!isStagedTradeChannel(channelId)) {
-      res.status(400).json({ ok: false, error: "channel_not_staged", hint: "仅支持分阶段交易频道" });
+    const sendList = listTelegramSendChannelsWithNames();
+    if (!sendList.length) {
+      res.status(400).json({ ok: false, error: "send_list_empty", hint: "channel_profiles.json send 为空" });
       return;
     }
-    const chCfg = getSignalChannelConfig(channelId);
-    if (!chCfg) {
-      res.status(400).json({ ok: false, error: "invalid_channel" });
+    const reqChannelId = String(req.body?.channelId ?? "").trim();
+    const picked = sendList.find((c) => c.id === reqChannelId && isCdpSendChannel(c.id)) ?? sendList[0];
+    const channelId = picked.id;
+    const channelName = picked.name;
+
+    const parsedLite = parseTelegramTradeTextLite(content);
+    if (!parsedLite) {
+      res.status(400).json({
+        ok: false,
+        error: "parse_failed",
+        hint: "需含币种、方向及进场/止盈/止损等结构化字段",
+      });
       return;
     }
-    const messageId = `debug-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
     const bodyPlatforms =
       req.body?.tradePlatforms && typeof req.body.tradePlatforms === "object" ? req.body.tradePlatforms : null;
-    const simulateOpts = { skipDedup: true, skipTelegram: true, debugSimulate: true };
     if (bodyPlatforms) {
-      simulateOpts.tradePlatforms = {
+      setTradePlatformToggles({
         bitget: bodyPlatforms.bitget !== false,
         weex: bodyPlatforms.weex !== false,
-      };
+      });
     }
+    if (req.body?.orderSizeUsdt != null) {
+      setTradeOrderSizeUsdt(req.body.orderSizeUsdt);
+    }
+
+    const exitPlan = buildDefaultTelegramExitPlan();
+    /** @type {Record<string, unknown>} */
+    const parsedJson = {
+      parser: "telegram",
+      signalPhase: "full",
+      orderMode: "market",
+      symbol: parsedLite.symbol,
+      direction: parsedLite.direction,
+      entry: parsedLite.entry,
+      takeProfits: parsedLite.takeProfits,
+      stopLoss: parsedLite.stopLoss,
+      exitPlan,
+      defaultTpsl: !parsedLite.takeProfits.length || !parsedLite.stopLoss,
+    };
+
     try {
-      const result = await signalCards.onMessage(
-        {
-          channelId,
-          messageId,
-          guildId: String(req.body?.guildId ?? "").trim(),
-          content,
-          timestamp: new Date().toISOString(),
-        },
-        simulateOpts
-      );
-      const ok = !result.skipped || result.merged;
+      const card = await cardArchive.archiveCard({
+        channelId,
+        channelName,
+        guildId: "telegram",
+        sourceType: "telegram",
+        sourceRef: `tg:debug:${Date.now()}`,
+        rawContent: content,
+        symbol: parsedLite.symbol,
+        direction: parsedLite.direction,
+        entry: parsedLite.entry,
+        targets: parsedLite.takeProfits,
+        stopLoss: parsedLite.stopLoss,
+        parsedJson,
+        note: "Debug 模拟 · 来源:telegram",
+        signalAt: new Date().toISOString(),
+        tradePlatforms: bodyPlatforms
+          ? { bitget: bodyPlatforms.bitget !== false, weex: bodyPlatforms.weex !== false }
+          : getTradePlatformToggles(),
+      });
+      const cardId = card?.id;
       log.info(
-        `[debug-simulate] channel=${channelId} skipped=${result.skipped ?? "-"} phase=${String(result.parsed?.signalPhase ?? "")} card=#${result.card?.id ?? "-"}`
+        `[debug-tg-simulate] channel=${channelId} symbol=${parsedLite.symbol} card=#${cardId ?? "-"}`
       );
       res.json({
-        ok,
+        ok: true,
         channelId,
-        channelName: chCfg.name,
-        messageId,
+        channelName,
         content,
-        ...result,
+        card,
+        parsed: parsedJson,
         bitget: getBitgetTradeStatus(),
         weex: getWeexTradeStatus(),
         tradePlatforms: getTradePlatformToggles(),
-        requiredChannelIds: getAutoTradeChannelIds(),
+        orderSizeUsdt: getTradeOrderSizeUsdt(),
+        telegramSendChannels: sendList,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });

@@ -23,6 +23,10 @@ import { detectAssetClass } from "./card-verify-policy.js";
 
 export const LIQUIDATION_ENTRY_TOLERANCE_PCT = 0.5;
 export const LIQUIDATION_DEFAULT_TP_SL_PCT = 5;
+/** 缺止盈时：TP1/2/3 相对入场价涨跌幅（%） */
+export const LIQUIDATION_DEFAULT_TP_PCTS = [0.05, 0.08, 0.12];
+/** 缺 exitPlan 时的默认分批比例 */
+export const LIQUIDATION_DEFAULT_TP_SIZE_PCTS = [0.3, 0.3, 0.4];
 /** 限价入场最长等待：超时未触及则判未入场，且不再重复匹配 */
 export const LIQUIDATION_ENTRY_WINDOW_MS = 12 * 60 * 60 * 1000;
 
@@ -76,17 +80,96 @@ export function isMarketEntryHint(v) {
  * @param {number | null} sl
  */
 export function applyDefaultTpSl(entry, isShort, tps, sl) {
-  const pct = LIQUIDATION_DEFAULT_TP_SL_PCT / 100;
+  const slPct = LIQUIDATION_DEFAULT_TP_SL_PCT / 100;
   /** @type {number[]} */
   const outTps = [...tps];
   let outSl = sl;
   if (!outTps.length) {
-    outTps.push(isShort ? entry * (1 - pct) : entry * (1 + pct));
+    for (const pct of LIQUIDATION_DEFAULT_TP_PCTS) {
+      outTps.push(isShort ? entry * (1 - pct) : entry * (1 + pct));
+    }
   }
   if (outSl == null) {
-    outSl = isShort ? entry * (1 + pct) : entry * (1 - pct);
+    outSl = isShort ? entry * (1 + slPct) : entry * (1 - slPct);
   }
   return { tps: outTps, sl: outSl };
+}
+
+/** @param {Record<string, unknown>} card @param {ReturnType<typeof resolveCardExecution>} execution */
+export function resolveCardExitPlan(card, execution) {
+  const parsed =
+    card.parsedJson && typeof card.parsedJson === "object"
+      ? card.parsedJson
+      : card.parsed_json && typeof card.parsed_json === "object"
+        ? card.parsed_json
+        : {};
+  const plan = execution.planned?.exitPlan ?? parsed.exitPlan;
+  return plan && typeof plan === "object" && !Array.isArray(plan)
+    ? /** @type {Record<string, unknown>} */ (plan)
+    : null;
+}
+
+/** @param {Record<string, unknown> | null} plan @param {number} n */
+export function tpSizePctsForPlan(plan, n) {
+  const count = Math.max(1, n);
+  const raw = plan?.takeProfitSizePcts;
+  if (Array.isArray(raw) && raw.length >= count) {
+    return raw.slice(0, count).map((x) => {
+      const v = Number(x);
+      if (!Number.isFinite(v) || v <= 0) return 1 / count;
+      return v > 1 ? v / 100 : v;
+    });
+  }
+  if (count === LIQUIDATION_DEFAULT_TP_PCTS.length) {
+    return [...LIQUIDATION_DEFAULT_TP_SIZE_PCTS];
+  }
+  return Array(count).fill(1 / count);
+}
+
+/**
+ * @param {Record<string, unknown> | null} plan
+ * @param {number} tpIndex
+ * @param {number} entry
+ * @param {number[]} tps
+ */
+export function slPriceAfterTpHit(plan, tpIndex, entry, tps) {
+  const trail = plan?.slTrailAfterTp;
+  if (!Array.isArray(trail)) return null;
+  const rule = String(trail[tpIndex] ?? "").toLowerCase();
+  if (rule === "entry") return entry;
+  if ((rule === "tp1" || rule === "tp0") && tps[0] != null) return tps[0];
+  return null;
+}
+
+/**
+ * @param {Array<{ sizePct: number, price: number }>} tpHits
+ * @param {number | null} sl
+ * @param {number} entry
+ * @param {boolean} isShort
+ * @param {number} leverage
+ */
+export function sumPartialExitPnlPct(tpHits, sl, slHitAt, entry, isShort, leverage) {
+  let pnlPct = 0;
+  let used = 0;
+  for (const h of tpHits) {
+    const p = calcLeveragePnl(entry, h.price, isShort, leverage);
+    const w = Number(h.sizePct) || 0;
+    if (p && w > 0) pnlPct += w * p.pnlPctOnMargin;
+    used += w;
+  }
+  if (slHitAt && sl != null) {
+    const rem = Math.max(0, 1 - used);
+    if (rem > 1e-9) {
+      const p = calcLeveragePnl(entry, sl, isShort, leverage);
+      if (p) pnlPct += rem * p.pnlPctOnMargin;
+    }
+  } else if (tpHits.length > 0 && used < 1 - 1e-9) {
+    const last = tpHits[tpHits.length - 1];
+    const rem = Math.max(0, 1 - used);
+    const p = calcLeveragePnl(entry, last.price, isShort, leverage);
+    if (p) pnlPct += rem * p.pnlPctOnMargin;
+  }
+  return Math.round(pnlPct * 100) / 100;
 }
 
 /** @param {number} entry @param {number} tp @param {boolean} isShort */
@@ -327,6 +410,8 @@ export function evaluateLiquidation(card, klines, opts) {
   tps = sanitized.tps;
   sl = sanitized.sl;
 
+  const exitPlan = resolveCardExitPlan(card, execution);
+  const tpSizePcts = tpSizePctsForPlan(exitPlan, tps.length);
   const n = Math.max(tps.length, 1);
   const sizePct = 1 / n;
   /** @type {Array<{ index: number, price: number, hitAt: string, sizePct: number }>} */
@@ -360,7 +445,12 @@ export function evaluateLiquidation(card, klines, opts) {
       const tp = tps[i];
       if (!touchesLevel(isShort, high, low, tp, "tp")) continue;
       hitIdx.add(i);
-      tpHits.push({ index: i, price: tp, hitAt, sizePct });
+      const pct = tpSizePcts[i] ?? sizePct;
+      tpHits.push({ index: i, price: tp, hitAt, sizePct: pct });
+      const nextSl = slPriceAfterTpHit(exitPlan, i, entryPriceUsed, tps);
+      if (nextSl != null && Number.isFinite(nextSl)) {
+        sl = nextSl;
+      }
     }
   }
 
@@ -372,7 +462,7 @@ export function evaluateLiquidation(card, klines, opts) {
     const open = Number(k.open ?? (high + low) / 2);
     if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
 
-    const remaining = 1 - hitIdx.size * sizePct;
+    const remaining = Math.max(0, 1 - tpHits.reduce((s, h) => s + (h.sizePct || 0), 0));
     const slTouch =
       remaining > 1e-9 && sl != null && touchesLevel(isShort, high, low, sl, "sl");
     /** @type {number[]} */
@@ -393,7 +483,7 @@ export function evaluateLiquidation(card, klines, opts) {
           outcome = "take_profit";
           break;
         }
-        const rem2 = 1 - hitIdx.size * sizePct;
+        const rem2 = Math.max(0, 1 - tpHits.reduce((s, h) => s + (h.sizePct || 0), 0));
         if (applyStopLoss(hitAt, high, low, rem2)) break;
       } else if (applyStopLoss(hitAt, high, low, remaining)) {
         break;
@@ -428,26 +518,41 @@ export function evaluateLiquidation(card, klines, opts) {
   else if (tps.length > 0 && hitIdx.size >= tps.length) status = "closed_tp";
   else if (tpHits.length > 0) status = "partial_tp";
 
-  // 严格：盈亏与结果均按「整仓在结算价平仓」核算，与止盈/止损价位一致
+  // 分批止盈 + 移动止损：按各档 sizePct 加权；否则整仓结算价
   let roundedPnl = 0;
   let pnlLabel = "0%";
-  if (settlementPrice != null && entryPriceUsed != null) {
-    if (tps.length > 0 && hitIdx.size >= tps.length) {
-      outcome = "take_profit";
-      const lastTp = tpHits[tpHits.length - 1];
-      if (lastTp) settlementPrice = lastTp.price;
-    } else {
-      const classified = classifyOutcomeByExit(entryPriceUsed, settlementPrice, isShort, sl, tps);
-      if (classified !== "pending") outcome = classified;
-    }
-    const strictPnl = calcLeveragePnl(entryPriceUsed, settlementPrice, isShort, leverage);
-    if (strictPnl) {
-      roundedPnl = alignPnlWithOutcome(
-        outcome,
-        Math.round(strictPnl.pnlPctOnMargin * 100) / 100
+  if (entryPriceUsed != null) {
+    const usePartial =
+      Boolean(exitPlan?.defaultApplied) ||
+      tpHits.some((h, i) => Math.abs((h.sizePct || 0) - (tpSizePcts[i] ?? sizePct)) > 1e-6);
+    if (usePartial && (tpHits.length > 0 || slHitAt)) {
+      roundedPnl = sumPartialExitPnlPct(
+        tpHits,
+        sl,
+        slHitAt,
+        entryPriceUsed,
+        isShort,
+        leverage
       );
-      const signed = /** @type {number} */ (roundedPnl);
-      pnlLabel = `${signed >= 0 ? "+" : ""}${signed.toFixed(2)}% (@${leverage}x)`;
+      roundedPnl = alignPnlWithOutcome(outcome, roundedPnl);
+      pnlLabel = `${roundedPnl >= 0 ? "+" : ""}${roundedPnl.toFixed(2)}% (@${leverage}x)`;
+    } else if (settlementPrice != null) {
+      if (tps.length > 0 && hitIdx.size >= tps.length) {
+        outcome = "take_profit";
+        const lastTp = tpHits[tpHits.length - 1];
+        if (lastTp) settlementPrice = lastTp.price;
+      } else {
+        const classified = classifyOutcomeByExit(entryPriceUsed, settlementPrice, isShort, sl, tps);
+        if (classified !== "pending") outcome = classified;
+      }
+      const strictPnl = calcLeveragePnl(entryPriceUsed, settlementPrice, isShort, leverage);
+      if (strictPnl) {
+        roundedPnl = alignPnlWithOutcome(
+          outcome,
+          Math.round(strictPnl.pnlPctOnMargin * 100) / 100
+        );
+        pnlLabel = `${roundedPnl >= 0 ? "+" : ""}${roundedPnl.toFixed(2)}% (@${leverage}x)`;
+      }
     }
   }
 

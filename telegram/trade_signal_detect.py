@@ -140,6 +140,37 @@ _RECAP_PROMO = re.compile(
     re.I,
 )
 _RECAP_TP_HIT = re.compile(r"TP\s*\d?\s*[+＋]\s*\d", re.I)
+# 结构化信号行（币种/方向/进场/止盈止损/#prom 等）
+_STRUCTURE_LINE = re.compile(
+    r"(?:"
+    r"币[种種]\s*[:：]|"
+    r"方向\s*[:：]|"
+    r"策略[属屬]性|"
+    r"进[场場][点點]|入[场場][点點]|"
+    r"获利目标|獲利目标|獲利目標|"
+    r"止盈|止損|止损|"
+    r"止损位置|止損位置|"
+    r"#prom\b|"
+    r"#[A-Za-z]{2,12}|"
+    r"市[价價]\s*[多空]|"
+    r"\bENTRY\b|\bTP\s*\d|\bSL\b|"
+    r"轻[仓倉](?:入)?[多空]|重[仓倉](?:入)?[多空]"
+    r")",
+    re.I,
+)
+# 纯闲聊/复盘叙述（无完整策略模板时不推送）
+_CASUAL_CHAT = re.compile(
+    r"我(?:一般|自己|昨天|觉得|發現|发现)|"
+    r"没喊|沒喊|"
+    r"规律|規律|冷却|冷卻|游[戏戲]技能|"
+    r"兄弟做[单單]|"
+    r"赔了|賠了|盈利\s*\d+\s*%|平了\s*\d+\s*%|"
+    r"掛[单單].*入[场場]|挂单.*入场|"
+    r"[这這]块我(?:没|沒有)固定|[这這]塊我(?:没|沒有)固定|"
+    r"稍[后後]发出|稍後發出|"
+    r"没固定|沒固定",
+    re.I,
+)
 _TP_PROFIT = re.compile(
     r"(?:✔\s*)?(?:获利目标|获利目標|獲利目标|獲利目標)\s*[:：]?\s*([^\n止損止损]{1,60})",
     re.I,
@@ -390,6 +421,68 @@ def strip_promotional_lines(text: str) -> str:
     return "\n".join(kept).strip()
 
 
+def refine_trade_text(text: str) -> str:
+    """
+    从混合闲聊的长消息里抽出结构化策略行。
+    若整段已是紧凑信号则原样返回。
+    """
+    raw = strip_promotional_lines(text or "")
+    if not raw.strip():
+        return ""
+    lines = raw.splitlines()
+    picked = [ln for ln in lines if _STRUCTURE_LINE.search(_t2s(ln))]
+    if picked:
+        return "\n".join(picked).strip()
+    return raw.strip()
+
+
+def is_structured_trade_message(text: str) -> bool:
+    """是否像完整/可执行的交易策略（非随口提到的 TP/止损）。"""
+    t = _t2s(strip_promotional_lines(text or "")).strip()
+    if not t:
+        return False
+    if _PROM_TAG.search(t) and _pick_direction(t):
+        return True
+    has_symbol = bool(_SYM_LABEL.search(t) or _SYM_HASH.search(t) or _pick_symbol(t))
+    has_dir = bool(_DIR_LINE.search(t) or _pick_direction(t))
+    has_entry = bool(
+        _ENTRY_POINT.search(t)
+        or _ENTRY.search(t)
+        or _ENTRY_EN.search(t)
+        or _STRATEGY_ATTR.search(t)
+        or _MARKET_PRICE.search(t)
+    )
+    has_tp = bool(_TP_PROFIT.search(t) or _TP.search(t) or _pick_tp_levels(t))
+    has_sl = bool(_SL_POS.search(t) or _SL.search(t))
+    actionable = sum([has_entry, has_tp, has_sl])
+    if has_symbol and has_dir and actionable >= 2:
+        return True
+    if has_symbol and has_dir and actionable >= 1 and _has_numeric_price(t):
+        return True
+    if has_symbol and has_dir and (has_entry or has_tp or has_sl) and len(t) <= 280:
+        return True
+    return False
+
+
+def is_casual_chat_only(text: str) -> bool:
+    """闲聊/复盘/答疑：即便提到 TP、止损也不推送。"""
+    raw = strip_promotional_lines(text or "")
+    if not raw.strip():
+        return True
+    refined = refine_trade_text(raw)
+    if is_structured_trade_message(refined):
+        return False
+    if is_structured_trade_message(raw):
+        return False
+    if _CASUAL_CHAT.search(_t2s(raw)):
+        return True
+    t = _t2s(raw)
+    if re.search(r"TP\s*1|止盈|止损|止損", t, re.I) and not is_structured_trade_message(t):
+        if len(t) > 36 or not _SYM_LABEL.search(t):
+            return True
+    return False
+
+
 def is_spam_or_recap_message(text: str) -> bool:
     """营销话术、历史战绩回顾等非开仓消息。"""
     t = _t2s(strip_promotional_lines(text))
@@ -416,8 +509,13 @@ def signal_skip_reason(
     if sig is None:
         return "无法解析为交易信号"
     src = text or sig.source_text or ""
+    if is_casual_chat_only(src):
+        return "闲聊/非策略消息"
     if is_spam_or_recap_message(src):
         return "营销/战绩回顾"
+    refined = refine_trade_text(src) or src
+    if not is_structured_trade_message(refined):
+        return "非结构化交易信号"
     who = resolve_sender_name(sender, sig.sender)
     if not who:
         return f"发送者无效({(sender or sig.sender)!r})"
@@ -520,7 +618,7 @@ def _looks_like_trade_message_inner(t: str) -> bool:
 
 def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) -> TradeSignal | None:
     """单条消息解析；无有效交易字段则返回 None。"""
-    body = _t2s(strip_promotional_lines(text).strip())
+    body = _t2s(refine_trade_text(text))
     if not body:
         return None
 
@@ -601,11 +699,18 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
 
 
 def looks_like_trade_message(text: str) -> bool:
-    """粗筛：是否值得进窗口分析。"""
+    """粗筛：是否值得进窗口分析（须为结构化策略，排除闲聊）。"""
     if is_spam_or_recap_message(text):
         return False
-    t = _t2s(strip_promotional_lines(text))
-    return _looks_like_trade_message_inner(t)
+    if is_casual_chat_only(text):
+        return False
+    refined = refine_trade_text(text)
+    target = refined or _t2s(strip_promotional_lines(text))
+    if not target.strip():
+        return False
+    if not is_structured_trade_message(target):
+        return False
+    return _looks_like_trade_message_inner(target)
 
 
 def has_prom_tag(text: str) -> bool:

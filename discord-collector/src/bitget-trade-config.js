@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
 import { config } from "./config.js";
+import { isTelegramAutoTradeChannel, TELEGRAM_TRADE_INITIAL_SL_PCT, TELEGRAM_TRADE_LEVERAGE } from "./telegram-auto-trade.js";
+import { getTradeOrderSizeUsdt } from "./trade-platform-toggles.js";
 
 const _dir = path.dirname(fileURLToPath(import.meta.url));
 const _envPath = path.join(_dir, "..", ".env");
@@ -149,6 +151,24 @@ export function loadBitgetTradeConfig(filePath = config.bitgetTradeConfigFile) {
 export function resolveChannelBitgetTrade(channelId, cfg) {
   const cid = String(channelId ?? "").trim();
   if (!cid || !cfg?.enabled) return null;
+
+  if (isTelegramAutoTradeChannel(cid)) {
+    return {
+      enabled: true,
+      dryRun: cfg.dryRun,
+      channel: {
+        marginMode: cfg.default.marginMode,
+        leverage: TELEGRAM_TRADE_LEVERAGE,
+        orderSizeUsdt: getTradeOrderSizeUsdt(),
+        orderType: "market",
+        productType: cfg.default.productType,
+        stagedTrade: true,
+        initialSlPct: TELEGRAM_TRADE_INITIAL_SL_PCT,
+        tpPartialRatios: [0.3, 0.3, 1],
+        name: "telegram",
+      },
+    };
+  }
 
   const envList = config.bitgetAutoTradeChannelIds;
   const ch = cfg.channels[cid];

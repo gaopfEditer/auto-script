@@ -114,6 +114,18 @@ export function readTelegramChannelProfiles() {
   }
 }
 
+/**
+ * channel_profiles.json `send` 白名单 + 频道名称（Debug / 自动开单展示）。
+ * @returns {Array<{ id: string; name: string }>}
+ */
+export function listTelegramSendChannelsWithNames() {
+  const { sendChatIds, channels } = readTelegramChannelProfiles();
+  return sendChatIds.map((id) => {
+    const meta = channels.find((c) => telegramChatIdsMatch(c.chatId, id));
+    return { id, name: String(meta?.name ?? id).trim() || id };
+  });
+}
+
 /** @param {unknown} chatId */
 export function isCdpSendChannel(chatId) {
   const { sendChatIds, sendSet } = readTelegramChannelProfiles();
