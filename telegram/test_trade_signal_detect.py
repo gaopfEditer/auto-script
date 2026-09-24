@@ -49,6 +49,8 @@ ASHLEY_CHAT_2 = "我一般不會，，因為群裡有兄弟做單，我要看止
 
 ASHLEY_CHAT_3 = "沒喊，我自己的掛單昨天入場了"
 
+TWITTER_COMPACT = "#uni\n做多"
+
 
 class TradeSignalFilterTest(unittest.TestCase):
     def test_pure_signal_structured(self) -> None:
@@ -74,6 +76,20 @@ class TradeSignalFilterTest(unittest.TestCase):
             with self.subTest(msg=msg[:24]):
                 self.assertTrue(is_casual_chat_only(msg))
                 self.assertFalse(looks_like_trade_message(msg))
+
+    def test_twitter_compact_hash_symbol_direction(self) -> None:
+        self.assertTrue(is_structured_trade_message(TWITTER_COMPACT))
+        self.assertFalse(is_casual_chat_only(TWITTER_COMPACT))
+        self.assertTrue(looks_like_trade_message(TWITTER_COMPACT))
+        refined = refine_trade_text(TWITTER_COMPACT)
+        self.assertIn("做多", refined)
+        sig = parse_trade_text(TWITTER_COMPACT, sender="test")
+        self.assertIsNotNone(sig)
+        assert sig is not None
+        self.assertEqual(sig.symbol, "UNI")
+        self.assertEqual(sig.direction, "多")
+        self.assertEqual(sig.entry, "市价")
+        self.assertIsNone(signal_skip_reason(sig, TWITTER_COMPACT, sender="test"))
 
 
 if __name__ == "__main__":

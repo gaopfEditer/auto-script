@@ -131,16 +131,30 @@ def signal_to_card_payload(
     if sig.sender:
         payload["authorKey"] = sig.sender.strip()
         payload["sender"] = sig.sender.strip()
+    tp_list = _split_targets(sig.take_profit)
+    sl_val = sig.stop_loss or ""
+    has_tpsl = bool(tp_list) or bool(sl_val.strip())
+    if has_tpsl:
+        signal_phase = "full"
+        awaiting_tpsl = False
+    elif phase == "initial":
+        signal_phase = "open"
+        awaiting_tpsl = True
+    else:
+        signal_phase = "full"
+        awaiting_tpsl = not has_tpsl
     parsed_json: dict[str, Any] = {
         "parser": "telegram",
-        "signalPhase": "full",
+        "signalPhase": signal_phase,
         "orderMode": "market",
         "symbol": sig.symbol,
         "direction": direction,
         "entry": sig.entry or "",
-        "takeProfits": _split_targets(sig.take_profit),
-        "stopLoss": sig.stop_loss or "",
+        "takeProfits": tp_list,
+        "stopLoss": sl_val,
     }
+    if awaiting_tpsl:
+        parsed_json["awaitingTpsl"] = True
     if exit_plan:
         parsed_json["exitPlan"] = exit_plan
         parsed_json["defaultTpsl"] = True
@@ -177,7 +191,8 @@ def post_card(payload: dict[str, Any]) -> dict[str, Any]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        # 归档含 Bitget/WEEX 自动开单时 collect:ui 可能较慢；开单已改后台，此处仍留足余量
+        with urllib.request.urlopen(req, timeout=120) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             body = json.loads(raw) if raw else {}
             if resp.status >= 400:

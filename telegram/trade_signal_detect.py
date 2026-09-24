@@ -154,7 +154,8 @@ _STRUCTURE_LINE = re.compile(
     r"#[A-Za-z]{2,12}|"
     r"市[价價]\s*[多空]|"
     r"\bENTRY\b|\bTP\s*\d|\bSL\b|"
-    r"轻[仓倉](?:入)?[多空]|重[仓倉](?:入)?[多空]"
+    r"轻[仓倉](?:入)?[多空]|重[仓倉](?:入)?[多空]|"
+    r"做多|做空|开多|开空|多单|空单"
     r")",
     re.I,
 )
@@ -461,6 +462,9 @@ def is_structured_trade_message(text: str) -> bool:
         return True
     if has_symbol and has_dir and (has_entry or has_tp or has_sl) and len(t) <= 280:
         return True
+    # twitter先行等紧凑信号：#SYMBOL + 方向（无进场/TP/SL，后续默认规则或市价补全）
+    if has_symbol and has_dir and len(t) <= 80:
+        return True
     return False
 
 
@@ -689,7 +693,11 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
     if nm:
         sig.note = _clean_field(nm.group(1))
 
-    if sig.has_core or sig.has_prom_open:
+    if sig.has_core:
+        if not sig.entry:
+            sig.entry = "市价"
+        return sig
+    if sig.has_prom_open:
         return sig
     if sig.take_profit or sig.stop_loss or sig.entry:
         return sig

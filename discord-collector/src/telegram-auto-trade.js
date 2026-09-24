@@ -2,7 +2,7 @@
  * channel_profiles.json `send` 白名单 Telegram 群 → Debug 勾选平台自动开单。
  * 默认 20x、保证金 orderSizeUsdt（Debug 可调，默认 1U）、市价开仓 + 完整 TP/SL（5% SL + 5/8/12% 三档）。
  */
-import { parseEntryPrice } from "./card-price-fetch.js";
+import { fetchFuturesPrice, parseEntryPrice } from "./card-price-fetch.js";
 import { isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { applyDefaultTpSl } from "./card-liquidation-engine.js";
@@ -37,6 +37,36 @@ function parseSlNum(raw) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** @param {unknown} entry */
+function isMarketEntryLabel(entry) {
+  const s = String(entry ?? "").trim();
+  return !s || /市[价價]|现价|market/i.test(s);
+}
+
+/**
+ * 紧凑信号（#SYMBOL + 方向）无数字入场价时，用 Binance 现价补全以便默认 TP/SL。
+ * @param {Record<string, unknown>} parsed
+ * @param {ReturnType<typeof normalizeExecution>} execution
+ * @param {string} symbol
+ */
+export async function enrichTelegramMarketEntry(parsed, execution, symbol) {
+  const sym = String(symbol ?? parsed.symbol ?? execution.symbol ?? "").trim();
+  if (!sym) return;
+  const entryRaw = String(parsed.entry ?? execution.planned?.entryPrice ?? "").trim();
+  if (!isMarketEntryLabel(entryRaw)) return;
+  try {
+    const { price } = await fetchFuturesPrice(sym);
+    if (!Number.isFinite(price) || price <= 0) return;
+    const entry = String(price);
+    parsed.entry = entry;
+    parsed.orderMode = String(parsed.orderMode ?? "market");
+    execution.planned.entryPrice = entry;
+    if (!execution.symbol) execution.symbol = sym;
+  } catch {
+    /* 无价则 maybeAutoTrade 仍会因缺 TP/SL 跳过 */
+  }
+}
+
 /**
  * 合并 execution → parsed，缺 TP/SL 时按 5/8/12% + 5% SL 补全（需有效入场价）。
  * @param {Record<string, unknown>} parsed
@@ -46,7 +76,6 @@ export function prepareTelegramTradeParsed(parsed, execution) {
   /** @type {Record<string, unknown>} */
   const next = { ...parsed };
   next.parser = String(next.parser ?? "telegram");
-  next.signalPhase = "full";
   next.orderMode = "market";
   next.symbol = String(execution.symbol ?? next.symbol ?? "").trim();
   next.direction = String(execution.direction ?? next.direction ?? "").trim();
@@ -89,6 +118,17 @@ export function prepareTelegramTradeParsed(parsed, execution) {
 
   next.takeProfits = tps;
   next.stopLoss = slRaw;
+  const hasTpsl = tps.length >= 1 && Boolean(slRaw);
+  if (hasTpsl) {
+    next.signalPhase = "full";
+    next.awaitingTpsl = false;
+  } else if (next.signalPhase === "open" || next.awaitingTpsl === true) {
+    next.signalPhase = "open";
+    next.awaitingTpsl = true;
+  } else {
+    next.signalPhase = "open";
+    next.awaitingTpsl = true;
+  }
   if (next.exitPlan && typeof next.exitPlan === "object") {
     execution.planned.exitPlan = /** @type {Record<string, unknown>} */ (next.exitPlan);
   }
@@ -106,6 +146,22 @@ export function telegramTradeRequiresTpsl(execution) {
   const tps = execution.planned?.takeProfitPrices ?? [];
   const sl = String(execution.planned?.stopLossPrice ?? "").trim();
   return tps.length >= 1 && Boolean(sl);
+}
+
+/**
+ * 分阶段市价开仓（initial / #SYMBOL+方向）可无完整 TP/SL，用 initialSlPct 先开仓。
+ * @param {Record<string, unknown>} parsed
+ * @param {ReturnType<typeof normalizeExecution>} execution
+ */
+export function telegramTradeCanStagedOpen(parsed, execution) {
+  const sym = String(parsed.symbol ?? execution.symbol ?? "").trim();
+  const dir = String(parsed.direction ?? execution.direction ?? "").trim();
+  if (!sym || sym === "待补充" || !dir) return false;
+  return (
+    parsed.signalPhase === "open" ||
+    parsed.awaitingTpsl === true ||
+    (parsed.orderMode === "market" && !telegramTradeRequiresTpsl(execution))
+  );
 }
 
 /**

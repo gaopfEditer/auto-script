@@ -314,6 +314,14 @@ class TradeCardPusher:
             snap = win.snapshot_for_ai()
 
             if not looks_like_trade_message(body):
+                log_pipeline(
+                    "skip",
+                    chat_id=chat_id,
+                    msg_id=msg_id,
+                    sender=sender,
+                    reason="非结构化/闲聊（looks_like=false）",
+                    body=body,
+                )
                 return
 
             current = parse_trade_text(body, sender=sender, msg_id=msg_id)
