@@ -24,6 +24,7 @@ const NAV = [
   { to: "/", label: "雷达", end: true },
   { to: "/patterns", label: "形态", end: false },
   { to: "/backtest", label: "回测", end: false },
+  { to: "/train", label: "盲K训练", end: false },
 ] as const;
 
 export const MercuHeader = memo(function MercuHeader({
@@ -58,8 +59,12 @@ export const MercuHeader = memo(function MercuHeader({
     ? new Date(scanTs * 1000).toLocaleTimeString("zh-CN", { hour12: false })
     : "—";
 
+  const equityBadge =
+    poolMeta?.equity_enabled && poolMeta.equity_eligible != null
+      ? ` | 币股${poolMeta.equity_eligible}`
+      : "";
   const poolLabel = poolMeta
-    ? `大象${poolMeta.heavyweight_count ?? 0}·中场${poolMeta.midweight_count ?? 0}·监控${poolMeta.eligible_count ?? poolSize}`
+    ? `大象${poolMeta.heavyweight_count ?? 0}·中场${poolMeta.midweight_count ?? 0}·监控${poolMeta.eligible_count ?? poolSize}${equityBadge}`
     : `监控 ${poolSize}`;
 
   const sourceId = poolMeta?.data_source || "binance";

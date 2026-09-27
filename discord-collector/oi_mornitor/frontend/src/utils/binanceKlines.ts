@@ -28,17 +28,18 @@ async function fetchBinanceFuturesKlinesOnce(
   interval: ChartTimeframe,
   opts?: { limit?: number; endTimeMs?: number; startTimeMs?: number },
 ): Promise<{ candles: PatternCandle[]; rawCount: number }> {
-  const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 1500);
+  const q = clampKlineQueryTimes(interval, opts);
+  const limit = Math.min(Math.max(q.limit ?? opts?.limit ?? 500, 1), 1500);
   const params = new URLSearchParams({
     symbol: sym,
     interval,
     limit: String(limit),
   });
-  if (opts?.startTimeMs != null && opts.startTimeMs > 0) {
-    params.set("startTime", String(opts.startTimeMs));
+  if (q.startTimeMs != null && q.startTimeMs > 0) {
+    params.set("startTime", String(q.startTimeMs));
   }
-  if (opts?.endTimeMs != null && opts.endTimeMs > 0) {
-    params.set("endTime", String(opts.endTimeMs));
+  if (q.endTimeMs != null && q.endTimeMs > 0) {
+    params.set("endTime", String(q.endTimeMs));
   }
   const url = `${binanceFapiBase()}/fapi/v1/klines?${params.toString()}`;
   const res = await fetch(url);
@@ -50,14 +51,68 @@ async function fetchBinanceFuturesKlinesOnce(
   if (!Array.isArray(data)) {
     throw new Error("币安 K 线响应格式错误");
   }
-  const candles = data
+  let candles = data
     .filter((row) => Array.isArray(row) && row.length >= 6)
     .map((row) => binanceKlineRowToCandle(row as unknown[]));
+  candles = filterCandlesNotAfterNow(candles, interval);
   return { candles, rawCount: data.length };
 }
 
-function isInvalidSymbolError(err: Error): boolean {
-  return /Invalid symbol|invalid symbol|-1121/i.test(err.message);
+export function isInvalidSymbolError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /Invalid symbol|invalid symbol|-1121/i.test(msg);
+}
+
+/** 请求窗口不得越过「当前已收盘 K」 */
+export function clampKlineQueryTimes(
+  interval: ChartTimeframe,
+  opts?: { limit?: number; endTimeMs?: number; startTimeMs?: number },
+): { limit?: number; endTimeMs?: number; startTimeMs?: number } {
+  const barMs =
+    interval === "5m"
+      ? 300_000
+      : interval === "15m"
+        ? 900_000
+        : interval === "1h"
+          ? 3_600_000
+          : interval === "4h"
+            ? 14_400_000
+            : interval === "1d"
+              ? 86_400_000
+              : 900_000;
+  const latestClosedEndMs = Date.now() - barMs;
+  const out = { ...opts };
+  if (out.endTimeMs != null && out.endTimeMs > latestClosedEndMs) {
+    out.endTimeMs = latestClosedEndMs;
+  }
+  if (out.startTimeMs != null && out.startTimeMs > latestClosedEndMs) {
+    out.startTimeMs = latestClosedEndMs - barMs;
+  }
+  if (
+    out.startTimeMs != null &&
+    out.endTimeMs != null &&
+    out.startTimeMs > out.endTimeMs
+  ) {
+    out.startTimeMs = out.endTimeMs - barMs;
+  }
+  return out;
+}
+
+function filterCandlesNotAfterNow(candles: PatternCandle[], interval: ChartTimeframe): PatternCandle[] {
+  const barMs =
+    interval === "5m"
+      ? 300
+      : interval === "15m"
+        ? 900
+        : interval === "1h"
+          ? 3600
+          : interval === "4h"
+            ? 14400
+            : interval === "1d"
+              ? 86400
+              : 900;
+  const maxSec = Math.floor(Date.now() / 1000) - barMs / 1000;
+  return candles.filter((c) => c.time <= maxSec);
 }
 
 /** 服务端代拉（代理 + 跨所兜底），与 /api/patterns/oi-hist 同口径 */
@@ -69,14 +124,18 @@ async function fetchKlinesViaBackend(
   if (isStablecoinSymbol(symbol)) {
     throw new Error(`稳定币已排除回溯 (${symbol})`);
   }
-  const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 1500);
+  const q = clampKlineQueryTimes(interval, opts);
+  const limit = Math.min(Math.max(q.limit ?? opts?.limit ?? 500, 1), 1500);
   const params = new URLSearchParams({
     symbol: toUsdtSymbol(symbol) || symbol,
     interval,
     limit: String(limit),
   });
-  if (opts?.endTimeMs != null && opts.endTimeMs > 0) {
-    params.set("endTime", String(opts.endTimeMs));
+  if (q.endTimeMs != null && q.endTimeMs > 0) {
+    params.set("endTime", String(q.endTimeMs));
+  }
+  if (q.startTimeMs != null && q.startTimeMs > 0) {
+    params.set("startTime", String(q.startTimeMs));
   }
   const res = await fetch(`/api/patterns/klines?${params.toString()}`);
   const body = (await res.json().catch(() => null)) as {
@@ -101,6 +160,7 @@ async function fetchKlinesViaBackend(
     const startSec = Math.floor(opts.startTimeMs / 1000);
     candles = candles.filter((c) => c.time >= startSec - 60);
   }
+  candles = filterCandlesNotAfterNow(candles, interval);
   if (!candles.length) {
     throw new Error(`服务端 K 线为空 (${symbol})`);
   }

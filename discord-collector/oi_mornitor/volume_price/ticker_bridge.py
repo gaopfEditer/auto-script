@@ -6,6 +6,9 @@ from typing import Any
 
 import pandas as pd
 
+from oi_mornitor.breakout_detector import klines_to_df
+from oi_mornitor.pattern_detector import enrich_indicators
+from oi_mornitor.signal_policy import is_blocked_ticker_alert
 from oi_mornitor.strategy.candle_signals import closed_bar_index
 from oi_mornitor.volume_price.signals import VolumePriceSignal, generate_signals
 
@@ -57,14 +60,19 @@ def _klines_to_rows(
 
 
 def klines_map_to_vp_df(
-    klines_map_15m: dict[str, list[list[Any]]],
+    klines_map_15m: dict[str, list[list[Any]]] | None = None,
     *,
     klines_map_1h: dict[str, list[list[Any]]] | None = None,
+    klines_map_4h: dict[str, list[list[Any]]] | None = None,
 ) -> pd.DataFrame:
-    """Binance K 线 batch → 量价模块 DataFrame（15m 信号 + 1h 趋势过滤）。"""
-    rows = _klines_to_rows(klines_map_15m, tf=SIGNAL_TF)
+    """Binance K 线 batch → 量价模块 DataFrame（多周期信号 + HTF 过滤）。"""
+    rows: list[dict[str, Any]] = []
+    if klines_map_15m:
+        rows.extend(_klines_to_rows(klines_map_15m, tf="15m"))
     if klines_map_1h:
         rows.extend(_klines_to_rows(klines_map_1h, tf="1h"))
+    if klines_map_4h:
+        rows.extend(_klines_to_rows(klines_map_4h, tf="4h"))
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
@@ -124,22 +132,51 @@ def volume_price_signal_to_alert(
     }
 
 
+def _vegas_down_on_1h(klines_1h: list[list[Any]] | None) -> bool:
+    """EMA144/169 中轨 < EMA576/676 中轨（Vegas DOWN）。"""
+    if not klines_1h or len(klines_1h) < 680:
+        return False
+    try:
+        df = enrich_indicators(klines_to_df(klines_1h))
+        if df.empty:
+            return False
+        row = df.iloc[-2] if len(df) >= 2 else df.iloc[-1]
+        e1 = float(row.get("vegas_e1") or 0)
+        e2 = float(row.get("vegas_e2") or 0)
+        e3 = float(row.get("vegas_e3") or 0)
+        e4 = float(row.get("vegas_e4") or 0)
+        if not all(x > 0 for x in (e1, e2, e3, e4)):
+            return False
+        fast_mid = (e1 + e2) / 2.0
+        slow_mid = (e3 + e4) / 2.0
+        return fast_mid < slow_mid
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def scan_volume_price_ticker_alerts(
-    klines_map_15m: dict[str, list[list[Any]]],
+    klines_map_15m: dict[str, list[list[Any]]] | None = None,
     *,
     klines_map_1h: dict[str, list[list[Any]]] | None = None,
+    klines_map_4h: dict[str, list[list[Any]]] | None = None,
+    signal_tfs: tuple[str, ...] | None = None,
     scan_ts: float | None = None,
     now_ms: int | None = None,
 ) -> list[dict[str, Any]]:
-    """watchlist 15m K 线上扫描量价信号，仅返回最后一根已收盘柱、score≥0.75。"""
-    if not klines_map_15m:
+    """watchlist 多周期 K 线扫描量价信号，仅最后一根已收盘柱、score≥0.75。"""
+    tfs = signal_tfs or (SIGNAL_TF,)
+    if not klines_map_15m and not klines_map_1h and not klines_map_4h:
         return []
 
-    df = klines_map_to_vp_df(klines_map_15m, klines_map_1h=klines_map_1h)
+    df = klines_map_to_vp_df(
+        klines_map_15m,
+        klines_map_1h=klines_map_1h,
+        klines_map_4h=klines_map_4h,
+    )
     if df.empty:
         return []
 
-    signals, _enriched = generate_signals(df, signal_tfs=(SIGNAL_TF,))
+    signals, _enriched = generate_signals(df, signal_tfs=tfs)
     if not signals:
         return []
 
@@ -147,37 +184,49 @@ def scan_volume_price_ticker_alerts(
     ts_val = scan_ts if scan_ts is not None else time.time()
 
     close_time_by_index: dict[tuple[str, str, int], int] = {}
-    closed_index_by_sym: dict[str, int] = {}
-    for sym, chunk in df[df["tf"] == SIGNAL_TF].groupby("symbol", sort=False):
+    closed_index_by_sym_tf: dict[tuple[str, str], int] = {}
+    for (sym, tf), chunk in df.groupby(["symbol", "tf"], sort=False):
+        if str(tf) not in tfs:
+            continue
         chunk = chunk.reset_index(drop=True)
+        tf_s = str(tf)
+        sym_s = str(sym)
         closed_idx = closed_bar_index(chunk, now_ms=now)
-        closed_index_by_sym[str(sym)] = closed_idx
+        closed_index_by_sym_tf[(sym_s, tf_s)] = closed_idx
         for i, row in chunk.iterrows():
-            close_time_by_index[(str(sym), SIGNAL_TF, int(i))] = int(
+            close_time_by_index[(sym_s, tf_s, int(i))] = int(
                 row.get("close_time") or row["ts"]
             )
 
-    picked: dict[str, VolumePriceSignal] = {}
+    picked: dict[tuple[str, str], VolumePriceSignal] = {}
     for sig in signals:
-        if sig.tf != SIGNAL_TF or float(sig.score) < MIN_SCORE:
+        if sig.tf not in tfs or float(sig.score) < MIN_SCORE:
             continue
         sym = str(sig.symbol)
-        closed_idx = closed_index_by_sym.get(sym, -1)
+        tf_s = str(sig.tf)
+        closed_idx = closed_index_by_sym_tf.get((sym, tf_s), -1)
         if closed_idx < 0 or int(sig.signal_bar_index) != closed_idx:
             continue
-        prev = picked.get(sym)
+        key = (sym, tf_s)
+        prev = picked.get(key)
         if prev is None or float(sig.score) > float(prev.score):
-            picked[sym] = sig
+            picked[key] = sig
 
     alerts: list[dict[str, Any]] = []
-    for sym, sig in picked.items():
-        closed_idx = closed_index_by_sym.get(sym, -1)
-        kline_close_time = close_time_by_index.get((sym, SIGNAL_TF, closed_idx), int(sig.ts))
+    for (sym, tf_s), sig in picked.items():
+        closed_idx = closed_index_by_sym_tf.get((sym, tf_s), -1)
+        kline_close_time = close_time_by_index.get((sym, tf_s, closed_idx), int(sig.ts))
         alert = volume_price_signal_to_alert(
             sig,
             kline_close_time=kline_close_time,
             scan_ts=ts_val,
         )
-        if alert:
-            alerts.append(alert)
+        if not alert or is_blocked_ticker_alert(alert):
+            continue
+        lab = str(alert.get("type_label") or "")
+        if "量价确认" in lab and "空" in lab:
+            sym_1h = (klines_map_1h or {}).get(sym)
+            if not _vegas_down_on_1h(sym_1h):
+                continue
+        alerts.append(alert)
     return alerts

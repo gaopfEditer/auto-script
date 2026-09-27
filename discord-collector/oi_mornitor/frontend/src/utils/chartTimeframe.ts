@@ -192,7 +192,6 @@ type ChartMetaPayload = {
   error?: string;
   state?: PatternState;
   ticker?: PatternChartData["ticker"];
-  sandbox_markers?: PatternChartData["markers"];
   price_lines?: PatternChartData["price_lines"];
   derivatives?: PatternChartData["analysis"]["derivatives"];
   analysis?: PatternChartData["analysis"];
@@ -254,8 +253,7 @@ async function fetchPatternChartFromClient(
     meta.state as unknown as Record<string, unknown> | undefined,
     { symbol: symbol.toUpperCase() },
   );
-  const sandboxMarkers = meta.sandbox_markers || [];
-  const markers = [...built.markers, ...sandboxMarkers];
+  const markers = built.markers;
   // 清算区图层已下线：不合并 meta 里的 liq 价线
   const metaLines = (meta.price_lines || []).filter(
     (l) => l.kind !== "liq_short" && l.kind !== "liq_long",

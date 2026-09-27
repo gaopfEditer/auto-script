@@ -22,7 +22,7 @@ export type AlertStatsRecord = {
   side: "long" | "short" | "flat";
   signalAt: number;
   entry: number;
-  tier: "major" | "altcoin";
+  tier: "major" | "altcoin" | "equity" | string;
   /** 默认止盈止损幅度 %（卡片方向单默认 5） */
   stepPct: number;
   verifyAt: number;
@@ -43,8 +43,10 @@ export type AlertStatsRecord = {
   maxProfitAt?: number;
   /** 15m 步进核实的上次检查时间（仍为 pending 时写入） */
   lastSettleCheckAt?: number;
-  /** telegram_push | telegram_card */
+  /** telegram_push | telegram_card | equity_pattern */
   source?: string;
+  /** crypto | equity（币股独立杠杆/核实窗） */
+  assetClass?: "crypto" | "equity" | string;
   /** TG 交易卡片 id（source=telegram_card） */
   cardId?: string;
   channelId?: string;
@@ -81,6 +83,8 @@ export const ALERT_SL_PCT = 5;
 export const ALERT_RUNNER_TRAIL_PCT = 5;
 /** BTC/ETH/SOL 100x；其余 20x（对齐 resolveLiquidationLeverage） */
 const LEV_100_BASES = new Set(["BTC", "ETH", "SOL"]);
+/** 币股胜率展示杠杆（对齐 OI_EQUITY_STATS_LEVERAGE） */
+export const EQUITY_STATS_LEVERAGE = 5;
 
 /** 弹窗头部展示用：核算规则摘要 */
 export const ALERT_SETTLE_RULES_SUMMARY =
@@ -131,14 +135,143 @@ export function resolveAlertTypeLabel(
   return String(fallback || "").trim();
 }
 
+const BLOCKED_TYPE_LABEL_SUBSTR = [
+  "(oi异动)",
+  "oi异动",
+  "连续上插针",
+  "连续下插针",
+  "非上轨连续上插针",
+  "非下轨连续下插针",
+] as const;
+
+const BLOCKED_TYPE_LABEL_EXACT = new Set([
+  "射击之星（2）",
+  "量价推进·空",
+  "量价推进-空",
+]);
+
+const LEGACY_BREAKOUT_LABELS = ["带量突破", "形态多头爆发", "多头爆发"];
+
+const RETIRED_ALERT_KEY_PREFIXES = new Set([
+  "candle_pattern_oi",
+  "oi_anomaly",
+  "pattern_bull_continuation",
+  "trigger",
+  "breakout_trigger",
+  "spring_2b",
+  "continuous_upper_wick",
+  "continuous_lower_wick",
+  "continuous_non_upper_wick",
+  "continuous_non_lower_wick",
+  "curvature_decay",
+  "vp_cont_thrust",
+]);
+
+const V_PREFIX_TYPE_RE = /^V[\+\-]?/;
+
+function normalizePatternTypeLabel(raw: string): string {
+  let s = String(raw || "").trim();
+  for (const sep of [" · ", "·", "|", "｜"]) {
+    if (s.includes(sep)) {
+      s = s.split(sep, 1)[0]?.trim() || s;
+      break;
+    }
+  }
+  return s;
+}
+
+/** 与后端 signal_policy.is_blocked_card_type_label 对齐 */
+export function isRetiredPatternTypeLabel(label?: string | null): boolean {
+  const raw = String(label || "").trim();
+  if (!raw) return false;
+  if (raw === "破底翻确认") return true;
+  if (BLOCKED_TYPE_LABEL_EXACT.has(raw)) return true;
+  const lab = normalizePatternTypeLabel(raw);
+  if (!lab) return false;
+  if (lab === "破底翻确认") return true;
+  if (BLOCKED_TYPE_LABEL_EXACT.has(lab)) return true;
+  if (BLOCKED_TYPE_LABEL_SUBSTR.some((x) => lab.includes(x))) return true;
+  if (lab.includes("（2）")) return true;
+  if (V_PREFIX_TYPE_RE.test(lab)) return true;
+  if (lab.includes("连续") && lab.includes("插针")) return true;
+  if (LEGACY_BREAKOUT_LABELS.some((x) => lab.includes(x))) return true;
+  return false;
+}
+
+function sideFromAlertLike(
+  side?: string,
+  dir?: string,
+): "long" | "short" | undefined {
+  const s = String(side || "").toLowerCase();
+  if (s === "short" || s === "bear") return "short";
+  if (s === "long" || s === "bull") return "long";
+  if (dir === "空") return "short";
+  if (dir === "多") return "long";
+  return undefined;
+}
+
+/** 胜率库 / 列表中应剔除的记录（停推类型 + 停用周期 + legacy） */
+export function isRetiredPatternRecord(rec: Pick<
+  AlertStatsRecord,
+  "key" | "typeLabel" | "interval" | "side" | "dir" | "symbol" | "signalAt" | "entry"
+>): boolean {
+  if (isRetiredPatternInterval(rec.interval)) return true;
+  const label =
+    String(rec.typeLabel || "").trim() ||
+    resolveAlertTypeLabel(null, rec.key || "", "") ||
+    "";
+  if (isRetiredPatternTypeLabel(label)) return true;
+  const key = rec.key || "";
+  if (key.startsWith("pattern_bull_continuation:") || key.startsWith("trigger:")) {
+    return true;
+  }
+  const prefix = key.split(":")[0]?.toLowerCase() || "";
+  if (RETIRED_ALERT_KEY_PREFIXES.has(prefix)) {
+    if (prefix === "vp_cont_thrust") {
+      return sideFromAlertLike(rec.side, rec.dir) === "short";
+    }
+    return true;
+  }
+  return false;
+}
+
+export function isRetiredPatternAlert(alert: Partial<PatternAlert>, key = ""): boolean {
+  const k =
+    key ||
+    `${alert.type || ""}:${alert.symbol || ""}:${alert.kline_close_time || ""}:${alert.message || alert.type_label || ""}`;
+  return isRetiredPatternRecord({
+    key: k,
+    typeLabel: resolveAlertTypeLabel(alert, k, ""),
+    interval: alert.interval,
+    side: sideFromAlertLike(String(alert.side || "")),
+    dir: "—",
+    symbol: alert.symbol || "",
+    signalAt: 0,
+    entry: 0,
+  });
+}
+
 function detectTier(symbol: string): "major" | "altcoin" {
   const bare = humanBaseAsset(symbol);
   return LEV_100_BASES.has(bare) ? "major" : "altcoin";
 }
 
-/** 卡片清算杠杆：主流 100 / 山寨 20 */
-export function resolveAlertLeverage(symbol: string): number {
+/** 卡片清算杠杆：主流 100 / 山寨 20；币股默认 5x */
+export function resolveAlertLeverage(
+  symbol: string,
+  assetClass?: string,
+): number {
+  if (String(assetClass || "").toLowerCase() === "equity") {
+    return EQUITY_STATS_LEVERAGE > 0 ? EQUITY_STATS_LEVERAGE : 1;
+  }
   return LEV_100_BASES.has(humanBaseAsset(symbol)) ? 100 : 20;
+}
+
+export function resolveRecordAssetClass(rec: Pick<AlertStatsRecord, "assetClass" | "source" | "tier">): "crypto" | "equity" {
+  const ac = String(rec.assetClass || "").toLowerCase();
+  if (ac === "equity") return "equity";
+  if (rec.tier === "equity" || rec.source === "equity_pattern") return "equity";
+  return "crypto";
 }
 
 function priceMovePct(entry: number, price: number, isShort: boolean): number {
@@ -174,6 +307,7 @@ function pruneStats(list: AlertStatsRecord[]): AlertStatsRecord[] {
   return list
     .filter((r) => r && typeof r.key === "string" && Number(r.signalAt) > 0)
     .filter((r) => !isStablecoinSymbol(r.tradeSymbol || r.symbol))
+    .filter((r) => !isRetiredPatternRecord(r))
     .sort((a, b) => b.signalAt - a.signalAt)
     .slice(0, LOCAL_STATS_SOFT_MAX);
 }
@@ -235,6 +369,27 @@ export type AlertStatsTypeOption = {
 
 export type AlertStatsIntervalOption = AlertStatsTypeOption;
 
+/** 北京时间 4h 时段（与结算摘要档对齐） */
+export type AlertStatsSessionFilter =
+  | "all"
+  | "0-4"
+  | "4-8"
+  | "8-12"
+  | "12-16"
+  | "16-20"
+  | "20-24";
+
+export type AlertStatsSessionOption = AlertStatsTypeOption & {
+  id: AlertStatsSessionFilter;
+};
+
+/** 北京时间工作日 / 周末 */
+export type AlertStatsDaytypeFilter = "all" | "weekday" | "weekend";
+
+export type AlertStatsDaytypeOption = AlertStatsTypeOption & {
+  id: AlertStatsDaytypeFilter;
+};
+
 export type AlertStatsPageResult = {
   items: AlertStatsRecord[];
   total: number;
@@ -244,6 +399,8 @@ export type AlertStatsPageResult = {
   summary: AlertWinRateSummary;
   typeOptions: AlertStatsTypeOption[];
   intervalOptions: AlertStatsIntervalOption[];
+  sessionOptions: AlertStatsSessionOption[];
+  daytypeOptions: AlertStatsDaytypeOption[];
   /** @deprecated 用 typeOptions */
   typeLabels: string[];
 };
@@ -268,26 +425,94 @@ function coerceSummary(raw: Partial<AlertWinRateSummary> | undefined, items: Ale
 }
 
 /** 服务端分页拉取（长期库）；弹窗列表用此接口。 */
+export type AlertStatsAssetFilter = "all" | "crypto" | "equity";
+
+export const ALERT_STATS_DAYTYPE_FILTERS: {
+  id: AlertStatsDaytypeFilter;
+  label: string;
+}[] = [
+  { id: "all", label: "全部日期" },
+  { id: "weekday", label: "工作日" },
+  { id: "weekend", label: "周末" },
+];
+
+export function beijingWeekday(signalAtMs: number): number {
+  const d = new Date(signalAtMs + 8 * 3_600_000);
+  return d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1;
+}
+
+export function signalMatchesDaytype(
+  signalAtMs: number,
+  daytype: AlertStatsDaytypeFilter,
+): boolean {
+  if (daytype === "all") return true;
+  const wd = beijingWeekday(signalAtMs);
+  if (daytype === "weekend") return wd >= 5;
+  if (daytype === "weekday") return wd < 5;
+  return true;
+}
+
+export const ALERT_STATS_SESSION_FILTERS: {
+  id: AlertStatsSessionFilter;
+  label: string;
+}[] = [
+  { id: "all", label: "全部时段" },
+  { id: "8-12", label: "8:00-12:00" },
+  { id: "12-16", label: "12:00-16:00" },
+  { id: "16-20", label: "16:00-20:00" },
+  { id: "20-24", label: "20:00-24:00" },
+  { id: "0-4", label: "00:00-4:00" },
+  { id: "4-8", label: "4:00-8:00" },
+];
+
+export function beijingHour(signalAtMs: number): number {
+  const d = new Date(signalAtMs + 8 * 3_600_000);
+  return d.getUTCHours();
+}
+
+export function signalInBeijingSession(
+  signalAtMs: number,
+  session: AlertStatsSessionFilter,
+): boolean {
+  if (session === "all") return true;
+  const hour = beijingHour(signalAtMs);
+  const [startRaw, endRaw] = session.split("-");
+  const start = Number(startRaw);
+  const end = Number(endRaw);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return true;
+  if (end >= 24) return hour >= start;
+  return hour >= start && hour < end;
+}
+
 export async function fetchAlertStatsPage(opts: {
   page?: number;
   pageSize?: number;
   timeFilter?: AlertStatsTimeFilter;
+  sessionFilter?: AlertStatsSessionFilter;
+  daytypeFilter?: AlertStatsDaytypeFilter;
   typeFilter?: string;
   intervalFilter?: string;
   symbol?: string;
+  assetClassFilter?: AlertStatsAssetFilter;
 }): Promise<AlertStatsPageResult> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? ALERT_STATS_PAGE_SIZE));
   const timeFilter = opts.timeFilter ?? "all";
+  const sessionFilter = opts.sessionFilter ?? "all";
+  const daytypeFilter = opts.daytypeFilter ?? "all";
   const typeFilter = opts.typeFilter && opts.typeFilter !== "all" ? opts.typeFilter : "all";
   const intervalFilter = opts.intervalFilter && opts.intervalFilter !== "all" ? opts.intervalFilter : "all";
   const symbol = String(opts.symbol || "").trim();
+  const assetClassFilter = opts.assetClassFilter ?? "all";
   const params = new URLSearchParams({
     page: String(page),
     pageSize: String(pageSize),
     time: timeFilter === "all" ? "all" : timeFilter,
+    session: sessionFilter === "all" ? "all" : sessionFilter,
+    daytype: daytypeFilter === "all" ? "all" : daytypeFilter,
     type: typeFilter,
     interval: intervalFilter,
+    assetClass: assetClassFilter,
   });
   if (symbol) params.set("symbol", symbol);
   const empty: AlertStatsPageResult = {
@@ -299,6 +524,8 @@ export async function fetchAlertStatsPage(opts: {
     summary: summarizeAlertWinRate([]),
     typeOptions: [],
     intervalOptions: [],
+    sessionOptions: mergeSessionOptions([]),
+    daytypeOptions: mergeDaytypeOptions([]),
     typeLabels: [],
   };
   try {
@@ -316,6 +543,8 @@ export async function fetchAlertStatsPage(opts: {
       summary?: Partial<AlertWinRateSummary>;
       typeOptions?: AlertStatsTypeOption[];
       intervalOptions?: AlertStatsIntervalOption[];
+      sessionOptions?: AlertStatsSessionOption[];
+      daytypeOptions?: AlertStatsDaytypeOption[];
       typeLabels?: string[];
     };
     if (!body?.ok || !Array.isArray(body.items)) return empty;
@@ -329,6 +558,12 @@ export async function fetchAlertStatsPage(opts: {
       normalizeIntervalOptions(body.intervalOptions, items),
       items,
     );
+    const sessionOptions = mergeSessionOptions(
+      normalizeSessionOptions(body.sessionOptions),
+    );
+    const daytypeOptions = mergeDaytypeOptions(
+      normalizeDaytypeOptions(body.daytypeOptions),
+    );
     return {
       items,
       total: Number(body.total) || items.length,
@@ -338,6 +573,8 @@ export async function fetchAlertStatsPage(opts: {
       summary: coerceSummary(body.summary, items),
       typeOptions,
       intervalOptions,
+      sessionOptions,
+      daytypeOptions,
       typeLabels: typeOptions.map((t) => t.label),
     };
   } catch {
@@ -353,6 +590,7 @@ function normalizeTypeOptions(
   if (Array.isArray(rawOpts) && rawOpts.length) {
     return rawOpts
       .filter((o) => o && typeof o.label === "string")
+      .filter((o) => !isRetiredPatternTypeLabel(o.label))
       .map((o) => ({
         label: String(o.label),
         count: Number(o.count) || 0,
@@ -370,14 +608,110 @@ function normalizeTypeOptions(
   }
   // 回退：仅有 label 列表或本页数据
   if (Array.isArray(rawLabels) && rawLabels.length) {
-    return rawLabels.map((label) => ({
-      label: String(label),
+    return rawLabels
+      .filter((label) => !isRetiredPatternTypeLabel(String(label)))
+      .map((label) => ({
+        label: String(label),
+        count: 0,
+        winRate: null,
+        totalPnlPct: null,
+      }));
+  }
+  return listAlertStatsTypeOptions(pageItems);
+}
+
+function normalizeSessionOptions(
+  rawOpts: AlertStatsSessionOption[] | undefined,
+): AlertStatsSessionOption[] {
+  if (!Array.isArray(rawOpts) || !rawOpts.length) return [];
+  return rawOpts
+    .filter((o) => o && typeof o.id === "string")
+    .map((o) => ({
+      id: o.id as AlertStatsSessionFilter,
+      label: String(o.label || ALERT_STATS_SESSION_FILTERS.find((f) => f.id === o.id)?.label || o.id),
+      count: Number(o.count) || 0,
+      wins: Number(o.wins) || 0,
+      losses: Number(o.losses) || 0,
+      winRate:
+        o.winRate == null || !Number.isFinite(Number(o.winRate))
+          ? null
+          : Number(o.winRate),
+      totalPnlPct:
+        o.totalPnlPct == null || !Number.isFinite(Number(o.totalPnlPct))
+          ? null
+          : Number(o.totalPnlPct),
+    }));
+}
+
+/** 时段下拉：固定顺序 + 后端联动统计 */
+export function mergeSessionOptions(
+  raw: AlertStatsSessionOption[],
+): AlertStatsSessionOption[] {
+  const byId = new Map(raw.map((o) => [o.id, o]));
+  return ALERT_STATS_SESSION_FILTERS.map(({ id, label }) => {
+    const fromBackend = byId.get(id);
+    if (fromBackend) return fromBackend;
+    return {
+      id,
+      label,
       count: 0,
       winRate: null,
       totalPnlPct: null,
+    };
+  });
+}
+
+function normalizeDaytypeOptions(
+  rawOpts: AlertStatsDaytypeOption[] | undefined,
+): AlertStatsDaytypeOption[] {
+  if (!Array.isArray(rawOpts) || !rawOpts.length) return [];
+  return rawOpts
+    .filter((o) => o && typeof o.id === "string")
+    .map((o) => ({
+      id: o.id as AlertStatsDaytypeFilter,
+      label: String(
+        o.label || ALERT_STATS_DAYTYPE_FILTERS.find((f) => f.id === o.id)?.label || o.id,
+      ),
+      count: Number(o.count) || 0,
+      wins: Number(o.wins) || 0,
+      losses: Number(o.losses) || 0,
+      winRate:
+        o.winRate == null || !Number.isFinite(Number(o.winRate))
+          ? null
+          : Number(o.winRate),
+      totalPnlPct:
+        o.totalPnlPct == null || !Number.isFinite(Number(o.totalPnlPct))
+          ? null
+          : Number(o.totalPnlPct),
     }));
-  }
-  return listAlertStatsTypeOptions(pageItems);
+}
+
+/** 工作日/周末下拉：固定顺序 + 后端联动统计 */
+export function mergeDaytypeOptions(
+  raw: AlertStatsDaytypeOption[],
+): AlertStatsDaytypeOption[] {
+  const byId = new Map(raw.map((o) => [o.id, o]));
+  return ALERT_STATS_DAYTYPE_FILTERS.map(({ id, label }) => {
+    const fromBackend = byId.get(id);
+    if (fromBackend) return fromBackend;
+    return {
+      id,
+      label,
+      count: 0,
+      winRate: null,
+      totalPnlPct: null,
+    };
+  });
+}
+
+/** 时段下拉展示文案：名称 · 胜率 · 合计盈亏 */
+export function formatSessionOptionLabel(opt: AlertStatsSessionOption): string {
+  return formatAlertTypeOptionLabel(opt);
+}
+
+/** 工作日/周末下拉展示文案 */
+export function formatDaytypeOptionLabel(opt: AlertStatsDaytypeOption): string {
+  return formatAlertTypeOptionLabel(opt);
 }
 
 /** 类型下拉展示文案：名称 · 胜率 · 合计盈亏 */
@@ -409,6 +743,7 @@ function listAlertStatsIntervalOptions(records: AlertStatsRecord[]): AlertStatsI
   const groups = new Map<string, AlertStatsRecord[]>();
   for (const r of records) {
     const iv = String(r.interval || "").trim() || "—";
+    if (isRetiredPatternInterval(iv)) continue;
     const arr = groups.get(iv) || [];
     arr.push(r);
     groups.set(iv, arr);
@@ -436,6 +771,7 @@ function normalizeIntervalOptions(
   if (Array.isArray(rawOpts) && rawOpts.length) {
     return rawOpts
       .filter((o) => o && typeof o.label === "string")
+      .filter((o) => !isRetiredPatternInterval(o.label))
       .map((o) => ({
         label: String(o.label),
         count: Number(o.count) || 0,
@@ -451,7 +787,7 @@ function normalizeIntervalOptions(
             : Number(o.totalPnlPct),
       }));
   }
-  return listAlertStatsIntervalOptions(pageItems);
+  return listAlertStatsIntervalOptions(_pageItems);
 }
 
 /** 从后台拉取近期共享库（供 Ticker/核实本地缓存），与本地合并 */
@@ -582,7 +918,7 @@ export function summarizeAlertWinRate(records: AlertStatsRecord[]): AlertWinRate
             : r.outcome === "take_profit"
               ? Math.abs(priceMove)
               : priceMove;
-        const lev = resolveAlertLeverage(r.symbol);
+        const lev = resolveAlertLeverage(r.symbol, resolveRecordAssetClass(r));
         totalPnl += Math.round(signed * lev * 100) / 100;
         pnlN++;
       }
@@ -609,6 +945,7 @@ export function upsertAlertForStats(input: {
   dir: "多" | "空" | "—";
 }): AlertStatsRecord | null {
   if (isStablecoinSymbol(String(input.alert.symbol || ""))) return null;
+  if (isRetiredPatternAlert(input.alert, input.key)) return null;
   const side = alertSide(input.dir, input.alert);
   if (side === "flat") return null;
   const entry = alertEntryPrice(input.alert);
@@ -776,6 +1113,9 @@ export function settleAlertByKlines(
   bars: Bar[],
   now = Date.now(),
 ): AlertStatsRecord {
+  if (isRetiredPatternInterval(rec.interval)) {
+    return retireDisabledIntervalRecord(rec);
+  }
   const isShort = rec.side === "short";
   const stepPct = rec.stepPct > 0 ? rec.stepPct : ALERT_TP1_PCT;
   const entry = rec.entry;
@@ -900,6 +1240,7 @@ export function settleAlertByKlines(
 
 function isAlertDueForSettleCheck(rec: AlertStatsRecord, now: number): boolean {
   if (rec.outcome !== "pending") return false;
+  if (isRetiredPatternInterval(rec.interval)) return false;
   if (now >= rec.verifyAt) return true;
   const age = now - rec.signalAt;
   if (age < ALERT_VERIFY_INTERVAL_MS) return false;
@@ -991,6 +1332,14 @@ export async function reverifyAlertStatsByKeys(
     for (const key of keySet) {
       const rec = working.find((r) => r.key === key);
       if (!rec) continue;
+      if (isRetiredPatternInterval(rec.interval)) {
+        const retired = retireDisabledIntervalRecord(rec);
+        working = working.map((r) => (r.key === key ? retired : r));
+        persistStats(working);
+        touched.push(retired);
+        onUpdate?.(summarizeAlertWinRate(working));
+        continue;
+      }
       try {
         const { bars, resolvedSymbol } = await fetchBarsForRecord(rec);
         const withSym =
@@ -1027,8 +1376,21 @@ export async function verifyDueAlertStats(
   onUpdate?: (summary: AlertWinRateSummary) => void,
 ): Promise<AlertWinRateSummary> {
   const summary = () => summarizeAlertWinRate(loadAlertStats());
-  const list = loadAlertStats();
+  let list = loadAlertStats();
   const now = Date.now();
+  const retired = list.filter(
+    (r) => r.outcome === "pending" && isRetiredPatternInterval(r.interval),
+  );
+  if (retired.length) {
+    list = list.map((r) =>
+      r.outcome === "pending" && isRetiredPatternInterval(r.interval)
+        ? retireDisabledIntervalRecord(r)
+        : r,
+    );
+    persistStats(list);
+    void pushAlertStatsToServer(retired.map(retireDisabledIntervalRecord));
+    onUpdate?.(summarizeAlertWinRate(list));
+  }
   const due = list.filter((r) => isAlertDueForSettleCheck(r, now));
   if (!due.length) return summary();
 
@@ -1039,6 +1401,14 @@ export async function verifyDueAlertStats(
     const stillDue = working.filter((r) => isAlertDueForSettleCheck(r, dueNow));
     const touched: AlertStatsRecord[] = [];
     for (const rec of stillDue) {
+      if (isRetiredPatternInterval(rec.interval)) {
+        const retired = retireDisabledIntervalRecord(rec);
+        working = working.map((r) => (r.key === rec.key ? retired : r));
+        persistStats(working);
+        touched.push(retired);
+        onUpdate?.(summarizeAlertWinRate(working));
+        continue;
+      }
       try {
         const { bars, resolvedSymbol } = await fetchBarsForRecord(rec);
         const withSym =
@@ -1097,7 +1467,7 @@ export function formatAlertTotalPnlPct(totalPnlPct: number | null | undefined): 
 }
 
 export function alertStatsLeverage(rec: AlertStatsRecord): number {
-  return resolveAlertLeverage(rec.symbol);
+  return resolveAlertLeverage(rec.symbol, resolveRecordAssetClass(rec));
 }
 
 /**
@@ -1147,6 +1517,25 @@ export type AlertStatsTimeFilter = "2h" | "4h" | "8h" | "24h" | "3d" | "7d" | "1
 
 /** 固定周期下拉集合（与后端 FIXED_INTERVALS 保持一致） */
 export const FIXED_INTERVALS: string[] = ["15m", "1h", "4h"];
+
+/** 形态信号列表已停用周期（不入库/不结算） */
+export const RETIRED_PATTERN_INTERVALS = new Set(["30m", "30min"]);
+
+export function isRetiredPatternInterval(interval?: string | null): boolean {
+  const iv = String(interval || "").trim().toLowerCase();
+  return RETIRED_PATTERN_INTERVALS.has(iv);
+}
+
+/** 历史 30m pending 标记为已忽略，不再拉 K 线核实 */
+export function retireDisabledIntervalRecord(rec: AlertStatsRecord): AlertStatsRecord {
+  return {
+    ...rec,
+    outcome: "flat",
+    movePct: 0,
+    error: "30m已停用",
+    verifiedAt: Date.now(),
+  };
+}
 
 /**
  * 周期下拉：固定集合 + 覆盖 backend 实际统计（有数据时用 backend，无数据时只显示 label）。
@@ -1206,10 +1595,12 @@ export function filterAlertStatsByTime(
 export function listAlertStatsTypeOptions(records: AlertStatsRecord[]): AlertStatsTypeOption[] {
   const groups = new Map<string, AlertStatsRecord[]>();
   for (const r of records) {
+    if (isRetiredPatternRecord(r)) continue;
     const label =
       String(r.typeLabel || "").trim() ||
       resolveAlertTypeLabel(null, r.key, "") ||
       "未标注";
+    if (isRetiredPatternTypeLabel(label)) continue;
     const arr = groups.get(label) || [];
     arr.push(r);
     groups.set(label, arr);

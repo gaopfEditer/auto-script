@@ -24,7 +24,7 @@ from oi_mornitor.config import PATTERN_CHART_DEFAULT_LIMIT, SCAN_INTERVAL_SEC, W
 from oi_mornitor.derivatives_metrics import build_derivatives_context, fetch_premium_index
 from oi_mornitor.pattern_monitor import fetch_open_interest_hist, fetch_pattern_klines
 from oi_mornitor.radar import get_service
-from oi_mornitor.sandbox.card_ws import register_card_routes
+from oi_mornitor.cards.card_ws import register_card_routes
 
 
 
@@ -272,16 +272,22 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
     page = int(page_raw) if page_raw.isdigit() else 1
     page_size = int(size_raw) if size_raw.isdigit() else 100
     time_filter = str(q.get("time") or q.get("timeFilter") or "all").strip() or "all"
+    session_filter = str(q.get("session") or q.get("sessionFilter") or "all").strip() or "all"
+    daytype_filter = str(q.get("daytype") or q.get("dayTypeFilter") or "all").strip() or "all"
     type_label = str(q.get("type") or q.get("typeLabel") or "all").strip() or "all"
     interval = str(q.get("interval") or q.get("iv") or "all").strip() or "all"
     symbol = str(q.get("symbol") or q.get("sym") or "").strip()
+    asset_class = str(q.get("assetClass") or q.get("asset_class") or "all").strip() or "all"
     payload = list_alert_stats_page(
         page=page,
         page_size=page_size,
         time_filter=time_filter,
+        session_filter=session_filter,
+        daytype_filter=daytype_filter,
         type_label=type_label,
         interval=interval,
         symbol=symbol or None,
+        asset_class=asset_class,
     )
     return _json_response({"ok": True, **payload})
 
@@ -716,17 +722,11 @@ async def handle_patterns_chart(request: web.Request) -> web.Response:
         return _json_response({"ok": False, "error": str(exc)}, status=500)
     if not data.get("candles"):
         return _json_response({"ok": False, "error": "K线数据为空"}, status=404)
-    if not data.get("partial"):
-        trade_markers = svc.sandbox_engine.get_trade_markers(symbol, interval)
-        if trade_markers:
-            merged = list(data.get("markers") or []) + trade_markers
-            data["markers"] = merged
-            data["sandbox_markers"] = trade_markers
     return _json_response({"ok": True, **data})
 
 
 async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
-    """轻量元数据：形态状态 + 沙盒入出标记 + 衍生品/多周期（供浏览器直连 K 线时叠加）。"""
+    """轻量元数据：形态状态 + 衍生品/多周期（供浏览器直连 K 线时叠加）。"""
     symbol = request.query.get("symbol", "").strip().upper()
     if not symbol:
         return _json_response({"ok": False, "error": "symbol required"}, status=400)
@@ -759,7 +759,6 @@ async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
                 "oi_tier": r.get("oi_tier"),
             }
             break
-    trade_markers = svc.sandbox_engine.get_trade_markers(symbol, interval)
     derivatives: dict[str, Any] = {}
     session = await svc._ensure_session()
     try:
@@ -800,7 +799,6 @@ async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
         "interval": interval,
         "state": state,
         "ticker": ticker,
-        "sandbox_markers": trade_markers,
         "price_lines": [],
         "derivatives": derivatives,
         "analysis": {"derivatives": derivatives} if derivatives else {},
@@ -952,78 +950,16 @@ async def handle_patterns_klines(request: web.Request) -> web.Response:
     )
 
 
-async def handle_sandbox_stats(_request: web.Request) -> web.Response:
-    svc = get_service()
-    return _json_response({"ok": True, **svc.sandbox_engine.get_payload()})
-
-
-async def handle_sandbox_reshuffle(_request: web.Request) -> web.Response:
-    svc = get_service()
-    picked = svc.sandbox_engine.ensure_daily_pool_from_rows(
-        svc.radar.last_all_rows,
-        svc.radar.heavyweight_symbol_list,
-        force=True,
-    )
-    if not picked:
-        return _json_response({"ok": False, "error": "候选池未就绪"}, status=503)
-    return _json_response({"ok": True, "picked": picked, **svc.sandbox_engine.get_payload()})
-
-
-async def handle_sandbox_enter(request: web.Request) -> web.Response:
-    """手动选择逻辑/方向，市价纸面开仓。"""
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return _json_response({"ok": False, "error": "invalid json"}, status=400)
-    symbol = str(body.get("symbol", "")).strip().upper()
-    logic = str(body.get("logic", "")).strip().upper()
-    side = str(body.get("side", "")).strip().upper()
-    if not symbol or not logic or not side:
-        return _json_response(
-            {"ok": False, "error": "需要 symbol / logic(S|T) / side(LONG|SHORT)"},
-            status=400,
-        )
-    svc = get_service()
-    market_price = None
-    for row in svc.radar.last_all_rows:
-        if str(row.get("symbol") or "").upper() == symbol:
-            try:
-                market_price = float(row.get("last_price") or 0) or None
-            except (TypeError, ValueError):
-                market_price = None
-            break
-    pattern_state = next(
-        (
-            s
-            for s in svc.pattern_engine.last_states
-            if str(s.get("symbol") or "").upper() == symbol
-        ),
-        None,
-    )
-    session = await svc._ensure_session()
-    result = await svc.sandbox_engine.manual_enter(
-        session,
-        symbol=symbol,
-        logic=logic,
-        side=side,
-        base_url=svc.radar.base_url,
-        market_price=market_price,
-        pattern_state=pattern_state,
-    )
-    status = 200 if result.get("ok") else 400
-    return _json_response(result, status=status)
-
-
-async def handle_sandbox_card_prices(_request: web.Request) -> web.Response:
+async def handle_card_prices(_request: web.Request) -> web.Response:
     """立即刷新活跃卡片币种市价（写入 last_price / 距 TP·SL）。"""
     svc = get_service()
     session = await svc._ensure_session()
-    result = await svc.sandbox_engine.refresh_card_market_prices(
+    result = await svc.card_engine.refresh_card_market_prices(
         session,
         base_url=svc.radar.base_url,
         pool_rows=svc.radar.last_all_rows,
     )
-    return _json_response({**result, **svc.sandbox_engine.get_payload()})
+    return _json_response({**result, **svc.card_engine.get_payload()})
 
 
 async def handle_tv_alert(_request: web.Request) -> web.Response:
@@ -1212,11 +1148,7 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/patterns/klines", handle_patterns_klines)
 
-    app.router.add_get("/api/sandbox", handle_sandbox_stats)
-
-    app.router.add_post("/api/sandbox/reshuffle", handle_sandbox_reshuffle)
-    app.router.add_post("/api/sandbox/enter", handle_sandbox_enter)
-    app.router.add_post("/api/sandbox/card-prices", handle_sandbox_card_prices)
+    app.router.add_post("/api/cards/prices", handle_card_prices)
 
     app.router.add_get("/api/tv-alert", handle_tv_alert)
 

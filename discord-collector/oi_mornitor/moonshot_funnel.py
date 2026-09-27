@@ -35,8 +35,6 @@ from oi_mornitor.config import (
     MOONSHOT_KLINE_LIMIT,
     MOONSHOT_QUOTE_VOL_MIN,
     MOONSHOT_RANGE_RATIO,
-    MOONSHOT_SCORE_B,
-    MOONSHOT_SCORE_C,
     MOONSHOT_STATE_DB,
     MOONSHOT_VOL_BREAK,
     MOONSHOT_VOL_WAKE_HI,
@@ -303,58 +301,6 @@ def _breakout_quality(df: pd.DataFrame, range_high: float) -> dict[str, Any]:
     return res
 
 
-def score_moonshot(
-    *,
-    compress_hits: int,
-    structure: dict[str, Any],
-    vol_wake: float,
-    breakout: dict[str, Any],
-    rel_strength: float,
-    btc_ok: bool,
-    oi_bonus: int = 0,
-) -> tuple[float, dict[str, float]]:
-    """五项 0～2 + OI 加减分，满分约 10。"""
-    parts: dict[str, float] = {}
-    # 压缩质量
-    parts["compress"] = min(2.0, float(compress_hits) * (2.0 / 3.0))
-    # 结构
-    s = 0.0
-    if structure.get("higher_low"):
-        s += 1.2
-    if structure.get("ate_lh"):
-        s += 1.0
-    parts["structure"] = min(2.0, s)
-    # 量能
-    if vol_wake >= float(MOONSHOT_VOL_BREAK):
-        parts["volume"] = 2.0
-    elif vol_wake >= float(MOONSHOT_VOL_WAKE_HI):
-        parts["volume"] = 1.5
-    elif vol_wake >= float(MOONSHOT_VOL_WAKE_LO):
-        parts["volume"] = 1.0
-    elif vol_wake >= 1.0:
-        parts["volume"] = 0.5
-    else:
-        parts["volume"] = 0.0
-    # 突破质量
-    if breakout.get("breakout"):
-        br = float(breakout.get("body_ratio") or 0)
-        vm = float(breakout.get("vol_mult") or 0)
-        parts["breakout"] = min(2.0, 1.0 + (0.5 if br >= 0.55 else 0) + (0.5 if vm >= 3 else 0))
-    elif breakout.get("extended"):
-        parts["breakout"] = 0.5  # 已竖直，不宜再当突破加分
-    else:
-        parts["breakout"] = 0.0
-    # 大盘 / RS
-    rs = 0.0
-    if btc_ok:
-        rs += 1.0
-    if rel_strength > 0:
-        rs += min(1.0, rel_strength / 5.0)
-    parts["market"] = min(2.0, rs)
-    total = sum(parts.values()) + max(-1, min(1, int(oi_bonus)))
-    return round(total, 2), parts
-
-
 def decide_state(
     *,
     compress: bool,
@@ -411,7 +357,6 @@ class MoonshotRow:
             "symbol": self.symbol,
             "state": self.state,
             "state_label": MS_LABELS.get(self.state, self.state),
-            "score": self.score,
             "reasons": list(self.reasons),
             "range_high": self.range_high,
             "last_hl": self.last_hl,
@@ -420,7 +365,6 @@ class MoonshotRow:
             "compress_days": round(self.compress_days, 1),
             "updated_at": self.updated_at,
             "cooldown_until": self.cooldown_until,
-            "score_parts": dict(self.score_parts),
         }
 
 
@@ -541,7 +485,6 @@ def evaluate_symbol_df(
     prev: MoonshotRow | None,
     rel_strength: float = 0.0,
     btc_ok: bool = True,
-    oi_bonus: int = 0,
 ) -> MoonshotRow | None:
     if df is None or len(df) < 50:
         return None
@@ -596,15 +539,6 @@ def evaluate_symbol_df(
         prev_state=prev_state,
         last_hl=last_hl,
     )
-    total, parts = score_moonshot(
-        compress_hits=hits,
-        structure=structure,
-        vol_wake=vol_wake,
-        breakout=br,
-        rel_strength=rel_strength,
-        btc_ok=btc_ok,
-        oi_bonus=oi_bonus,
-    )
     if structure.get("higher_low"):
         reasons.append("更高低点")
     if structure.get("ate_lh"):
@@ -621,7 +555,6 @@ def evaluate_symbol_df(
     row = MoonshotRow(
         symbol=symbol.upper(),
         state=state,
-        score=total,
         reasons=reasons[:8],
         range_high=float(structure.get("range_high") or 0),
         last_hl=last_hl,
@@ -634,7 +567,6 @@ def evaluate_symbol_df(
             if state == MS_INVALID
             else (prev.cooldown_until if prev else 0.0)
         ),
-        score_parts=parts,
         alerted_state=prev.alerted_state if prev else "",
     )
     return row
@@ -714,7 +646,7 @@ class MoonshotEngine:
     def list_rows(self) -> list[MoonshotRow]:
         now = time.time()
         rows = [r for r in self._rows.values() if r.state != MS_INVALID or r.cooldown_until > now]
-        rows.sort(key=lambda r: (-r.score, r.symbol))
+        rows.sort(key=lambda r: r.symbol)
         return rows
 
     def get_payload(self) -> dict[str, Any]:
@@ -725,8 +657,6 @@ class MoonshotEngine:
             "moonshot_a_interval_sec": int(MOONSHOT_A_INTERVAL_SEC),
             "moonshot_last_a_scan_ts": self._last_a_scan_ts,
             "moonshot_a_pool_size": len(self._a_candidates),
-            "moonshot_score_b": float(MOONSHOT_SCORE_B),
-            "moonshot_score_c": float(MOONSHOT_SCORE_C),
             "moonshot": [r.to_dict() for r in rows[: max(50, int(MOONSHOT_A_POOL_MAX))]],
             "moonshot_alerts": list(self._last_alerts[-30:]),
             "moonshot_by_symbol": {r.symbol: r.to_dict() for r in rows},
@@ -743,19 +673,6 @@ class MoonshotEngine:
             return 0.0
         return _f(row.get("price_change_pct_24h")) - btc_chg
 
-    def _oi_bonus(self, row: dict[str, Any] | None) -> int:
-        """有数据才加减分；缺失为 0。"""
-        if not row:
-            return 0
-        # 价格横/微跌而 OI 升：+1（用 5m/15m oi 变动若存在）
-        oi_pct = _f(row.get("oi_change_pct_15m") or row.get("oi_change_pct_5m"))
-        px = _f(row.get("price_change_pct_24h"))
-        if oi_pct > 2 and px <= 1.0:
-            return 1
-        if oi_pct < -5 and px > 3:
-            return -1
-        return 0
-
     def upsert_row(self, row: MoonshotRow) -> MoonshotRow:
         self._rows[row.symbol] = row
         try:
@@ -771,7 +688,6 @@ class MoonshotEngine:
             "message": message,
             "state": row.state,
             "state_label": MS_LABELS.get(row.state, row.state),
-            "score": row.score,
             "vol_wake": row.vol_wake,
             "range_high": row.range_high,
             "ts": time.time(),
@@ -786,18 +702,18 @@ class MoonshotEngine:
                 return self._make_alert(
                     row,
                     kind="moonshot_find_top",
-                    message=f"寻找顶部 · 分{row.score} · 停追",
+                    message="寻找顶部 · 停追",
                 )
             return None
-        if row.state == MS_IN_POSITION and row.score >= float(MOONSHOT_SCORE_C):
+        if row.state == MS_IN_POSITION:
             if not prev or prev.state != MS_IN_POSITION:
                 return self._make_alert(
                     row,
                     kind="moonshot_trigger",
-                    message=f"C触发放量收盘突破 · 分{row.score}",
+                    message="C触发放量收盘突破",
                 )
             return None
-        if row.state in _B_STATES and row.score >= float(MOONSHOT_SCORE_B):
+        if row.state in _B_STATES:
             key = f"B:{row.state}"
             if row.alerted_state == key:
                 return None
@@ -805,7 +721,7 @@ class MoonshotEngine:
             return self._make_alert(
                 row,
                 kind="moonshot_coil",
-                message=f"B蓄势 {MS_LABELS.get(row.state)} · 分{row.score}",
+                message=f"B蓄势 {MS_LABELS.get(row.state)}",
             )
         return None
 
@@ -883,7 +799,6 @@ class MoonshotEngine:
                 prev=prev,
                 rel_strength=self._rel_strength(prow, btc_chg),
                 btc_ok=btc_ok,
-                oi_bonus=self._oi_bonus(prow),
             )
             if row is None:
                 continue
@@ -898,7 +813,7 @@ class MoonshotEngine:
             self.upsert_row(row)
             if al:
                 alerts.append(al)
-        # 裁剪过大池：按分保留 A_POOL_MAX
+        # 裁剪过大池
         ranked = self.list_rows()
         if len(ranked) > int(MOONSHOT_A_POOL_MAX):
             keep_set = {r.symbol for r in ranked[: int(MOONSHOT_A_POOL_MAX)]}
@@ -954,7 +869,6 @@ class MoonshotEngine:
                 prev=prev,
                 rel_strength=self._rel_strength(prow, btc_chg),
                 btc_ok=btc_ok,
-                oi_bonus=self._oi_bonus(prow),
             )
             if row is None:
                 continue
@@ -967,27 +881,16 @@ class MoonshotEngine:
         return alerts
 
     def top_for_watchlist(self, limit: int = 50) -> list[str]:
-        """按分选出应占监听槽的币（不含失效）。"""
+        """按漏斗状态选出应占监听槽的币（不含失效/纯压缩观察）。"""
         rows = [
             r
             for r in self.list_rows()
-            if r.state in _ACTIVE_STATES and r.score >= float(MOONSHOT_SCORE_B) * 0.5
+            if r.state in (_B_STATES | {MS_IN_POSITION, MS_FIND_TOP})
         ]
         return [r.symbol for r in rows[:limit]]
 
-    def b_candidates_for_sandbox(self) -> list[MoonshotRow]:
-        return [
-            r
-            for r in self.list_rows()
-            if r.state in _B_STATES and r.score >= float(MOONSHOT_SCORE_B)
-        ]
-
     def c_triggers(self) -> list[MoonshotRow]:
-        return [
-            r
-            for r in self.list_rows()
-            if r.state == MS_IN_POSITION and r.score >= float(MOONSHOT_SCORE_C)
-        ]
+        return [r for r in self.list_rows() if r.state == MS_IN_POSITION]
 
 
 async def run_moonshot_a_loop(

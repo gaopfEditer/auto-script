@@ -55,7 +55,7 @@ _WARMUP_BARS = 220
 _VERIFY_DELAY_MS = 3 * 60 * 60 * 1000
 _5M_MS = 300_000
 _DAY_MS = 86_400_000
-_INTERVAL_SECONDS = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}
+_INTERVAL_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
 _MAJORS = {s.upper() for s in CANDLE_CARD_MAJOR_SYMBOLS}
 
 KIND_OPTIONS: list[dict[str, str]] = [

@@ -140,6 +140,42 @@ export interface PoolMeta {
   tier_heavy_min_usd?: number;
   taker_flow_status?: "live" | "cached" | "unavailable" | string;
   proxy_disabled?: boolean;
+  /** 币股池并行开关（OI_EQUITY_ENABLED） */
+  equity_enabled?: boolean;
+  equity_count?: number;
+  equity_eligible?: number;
+  equity_excluded?: number;
+  equity_no_oi?: number;
+}
+
+export interface EquityPoolItem {
+  base: string;
+  symbol: string;
+  venue?: string;
+  product?: string;
+  last_price?: number;
+  turnover_24h_usd?: number;
+  oi_usd?: number | null;
+  oi_available?: boolean;
+  asset_class?: "equity";
+  tier?: "equity";
+  session_ok?: boolean;
+  in_watchlist?: boolean;
+  ui_tag?: string;
+  price_change_pct_24h?: number;
+}
+
+export interface EquityPatternState {
+  symbol: string;
+  base?: string;
+  asset_class?: "equity";
+  tier?: "equity";
+  intervals?: string[];
+  session_ok?: boolean;
+  ui_tag?: string;
+  last_price?: number;
+  oi_available?: boolean;
+  oi_usd?: number | null;
 }
 
 export interface BreakoutAlert {
@@ -386,7 +422,6 @@ export interface MoonshotItem {
   symbol: string;
   state: string;
   state_label?: string;
-  score: number;
   reasons?: string[];
   range_high?: number;
   last_hl?: number;
@@ -395,7 +430,6 @@ export interface MoonshotItem {
   compress_days?: number;
   updated_at?: number;
   cooldown_until?: number;
-  score_parts?: Record<string, number>;
 }
 
 export interface PatternPayload {
@@ -420,26 +454,20 @@ export interface PatternPayload {
   moonshot_a_interval_sec?: number;
   moonshot_last_a_scan_ts?: number;
   moonshot_a_pool_size?: number;
-  moonshot_score_b?: number;
-  moonshot_score_c?: number;
   moonshot?: MoonshotItem[];
   moonshot_by_symbol?: Record<string, MoonshotItem>;
   moonshot_alerts?: PatternAlert[];
-  sandbox_enabled?: boolean;
-  sandbox_day?: string;
-  sandbox_pool?: string[];
-  sandbox_pool_count?: number;
-  sandbox_max_concurrent?: number;
-  /** 沙盒执行周期，默认 ["15m","1h"] */
-  sandbox_intervals?: string[];
-  sandbox_positions?: SandboxPosition[];
-  sandbox_card_orders?: SandboxCardOrder[];
-  sandbox_alerts?: PatternAlert[];
-  sandbox_stats?: SandboxStats;
-  sandbox_trade_history?: SandboxTrade[];
-  sandbox_scan_ts?: number;
-  sandbox_card_price_ts?: number;
+  card_orders?: SandboxCardOrder[];
+  card_price_ts?: number;
+  card_scan_ts?: number;
   card_near_entry_pct?: number;
+  card_near_entry_pct_major?: number;
+  /** 币股并行池（与加密 watchlist 独立） */
+  equity_enabled?: boolean;
+  equity_pool?: EquityPoolItem[];
+  equity_alerts?: PatternAlert[];
+  equity_states?: EquityPatternState[];
+  equity_scan_ts?: number;
 }
 
 export interface PatternCandle {
@@ -585,6 +613,8 @@ export interface RadarSnapshot {
   scan_ts: number;
   meta?: GlobalMeta;
   pool_meta?: PoolMeta;
+  equity_pool?: EquityPoolItem[];
+  equity_scan_ts?: number;
   hot_tickers: TickerRow[];
   all_tickers: TickerRow[];
   market_matrix?: MarketMatrix;

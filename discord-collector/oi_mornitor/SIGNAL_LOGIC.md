@@ -1,10 +1,10 @@
 # oi_mornitor 信号 · 拐点 · 通知逻辑说明
 
-本文档整理 `oi_mornitor` 内全部业务信号、图表标注（次高点 / 扳机线 / Vegas / 射击之星等）、**沙盒纸面交易（短线猎手 S / 长线维加斯 T）** 与通知通道，方便对照 Pine（`tradingview-bollinger-wicks.pine` / Vegas 双通道）与前端图表。
+本文档整理 `oi_mornitor` 内全部业务信号、图表标注（次高点 / 扳机线 / Vegas / 射击之星等）、**交易卡片生命周期** 与通知通道，方便对照 Pine（`tradingview-bollinger-wicks.pine` / Vegas 双通道）与前端图表。
 
 ---
 
-## 1. 总览：业务链路 + 形态图 + 沙盒交易
+## 1. 总览：业务链路 + 形态图 + 卡片
 
 ```
 RadarService.scan_once (~30–60s)
@@ -14,10 +14,10 @@ RadarService.scan_once (~30–60s)
   ├─ 形态∩柱级OI           → pattern_alerts type=candle_pattern_oi（Toast；TG 旧文案默认让位卡片）
   ├─ 多周期形态卡片         → pattern_alerts type=candle_pattern_card → Telegram 卡片群
   ├─ 回踩/Vegas/射击之星    → pattern.pullback_alerts（后端有、前端 Toast 未接）
-  └─ 沙盒纸面交易 S/T       → pattern.sandbox_*（SandboxToast + 列表 + localStorage 历史）
+  └─ 交易卡片生命周期       → pattern.card_orders（卡片看板 · CardLifecyclePanel）
 
 图表 /api/patterns/chart
-  → candles + BB + Vegas EMA + price_lines(H_max/LH/扳机…) + markers(拐点/锤子/射击之星/沙盒入出)
+  → candles + BB + Vegas EMA + price_lines(H_max/LH/扳机…) + markers(拐点/锤子/射击之星)
 ```
 
 **通知通道速查**
@@ -28,10 +28,11 @@ RadarService.scan_once (~30–60s)
 | 矩阵突破扳机 | `breakout_alerts` | 雷达页 ✅ | ❌ |
 | 形态多头爆发 | `pattern.pattern_alerts` | 形态页 ✅ | ❌ |
 | 形态卡片（射击之星/OI倒锤子） | `pattern.pattern_alerts` `candle_pattern_card` | 形态页 ✅ | ✅ `OI_CANDLE_CARD_TELEGRAM_CHAT_ID` |
-| 结构卡片（头肩/探底/2B/Sweep） | `pattern.pattern_alerts` `structure_pattern_card` | 形态页 ✅ | ✅ 同群 · `OI_STRUCTURE_CARD_TELEGRAM` |
+| **MAIN 热门精选**（默认 BTC/ETH） | 同上 + 量价 ticker | — | ✅ `MAIN_CARD_TELEGRAM_CHAT_ID` · `main_card_policy`：15m/1h/4h 射击之星/倒锤子/量价确认/量价推进 |
+| 结构卡片（头肩/探底/2B/Sweep） | `pattern.pattern_alerts` `structure_pattern_card` | 形态页 ✅ | ✅ 同群 · `OI_STRUCTURE_CARD_TELEGRAM`（不进 MAIN） |
 | 形态信号结算摘要（4h） | 胜率库 `pattern_alert_stats` | 形态列表 | ✅ `MAIN_CARD_TELEGRAM_CHAT_ID` · 北京 04/08/12/16/20/24 |
 | 回踩/射击之星 | `pattern.pullback_*` | ❌ 未接 | 仅 `run_coin_monitor --telegram` |
-| 沙盒入场/移止损/减仓/平仓 | `pattern.sandbox_alerts` | 形态页 ✅ | ❌ |
+| 形态信号列表胜率 | `pattern_alert_stats` + Ticker | 形态页 ✅ | ✅ 4h 结算摘要 |
 
 ---
 
@@ -91,9 +92,9 @@ TRIGGER_SIGNAL（多头爆发）→ trigger_emitted=true，本币不再评估
 
 ### 2.4 去重 / 持久化
 
-- DB：`data/pattern_state.db`  
-- 同 `kline_close_time` 不重复写  
-- `trigger_emitted` 后不再扫该币（需 `reset_symbol` 或清库）
+- **主形态扫描已不再跑 LH→HL→扳机状态机**（仅图表仍画 H_max/LH/扳机线）；`pattern_bull_continuation` 不进 ticker/胜率库  
+- DB：`data/pattern_state.db`（历史字段保留）  
+- 回踩策略 `PullbackStrategyEngine` 独立；默认 `OI_PULLBACK_SCAN_ENABLED=0`
 
 ---
 
@@ -145,6 +146,8 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 须在布林中轨之下；若已是射击之星外形则不再标倒锤子
 ```
 
+**卡片/列表推送（2026-09）**：与射击之星对称——中轨下 + 前序跌幅 ≥3%；**不再要求柱级 OI**。OI 异动仅图表 tag `(oi异动)`，不进 typeLabel / 胜率库。
+
 图例：射击之星品红下行箭头；倒锤子青色上行箭头。
 
 ---
@@ -166,17 +169,20 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 
 - Stage1：`is_valid_breakout` 或反转背景  
 - Stage2：缩量贴 wall / BB 中轨 / Vegas 中线 → 多；或顶部射击之星 → 空  
-- 可选：`python -m oi_mornitor.scripts.run_coin_monitor --telegram`
+- **默认关扫描**：`OI_PULLBACK_SCAN_ENABLED=0`（仅 SSE 无 Toast 的半开状态已停用；要调参再显式开启）
+- CLI：`python -m oi_mornitor.scripts.run_coin_monitor --telegram`
 
 ### 5.4 多周期形态 / 结构 Telegram 卡片
 
 - 引擎：`PatternMonitorEngine._scan_candle_pattern_cards`
   - 蜡烛：`candle_signals.find_last_closed_candle_card_hits` + `notify_telegram.format_candle_card_message`
   - 结构：`structure_signals.find_last_closed_structure_hits` + 顶部/底部模板
-- **主流**（默认 BTC/ETH/SOL）：`15m/30m/1h/4h`
-- **山寨**：`15m` 榜「价格幅度 Top7 ∪ 合约流入(流动性)幅度 Top7」→ 扫 `15m/30m/1h`
-- 蜡烛：射击之星；连续走平射击之星（主流）；柱级 OI 异动倒锤子
-- 结构：头肩顶/M顶 + Vegas 破位；恐慌放量 + 二次阳线探底；2B Spring；流动性掠夺；圆弧动量衰竭
+- **主流**（默认 BTC/ETH/SOL）：`15m/1h/4h`（30m 已停）
+- **山寨**：流入 Top7 → 射击之星 / 顶部结构；涨幅 Top7 **仅**倒锤 / 结构看多（不与追涨空叠）
+- 蜡烛：过滤后射击之星、无 OI 倒锤子；**停推** `(oi异动)`、V*、射击之星（2）、连续插针、形态∩OI 短线
+- 结构：头肩/M顶 + **破位质量**（≥0.6×ATR 或连续收中轨下）；Sweep 须放量且收在前高下；**圆弧顶不进自动卡片**
+- 量价 ticker：停推「量价推进·空」；「量价确认·空」须 1h Vegas DOWN
+- 统一策略：`signal_policy.py`（ticker / 胜率库 / 卡片共用）
 - 群：`OI_CANDLE_CARD_TELEGRAM_CHAT_ID`；开关 `OI_CANDLE_CARD_TELEGRAM` / `OI_STRUCTURE_CARD_TELEGRAM`
 - 去重：同币同周期同类型同开盘时间只推一次
 - **结算摘要**：北京时间 `04/08/12/16/20/24` 点，把形态信号列表本档 4h + 当日累计推到 `MAIN_CARD_TELEGRAM_CHAT_ID`（开关 `OI_STATS_SETTLE_TELEGRAM`）
@@ -263,7 +269,6 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 | `shooting_star` | 射击之星 | 品红 ↓ |
 | `inverted_hammer` | 倒锤子 | 青 ↑ |
 | Vegas EMA | 过滤/A/B | 绿/蓝/红折线 |
-| `sandbox_entry` / `sandbox_exit` | 沙盒开/平仓 | 绿/橙标记 |
 
 ---
 
@@ -275,10 +280,13 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 | 形态状态机 + watchlist（每 2h 合约流入+OI 爆发刷新，未进场可替换） | `pattern_monitor.py` / `pattern_state_tracker.py` |
 | Vegas / 射击之星 / 倒锤子指标 | `strategy/indicators.py` |
 | 回踩策略 | `strategy/pullback.py` |
-| **沙盒 S/T 策略** | `sandbox/logics.py` + `sandbox/engine.py` + `sandbox/tracker.py` |
-| 配置 | `config.py`（`PATTERN_*` / `STRATEGY_*` / `SANDBOX_*`） |
+| **交易卡片** | `cards/engine.py` + `cards/card_tracker.py` + `cards/card_parser.py` |
+| **形态列表胜率入库** | `pattern_alert_stats.py` |
+| **形态列表统一出场** | `pattern_settle.py` + `frontend/src/utils/patternAlertWinRate.ts` |
+| **列表入场规则文案** | `frontend/src/utils/patternEntryRules.ts` |
+| 配置 | `config.py`（`PATTERN_*` / `STRATEGY_*` / `CARD_*` / `OI_CARD_WS_*`） |
 | 图表 UI | `frontend/src/components/PatternChartPanel.tsx` |
-| 沙盒历史（localStorage 3 天） | `frontend/src/utils/sandboxHistory.ts` |
+| 卡片看板 UI | `frontend/src/components/CardLifecyclePanel.tsx` |
 | Pine 对照 | 仓库根目录 `tradingview-bollinger-wicks.pine` |
 
 ---
@@ -288,268 +296,194 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 1. Pullback 告警进了 SSE，形态页尚无 Toast。  
 2. 主雷达不发 Telegram。  
 3. 形态 / 回踩 TRIGGER 后不自动重置。  
-4. `_last_alerts` 仅本轮，非历史 inbox（沙盒成交另有 SQLite + 前端 localStorage）。
+4. `_last_alerts` 仅本轮，非历史 inbox（卡片订单在 SQLite `card_orders`）。
 
 ---
 
-## 9. 沙盒纸面交易：什么时候开单 / 止盈 / 止损
+## 9. 交易卡片生命周期（collector → OI）
 
-实现：`sandbox/logics.py`（判定）· `sandbox/engine.py`（执行）· `sandbox/tracker.py`（SQLite）  
-前端：形态页「沙盒」Tab · Toast · 持仓/历史表（`sandboxHistory.ts`，本地约 **90 天**）。
+实现：`cards/engine.py` · `cards/card_tracker.py` · `cards/card_parser.py`  
+前端：形态页「卡片看板」· `CardLifecyclePanel.tsx`
 
-> 以下阈值均为**币种价格变动 %**（不是 ROE）。账面 ROE ≈ 价变% × 杠杆（BTC/ETH 100x，山寨 30x）。
+- **接入**：discord-collector `CARD_SINK` → WS `OI_CARD_WS_PATH`（默认 `/ws/cards`）或 `POST /api/cards`
+- **不做纸面模拟开单**：仅登记卡片、刷新市价、更新生命周期阶段（监听 / 近场 / 挂单 / 入场 / 止盈 / 止损）
+- **市价卡**：接入后标记为挂单，下一轮扫描按现价写入 `fill_price` 并进入「入场」
+- **限价卡**：距入场区 ≤ 近场阈值 →「近场」→ 触价 →「入场」；主流 BTC/ETH 或杠杆≥80 为 **0.2%**，山寨小杠杆约 **1%**
+- **出场判定**：按卡片 SL / 多级 TP 与现价比较更新阶段，**不下单、不计纸面 PnL**
+- **市价刷新**：`POST /api/cards/prices` 或后台 `CARD_PRICE_REFRESH_SEC`（默认 5 分钟）
 
-### 9.0 资金与执行约定
+## 10. 形态信号列表：入场与出场逻辑总览
 
-| 项 | 默认 | 说明 |
-|----|------|------|
-| K 线周期 | **15m + 1h** 已收盘 K（同等扫描） | `OI_SANDBOX_INTERVALS`（默认 `15m,1h`）；单周期可设 `15m` |
-| 日扫描池 | 随机 **12** 币 | `OI_SANDBOX_DAILY_COUNT`；可「重抽」 |
-| 最大同时持仓 | **20** | `OI_SANDBOX_MAX_CONCURRENT`；先触发先开（跨周期合计） |
-| 单笔保证金 | **1U** | `OI_SANDBOX_NOTIONAL_USD`；名义 = 保证金 × 杠杆 |
-| 杠杆 | BTC/ETH **100x**，其余 **30x** | `OI_SANDBOX_LEVERAGE_*` |
-| 手续费 | 单边 **0.04%** 名义 | 开+平各一次，从 PnL 扣除（`OI_SANDBOX_FEE_PCT`） |
-| 再入场冷却 | 平仓后再等 **8** 根**该仓位周期** K | `OI_SANDBOX_REENTRY_COOLDOWN_BARS`；按 `symbol|interval` |
-| 评估节奏 | 同币+同周期同一根已收盘 K 只评一次 | **入场当根不平仓**（`held_bars≤0` 直接跳过） |
+> **用途**：形态页底部 **Ticker / 胜率弹窗** 用的核算口径；与 §9 **卡片生命周期看板** 独立。  
+> 列表回答：「这条 TG 推送的信号，若按统一规则进场，3h 内算胜还是负？」
 
-开单来源：
-
-- **自动 `auto`**：日池在每个启用周期上扫描，命中 S/T 入场条件  
-- **手动 `manual`**：形态页「手动市价进场」→ `POST /api/sandbox/enter`（可选 `interval`；不校验形态扳机，仍按所选 S/T 算初始 SL，后续出场规则相同）
-- **卡片 `card`（logic=`C`）**：WebSocket `OI_CARD_WS_PATH`（默认 `/ws/cards`）或 `POST /api/cards` 推送卡片；**不改 S/T 规则**，额外监听卡片币种。市价卡立即纸面入场；限价卡近场提醒并挂单——**主流（BTC/ETH 或杠杆≥80，约 100x）距入场区 ≤0.2%**，**山寨小杠杆（约 20x/30x）≤1%**——触价后入场。出场按卡片 SL / 多级 TP（分批）：**第一止盈触发后，剩余仓止损移至开仓价（保本）**，防止回吐；最后一档 TP 全平。同步回卡片系统时带 `card_id`。
-
-自动：同币**同周期**同时仅允许 1 笔开仓（15m 与 1h 可并存）；手动/卡片：同币可叠多笔。持仓/平仓/冷却均按仓位自己的 `interval` 取对应 K 线（卡片仓 interval=`card`）。
-
----
-
-### 9.1 什么时候开单（Trend_Status 分流）
-
-先判市场状态，再决定用哪套入场逻辑（两套互斥，避免震荡里硬做趋势、趋势里硬抄底）：
+### 10.0 数据流
 
 ```
-trend_status(15m df):
-  BULL  = Vegas 慢速通道(EMA576/676) 斜率向上 且 收盘 > 慢速中轨
-  BEAR  = 斜率向下 且 收盘 < 慢速中轨
-  RANGE = 其余（含快慢通道纠缠的横盘）
-
-入场路由：
-  RANGE      → 只评估模块 S（短线猎手）
-  BULL/BEAR  → 只评估模块 T（长线维加斯，且必须同向）
-
-Vegas 蓝红方向门控（`OI_SANDBOX_VEGAS_DIRECTION_GATE`，默认开）：
-  UP   = 快通道中轨(EMA144/169 蓝) > 慢通道中轨(EMA576/676 红) → 自动单只做多
-  DOWN = 蓝 < 红 → 自动单只做空
-  FLAT = 纠缠 → 不开自动仓
-
-  与形态配合：底部锤子/倒锤 + UP 才做多；顶部射击之星 + DOWN 才做空。
-  手动市价单不门控，但仍记录 vegas_direction 便于筛选统计。
+信号产生（形态扫描 / TG 推送 / 交易卡片归档）
+    → record_alert_from_push / record_card_from_archive
+    → pattern_alert_stats.json（outcome=pending）
+    → 前端 verifyDueAlertStats（每 15m）或弹窗手动重核
+    → settleAlertByKlines（对齐 pattern_settle.settle_signal_batch）
+    → POST /api/pattern-alert-stats 回写 outcome / movePct / pnlPct
+    → Ticker 着色 · 胜率弹窗 · 4h 结算摘要 TG
 ```
 
-#### 9.1.1 短线猎手 S — 开多 / 开空
-
-**环境**：`RANGE`（震荡或趋势末端纠缠），且通过 Vegas 方向门控。
-
-| 方向 | 开单条件（当根已收盘 K，需同时满足） |
-|------|--------------------------------------|
-| **空** | 触及布林**上轨**或结构 **LH**，且当根为标准**射击之星**；再加 2026-09 高胜率过滤：① 收盘须在 **BB 上轨区**（`basis + 0.85×带宽`）或贴近 **Vegas A/B 通道**（`OI_SANDBOX_HUNTER_REQUIRE_POSITION`，默认开）；② 信号前 `OI_SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK`(20) 根累计涨幅 ≥ `OI_SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT`(3%) |
-| **多** | 触及布林**下轨**或结构 **HL**，且当根为**倒锤子 / 锤子**；再加 2026-09 高胜率过滤：① 收盘须在**布林中轨之下**（`OI_SANDBOX_HUNTER_HAMMER_BELOW_MID`，默认开，对齐卡片倒锤子 §4.2）；② 信号前 `OI_SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK`(20) 根累计跌幅 ≥ `OI_SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT`(3%) |
-
-入场价 = 该根**收盘价**。
-
-过滤与上午卡片准确率调优（§5.4）同口径：**只在关键位置 + 有趋势背景时才做反转**，减少震荡里乱做。入场 `meta` 记 `trend_pct` / `position_ok` / `near_vegas` / `below_mid` 便于复盘。长线 T 本身已有 BULL/BEAR 趋势门控，不再叠加。
-
-#### 9.1.2 长线维加斯 T — 开多 / 开空
-
-**环境**：仅 `BULL` 做多 / 仅 `BEAR` 做空。
-
-| 方向 | 开单条件（当根，需同时满足） |
-|------|------------------------------|
-| **多** | ① 回踩触及 Vegas **过滤线 EMA12** 或隧道（EMA144/169）下沿；② 收盘重新站上过滤线/隧道；③ 确认 = **阳线反包** 或 结构 **HL** |
-| **空** | ① 回抽触及过滤线或隧道上沿；② 收盘仍在过滤线/隧道下方；③ 确认 = **阴线反包** 或 结构 **LH** |
-
----
-
-### 9.2 初始止损（开仓立刻写入）
-
-#### 结构止损（算出来的原始 SL）
-
-| 模块 | 多单 | 空单 |
-|------|------|------|
-| **S 猎手** | 信号 K 最低价 × (1−0.1%) | 信号 K 最高价 × (1+0.1%) |
-| **T 维加斯** | `max(HL×0.9995, EMA169×(1−0.2%))`，且必须低于入场价；无结构位时用入场×(1−0.2%) | 对称（LH / EMA169 上方 0.2%） |
-
-#### 距离上限（ATR 动态，取代百分比硬裁剪）
-
-入场后一律 `apply_entry_sl_cap`：用 **`2.5 × ATR(14)`** 作为距入场的最大止损距离（`OI_SANDBOX_SL_ATR_MULT`，默认 2.5）。
-
-- 多：结构 SL 过远则**上移**到 `入场 − 2.5×ATR`  
-- 空：结构 SL 过远则**下移**到 `入场 + 2.5×ATR`  
-- ATR 无效时**不裁剪**（保留结构 SL）  
-- OI 暴增时波动率升高 → ATR 变大 → 允许更宽止损，避免被噪音扫损  
-- 已开仓位不会因改配置自动重算；仅**新开仓**生效  
-
-硬止损击穿（多：`low≤SL` / 空：`high≥SL`）→ **立即全平**，不受最短持仓限制。
-
----
-
-### 9.3 止盈与移损（持仓后）
-
-**通用（S / T 都有）— 阶梯锁利**
-
-- 持仓以来极值相对入场的有利价变，每满 **2.2%** → SL 相对入场再锁定 **+1%**（可叠加：4.4%→+2%，6.6%→+3%…）  
-- 事件：`trail` / `reason=step_trail`；若当根已触及新 SL → `exit` / `step_sl`
-
-#### 9.3.1 短线 S — 主动止盈（全平，不留尾）
-
-在**硬止损未触发**时，需同时满足软出场门槛，才允许主动止盈：
-
-1. 持仓已满至少 **2** 根 15m（`OI_SANDBOX_MIN_HOLD_BARS`）  
-2. 收盘价相对入场已有 ≥ **0.25%** 有利波动（`OI_SANDBOX_SOFT_EXIT_MIN_MOVE_PCT`）
-
-| 止盈方式 | 条件 | 出场码 |
-|----------|------|--------|
-| 布林中轨 | 收盘触及/越过中轨（不用影线） | `bb_mid` |
-| ATR | 收盘有利波动 ≥ **2×ATR14** | `atr2` |
-
-逻辑：止损被打穿 = 反转失败，瞬间离场；中轨/ATR 用来落袋，避免影线秒平。
-
-#### 9.3.2 长线 T — 分阶段（保本 → 减仓 → 跟踪）
-
-| 阶段 | 触发（价变有利） | 动作 | 事件 |
-|------|------------------|------|------|
-| **0** | 开仓 | 写入入场价 / 初始 SL | `entry` |
-| **1** | ≥ **0.75%** | SL 移至**开仓成本（保本）** | `trail` / `breakeven` |
-| **阶梯** | 峰值每满 **2.2%** | 相对入场锁定 +1%/+2%/…（与 S 相同） | `trail` / `step_trail` |
-| **2** | ≥ **1.0%** | **市价减仓 30%**，余 70% 进入跟踪 | `partial` + `trail` |
-| **3** | 自持仓极值回撤 **1%** | 剩余仓位全平；跟踪 SL 与阶梯取更优 | `exit` / `trail` |
-
-伪代码（多单尾仓）：
-
-```python
-if high > highest_price:
-    highest_price = high
-trail_sl = max(highest_price * 0.99, step_trail_sl)  # 距高点 1%，或更优阶梯锁
-if low <= trail_sl:
-    close_all()
-```
-
----
-
-### 9.4 出场原因码（复盘用）
-
-| code | 含义 |
+| 环节 | 实现 |
 |------|------|
-| `sl` | 硬止损 |
-| `step_sl` | 阶梯锁定止损被打穿 |
-| `bb_mid` | 短线：布林中轨止盈 |
-| `atr2` | 短线：2×ATR 止盈 |
-| `breakeven` / `step_trail` / `trailing_update` | 移损（未平仓） |
-| `partial` | 长线减仓 30% |
-| `trail` | 长线跟踪止损全平 |
+| 入库（形态/结构 TG 卡） | `pattern_alert_stats.record_alert_from_push` ← `notify_telegram` |
+| 入库（discord-collector 交易卡） | `record_card_from_archive` ← `POST /api/pattern-alert-stats/record-card` |
+| 核实窗口 | 信号后 **3h**（`verifyAt = signalAt + 3h`） |
+| 步进节奏 | 每 **15m** 拉 Binance 15m K 重算；未满 3h 且未触发则保持 `pending` |
+| 前端规则文案 | `frontend/src/utils/patternEntryRules.ts`（弹窗「入场规则」） |
+| 前端结算 | `frontend/src/utils/patternAlertWinRate.ts` |
+| 后端结算（回测等同源） | `pattern_settle.py` |
 
-前端历史表：partial + 最终全平合并为一行，阶段事件用 `;` 连接。
-
----
-
-### 9.5 配置一览（沙盒交易相关）
-
-| 环境变量 | 默认 | 含义 |
-|----------|------|------|
-| `OI_SANDBOX_INTERVALS` | 15m,1h | 交易执行周期列表（逗号分隔） |
-| `OI_SANDBOX_INTERVAL` | （列表首项） | 兼容旧变量；未设 `INTERVALS` 时仍可用单值思路，以 `INTERVALS` 为准 |
-| `OI_SANDBOX_KLINE_LIMIT` | 200 | 15m 等周期拉取根数 |
-| `OI_SANDBOX_KLINE_LIMIT_1H` | 720 | 1h 拉取根数（够 Vegas EMA676） |
-| `OI_SANDBOX_DAILY_COUNT` | 12 | 日池币数 |
-| `OI_SANDBOX_MAX_CONCURRENT` | 20 | 最大同时持仓 |
-| `OI_SANDBOX_NOTIONAL_USD` | 1 | 单笔保证金 U |
-| `OI_SANDBOX_LEVERAGE_MAJOR` / `_ALT` | 100 / 30 | BTC·ETH / 山寨杠杆 |
-| `OI_SANDBOX_FEE_PCT` | 0.04 | 单边手续费 %（名义） |
-| `OI_SANDBOX_HUNTER_SL_PAD` | 0.001 | S：信号 K 极值外垫 |
-| `OI_SANDBOX_HUNTER_ATR_MULT` | 2 | S：ATR 止盈倍数 |
-| `OI_SANDBOX_HUNTER_REQUIRE_POSITION` | 1 | S：射击之星做空须收盘在 BB 上轨区或近 Vegas 通道 |
-| `OI_SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK` | 20 | S：做空前趋势背景回看根数 |
-| `OI_SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT` | 3.0 | S：做空前累计涨幅门槛 % |
-| `OI_SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK` | 20 | S：做多前趋势背景回看根数 |
-| `OI_SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT` | 3.0 | S：做多前累计跌幅门槛 % |
-| `OI_SANDBOX_HUNTER_HAMMER_BELOW_MID` | 1 | S：倒锤/锤子做多须收盘在中轨之下 |
-| `OI_SANDBOX_SL_ATR_MULT` | 2.5 | 初始止损距离上限 = 该值 × ATR(14) |
-| `OI_SANDBOX_TREND_SL_PAD` | 0.002 | T：EMA169 外垫 |
-| `OI_SANDBOX_TREND_BE_PRICE_PCT` | 0.75 | T：保本触发价变% |
-| `OI_SANDBOX_TREND_PARTIAL_PRICE_PCT` | 1.0 | T：减仓触发价变% |
-| `OI_SANDBOX_TREND_PARTIAL_FRAC` | 0.30 | T：减仓比例 |
-| `OI_SANDBOX_TREND_TRAIL_PCT` | 1.0 | T：尾仓回撤% |
-| `OI_SANDBOX_STEP_TRAIL_PROFIT_PCT` | 2.2 | 阶梯：峰值每满该% |
-| `OI_SANDBOX_STEP_TRAIL_SL_LIFT_PCT` | 1.0 | 阶梯：每档锁定% |
-| `OI_SANDBOX_MIN_HOLD_BARS` | 2 | 软止盈最短持仓根数 |
-| `OI_SANDBOX_SOFT_EXIT_MIN_MOVE_PCT` | 0.25 | 软止盈最小有利价变% |
-| `OI_SANDBOX_REENTRY_COOLDOWN_BARS` | 8 | 同币再开冷却根数 |
+**关键原则**：各信号类型的差异只在 **§10.2 入场价/方向**；**§10.3 出场规则对所有入库信号统一**，不按 typeLabel 分叉（含 TG 交易卡）。
 
 ---
 
-### 9.6 单笔生命周期字段
+### 10.1 入库条件（谁进列表）
 
-SQLite `trades` + 持仓 `meta_json.events` + 前端 localStorage：
+| 来源 | `source` | 必要条件 |
+|------|----------|----------|
+| 蜡烛/结构 TG 卡片 | `telegram_push` | 能解析 `long/short`；有 `entry`（见下表）；非 legacy 带量突破 |
+| discord-collector 交易卡 | `telegram_card` | 有 `cardId`、方向、数字 `entry`（execution / parsedJson） |
 
-| 字段 | 说明 |
-|------|------|
-| `entry_time` / `entry_price` | 开仓时间（K 收盘秒）与价格 |
-| `exit_time` / `exit_price` | 平仓/减仓时间与价格 |
-| `side` / `logic`（S\|T） / `leverage` / `source` | 方向、模块、杠杆、手动/自动 |
-| `sl` | 当前生效止损 |
-| `stage` / `partial_done` | 长线阶段；是否已减仓 |
-| `highest_price` / `lowest_price` | 跟踪极值 |
-| `events[]` | 有序事件链 |
-| `pnl_usd` / `pnl_pct` / `roe_pct` | 扣费后盈亏 |
+**不入库 / 已停用**（`signal_policy.py` 统一判定；**启动时从胜率库 / ticker 物理删除**，24h 弹窗不再展示）
 
-```json
-[
-  {"type":"entry","time":1710000000,"price":1.23,"sl":1.221,"side":"LONG","logic":"T","source":"auto"},
-  {"type":"trail","time":1710000900,"price":1.24,"sl":1.23,"reason":"breakeven"},
-  {"type":"partial","time":1710001800,"price":1.25,"frac":0.3},
-  {"type":"exit","time":1710003600,"price":1.24,"reason":"trail"}
-]
-```
+- Legacy：`pattern_bull_continuation` / 带量突破扳机
+- 周期 **`30m`**
+- **`破底翻确认` / `spring_2b`**
+- 蜡烛停推：`(oi异动)`、V*、射击之星（2）、连续插针、形态∩OI 短线（`candle_pattern_oi` / `oi_anomaly`）
+- 结构停推：圆弧顶（`curvature_decay`）
+- 量价停推：「量价推进·空」（`vp_cont_thrust` 空）
+- 无法解析方向或入场价
 
 ---
 
-### 9.7 设计要点
+### 10.2 各信号类型的入场定义
 
-1. **策略不冲突**：RANGE 只做边界反转（S）；趋势明确才做回踩顺势（T）。  
-2. **止损先紧后活**：结构位 + 硬上限 → 开仓风险可控；盈利后再阶梯上移 / 保本 / 跟踪。  
-3. **短线防抖**：中轨用收盘判定 + 最短持仓 + 最小有利波动，减少影线假平仓。  
-4. **长线分阶段**：先保本 → 减仓 30% 落袋 → 尾仓才给 1% 回撤空间。  
-5. **多币并发**：日池 12、上限 20，先触发先开；平仓后冷却防反复扫损。
+入场价一律取 **信号 K 线收盘价**（或卡片归档时的 `entryPrice` / `price` / `close`），除非另有说明。  
+「防守位」仅作推送文案/图表参考，**列表核算不使用**自定义 SL，统一走 §10.3 的 ±5%。
+
+| typeLabel（列表展示） | 方向 | 入场价 | 触发要点（实现） |
+|----------------------|------|--------|------------------|
+| **底部二次探底确认** | 多 | 确认柱收盘 | L1 恐慌放量 → L2 贴 L1（±3%）→ 阳线确认（`structure_signals._detect_bottom_reversal`） |
+| **破底翻确认** | 多 | 收回柱收盘 | Spring/2B：假破 L1 后 1～3 根内收回（**已不进胜率库**） |
+| **顶部结构确认** | 空 | 破位柱收盘 | 子形态：头肩/M顶+Vegas 中轨跌破、流动性掠夺、圆弧顶衰竭（`structure_signals`） |
+| **射击之星** | 空 | 信号柱收盘 | 上影≥1.5×实体；BB 上轨区或近 Vegas；前 20 根涨幅≥3% |
+| **连续走平射击之星** | 空 | 同上 | 短窗内第二次射击之星 |
+| **倒锤子** | 多 | 信号柱收盘 | 下影≥1.5×实体；收盘在中轨下；**须柱级 OI 异动**；前 20 根跌幅≥3% |
+| **形态多头爆发** | 多 | 扳机确认收盘 | LH→HL→带量破扳机线（§2；legacy 突破已从库剔除） |
+| **TG 交易卡** | 卡方向 | 卡片 `entry` | `typeLabel`≈频道名；须归档时已有数字入场价 |
+
+详细条件与 §5.4 / §5.5、`patternEntryRules.ts` 一致。调整入场检测改 **扫描侧**；调整列表盈亏改 **§10.3** 或杠杆口径。
 
 ---
 
-## 10. 潜力暴涨漏斗（A/B/C）
+### 10.3 统一出场规则（列表专用）
+
+**所有**进入 `pattern_alert_stats` 的记录共用同一套 **`settle_signal_batch`**，与信号类型无关。
+
+| 项 | 默认值 | 说明 |
+|----|--------|------|
+| 止损 | **±5%**（相对入场价） | 剩余仓位一次性触发即全平该部分 |
+| TP1 | **+3%** | 平 **30%** 仓位（加权计入 movePct） |
+| TP2 | **+7%** | 再平 **30%** |
+| Runner | 余 **40%** | TP2 触达后启动；从极值 **回撤 5%** 跟踪止盈（多：高点下移线；空：低点上移线） |
+| 核实 K 线 | **15m** | 5m 源数据会聚合为 15m |
+| 最长窗口 | **3h** | 超时仍有剩余 → 按窗口末 **收盘价** 结算余仓 |
+| 价格对齐 | 自动 scale | 入场与 K 线量级差 >50× 时尝试对齐（防 1000PEPE 等） |
+
+**Outcome 判定**
+
+- `take_profit`：加权 `movePct > 0`
+- `stop_loss`：加权 `movePct < 0`
+- `flat`：\|movePct\| ≈ 0
+- `pending`：未满 3h 且未触发 SL/TP/Runner
+- `error`：无 K 线等
+
+**盈亏展示（弹窗/TG 摘要）**
+
+- `movePct` = 各档 **价格变动 %** 按 30/30/40 加权
+- `pnlPct` = `movePct × 杠杆`（保证金 ROE 近似）
+- 杠杆：**BTC/ETH/SOL → 100x**；其余山寨 → **20x**
+
+> **注意**：§10.3 为列表专用统一出场；与 §9 卡片 SL/TP 阶段展示**不是同一套核算**。改列表胜率只动 `pattern_settle.py` + `patternAlertWinRate.ts`。
+
+---
+
+### 10.4 与交易卡片 / 潜力暴涨的关系
+
+| 系统 | 入场 | 出场 | 关系 |
+|------|------|------|------|
+| **列表胜率** | §10.2 信号价或卡片 entry | §10.3 统一 3/7% + Runner | 事后回溯，不下单 |
+| **卡片看板（§9）** | collector 推送的 entry / 市价 | 卡片 SL + TP 阶段展示 | 实时监听，不纸面开单 |
+| **潜力暴涨 B/C** | 漏斗状态 | 仅警报与占槽 | 不占列表 typeLabel |
+
+TG **交易卡**同时可能：① 登记胜率库（有 entry 时）；② 推送到 OI 卡片看板。两者独立核算。
+
+### 10.5 调参索引（后续改规则看这里）
+
+| 目标 | 文件 / 变量 |
+|------|-------------|
+| 某类信号 **能不能推送** | `pattern_monitor.py` · `candle_signals.py` · `structure_signals.py` · `config.py` `OI_CANDLE_*` / `OI_STRUCTURE_*` |
+| 信号 **入场条件文案** | `frontend/src/utils/patternEntryRules.ts` · 本文 §5.5 |
+| 列表 **TP/SL/Runner** | `pattern_settle.py`（`TP_LEVELS_PCT` / `BATCH_WEIGHTS` / `DEFAULT_SL_PCT` / `RUNNER_TRAIL_PCT`）· `patternAlertWinRate.ts` 同名常量 |
+| 列表 **核实窗口** | `pattern_alert_stats.py` `_VERIFY_DELAY_MS` · `patternAlertWinRate.ts` `ALERT_VERIFY_DELAY_MS` |
+| 列表 **杠杆口径** | `pattern_alert_stats._leverage` · `patternAlertWinRate.ts` `LEV_100_BASES` |
+| 入库 **黑名单** | `pattern_alert_stats.record_alert_from_push` |
+| 卡片生命周期 | §9 · `cards/engine.py` |
+| 4h 结算 TG 摘要 | `pattern_alert_settle_report.py` · `OI_STATS_SETTLE_TELEGRAM` |
+
+---
+
+## 11. 潜力暴涨漏斗（A/B/C）
 
 并行于 LH→HL 拐点机；字段挂在 `pattern.moonshot*`。核心：**先找死久了还在抬的盘子，再只做放量收盘离开平台的那一下**；竖起后切「寻找顶部」，不追中段。
 
-### 10.1 猎场
+### 11.1 猎场
 
 - 默认宇宙：雷达 `TOP_N`（≈200），**不是**全市场
 - 中场 OI 优先；踢稳定币、24h 涨幅过热前排、低 `quote_volume`
 - OI 不足不否决
-- 监听硬上限仍为 **50**；A 池可更大，按分占槽
+- 监听硬上限仍为 **50**；A 池可更大，按 **漏斗状态**占槽（B/C 态优先）
 - 全市场：`OI_MOONSHOT_FULL_SCAN=1`（默认关；每 2h 约 +700～900 次 K，有 418 风险）
 
-### 10.2 状态机
+### 11.2 状态机（2026-09 起不再使用数值评分）
 
 | 状态 | 含义 | 动作 |
 |------|------|------|
 | `COMPRESS` | 压缩观察 | 只盯不买 |
-| `WAIT_HL` / `LH_NEAR` / `READY_BREAK` | 蓄势 B | 警报 + 可选沙盒试丁点 |
-| `IN_POSITION` | C 放量收盘突破 | 交易/纸面开仓 |
+| `WAIT_HL` / `LH_NEAR` / `READY_BREAK` | 蓄势 B | 警报 |
+| `IN_POSITION` | C 放量收盘突破 | 警报 |
 | `FIND_TOP` | 已竖直/量高潮 | 只减不加 |
 | `INVALID` | 跌回 HL/平台 | 冷却 3～5 天 |
 
-评分 0～10（压缩/结构/量/突破/大盘·RS）；默认 **≥8 进 B，≥9 且突破进 C**。OI/资金费仅加减分。  
-壳层顶栏 `oi-nav-spacer` 展示 **score > 5** 的币种+分数（`OI_MOONSHOT_SCORE_DISPLAY`，默认 5）；点击跳转 `/oi?symbol=` → 形态图。
+进 B/C、占监听槽、发警报 **仅看状态**，不再计算 0～10 分；左侧列表只展示 **状态标签 + reasons**，不展示分数。
 
-### 10.3 扫描节奏
+### 11.3 扫描节奏
 
 - A：独立慢环 `OI_MOONSHOT_A_INTERVAL_SEC`（默认 7200），1h K，与主环错峰
 - B/C：形态 watchlist 每轮 15m K 复用更新，几乎不增请求
 
-开关：`OI_MOONSHOT_ENABLED`（默认开）、`OI_MOONSHOT_SANDBOX_B/C`、`OI_MOONSHOT_FULL_SCAN`（默认关）。
+开关：`OI_MOONSHOT_ENABLED`（默认开）、`OI_MOONSHOT_FULL_SCAN`（默认关）。
+
+---
+
+## 12. 币股并行池（equity_pool）
+
+与加密 OI 分层 **完全并行**：**不**进入 `build_tier_pool()`、**不**计入 `eligible_count` / 大象·中场·监控 badge；SSE 独立字段 + badge「币股 N」。
+
+| 项 | 说明 |
+|----|------|
+| 入池 | 白名单 × 交易所别名；24h 成交额 ≥ `OI_EQUITY_MIN_TURNOVER_USD`；无 OI 可入池 |
+| 刷新 | 独立慢环 `OI_EQUITY_SCAN_INTERVAL_SEC`（默认 300s），与主环 30–60s 错峰 |
+| 形态 | 仅 `OI_EQUITY_KLINE_INTERVALS`（默认 1h/4h）；禁用 `*(oi异动)*`、V*、连续插针、moonshot |
+| 时段 | `OI_EQUITY_SIGNAL_SESSION_ONLY=1` 时非美股时段只更新图表标注，不 `record_alert` |
+| 胜率 | `asset_class=equity` · 杠杆 `OI_EQUITY_STATS_LEVERAGE`（默认 5x）· 核实窗 4h |
+| TG | 默认关 `OI_EQUITY_CARD_TELEGRAM=0` |
+| 关闭 | `OI_EQUITY_ENABLED=0` 时行为与加币股前一致 |
+
+关键文件：`equity_pool.py` · `equity_pattern.py` · `radar._equity_loop` · `pattern_alert_stats.record_equity_alert_from_scan`。

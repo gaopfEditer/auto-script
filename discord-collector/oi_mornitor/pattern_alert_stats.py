@@ -7,10 +7,17 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from oi_mornitor.config import PATTERN_STATE_DB
+from oi_mornitor.signal_policy import (
+    is_blocked_card_type_label,
+    is_blocked_stats_record,
+    is_disabled_pattern_interval,
+    is_retired_pattern_stats_record,
+)
 from oi_mornitor.symbol_aliases import human_base_asset, normalize_usdt_symbol
 
 logger = logging.getLogger(__name__)
@@ -37,19 +44,26 @@ def _is_legacy_breakout_record(rec: dict[str, Any]) -> bool:
 
 
 def purge_legacy_breakout_stats() -> int:
-    """移除胜率库中的旧带量突破 / 扳机信号。"""
+    """移除胜率库中的旧带量突破 / 扳机信号（兼容旧调用）。"""
+    return purge_retired_pattern_stats()
+
+
+def purge_retired_pattern_stats() -> int:
+    """移除胜率库中已停推 / 停用周期 / legacy 信号。"""
     with _LOCK:
         before = _load()
-        kept = [r for r in before if not _is_legacy_breakout_record(r)]
+        kept = [r for r in before if not is_retired_pattern_stats_record(r)]
         removed = len(before) - len(kept)
         if removed:
             _save(kept)
+            logger.info("胜率库清理停推/legacy 记录 %d 条", removed)
         return removed
 _STATS_FILE = Path(PATTERN_STATE_DB).resolve().parent / "pattern_alert_stats.json"
 # 长期保存：不再按 7 天裁剪；仅软上限防文件无限膨胀（可 env 覆盖）
 _MAX_ITEMS = int(os.environ.get("PATTERN_ALERT_STATS_MAX", "50000"))
 _PAGE_SIZE_DEFAULT = 100
 _VERIFY_DELAY_MS = 3 * 60 * 60 * 1000
+_EQUITY_VERIFY_DELAY_MS = 4 * 60 * 60 * 1000
 _VERIFY_INTERVAL_MS = 15 * 60 * 1000
 _DEFAULT_TP_SL_PCT = 3.0
 _DEFAULT_SL_PCT = 5.0
@@ -72,11 +86,74 @@ _TIME_FILTER_MS: dict[str, int] = {
 # 固定周期下拉集合（与前端保持一致）
 FIXED_INTERVALS = ["15m", "1h", "4h"]
 
+# 北京时间 4h 时段（与 pattern_alert_settle_report 结算档对齐）
+_TZ_CN = timezone(timedelta(hours=8))
+_BEIJING_SESSIONS: dict[str, tuple[int, int]] = {
+    "0-4": (0, 4),
+    "4-8": (4, 8),
+    "8-12": (8, 12),
+    "12-16": (12, 16),
+    "16-20": (16, 20),
+    "20-24": (20, 24),
+}
+# 下拉展示顺序（与前端 ALERT_STATS_SESSION_FILTERS 一致）
+SESSION_ORDER: tuple[str, ...] = ("8-12", "12-16", "16-20", "20-24", "0-4", "4-8")
+SESSION_LABELS: dict[str, str] = {
+    "all": "全部时段",
+    "8-12": "8:00-12:00",
+    "12-16": "12:00-16:00",
+    "16-20": "16:00-20:00",
+    "20-24": "20:00-24:00",
+    "0-4": "00:00-4:00",
+    "4-8": "4:00-8:00",
+}
+
+# 北京时间工作日 / 周末（weekday: 0=周一 … 6=周日）
+DAYTYPE_ORDER: tuple[str, ...] = ("weekday", "weekend")
+DAYTYPE_LABELS: dict[str, str] = {
+    "all": "全部日期",
+    "weekday": "工作日",
+    "weekend": "周末",
+}
+
+
+def _beijing_dt(signal_at_ms: int) -> datetime:
+    return datetime.fromtimestamp(signal_at_ms / 1000.0, tz=_TZ_CN)
+
+
+def _beijing_hour(signal_at_ms: int) -> int:
+    return _beijing_dt(signal_at_ms).hour
+
+
+def _signal_matches_daytype(signal_at_ms: int, daytype: str) -> bool:
+    dt = str(daytype or "").strip().lower()
+    if not dt or dt == "all":
+        return True
+    wd = _beijing_dt(signal_at_ms).weekday()
+    if dt == "weekend":
+        return wd >= 5
+    if dt == "weekday":
+        return wd < 5
+    return True
+
+
+def _signal_in_beijing_session(signal_at_ms: int, session: str) -> bool:
+    bounds = _BEIJING_SESSIONS.get(str(session or "").strip())
+    if not bounds:
+        return True
+    start_h, end_h = bounds
+    hour = _beijing_hour(signal_at_ms)
+    if end_h >= 24:
+        return hour >= start_h
+    return start_h <= hour < end_h
+
 def _interval_in_fixed(iv: str) -> str | None:
     """判断原始 interval 是否落在固定集合中；尝试归一化（w → 7d / m → 30d）。"""
     if not iv:
         return None
     iv = str(iv).strip().lower()
+    if is_disabled_pattern_interval(iv):
+        return None
     norm: dict[str, str] = {
         "1h": "1h",
         "1w": "7d",
@@ -121,7 +198,12 @@ def _detect_tier(symbol: str) -> str:
     return "major" if human_base_asset(symbol) in _LEV_100 else "altcoin"
 
 
-def _leverage(symbol: str) -> int:
+def _leverage(symbol: str, asset_class: str = "crypto") -> float:
+    if str(asset_class or "").lower() == "equity":
+        from oi_mornitor.config import OI_EQUITY_STATS_LEVERAGE
+
+        lev = float(OI_EQUITY_STATS_LEVERAGE or 5)
+        return lev if lev > 0 else 0.0
     return 100 if human_base_asset(symbol) in _LEV_100 else 20
 
 
@@ -240,9 +322,12 @@ def filter_alert_stats(
     items: list[dict[str, Any]] | None = None,
     *,
     time_filter: str | None = None,
+    session_filter: str | None = None,
+    daytype_filter: str | None = None,
     type_label: str | None = None,
     interval: str | None = None,
     symbol: str | None = None,
+    asset_class: str | None = None,
     now_ms: int | None = None,
 ) -> list[dict[str, Any]]:
     rows = items if items is not None else _load()
@@ -253,6 +338,20 @@ def filter_alert_stats(
         if span:
             cutoff = now - span
             rows = [r for r in rows if int(r.get("signalAt") or 0) >= cutoff]
+    sf = (session_filter or "all").strip()
+    if sf and sf != "all":
+        rows = [
+            r
+            for r in rows
+            if _signal_in_beijing_session(int(r.get("signalAt") or 0), sf)
+        ]
+    df = (daytype_filter or "all").strip().lower()
+    if df and df != "all":
+        rows = [
+            r
+            for r in rows
+            if _signal_matches_daytype(int(r.get("signalAt") or 0), df)
+        ]
     tl = (type_label or "").strip()
     if tl and tl != "all":
         rows = [r for r in rows if _type_label_of(r) == tl]
@@ -263,6 +362,14 @@ def filter_alert_stats(
     if needle and needle != "ALL":
         want = human_base_asset(needle) or needle
         rows = [r for r in rows if _rec_base_symbol(r) == want]
+    ac = (asset_class or "").strip().lower()
+    if ac and ac != "all":
+        rows = [
+            r
+            for r in rows
+            if str(r.get("assetClass") or "crypto").lower() == ac
+        ]
+    rows = [r for r in rows if not is_retired_pattern_stats_record(r)]
     return rows
 
 
@@ -322,8 +429,97 @@ def _rec_pnl_pct(rec: dict[str, Any]) -> float | None:
         signed = abs(price_move)
     else:
         signed = price_move
-    lev = _leverage(str(rec.get("tradeSymbol") or rec.get("symbol") or ""))
+    lev = _leverage(
+        str(rec.get("tradeSymbol") or rec.get("symbol") or ""),
+        str(rec.get("assetClass") or "crypto"),
+    )
+    if str(rec.get("assetClass") or "").lower() == "equity" and lev <= 0:
+        return round(signed, 2)
     return round(signed * lev, 2)
+
+
+def list_session_options(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """北京时间时段下拉：含胜率、合计盈亏（相对当前已叠加的其他筛选）。"""
+    rows = items if items is not None else _load()
+    buckets: dict[str, list[dict[str, Any]]] = {sid: [] for sid in SESSION_ORDER}
+    for r in rows:
+        signal_at = int(r.get("signalAt") or 0)
+        if signal_at <= 0:
+            continue
+        for sid in SESSION_ORDER:
+            if _signal_in_beijing_session(signal_at, sid):
+                buckets[sid].append(r)
+                break
+    out: list[dict[str, Any]] = []
+    s_all = summarize(rows)
+    out.append(
+        {
+            "id": "all",
+            "label": SESSION_LABELS["all"],
+            "count": len(rows),
+            "wins": s_all["wins"],
+            "losses": s_all["losses"],
+            "winRate": s_all["winRate"],
+            "totalPnlPct": s_all.get("totalPnlPct"),
+        }
+    )
+    for sid in SESSION_ORDER:
+        bucket = buckets[sid]
+        s = summarize(bucket)
+        out.append(
+            {
+                "id": sid,
+                "label": SESSION_LABELS[sid],
+                "count": len(bucket),
+                "wins": s["wins"],
+                "losses": s["losses"],
+                "winRate": s["winRate"],
+                "totalPnlPct": s.get("totalPnlPct"),
+            }
+        )
+    return out
+
+
+def list_daytype_options(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """工作日/周末下拉：含胜率、合计盈亏（相对当前已叠加的其他筛选）。"""
+    rows = items if items is not None else _load()
+    buckets: dict[str, list[dict[str, Any]]] = {did: [] for did in DAYTYPE_ORDER}
+    for r in rows:
+        signal_at = int(r.get("signalAt") or 0)
+        if signal_at <= 0:
+            continue
+        for did in DAYTYPE_ORDER:
+            if _signal_matches_daytype(signal_at, did):
+                buckets[did].append(r)
+                break
+    out: list[dict[str, Any]] = []
+    s_all = summarize(rows)
+    out.append(
+        {
+            "id": "all",
+            "label": DAYTYPE_LABELS["all"],
+            "count": len(rows),
+            "wins": s_all["wins"],
+            "losses": s_all["losses"],
+            "winRate": s_all["winRate"],
+            "totalPnlPct": s_all.get("totalPnlPct"),
+        }
+    )
+    for did in DAYTYPE_ORDER:
+        bucket = buckets[did]
+        s = summarize(bucket)
+        out.append(
+            {
+                "id": did,
+                "label": DAYTYPE_LABELS[did],
+                "count": len(bucket),
+                "wins": s["wins"],
+                "losses": s["losses"],
+                "winRate": s["winRate"],
+                "totalPnlPct": s.get("totalPnlPct"),
+            }
+        )
+    return out
 
 
 def list_type_options(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
@@ -354,27 +550,79 @@ def list_alert_stats_page(
     page: int = 1,
     page_size: int = _PAGE_SIZE_DEFAULT,
     time_filter: str | None = None,
+    session_filter: str | None = None,
+    daytype_filter: str | None = None,
     type_label: str | None = None,
     interval: str | None = None,
     symbol: str | None = None,
+    asset_class: str | None = None,
 ) -> dict[str, Any]:
-    """分页列表；typeOptions/intervalOptions 互相联动（选了什么 filter，另一个的 count 就跟着变）。"""
+    """分页列表；type/interval/session/daytype Options 互相联动。"""
     page = max(1, int(page or 1))
     size = min(100, max(1, int(page_size or _PAGE_SIZE_DEFAULT)))
-    # 基础时间筛选（可叠加币种，供图表按币拉取入场点）
-    timed = filter_alert_stats(
-        time_filter=time_filter, type_label=None, interval=None, symbol=symbol
+    # 基础时间窗（不含时段/日期类型，供下拉联动）
+    time_base = filter_alert_stats(
+        time_filter=time_filter,
+        session_filter=None,
+        daytype_filter=None,
+        type_label=None,
+        interval=None,
+        symbol=symbol,
+        asset_class=asset_class,
     )
-    # intervalOpts 叠加 type 过滤（联动）
+    # 叠加时段 + 工作日/周末（供 type/interval 联动）
+    scoped = filter_alert_stats(
+        time_base,
+        session_filter=session_filter,
+        daytype_filter=daytype_filter,
+        type_label=None,
+        interval=None,
+    )
+    cross_kw = dict(
+        time_filter=None,
+        type_label=type_label,
+        interval=interval,
+    )
+    # sessionOpts 叠加 daytype + type + interval
+    session_opts = list_session_options(
+        filter_alert_stats(
+            time_base,
+            session_filter=None,
+            daytype_filter=daytype_filter,
+            **cross_kw,
+        )
+    )
+    # daytypeOpts 叠加 session + type + interval
+    daytype_opts = list_daytype_options(
+        filter_alert_stats(
+            time_base,
+            daytype_filter=None,
+            session_filter=session_filter,
+            **cross_kw,
+        )
+    )
+    # intervalOpts 叠加 type + session + daytype
     interval_opts = list_interval_options(
-        filter_alert_stats(timed, time_filter=None, type_label=type_label, interval=None)
+        filter_alert_stats(
+            scoped,
+            type_label=type_label,
+            interval=None,
+        )
     )
-    # typeOpts 叠加 interval 过滤（联动）
+    # typeOpts 叠加 interval + session + daytype
     type_opts = list_type_options(
-        filter_alert_stats(timed, time_filter=None, type_label=None, interval=interval)
+        filter_alert_stats(
+            scoped,
+            type_label=None,
+            interval=interval,
+        )
     )
     # 列表用全部过滤
-    filtered = filter_alert_stats(timed, time_filter=None, type_label=type_label, interval=interval)
+    filtered = filter_alert_stats(
+        scoped,
+        type_label=type_label,
+        interval=interval,
+    )
     total = len(filtered)
     pages = max(1, (total + size - 1) // size) if total else 1
     if page > pages:
@@ -390,6 +638,8 @@ def list_alert_stats_page(
         "summary": summarize(filtered),
         "typeOptions": type_opts,
         "intervalOptions": interval_opts,
+        "sessionOptions": session_opts,
+        "daytypeOptions": daytype_opts,
         # 兼容旧前端
         "typeLabels": [x["label"] for x in type_opts],
     }
@@ -565,12 +815,14 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
     """TG 推送形态/结构卡片时登记一条待核实信号。"""
     if not isinstance(alert, dict):
         return None
+    if is_blocked_stats_record(alert):
+        return None
     if _is_legacy_breakout_record({"key": alert_stats_key(alert), **alert}):
         return None
     # 彻底屏蔽已停用的 30m 周期和破底翻确认
     iv = str(alert.get("interval") or "").strip()
     kind = str(alert.get("kind") or alert.get("type_label") or "").strip()
-    if iv in ("30m", "30min") or kind == "破底翻确认" or kind == "spring_2b":
+    if is_disabled_pattern_interval(iv) or kind == "破底翻确认" or kind == "spring_2b":
         return None
     side = _side_from_alert(alert)
     if side not in ("long", "short"):
@@ -592,6 +844,8 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
     type_label = str(
         alert.get("type_label") or alert.get("pattern_label") or alert.get("signal_text") or ""
     ).strip()
+    if is_blocked_card_type_label(type_label):
+        return None
     interval = str(alert.get("interval") or "").strip()
     dir_cn = "多" if side == "long" else "空"
 
@@ -632,6 +886,7 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
             "typeLabel": type_label,
             "interval": interval,
             "source": "telegram_push",
+            "assetClass": str(alert.get("asset_class") or "crypto"),
             "recordedAt": _now_ms(),
         }
         _save([rec, *items])
@@ -642,6 +897,58 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
             interval or "—",
             signal_at,
         )
+        return rec
+
+
+def record_equity_alert_from_scan(alert: dict[str, Any]) -> dict[str, Any] | None:
+    """币股形态扫描入库（独立 asset_class / 4h 核实窗口）。"""
+    if not isinstance(alert, dict):
+        return None
+    if str(alert.get("asset_class") or "") != "equity":
+        return None
+    iv = str(alert.get("interval") or "").strip()
+    if iv not in ("1h", "4h"):
+        return None
+    kind = str(alert.get("type_label") or "").strip()
+    if kind in ("破底翻确认", "spring_2b") or "(oi异动)" in kind:
+        return None
+    side = _side_from_alert(alert)
+    if side not in ("long", "short"):
+        return None
+    entry = _entry_from_alert(alert)
+    if entry is None:
+        return None
+    key = alert_stats_key({**alert, "source": "equity_pattern"})
+    sym_raw = str(alert.get("symbol") or "")
+    signal_at = _to_ms(alert.get("kline_close_time") or alert.get("scan_ts"))
+    trade_symbol = normalize_usdt_symbol(sym_raw)
+    type_label = str(alert.get("type_label") or "").strip()
+    dir_cn = "多" if side == "long" else "空"
+
+    with _LOCK:
+        items = _load()
+        if any(r.get("key") == key for r in items):
+            return next(r for r in items if r.get("key") == key)
+        rec = {
+            "key": key,
+            "symbol": _display_symbol(sym_raw),
+            "tradeSymbol": trade_symbol,
+            "dir": dir_cn,
+            "side": side,
+            "signalAt": signal_at,
+            "entry": entry,
+            "tier": "equity",
+            "stepPct": _DEFAULT_TP_SL_PCT,
+            "verifyAt": signal_at + _EQUITY_VERIFY_DELAY_MS,
+            "outcome": "pending",
+            "typeLabel": type_label,
+            "interval": iv,
+            "source": "equity_pattern",
+            "assetClass": "equity",
+            "recordedAt": _now_ms(),
+        }
+        _save([rec, *items])
+        logger.info("币股信号胜率入库 %s %s %s", rec["symbol"], type_label, iv)
         return rec
 
 
@@ -679,6 +986,8 @@ def apply_settle_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if not isinstance(u, dict):
                 continue
             key = str(u.get("key") or "")
+            if key and key in by_key and is_retired_pattern_stats_record(by_key[key]):
+                continue
             if not key or key not in by_key:
                 # 允许前端补登记一条完整记录
                 if key and u.get("signalAt") and u.get("entry") and u.get("side"):

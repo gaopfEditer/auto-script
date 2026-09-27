@@ -14,8 +14,15 @@ import {
   formatAlertTotalPnlPct,
   formatAlertTypeOptionLabel,
   formatIntervalOptionLabel,
+  formatDaytypeOptionLabel,
+  formatSessionOptionLabel,
   type AlertStatsIntervalOption,
   type AlertStatsRecord,
+  type AlertStatsAssetFilter,
+  type AlertStatsDaytypeFilter,
+  type AlertStatsDaytypeOption,
+  type AlertStatsSessionFilter,
+  type AlertStatsSessionOption,
   type AlertStatsTimeFilter,
   type AlertStatsTypeOption,
   type AlertWinRateSummary,
@@ -163,6 +170,9 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
 }: Props) {
   const operator = useMemo(() => isOiOperator(), []);
   const [filter, setFilter] = useState<AlertStatsTimeFilter>("all");
+  const [sessionFilter, setSessionFilter] = useState<AlertStatsSessionFilter>("all");
+  const [daytypeFilter, setDaytypeFilter] = useState<AlertStatsDaytypeFilter>("all");
+  const [assetClassFilter, setAssetClassFilter] = useState<AlertStatsAssetFilter>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [intervalFilter, setIntervalFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
@@ -172,6 +182,8 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   );
   const [typeOptions, setTypeOptions] = useState<AlertStatsTypeOption[]>([]);
   const [intervalOptions, setIntervalOptions] = useState<AlertStatsIntervalOption[]>([]);
+  const [sessionOptions, setSessionOptions] = useState<AlertStatsSessionOption[]>([]);
+  const [daytypeOptions, setDaytypeOptions] = useState<AlertStatsDaytypeOption[]>([]);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [loadingList, setLoadingList] = useState(false);
@@ -197,13 +209,18 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
         page: nextPage,
         pageSize: ALERT_STATS_PAGE_SIZE,
         timeFilter: filter,
+        sessionFilter,
+        daytypeFilter,
         typeFilter,
         intervalFilter,
+        assetClassFilter,
       });
       setRows(res.items);
       setSummary(res.summary);
       setTypeOptions(res.typeOptions);
       setIntervalOptions(res.intervalOptions ?? []);
+      setSessionOptions(res.sessionOptions ?? []);
+      setDaytypeOptions(res.daytypeOptions ?? []);
       setTotal(res.total);
       setPages(res.pages);
       setPage(res.page);
@@ -241,7 +258,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     setPage(1);
     void reloadPage({ page: 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, typeFilter, intervalFilter]);
+  }, [filter, sessionFilter, daytypeFilter, assetClassFilter, typeFilter, intervalFilter]);
 
   useEffect(() => {
     if (!open) return;
@@ -512,6 +529,49 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
               </select>
             </label>
           </div>
+          <label className="pattern-wr-type-filter">
+            <span>时段</span>
+            <select
+              value={sessionFilter}
+              onChange={(e) => setSessionFilter(e.target.value as AlertStatsSessionFilter)}
+              aria-label="按北京时间时段筛选"
+            >
+              {sessionOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {formatSessionOptionLabel(o)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="pattern-wr-type-filter">
+            <span>日期</span>
+            <select
+              value={daytypeFilter}
+              onChange={(e) => setDaytypeFilter(e.target.value as AlertStatsDaytypeFilter)}
+              aria-label="按工作日或周末筛选"
+            >
+              {daytypeOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {formatDaytypeOptionLabel(o)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="pattern-wr-type-filter">
+            <span>资产</span>
+            <select
+              value={assetClassFilter}
+              onChange={(e) => {
+                setAssetClassFilter(e.target.value as AlertStatsAssetFilter);
+                setPage(1);
+              }}
+              aria-label="按资产类别筛选"
+            >
+              <option value="all">全部</option>
+              <option value="crypto">加密</option>
+              <option value="equity">币股</option>
+            </select>
+          </label>
           <label className="pattern-wr-type-filter">
             <span>类型</span>
             <select

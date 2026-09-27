@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from oi_mornitor.config import PATTERN_STATE_DB
+from oi_mornitor.signal_policy import (
+    is_blocked_ticker_alert,
+    is_disabled_pattern_interval,
+    is_retired_pattern_stats_record,
+    is_retired_pattern_ticker_item,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,18 +87,13 @@ def _prune(items: list[dict[str, Any]], now: int | None = None) -> list[dict[str
     for r in items:
         if not isinstance(r, dict):
             continue
-        if _is_legacy_breakout_item(r):
+        if is_retired_pattern_ticker_item(r):
             continue
         key = _item_key(r)
         if not key or key in seen:
             continue
         signal_at = _to_ms(r.get("signalAt"), 0)
         if signal_at <= cutoff:
-            continue
-        # 彻底屏蔽已停用的 30m 周期（前端/后端任何路径写入都过滤）
-        _alert = r.get("alert") or {}
-        _iv = str(_alert.get("interval") or "").strip()
-        if _iv in ("30m", "30min"):
             continue
         seen.add(key)
         row = dict(r)
@@ -208,19 +209,27 @@ def _item_key_from_alert(alert: dict[str, Any]) -> str:
 
 
 def purge_legacy_breakout_ticker_items() -> int:
-    """移除 ticker 库中的旧带量突破 / 扳机信号。"""
+    """移除 ticker 库中的旧带量突破 / 扳机信号（兼容旧调用）。"""
+    return purge_retired_pattern_ticker_items()
+
+
+def purge_retired_pattern_ticker_items() -> int:
+    """移除 ticker 库中已停推 / 停用周期 / legacy 信号。"""
     with _LOCK:
         before = _load()
-        kept = [r for r in before if not _is_legacy_breakout_item(r)]
+        kept = [r for r in before if not is_retired_pattern_ticker_item(r)]
         removed = len(before) - len(kept)
         if removed:
             _save(kept)
+            logger.info("ticker 清理停推/legacy 记录 %d 条", removed)
         return removed
 
 
 def record_ticker_from_alert(alert: dict[str, Any]) -> dict[str, Any] | None:
     """后端扫描出信号时直接写入 ticker（不依赖浏览器打开）。"""
     if not isinstance(alert, dict):
+        return None
+    if is_blocked_ticker_alert(alert):
         return None
     if _is_legacy_breakout_alert(alert):
         return None
@@ -230,7 +239,7 @@ def record_ticker_from_alert(alert: dict[str, Any]) -> dict[str, Any] | None:
     # 彻底屏蔽已停用的 30m 周期和破底翻确认
     iv = str(alert.get("interval") or "").strip()
     kind = str(alert.get("kind") or alert.get("type_label") or "").strip()
-    if iv in ("30m", "30min") or kind == "破底翻确认" or kind == "spring_2b":
+    if is_disabled_pattern_interval(iv) or kind == "破底翻确认" or kind == "spring_2b":
         return None
     key = _item_key_from_alert(alert)
     if not key or key.count(":") < 2:
@@ -283,11 +292,10 @@ def backfill_ticker_from_stats(*, limit: int = 40) -> int:
         sym = str(rec.get("tradeSymbol") or rec.get("symbol") or "").strip()
         if not sym:
             continue
+        if is_retired_pattern_stats_record(rec):
+            continue
         type_label = str(rec.get("typeLabel") or "")
         interval = str(rec.get("interval") or "")
-        # 彻底屏蔽已停用的 30m 周期和破底翻确认
-        if interval.strip() in ("30m", "30min") or type_label.strip() == "破底翻确认":
-            continue
         dir_cn = str(rec.get("dir") or "—")
         reason = f"{type_label}·{interval}" if interval and type_label else (type_label or "信号")
         alert = {

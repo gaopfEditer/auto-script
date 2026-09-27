@@ -2,67 +2,32 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type {
   ChartAlertEntryFocus,
+  EquityPoolItem,
+  EquityPatternState,
   MoonshotItem,
   PatternAlert,
   PatternPayload,
   PatternState,
   PatternWatchItem,
 } from "../types";
-import { fmtMetaPrice, fmtTs } from "../utils/format";
 import { displaySymbol, humanBaseAsset } from "../utils/symbol";
 import { CoinAvatar } from "../components/CoinAvatar";
 import { MercuHeader } from "../components/MercuHeader";
 import { PatternChartPanel } from "../components/PatternChartPanel";
 import { PatternAlertTicker } from "../components/PatternAlertTicker";
-import { SandboxToastStack } from "../components/SandboxToastStack";
 import { CardLifecyclePanel } from "../components/CardLifecyclePanel";
 import { useRadarSSE } from "../hooks/useRadarSSE";
-import { useOiOnboardBridge } from "../hooks/useOiOnboardBridge";
-import { useSandboxTradeHistory } from "../hooks/useSandboxTradeHistory";
 import { useSpecialFocus } from "../hooks/useSpecialFocus";
-import { resolveSandboxCardAuthor } from "../utils/cardAuthor";
-import {
-  filterHistoryByRange,
-  SANDBOX_HISTORY_RANGE_OPTIONS,
-  SANDBOX_HISTORY_RETAIN_DAYS,
-  summarizeHistoryByLogic,
-  summarizeHistoryByVegas,
-  summarizeHistoryRange,
-  type SandboxHistoryRange,
-} from "../utils/sandboxHistory";
-
-type SandboxLogicFilter = "all" | "S" | "T" | "C";
-type SandboxVegasFilter = "all" | "UP" | "DOWN";
-function fmtTradeEvents(events?: Array<Record<string, unknown>>, fallback?: string): string {
-  if (!events?.length) return fallback?.trim() || "—";
-  return events
-    .filter((e) => e.type && e.type !== "sync")
-    .map((e) => {
-      const t =
-        e.type === "entry"
-          ? "入"
-          : e.type === "exit"
-            ? "出"
-            : e.type === "partial"
-              ? "减"
-              : "移";
-      const px = e.price != null ? fmtMetaPrice(Number(e.price)) : "";
-      const sl = e.sl != null ? ` SL${fmtMetaPrice(Number(e.sl))}` : "";
-      const extra =
-        e.type === "exit" && e.exit_label
-          ? ` ${String(e.exit_label)}`
-          : e.message
-            ? ` ${String(e.message)}`
-            : "";
-      return `${t}@${px}${sl}${extra}`.replace(/\s+/g, " ").trim();
-    })
-    .filter(Boolean)
-    .join("; ");
-}
 
 const STATUS_CLASS: Record<string, string> = {
   SEARCHING_TOP: "pat-search",
   EXPIRED: "pat-expired",
+};
+
+const EQUITY_TAG_LABEL: Record<string, string> = {
+  "crypto-proxy": "crypto-proxy",
+  beta: "beta",
+  macro: "macro",
 };
 
 const MOONSHOT_CLASS: Record<string, string> = {
@@ -88,15 +53,9 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const [chartTfNonce, setChartTfNonce] = useState(0);
   /** 形态信号列表点开时，在 K 线上标出入场点 */
   const [chartAlertFocus, setChartAlertFocus] = useState<ChartAlertEntryFocus | null>(null);
-  const [mainTab, setMainTab] = useState<"pattern" | "sandbox">("pattern");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; symbol: string } | null>(null);
   /** 本页是否已做过「进入默认选中」；用户手动关掉图表后不再强选 */
   const didAutoSelectRef = useRef(false);
-
-  const ensurePatternTab = useCallback(() => {
-    setMainTab("pattern");
-  }, []);
-  useOiOnboardBridge({ onEnsurePatternTab: ensurePatternTab });
 
   const watchlist: PatternWatchItem[] = pattern?.watchlist ?? [];
   const states: PatternState[] = pattern?.states ?? [];
@@ -105,29 +64,21 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     () => new Set(watchlist.map((w) => w.symbol.toUpperCase())),
     [watchlist],
   );
-  const sandboxAlerts: PatternAlert[] = pattern?.sandbox_alerts ?? [];
-  const sandboxPool = pattern?.sandbox_pool ?? [];
-  const sandboxPositions = pattern?.sandbox_positions ?? [];
-  const sandboxStats = pattern?.sandbox_stats;
   const scanTs = pattern?.scan_ts ?? snapshot.scan_ts;
-  const sandboxScanTs = pattern?.sandbox_scan_ts ?? scanTs;
-  const sandboxExitAlerts = useMemo(
-    () => sandboxAlerts.filter((a) => a.type === "exit"),
-    [sandboxAlerts],
-  );
-  const sandboxOn = pattern?.sandbox_enabled !== false;
-  const sandboxMaxConcurrent = pattern?.sandbox_max_concurrent ?? 20;
   const maxWatchSymbols = pattern?.max_watch_symbols ?? 50;
-  const enteredSymbols = useMemo(() => {
+  const cardOrders = pattern?.card_orders ?? [];
+  const activeCardSymbols = useMemo(() => {
     const set = new Set<string>();
-    for (const p of sandboxPositions) {
-      const s = String(p.symbol || "").trim().toUpperCase();
-      if (s) set.add(s);
+    for (const o of cardOrders) {
+      if (["watching", "near", "ordered", "filled"].includes(String(o.status))) {
+        const s = String(o.symbol || "").trim().toUpperCase();
+        if (s) set.add(s);
+      }
     }
     return set;
-  }, [sandboxPositions]);
+  }, [cardOrders]);
 
-  /** 左侧列表：置顶 → 进行中持仓 → 潜力暴涨分 → 其余 */
+  /** 左侧列表：置顶 → 进行中持仓 → 其余（按 symbol 排序） */
   const moonshotBySym = useMemo(() => {
     const map = pattern?.moonshot_by_symbol;
     if (map && typeof map === "object") return map as Record<string, MoonshotItem>;
@@ -138,6 +89,17 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     return out;
   }, [pattern?.moonshot, pattern?.moonshot_by_symbol]);
 
+  const equityEnabled = Boolean(pattern?.equity_enabled);
+  const equityPool: EquityPoolItem[] = pattern?.equity_pool ?? [];
+  const equityStatesBySym = useMemo(() => {
+    const map = new Map<string, EquityPatternState>();
+    for (const st of pattern?.equity_states ?? []) {
+      const sym = String(st.symbol || "").trim().toUpperCase();
+      if (sym) map.set(sym, st);
+    }
+    return map;
+  }, [pattern?.equity_states]);
+
   const sortedWatchlist = useMemo(() => {
     const pinned: PatternWatchItem[] = [];
     const trading: PatternWatchItem[] = [];
@@ -145,133 +107,32 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     for (const w of watchlist) {
       const sym = String(w.symbol || "").trim().toUpperCase();
       if (w.pinned) pinned.push(w);
-      else if (enteredSymbols.has(sym)) trading.push(w);
+      else if (activeCardSymbols.has(sym)) trading.push(w);
       else rest.push(w);
     }
-    const byScore = (a: PatternWatchItem, b: PatternWatchItem) => {
-      const sa = moonshotBySym[String(a.symbol || "").toUpperCase()]?.score ?? -1;
-      const sb = moonshotBySym[String(b.symbol || "").toUpperCase()]?.score ?? -1;
-      return sb - sa;
-    };
-    rest.sort(byScore);
-    trading.sort(byScore);
+    const bySymbol = (a: PatternWatchItem, b: PatternWatchItem) =>
+      String(a.symbol || "").localeCompare(String(b.symbol || ""), undefined, { sensitivity: "base" });
+    rest.sort(bySymbol);
+    trading.sort(bySymbol);
     return [...pinned, ...trading, ...rest];
-  }, [watchlist, enteredSymbols, moonshotBySym]);
+  }, [watchlist, activeCardSymbols]);
 
-  const [manualSym, setManualSym] = useState("");
-  const [manualLogic, setManualLogic] = useState<"S" | "T">("S");
-  const [manualSide, setManualSide] = useState<"LONG" | "SHORT">("LONG");
-  const [manualInterval, setManualInterval] = useState<"15m" | "1h">("15m");
-  /** 持仓手动平仓百分比，key=position id */
-  const [closePctById, setClosePctById] = useState<Record<number, number>>({});
-  const [closingId, setClosingId] = useState<number | null>(null);
-  const [historyRange, setHistoryRange] = useState<SandboxHistoryRange>("7d");
-  const [sandboxLogicFilter, setSandboxLogicFilter] = useState<SandboxLogicFilter>("all");
-  const [sandboxVegasFilter, setSandboxVegasFilter] = useState<SandboxVegasFilter>("all");
   const [cardLifeOpen, setCardLifeOpen] = useState(false);
   const [cardPriceBusy, setCardPriceBusy] = useState(false);
-  const [hideSandboxAuthor, setHideSandboxAuthor] = useState(() => {
-    try {
-      return localStorage.getItem("oi_sandbox_hide_author") === "1";
-    } catch {
-      return false;
-    }
-  });
-
-  const toggleHideSandboxAuthor = useCallback(() => {
-    setHideSandboxAuthor((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("oi_sandbox_hide_author", next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
-  const sandboxIntervals = useMemo(() => {
-    const raw = pattern?.sandbox_intervals;
-    if (Array.isArray(raw) && raw.length) {
-      return raw.map(String).filter((x) => x === "15m" || x === "1h") as Array<"15m" | "1h">;
-    }
-    return ["15m", "1h"] as Array<"15m" | "1h">;
-  }, [pattern?.sandbox_intervals]);
-
-  const sandboxHistory = useSandboxTradeHistory({
-    recentTrades: sandboxStats?.recent_trades,
-    historyTrades: pattern?.sandbox_trade_history,
-    day: sandboxStats?.day,
-    exitAlerts: sandboxExitAlerts,
-    scanTs: sandboxScanTs,
-  });
-  const filteredHistory = useMemo(() => {
-    let rows = filterHistoryByRange(sandboxHistory, historyRange);
-    if (sandboxLogicFilter === "C") {
-      rows = rows.filter(
-        (t) => t.logic === "C" || t.source === "card" || t.source_label === "卡片",
-      );
-    } else if (sandboxLogicFilter === "S" || sandboxLogicFilter === "T") {
-      rows = rows.filter((t) => String(t.logic || "").toUpperCase() === sandboxLogicFilter);
-    }
-    if (sandboxVegasFilter === "UP" || sandboxVegasFilter === "DOWN") {
-      rows = rows.filter(
-        (t) => String(t.vegas_direction || "").toUpperCase() === sandboxVegasFilter,
-      );
-    }
-    return rows;
-  }, [sandboxHistory, historyRange, sandboxLogicFilter, sandboxVegasFilter]);
-  const historyRangeStats = useMemo(
-    () => summarizeHistoryRange(filteredHistory),
-    [filteredHistory],
-  );
-  const historyByLogic = useMemo(
-    () => summarizeHistoryByLogic(filteredHistory),
-    [filteredHistory],
-  );
-  const historyByVegas = useMemo(
-    () => summarizeHistoryByVegas(filteredHistory),
-    [filteredHistory],
-  );
-  const filteredPositions = useMemo(() => {
-    let rows = sandboxPositions;
-    if (sandboxLogicFilter === "C") {
-      rows = rows.filter(
-        (p) => p.logic === "C" || p.source === "card" || p.source_label === "卡片",
-      );
-    } else if (sandboxLogicFilter === "S" || sandboxLogicFilter === "T") {
-      rows = rows.filter((p) => String(p.logic || "").toUpperCase() === sandboxLogicFilter);
-    }
-    if (sandboxVegasFilter === "UP" || sandboxVegasFilter === "DOWN") {
-      rows = rows.filter(
-        (p) => String(p.vegas_direction || "").toUpperCase() === sandboxVegasFilter,
-      );
-    }
-    return rows;
-  }, [sandboxPositions, sandboxLogicFilter, sandboxVegasFilter]);
-  const cardOrders = pattern?.sandbox_card_orders ?? [];
-  const filteredCardOrders = useMemo(() => {
-    if (sandboxLogicFilter === "S" || sandboxLogicFilter === "T") return [];
-    return cardOrders.filter((o) =>
-      ["watching", "near", "ordered", "filled"].includes(o.status),
-    );
-  }, [cardOrders, sandboxLogicFilter]);
 
   const refreshCardPrices = useCallback(async () => {
     setCardPriceBusy(true);
     setErr("");
     try {
-      const res = await fetch("/api/sandbox/card-prices", { method: "POST" });
+      const res = await fetch("/api/cards/prices", { method: "POST" });
       const data = await res.json();
       if (!data.ok && data.error) {
         setErr(data.error || "卡片市价刷新失败");
         return;
       }
       patchPattern({
-        sandbox_card_orders: data.sandbox_card_orders,
-        sandbox_card_price_ts: data.sandbox_card_price_ts ?? data.ts,
-        sandbox_positions: data.sandbox_positions,
-        sandbox_stats: data.sandbox_stats,
-        sandbox_trade_history: data.sandbox_trade_history,
+        card_orders: data.card_orders,
+        card_price_ts: data.card_price_ts ?? data.ts,
       } as Partial<PatternPayload>);
     } catch {
       setErr("卡片市价刷新网络错误");
@@ -279,110 +140,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
       setCardPriceBusy(false);
     }
   }, [patchPattern]);
-
-  const reshuffleSandbox = useCallback(async () => {
-    setBusy(true);
-    setErr("");
-    try {
-      const res = await fetch("/api/sandbox/reshuffle", { method: "POST" });
-      const data = await res.json();
-      if (!data.ok) setErr(data.error || "沙盒日池重抽失败");
-    } catch {
-      setErr("网络错误");
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  const manualSandboxEnter = useCallback(
-    async (args?: {
-      symbol?: string;
-      logic?: "S" | "T";
-      side?: "LONG" | "SHORT";
-      interval?: "15m" | "1h";
-    }) => {
-      const sym = (args?.symbol || manualSym || selectedSymbol || "").trim().toUpperCase();
-      const logic = args?.logic || manualLogic;
-      const side = args?.side || manualSide;
-      const interval = args?.interval || manualInterval;
-      if (!sym) {
-        setErr("请填写或选中币种");
-        return;
-      }
-      setBusy(true);
-      setErr("");
-      try {
-        const res = await fetch("/api/sandbox/enter", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol: sym, logic, side, interval }),
-        });
-        const data = await res.json();
-        if (!data.ok) setErr(data.error || "市价开仓失败");
-        else {
-          setMainTab("sandbox");
-          setSelectedSymbol(sym);
-          // 立刻同步持仓到左侧列表高亮（不必等下一轮 SSE）
-          const patch: Partial<PatternPayload> = {};
-          if (Array.isArray(data.sandbox_positions)) {
-            patch.sandbox_positions = data.sandbox_positions;
-          }
-          if (data.sandbox_stats) patch.sandbox_stats = data.sandbox_stats;
-          if (Array.isArray(data.sandbox_pool)) patch.sandbox_pool = data.sandbox_pool;
-          if (Array.isArray(data.sandbox_alerts)) patch.sandbox_alerts = data.sandbox_alerts;
-          if (Object.keys(patch).length) patchPattern(patch);
-        }
-      } catch {
-        setErr("网络错误");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [manualSym, selectedSymbol, manualLogic, manualSide, manualInterval, patchPattern],
-  );
-
-  const manualSandboxClose = useCallback(
-    async (positionId: number, pct: number) => {
-      if (!positionId) {
-        setErr("缺少持仓 ID");
-        return;
-      }
-      const p = Math.min(100, Math.max(1, Math.round(Number(pct) || 100)));
-      setClosingId(positionId);
-      setBusy(true);
-      setErr("");
-      try {
-        const res = await fetch("/api/sandbox/close", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ position_id: positionId, pct: p }),
-        });
-        const data = await res.json();
-        if (!data.ok) setErr(data.error || "平仓失败");
-        else {
-          const patch: Partial<PatternPayload> = {};
-          if (Array.isArray(data.sandbox_positions)) {
-            patch.sandbox_positions = data.sandbox_positions;
-          }
-          if (data.sandbox_stats) patch.sandbox_stats = data.sandbox_stats;
-          if (Array.isArray(data.sandbox_trade_history)) {
-            patch.sandbox_trade_history = data.sandbox_trade_history;
-          }
-          if (Array.isArray(data.sandbox_alerts)) patch.sandbox_alerts = data.sandbox_alerts;
-          if (Array.isArray(data.sandbox_card_orders)) {
-            patch.sandbox_card_orders = data.sandbox_card_orders;
-          }
-          if (Object.keys(patch).length) patchPattern(patch);
-        }
-      } catch {
-        setErr("网络错误");
-      } finally {
-        setBusy(false);
-        setClosingId(null);
-      }
-    },
-    [patchPattern],
-  );
 
   const addSymbol = useCallback(
     async (symbolOverride?: string) => {
@@ -403,7 +160,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         }
         if (!symbolOverride) setInput("");
         setSelectedSymbol(sym);
-        setMainTab("pattern");
         if (Array.isArray(data.watchlist)) {
           patchPattern({
             watchlist: data.watchlist,
@@ -431,8 +187,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     if (!sym) return;
     didAutoSelectRef.current = true;
     setSelectedSymbol(sym);
-    setManualSym(sym);
-    setMainTab("pattern");
     const wantAdd = searchParams.get("add") === "1";
     const next = new URLSearchParams(searchParams);
     next.delete("symbol");
@@ -457,8 +211,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     if (!first) return;
     didAutoSelectRef.current = true;
     setSelectedSymbol(first);
-    setManualSym(first);
-    setMainTab("pattern");
   }, [sortedWatchlist, selectedSymbol, searchParams]);
 
   const removeSymbol = useCallback(async (symbol: string, e: React.MouseEvent) => {
@@ -632,9 +384,16 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               : ""}
           </p>
 
+          {equityEnabled && sortedWatchlist.length > 0 ? (
+            <p className="pattern-group-label">加密</p>
+          ) : null}
           <ul className="pattern-watchlist">
             {sortedWatchlist.length === 0 ? (
-              <li className="pattern-empty">等待雷达扫描后按合约流入 / OI 爆发自动挑选…</li>
+              <li className="pattern-empty">
+                {equityEnabled
+                  ? "等待雷达扫描后按合约流入 / OI 爆发自动挑选…"
+                  : "等待雷达扫描后按合约流入 / OI 爆发自动挑选…"}
+              </li>
             ) : (
               sortedWatchlist.map((w) => {
                 const st = states.find((s) => s.symbol === w.symbol);
@@ -647,7 +406,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                 const active = selectedSymbol === w.symbol;
                 const pinned = Boolean(w.pinned);
                 const isManual = Boolean(w.manual) || w.slot === "manual";
-                const entered = enteredSymbols.has(String(w.symbol || "").trim().toUpperCase());
+                const entered = activeCardSymbols.has(String(w.symbol || "").trim().toUpperCase());
                 const pinHours =
                   pinned && (w.pin_remaining_sec ?? 0) > 0
                     ? Math.max(1, Math.ceil((w.pin_remaining_sec ?? 0) / 3600))
@@ -669,10 +428,10 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     title={
                       [
                         isManual ? "手动输入槽" : "",
-                        entered ? "沙盒持仓中" : "",
+                        entered ? "卡片进行中" : "",
                         pinned ? `已置顶，约剩 ${pinHours} 小时` : "",
                         ms
-                          ? `潜力 ${ms.state_label || ms.state} · 分 ${Number(ms.score).toFixed(1)} · ${(ms.reasons || []).join(" / ")}`
+                          ? `潜力 ${ms.state_label || ms.state}${(ms.reasons || []).length ? ` · ${(ms.reasons || []).join(" / ")}` : ""}`
                           : "点击查看 K 线",
                       ]
                         .filter(Boolean)
@@ -680,7 +439,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     }
                     onClick={() => {
                       setSelectedSymbol(w.symbol);
-                      setManualSym(w.symbol);
                     }}
                     onContextMenu={(e) => openWatchCtxMenu(e, w.symbol)}
                     onKeyDown={(e) => e.key === "Enter" && setSelectedSymbol(w.symbol)}
@@ -688,19 +446,14 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     <div className="pattern-watch-head">
                       <CoinAvatar symbol={w.symbol} size="sm" />
                       <span className="pattern-sym">${displaySymbol(w.symbol)}</span>
-                      {ms && Number(ms.score) > 0 ? (
-                        <span className="pattern-ms-score" title="潜力暴涨评分">
-                          {Number(ms.score).toFixed(1)}
-                        </span>
-                      ) : null}
                       {isManual ? (
                         <span className="pattern-manual-badge" title="手动输入专用槽">
                           手动
                         </span>
                       ) : null}
                       {entered ? (
-                        <span className="pattern-entered-badge" title="沙盒持仓中">
-                          持仓
+                        <span className="pattern-entered-badge" title="卡片进行中">
+                          卡片
                         </span>
                       ) : null}
                       <button
@@ -735,39 +488,80 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               })
             )}
           </ul>
+
+          {equityEnabled ? (
+            <>
+              <p className="pattern-group-label">
+                币股 · {equityPool.length}
+                {pattern?.equity_scan_ts
+                  ? ` · ${new Date(pattern.equity_scan_ts * 1000).toLocaleTimeString("zh-CN", { hour12: false })}`
+                  : ""}
+              </p>
+              <ul className="pattern-watchlist pattern-equity-list">
+                {equityPool.length === 0 ? (
+                  <li className="pattern-empty">白名单匹配中（按 24h 成交额入池，OI 非必须）…</li>
+                ) : (
+                  equityPool.map((item) => {
+                    const sym = String(item.symbol || "").trim();
+                    const active = selectedSymbol === sym;
+                    const est = equityStatesBySym.get(sym.toUpperCase());
+                    const tag = EQUITY_TAG_LABEL[item.ui_tag || ""] || item.ui_tag || "";
+                    const ivText = (est?.intervals || []).join("/") || "1h/4h";
+                    return (
+                      <li
+                        key={sym}
+                        className={`pattern-watch-item pat-equity${active ? " active" : ""}${est?.session_ok === false ? " session-off" : ""}`}
+                        role="button"
+                        tabIndex={0}
+                        title={[
+                          tag,
+                          item.oi_available && item.oi_usd != null
+                            ? `OI $${Math.round(item.oi_usd).toLocaleString()}`
+                            : "OI 非必须",
+                          est?.session_ok === false ? "非美股时段（仅标注）" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        onClick={() => setSelectedSymbol(sym)}
+                        onKeyDown={(e) => e.key === "Enter" && setSelectedSymbol(sym)}
+                      >
+                        <div className="pattern-watch-head">
+                          <CoinAvatar symbol={sym} size="sm" />
+                          <span className="pattern-sym">${displaySymbol(sym)}</span>
+                          {tag ? (
+                            <span className="pattern-equity-tag">{tag}</span>
+                          ) : null}
+                        </div>
+                        <div className="pattern-status">
+                          {ivText}
+                          {item.oi_available && item.oi_usd != null
+                            ? ` · OI $${(item.oi_usd / 1e6).toFixed(1)}M`
+                            : ""}
+                        </div>
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            </>
+          ) : null}
         </aside>
 
         <main className="pattern-main panel" data-onboard="oi-main">
           <div className="pattern-main-head">
             <div className="pattern-main-tabs" role="tablist">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={mainTab === "pattern" && !selectedSymbol}
-                className={`pattern-main-tab${mainTab === "pattern" && !selectedSymbol ? " active" : ""}`}
-                onClick={() => {
-                  setMainTab("pattern");
-                  setSelectedSymbol(null);
-                }}
-              >
+              <span className="pattern-main-tab active" role="tab" aria-selected={!selectedSymbol}>
                 形态预警流
                 {alerts.length > 0 && <em>{alerts.length}</em>}
+              </span>
+              <button
+                type="button"
+                className="pattern-random-btn"
+                onClick={() => setCardLifeOpen(true)}
+              >
+                卡片看板
+                {activeCardSymbols.size > 0 && <em>{activeCardSymbols.size}</em>}
               </button>
-              {sandboxOn && (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mainTab === "sandbox" && !selectedSymbol}
-                  className={`pattern-main-tab${mainTab === "sandbox" && !selectedSymbol ? " active" : ""}`}
-                  onClick={() => {
-                    setMainTab("sandbox");
-                    setSelectedSymbol(null);
-                  }}
-                >
-                  沙盒纸面交易
-                  {sandboxPositions.length > 0 && <em>{sandboxPositions.length}</em>}
-                </button>
-              )}
             </div>
             <PatternAlertTicker
               alerts={alerts}
@@ -777,7 +571,6 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                 setChartPreferredTf(interval || null);
                 setChartTfNonce((n) => n + 1);
                 setChartAlertFocus(focus ?? null);
-                setMainTab("pattern");
               }}
             />
             <span className="pattern-scan">
@@ -806,7 +599,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               addWatchBusy={busy}
               onAddToWatchlist={(sym) => void addSymbol(sym)}
             />
-          ) : mainTab === "pattern" ? (
+          ) : (
                 <div className="pattern-flow pattern-tab-panel">
                   <p className="pattern-hint-main">
                     ← 点击左侧币种查看 15m K 线与蜡烛/结构标注；新信号见顶栏滚动条（形态卡片、结构、量价等）。
@@ -836,658 +629,21 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
                     </section>
                   )}
                 </div>
-              ) : (
-                <div className="pattern-tab-panel sandbox-section">
-                    <div className="sandbox-head">
-                      <h3>沙盒纸面交易 · {sandboxStats?.day ?? "今日"}</h3>
-                      <div className="sandbox-head-actions">
-                        <button
-                          type="button"
-                          className="pattern-random-btn"
-                          onClick={() => setCardLifeOpen(true)}
-                        >
-                          卡片看板
-                        </button>
-                        <button type="button" className="pattern-random-btn" onClick={reshuffleSandbox} disabled={busy}>
-                          重抽今日 12 币
-                        </button>
-                      </div>
-                    </div>
-                    <div className="sandbox-manual">
-                      <span className="sandbox-manual-label">手动市价进场</span>
-                      <input
-                        type="text"
-                        list="sandbox-sym-suggestions"
-                        placeholder={selectedSymbol || "如 BTCUSDT"}
-                        value={manualSym}
-                        onChange={(e) => setManualSym(e.target.value.toUpperCase())}
-                        disabled={busy}
-                      />
-                      <datalist id="sandbox-sym-suggestions">
-                        {[...new Set([...watchlist.map((w) => w.symbol), ...sandboxPool])].map((s) => (
-                          <option key={s} value={s} />
-                        ))}
-                      </datalist>
-                      <select
-                        value={manualLogic}
-                        onChange={(e) => setManualLogic(e.target.value as "S" | "T")}
-                        disabled={busy}
-                        aria-label="逻辑"
-                      >
-                        <option value="S">S · 短线猎手</option>
-                        <option value="T">T · 长线维加斯</option>
-                      </select>
-                      <select
-                        value={manualSide}
-                        onChange={(e) => setManualSide(e.target.value as "LONG" | "SHORT")}
-                        disabled={busy}
-                        aria-label="方向"
-                      >
-                        <option value="LONG">做多 LONG</option>
-                        <option value="SHORT">做空 SHORT</option>
-                      </select>
-                      <select
-                        value={manualInterval}
-                        onChange={(e) => setManualInterval(e.target.value as "15m" | "1h")}
-                        disabled={busy}
-                        aria-label="执行周期"
-                      >
-                        {sandboxIntervals.map((iv) => (
-                          <option key={iv} value={iv}>
-                            {iv}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="pattern-random-btn"
-                        onClick={() => void manualSandboxEnter()}
-                        disabled={busy}
-                      >
-                        市价开仓
-                      </button>
-                    </div>
-                    <div className="strategy-brief-grid">
-                      <article className="strategy-brief">
-                        <header>
-                          <span className="strategy-brief-tag">S · 短线猎手</span>
-                          <strong>震荡边界偷鸡</strong>
-                        </header>
-                        <p>
-                          RANGE：上轨/LH + 射击之星做空；下轨/HL + 倒锤/锤子做多。止损 = 信号 K 极值 ±0.1%；
-                          触及布林中轨或有利 ≥2×ATR 全平。
-                        </p>
-                      </article>
-                      <article className="strategy-brief">
-                        <header>
-                          <span className="strategy-brief-tag trend">T · 长线维加斯</span>
-                          <strong>趋势回踩波段</strong>
-                        </header>
-                        <p>
-                          BULL/BEAR：回踩 EMA12/隧道确认。初始止损距入场不超过
-                          2.5×ATR(14)（OI 暴增波动大时自动放宽）。价变 ≥0.75% 保本 → ≥1% 减仓
-                          30% → 尾仓自极值回撤 1% 全平。
-                        </p>
-                      </article>
-                      <article className="strategy-brief">
-                        <header>
-                          <span className="strategy-brief-tag muted">分流 · Vegas</span>
-                          <strong>蓝红方向门控</strong>
-                        </header>
-                        <p>
-                          蓝通道(EMA144/169)在红通道(EMA576/676)之上 → UP，底部信号优先做多；红在蓝上 →
-                          DOWN，顶部信号优先做空。RANGE 仍跑 S、趋势仍跑 T，但逆 Vegas 方向的自动单会被过滤。
-                        </p>
-                      </article>
-                    </div>
-                    <div className="pattern-hint-row">
-                      <p className="pattern-hint-main">
-                        日池 {sandboxPool.length} · 周期 {sandboxIntervals.join(" + ")} · 并发≤
-                        {sandboxMaxConcurrent} · 余额 {sandboxStats?.balance?.toFixed(2) ?? "—"}U · 胜率{" "}
-                        {sandboxStats ? `${(sandboxStats.win_rate * 100).toFixed(0)}%` : "—"} · 今日盈亏{" "}
-                        {sandboxStats
-                          ? `${sandboxStats.pnl_usd >= 0 ? "+" : ""}${sandboxStats.pnl_usd.toFixed(2)}U`
-                          : "—"}
-                        {" · "}
-                        历史本地近 {SANDBOX_HISTORY_RETAIN_DAYS} 天
-                      </p>
-                      <button
-                        type="button"
-                        className={`sandbox-hide-author-btn${hideSandboxAuthor ? " on" : ""}`}
-                        title={hideSandboxAuthor ? "显示作者列" : "隐藏作者列"}
-                        onClick={toggleHideSandboxAuthor}
-                      >
-                        {hideSandboxAuthor ? "显示作者" : "隐藏作者"}
-                      </button>
-                    </div>
-                    <div className="sandbox-history-filters">
-                      {(
-                        [
-                          { id: "all" as const, label: "全部算法" },
-                          { id: "S" as const, label: "S 猎手" },
-                          { id: "T" as const, label: "T 维加斯" },
-                          { id: "C" as const, label: "卡片" },
-                        ] as const
-                      ).map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          className={`sandbox-range-btn${sandboxLogicFilter === opt.id ? " active" : ""}`}
-                          onClick={() => setSandboxLogicFilter(opt.id)}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                      <span className="sandbox-filter-sep" aria-hidden>
-                        |
-                      </span>
-                      {(
-                        [
-                          { id: "all" as const, label: "全部趋势" },
-                          { id: "UP" as const, label: "蓝>红↑" },
-                          { id: "DOWN" as const, label: "红>蓝↓" },
-                        ] as const
-                      ).map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          className={`sandbox-range-btn${sandboxVegasFilter === opt.id ? " active" : ""}`}
-                          onClick={() => setSandboxVegasFilter(opt.id)}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                      <span className="sandbox-filter-sep" aria-hidden>
-                        |
-                      </span>
-                      {SANDBOX_HISTORY_RANGE_OPTIONS.map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          className={`sandbox-range-btn${historyRange === opt.id ? " active" : ""}`}
-                          onClick={() => setHistoryRange(opt.id)}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                      <span className="sandbox-range-stats">
-                        <span className="sandbox-range-count">
-                          {historyRangeStats.trades} 笔
-                          {historyRangeStats.trades > 0
-                            ? ` · 胜 ${historyRangeStats.wins} / 负 ${historyRangeStats.losses} · 胜率 ${(historyRangeStats.win_rate * 100).toFixed(0)}%`
-                            : ""}
-                        </span>
-                        <span
-                          className={`sandbox-range-pnl${
-                            historyRangeStats.trades === 0
-                              ? ""
-                              : historyRangeStats.pnl_usd >= 0
-                                ? " pos"
-                                : " neg"
-                          }`}
-                        >
-                          盈亏{" "}
-                          {historyRangeStats.trades === 0
-                            ? "—"
-                            : `${historyRangeStats.pnl_usd >= 0 ? "+" : ""}${historyRangeStats.pnl_usd.toFixed(2)}U`}
-                        </span>
-                      </span>
-                    </div>
-                    {historyRangeStats.trades > 0 ? (
-                      <p className="sandbox-algo-stats pattern-hint-main">
-                        按算法：
-                        {(["S", "T", "C"] as const).map((k) => {
-                          const s = historyByLogic[k];
-                          if (!s || s.trades <= 0) return null;
-                          return (
-                            <span key={k} className="sandbox-algo-chip">
-                              {k} {s.trades}笔 / {(s.win_rate * 100).toFixed(0)}% /{" "}
-                              <span className={s.pnl_usd >= 0 ? "pos" : "neg"}>
-                                {s.pnl_usd >= 0 ? "+" : ""}
-                                {s.pnl_usd.toFixed(2)}U
-                              </span>
-                            </span>
-                          );
-                        })}
-                        {" · "}
-                        按Vegas：
-                        {(["UP", "DOWN"] as const).map((k) => {
-                          const s = historyByVegas[k];
-                          if (!s || s.trades <= 0) return null;
-                          return (
-                            <span key={k} className="sandbox-algo-chip">
-                              {k === "UP" ? "蓝>红" : "红>蓝"} {s.trades}笔 /{" "}
-                              {(s.win_rate * 100).toFixed(0)}% /{" "}
-                              <span className={s.pnl_usd >= 0 ? "pos" : "neg"}>
-                                {s.pnl_usd >= 0 ? "+" : ""}
-                                {s.pnl_usd.toFixed(2)}U
-                              </span>
-                            </span>
-                          );
-                        })}
-                      </p>
-                    ) : null}
-                    <div className="sandbox-pool">
-                      {sandboxPool.length === 0 ? (
-                        <span className="pattern-empty">
-                          {sandboxOn
-                            ? "日池未生成：等待下一轮雷达（或点重抽）…"
-                            : "沙盒未启用"}
-                        </span>
-                      ) : (
-                        sandboxPool.map((sym) => {
-                          const entered = enteredSymbols.has(sym.toUpperCase());
-                          return (
-                            <button
-                              key={sym}
-                              type="button"
-                              className={`sandbox-chip${selectedSymbol === sym ? " active" : ""}${entered ? " entered" : ""}`}
-                              onClick={() => setSelectedSymbol(sym)}
-                              title={entered ? "沙盒持仓中" : undefined}
-                            >
-                              ${displaySymbol(sym)}
-                              {entered ? <span className="sandbox-chip-mark">持</span> : null}
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-
-                    {filteredCardOrders.length > 0 && (
-                      <table className="sandbox-table">
-                        <thead>
-                          <tr>
-                            <th>卡片ID</th>
-                            <th>发单时间</th>
-                            {!hideSandboxAuthor ? <th>作者</th> : null}
-                            <th>币种</th>
-                            <th>状态</th>
-                            <th>方向</th>
-                            <th>入场</th>
-                            <th>止盈</th>
-                            <th>止损</th>
-                            <th>现价</th>
-                            <th>杠杆</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredCardOrders.map((o) => {
-                            const author = resolveSandboxCardAuthor(o);
-                            return (
-                            <tr
-                              key={o.card_id}
-                              className="clickable"
-                              onClick={() => setSelectedSymbol(o.symbol)}
-                            >
-                              <td>
-                                {o.card_id}
-                                {!hideSandboxAuthor && author ? (
-                                  <span className="sandbox-pnl-sub">{author}</span>
-                                ) : null}
-                              </td>
-                              <td>
-                                {fmtTs(
-                                  o.signal_at || o.created_at || 0
-                                )}
-                              </td>
-                              {!hideSandboxAuthor ? <td>{author || "—"}</td> : null}
-                              <td>${displaySymbol(o.symbol)}</td>
-                              <td>
-                                {o.phase ||
-                                  (o.status === "watching"
-                                  ? "监听"
-                                  : o.status === "near"
-                                    ? "近场"
-                                    : o.status === "ordered"
-                                      ? "挂单"
-                                      : o.status === "filled"
-                                        ? "已入场"
-                                        : o.status)}
-                              </td>
-                              <td>{o.side}</td>
-                              <td className="sandbox-tf">
-                                {o.entry_type === "market"
-                                  ? "市价"
-                                  : o.entry_low != null
-                                    ? o.entry_high != null && o.entry_high !== o.entry_low
-                                      ? `${o.entry_low}-${o.entry_high}`
-                                      : String(o.entry_low)
-                                    : "—"}
-                              </td>
-                              <td className="sandbox-tf">
-                                {(o.tps || []).length
-                                  ? (o.tps || []).join(" · ")
-                                  : "—"}
-                              </td>
-                              <td>{o.sl != null ? fmtMetaPrice(o.sl) : "—"}</td>
-                              <td>
-                                {o.last_price != null ? fmtMetaPrice(o.last_price) : "—"}
-                                {o.dist_next_tp_pct != null ? (
-                                  <span className="sandbox-pnl-sub">
-                                    TP{o.next_tp} {o.dist_next_tp_pct >= 0 ? "+" : ""}
-                                    {o.dist_next_tp_pct.toFixed(2)}%
-                                  </span>
-                                ) : null}
-                              </td>
-                              <td>{o.leverage != null ? `${o.leverage}x` : "—"}</td>
-                            </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    )}
-
-                    {filteredPositions.length > 0 && (
-                      <table className="sandbox-table">
-                        <thead>
-                          <tr>
-                            <th>币种</th>
-                            {!hideSandboxAuthor ? <th>作者</th> : null}
-                            <th>来源</th>
-                            <th>周期</th>
-                            <th>模块</th>
-                            <th>方向</th>
-                            <th>参考周期</th>
-                            <th>入场原因</th>
-                            <th>入场时间/价</th>
-                            <th>止损</th>
-                            <th>事件</th>
-                            <th>平仓</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredPositions.map((p) => (
-                            <tr
-                              key={p.id ?? `${p.symbol}-${p.entry_time}-${p.logic}-${p.interval}`}
-                              className="clickable"
-                              onClick={() => setSelectedSymbol(p.symbol)}
-                            >
-                              <td>${displaySymbol(p.symbol)}</td>
-                              {!hideSandboxAuthor ? (
-                              <td>
-                                {resolveSandboxCardAuthor({
-                                  author_name: p.author_name,
-                                  channel_id: p.channel_id,
-                                  channel_name: p.channel_name,
-                                  source_label: p.card_source || p.source_label,
-                                }) || "—"}
-                              </td>
-                              ) : null}
-                              <td>
-                                <span
-                                  className={`sandbox-src${
-                                    p.source === "card" || p.source_label === "卡片"
-                                      ? " card"
-                                      : (p.source || p.source_label) === "manual" ||
-                                          p.source_label === "手动"
-                                        ? " manual"
-                                        : " auto"
-                                  }`}
-                                >
-                                  {p.source_label ||
-                                    (p.source === "manual"
-                                      ? "手动"
-                                      : p.source === "card"
-                                        ? "卡片"
-                                        : "自动")}
-                                  {p.card_id ? ` · ${p.card_id}` : ""}
-                                </span>
-                              </td>
-                              <td className="sandbox-tf">{p.interval || "15m"}</td>
-                              <td>
-                                {p.module ||
-                                  (p.logic === "S"
-                                    ? "短线"
-                                    : p.logic === "T"
-                                      ? "长线"
-                                      : p.logic === "C"
-                                        ? "卡片"
-                                        : p.logic)}
-                              </td>
-                              <td>{p.side}</td>
-                              <td className="sandbox-tf">
-                                {p.ref_intervals_label ||
-                                  (p.logic === "T"
-                                    ? "15m · 1h · 4h · 1d"
-                                    : p.interval || "15m")}
-                              </td>
-                              <td className="sandbox-events">{p.entry_reason || "—"}</td>
-                              <td>
-                                {fmtTs(p.entry_time)}
-                                <span className="sandbox-pnl-sub">{fmtMetaPrice(p.entry_price)}</span>
-                              </td>
-                              <td>{fmtMetaPrice(p.sl)}</td>
-                              <td className="sandbox-events">{fmtTradeEvents(p.events)}</td>
-                              <td
-                                className="sandbox-close-cell"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {p.id != null ? (
-                                  <div className="sandbox-close-row">
-                                    <div className="sandbox-close-presets">
-                                      {[25, 50, 75, 100].map((n) => (
-                                        <button
-                                          key={n}
-                                          type="button"
-                                          className={`sandbox-close-pct${
-                                            (closePctById[p.id!] ?? 100) === n
-                                              ? " active"
-                                              : ""
-                                          }`}
-                                          disabled={busy || closingId === p.id}
-                                          onClick={() =>
-                                            setClosePctById((prev) => ({
-                                              ...prev,
-                                              [p.id!]: n,
-                                            }))
-                                          }
-                                        >
-                                          {n}%
-                                        </button>
-                                      ))}
-                                    </div>
-                                    <div className="sandbox-close-actions">
-                                      <input
-                                        type="number"
-                                        min={1}
-                                        max={100}
-                                        step={1}
-                                        className="sandbox-close-input"
-                                        value={closePctById[p.id] ?? 100}
-                                        disabled={busy || closingId === p.id}
-                                        onChange={(e) => {
-                                          const v = Math.min(
-                                            100,
-                                            Math.max(1, Number(e.target.value) || 1),
-                                          );
-                                          setClosePctById((prev) => ({
-                                            ...prev,
-                                            [p.id!]: v,
-                                          }));
-                                        }}
-                                      />
-                                      <button
-                                        type="button"
-                                        className="sandbox-close-btn"
-                                        disabled={busy || closingId === p.id}
-                                        onClick={() =>
-                                          void manualSandboxClose(
-                                            p.id!,
-                                            closePctById[p.id!] ?? 100,
-                                          )
-                                        }
-                                      >
-                                        {closingId === p.id ? "…" : "平仓"}
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  "—"
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-
-                    <table className="sandbox-table">
-                      <thead>
-                        <tr>
-                          <th>日期</th>
-                          <th>币种</th>
-                          {!hideSandboxAuthor ? <th>作者</th> : null}
-                          <th>来源</th>
-                          <th>周期</th>
-                          <th>逻辑</th>
-                          <th>Vegas</th>
-                          <th>方向</th>
-                          <th>参考周期</th>
-                          <th>入场原因</th>
-                          <th>入场时间/价</th>
-                          <th>出场时间/价</th>
-                          <th>出场逻辑</th>
-                          <th>盈亏</th>
-                          <th>阶段事件</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredHistory.length === 0 ? (
-                          <tr>
-                            <td colSpan={hideSandboxAuthor ? 14 : 15} className="pattern-empty">
-                              该时间范围内暂无平仓记录（本地保留近 {SANDBOX_HISTORY_RETAIN_DAYS} 天）
-                            </td>
-                          </tr>
-                        ) : (
-                          filteredHistory.map((t) => {
-                            const ev =
-                              t.stage_events ||
-                              fmtTradeEvents(t.events, t.reason);
-                            const srcLabel =
-                              t.source_label ||
-                              (t.source === "card" || t.source === "卡片"
-                                ? "卡片"
-                                : t.source === "manual" || t.source === "手动"
-                                  ? "手动"
-                                  : "自动");
-                            const author =
-                              resolveSandboxCardAuthor({
-                                author_name: t.author_name,
-                                channel_id: t.channel_id,
-                                channel_name: t.channel_name,
-                                source_label: t.card_source || t.source_label,
-                              }) || "—";
-                            const exitLabel =
-                              t.exit_label ||
-                              (t.reason?.includes("|")
-                                ? t.reason.split("|")[1]
-                                : "") ||
-                              "—";
-                            const vegasLabel =
-                              t.vegas_direction_label ||
-                              (t.vegas_direction === "UP"
-                                ? "蓝>红↑"
-                                : t.vegas_direction === "DOWN"
-                                  ? "红>蓝↓"
-                                  : t.vegas_direction || "—");
-                            return (
-                            <tr
-                              key={t.key}
-                              className="clickable"
-                              onClick={() => setSelectedSymbol(t.symbol)}
-                            >
-                              <td>{t.day.slice(5)}</td>
-                              <td>${displaySymbol(t.symbol)}</td>
-                              {!hideSandboxAuthor ? <td>{author}</td> : null}
-                              <td>
-                                <span
-                                  className={`sandbox-src${
-                                    srcLabel === "卡片"
-                                      ? " card"
-                                      : srcLabel === "手动"
-                                        ? " manual"
-                                        : " auto"
-                                  }`}
-                                >
-                                  {srcLabel}
-                                </span>
-                              </td>
-                              <td className="sandbox-tf">{t.interval || "15m"}</td>
-                              <td>{t.logic}</td>
-                              <td className="sandbox-tf">{vegasLabel}</td>
-                              <td>{t.side}</td>
-                              <td className="sandbox-tf">
-                                {t.ref_intervals_label ||
-                                  (Array.isArray(t.ref_intervals)
-                                    ? t.ref_intervals.join(" · ")
-                                    : t.logic === "T"
-                                      ? "15m · 1h · 4h · 1d"
-                                      : t.interval || "15m")}
-                              </td>
-                              <td className="sandbox-events">
-                                {t.entry_reason || "—"}
-                              </td>
-                              <td>
-                                {t.entry_time ? fmtTs(t.entry_time) : "—"}
-                                <span className="sandbox-pnl-sub">{fmtMetaPrice(t.entry_price)}</span>
-                              </td>
-                              <td>
-                                {t.exit_time ? fmtTs(t.exit_time) : "—"}
-                                <span className="sandbox-pnl-sub">{fmtMetaPrice(t.exit_price)}</span>
-                              </td>
-                              <td className="sandbox-events">{exitLabel}</td>
-                              <td className={t.pnl_usd >= 0 ? "pos" : "neg"}>
-                                {t.pnl_usd >= 0 ? "+" : ""}
-                                {t.pnl_usd.toFixed(2)}U
-                                <span className="sandbox-pnl-sub">
-                                  价{(t.pnl_pct >= 0 ? "+" : "") + t.pnl_pct.toFixed(2)}%
-                                  {" · "}
-                                  ROE
-                                  {(t.roe_pct ?? t.pnl_pct * (t.leverage ?? 30)) >= 0
-                                    ? "+"
-                                    : ""}
-                                  {(
-                                    t.roe_pct ?? t.pnl_pct * (t.leverage ?? 30)
-                                  ).toFixed(1)}
-                                  %
-                                  {t.fee_usd != null && Number(t.fee_usd) > 0
-                                    ? ` · 费${Number(t.fee_usd).toFixed(4)}U`
-                                    : ""}
-                                </span>
-                              </td>
-                              <td className="sandbox-events">{ev}</td>
-                            </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                </div>
-              )}
+          )}
         </main>
       </div>
 
       <CardLifecyclePanel
         open={cardLifeOpen}
         orders={cardOrders}
-        priceTs={pattern?.sandbox_card_price_ts}
+        priceTs={pattern?.card_price_ts}
         onClose={() => setCardLifeOpen(false)}
         onSelectSymbol={(sym) => {
           setSelectedSymbol(sym);
-          setMainTab("pattern");
           setCardLifeOpen(false);
         }}
         onRefreshPrices={() => void refreshCardPrices()}
         refreshing={cardPriceBusy}
-      />
-
-      <SandboxToastStack
-        alerts={sandboxAlerts}
-        scanTs={sandboxScanTs}
-        onOpen={(sym) => {
-          setSelectedSymbol(sym);
-          setMainTab("pattern");
-        }}
       />
 
       {ctxMenu && (

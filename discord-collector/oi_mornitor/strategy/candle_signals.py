@@ -16,6 +16,7 @@ from oi_mornitor.config import (
     STRATEGY_SHOOT_WICK_MAX_RATIO,
     STRATEGY_SHOOT_WICK_RATIO,
 )
+from oi_mornitor.signal_policy import is_blocked_marker_text
 from oi_mornitor.strategy.indicators import detect_inverted_hammer, detect_shooting_star
 
 CONT_WICK_COUNT = 2
@@ -473,11 +474,14 @@ def _candle_card_hits_at_index(
     bar_markers: list[dict[str, Any]],
     *,
     allow_shooting_star: bool = True,
-    allow_consecutive_shoot: bool = True,
-    allow_inverted_hammer_oi: bool = True,
+    allow_consecutive_shoot: bool = False,
+    allow_inverted_hammer: bool = True,
+    allow_inverted_hammer_oi: bool | None = None,
     filter_kinds: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """单根 K 上的蜡烛卡片命中（与 Telegram 卡片推送同口径）。"""
+    if allow_inverted_hammer_oi is not None:
+        allow_inverted_hammer = allow_inverted_hammer and bool(allow_inverted_hammer_oi)
     if idx < 0 or idx >= len(df):
         return []
     row = df.iloc[idx]
@@ -495,19 +499,19 @@ def _candle_card_hits_at_index(
     for m in bar_markers:
         kind = str(m.get("kind") or "")
         text = str(m.get("text") or "")
+        if is_blocked_marker_text(text):
+            continue
         oi_on = bool(m.get("oi_anomaly"))
         trend: float | None = None
 
         if kind == "shooting_star":
             is_consec = "射击之星（2）" in text or "（2）" in text
-            if is_consec and allow_consecutive_shoot:
-                type_label = "连续走平射击之星"
-                card_kind = "consecutive_flat_shooting_star"
-            elif allow_shooting_star:
-                type_label = "射击之星"
-                card_kind = "shooting_star"
-            else:
+            if is_consec:
                 continue
+            if not allow_shooting_star:
+                continue
+            type_label = "射击之星"
+            card_kind = "shooting_star"
             if CANDLE_SHOOT_REQUIRE_POSITION:
                 basis = float(row["bb_basis"])
                 upper = float(row["bb_upper"])
@@ -519,7 +523,14 @@ def _candle_card_hits_at_index(
             if trend is None or trend < CANDLE_SHOOT_TREND_MIN_PCT:
                 continue
         elif kind == "inverted_hammer":
-            if not (allow_inverted_hammer_oi and oi_on):
+            if not allow_inverted_hammer:
+                continue
+            basis = float(row["bb_basis"])
+            lower = float(row["bb_lower"])
+            below_mid = float(row["low"]) <= basis
+            lower_zone = lower + (basis - lower) * 0.15
+            in_lower_zone = float(row["close"]) <= lower_zone or at_lower_band(row)
+            if CANDLE_SHOOT_REQUIRE_POSITION and not (below_mid and (in_lower_zone or near_v)):
                 continue
             trend = _trend_return(df, idx, CANDLE_HAMMER_TREND_LOOKBACK)
             if trend is None or trend > -CANDLE_HAMMER_TREND_MIN_PCT:
@@ -606,16 +617,15 @@ def find_last_closed_candle_card_hits(
     *,
     now_ms: int | None = None,
     allow_shooting_star: bool = True,
-    allow_consecutive_shoot: bool = True,
-    allow_inverted_hammer_oi: bool = True,
+    allow_consecutive_shoot: bool = False,
+    allow_inverted_hammer: bool = True,
+    allow_inverted_hammer_oi: bool | None = None,
 ) -> list[dict[str, Any]]:
     """最近收盘柱上的 Telegram 卡片信号。
 
-    - 射击之星：不要求 OI
-    - 连续走平射击之星：SHOOT_REPEAT_BARS 内再次出现（「射击之星（2）」）
-    - 倒锤子：仅柱级 OI 异动时推送
+    - 射击之星：位置 + 前序涨幅；不要求 OI；(oi异动)/V*/（2）/连续插针 停推
+    - 倒锤子：与射击之星对称（中轨下 + 前序跌幅）；OI 仅作 tag
     - 射击之星位置过滤：收盘须在 BB 上轨区或近 Vegas 通道（CANDLE_SHOOT_REQUIRE_POSITION）
-    - 趋势背景：射击之星前须有上涨、倒锤子前须有下跌（CANDLE_*_TREND_*）
     """
     if df.empty or "open_time" not in df.columns or "bb_basis" not in df.columns:
         return []
@@ -631,5 +641,6 @@ def find_last_closed_candle_card_hits(
         bar_markers,
         allow_shooting_star=allow_shooting_star,
         allow_consecutive_shoot=allow_consecutive_shoot,
+        allow_inverted_hammer=allow_inverted_hammer,
         allow_inverted_hammer_oi=allow_inverted_hammer_oi,
     )

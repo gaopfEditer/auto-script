@@ -100,7 +100,8 @@ def get_telegram_push_toggles() -> dict[str, Any]:
         "hint": (
             "形态卡片推送由 oi_mornitor 扫描触发（collect:ui 自动守护 / pnpm run oi:start）。"
             " candle → OI_CANDLE_CARD_TELEGRAM_CHAT_ID；"
-            " main → 特别关注币另推 MAIN_CARD_TELEGRAM_CHAT_ID。"
+            " main → 热门/特别关注币（默认 BTC/ETH）另推 MAIN："
+            "15m/1h/4h 射击之星、倒锤子、量价确认、量价推进。"
         ),
     }
 

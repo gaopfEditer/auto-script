@@ -20,9 +20,8 @@ from oi_mornitor.strategy.structure_signals import (
 )
 
 _MAJORS = {s.upper() for s in CANDLE_CARD_MAJOR_SYMBOLS}
-_INTERVAL_SECONDS = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}
+_INTERVAL_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
 _DAY_MS = 86_400_000
-_LIVE_DISABLED_INTERVALS = frozenset({"30m"})
 
 
 def live_majors() -> set[str]:
@@ -30,7 +29,7 @@ def live_majors() -> set[str]:
 
 
 def build_live_scan_jobs(alt_symbols: list[str]) -> list[tuple[str, str, bool]]:
-    """与 Live 相同的 (symbol, interval, is_major) 扫描任务；30m 仍列出但扫描层跳过。"""
+    """与 Live 相同的 (symbol, interval, is_major) 扫描任务。"""
     jobs: list[tuple[str, str, bool]] = []
     for sym in sorted(_MAJORS):
         for iv in CANDLE_CARD_MAJOR_INTERVALS:
@@ -43,7 +42,9 @@ def build_live_scan_jobs(alt_symbols: list[str]) -> list[tuple[str, str, bool]]:
 
 
 def interval_allowed_for_job(interval: str) -> bool:
-    return interval not in _LIVE_DISABLED_INTERVALS
+    from oi_mornitor.signal_policy import is_disabled_pattern_interval
+
+    return not is_disabled_pattern_interval(interval)
 
 
 def structure_interval_ok(interval: str) -> bool:

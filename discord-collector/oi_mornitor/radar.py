@@ -41,10 +41,10 @@ from oi_mornitor.config import (
     OI_ZSCORE_THRESHOLD,
     OPEN_TRADE_SCAN_SEC,
     CARD_PRICE_REFRESH_SEC,
+    OI_EQUITY_ENABLED,
+    OI_EQUITY_SCAN_INTERVAL_SEC,
     PRICE_SPIKE_PCT_15M,
     PRICE_SPIKE_PCT_5M,
-    SANDBOX_SCAN_SEC,
-    SANDBOX_KLINE_FETCH_TIMEOUT_SEC,
     POLL_15M_SEC,
     POLL_5M_SEC,
     REQUEST_INTERVAL_SEC,
@@ -60,7 +60,7 @@ from oi_mornitor.capital_bias import (
 from oi_mornitor.market_matrix import MarketMatrixCache
 from oi_mornitor.matrix_breakout import MatrixBreakoutEngine
 from oi_mornitor.pattern_monitor import PatternMonitorEngine
-from oi_mornitor.sandbox import SandboxEngine
+from oi_mornitor.cards import CardEngine
 from oi_mornitor.strategy.pullback_engine import PullbackStrategyEngine
 from oi_mornitor.market_snapshot import (
     TIER_HEAVY,
@@ -71,6 +71,12 @@ from oi_mornitor.market_snapshot import (
     pool_meta_from_counts,
     tier_label,
 )
+from oi_mornitor.equity_pool import (
+    EquityPoolStats,
+    build_equity_pool,
+    merge_equity_into_pool_meta,
+)
+from oi_mornitor.equity_pattern import scan_equity_patterns
 from oi_mornitor.rank_metrics import RankMetricsEngine, empty_rank_by_tf
 from oi_mornitor.symbol_aliases import is_stablecoin_symbol
 from oi_mornitor.taker_flow import (
@@ -1321,7 +1327,7 @@ class RadarService:
         self.breakout_engine = MatrixBreakoutEngine()
         self.pattern_engine = PatternMonitorEngine()
         self.pullback_engine = PullbackStrategyEngine(self.pattern_engine)
-        self.sandbox_engine = SandboxEngine()
+        self.card_engine = CardEngine()
         from oi_mornitor.moonshot_funnel import MoonshotEngine
         from oi_mornitor.tv_alert_sync import TvAlertSync
 
@@ -1331,15 +1337,18 @@ class RadarService:
         self._session: aiohttp.ClientSession | None = None
         self._session_trust_env: bool | None = None
         self._task: asyncio.Task[None] | None = None
-        self._open_trade_task: asyncio.Task[None] | None = None
-        self._sandbox_task: asyncio.Task[None] | None = None
+        self._card_lifecycle_task: asyncio.Task[None] | None = None
         self._card_price_task: asyncio.Task[None] | None = None
         self._settle_report_task: asyncio.Task[None] | None = None
         self._moonshot_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
-        self._sandbox_scan_lock = asyncio.Lock()
+        self._equity_task: asyncio.Task[None] | None = None
+        self._equity_pool: list[dict[str, Any]] = []
+        self._equity_stats: EquityPoolStats | None = None
+        self._equity_alerts: list[dict[str, Any]] = []
+        self._equity_states: list[dict[str, Any]] = []
+        self._equity_scan_ts: float = 0.0
         self._running = False
-        self._moonshot_sandbox_keys: set[str] = set()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         # 代理失效时关闭 trust_env，改为直连，否则所有请求都会卡在 127.0.0.1:7890
@@ -1366,22 +1375,16 @@ class RadarService:
         session = await self._ensure_session()
         hot = await self.radar.scan(session)
         self.matrix.update_from_rows(self.radar.last_all_rows, scan_ts=self.radar.last_scan_ts)
-        # 日池与形态/沙盒 K 线解耦：雷达一出结果立刻生成，避免 UI 长期「等待日池」
-        try:
-            self.sandbox_engine.ensure_daily_pool_from_rows(
-                self.radar.last_all_rows,
-                self.radar.heavyweight_symbol_list,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("沙盒日池生成失败: %s", exc)
         await self.breakout_engine.scan(
             session,
             self.radar.last_all_rows,
             base_url=self.radar.base_url,
             scan_ts=self.radar.last_scan_ts,
         )
-        sandbox_open = {
-            p.symbol.upper() for p in self.sandbox_engine.tracker.list_positions()
+        card_symbols = {
+            str(o.get("symbol") or "").upper()
+            for o in self.card_engine.tracker.list_active_card_orders()
+            if o.get("symbol")
         }
         try:
             await asyncio.wait_for(
@@ -1391,15 +1394,13 @@ class RadarService:
                     scan_ts=self.radar.last_scan_ts,
                     pool_rows=self.radar.last_all_rows,
                     fallback_symbols=self.radar.heavyweight_symbol_list,
-                    protect_symbols=sandbox_open,
+                    protect_symbols=card_symbols,
                     hot_tickers=self.radar.last_hot_tickers,
                 ),
                 timeout=180,
             )
         except asyncio.TimeoutError:
             logger.error("形态扫描超时（180s），跳过本轮形态更新")
-        else:
-            await self._maybe_moonshot_sandbox(session)
         for row in self.radar.last_all_rows:
             sym = str(row.get("symbol") or "")
             pct = row.get("pct_5m")
@@ -1408,20 +1409,22 @@ class RadarService:
                     self.pullback_engine.set_oi_change_pct(sym, float(pct))
                 except (TypeError, ValueError):
                     pass
-        try:
-            await asyncio.wait_for(
-                self.pullback_engine.scan(
-                    session,
-                    base_url=self.radar.base_url,
-                    scan_ts=self.radar.last_scan_ts,
-                    pool_rows=self.radar.last_all_rows,
-                    fallback_symbols=self.radar.heavyweight_symbol_list,
-                ),
-                timeout=120,
-            )
-        except asyncio.TimeoutError:
-            logger.error("回踩扫描超时（120s），跳过本轮")
-        # S/T 纸面扫描改独立循环，避免被形态扫阻塞
+        from oi_mornitor.config import PULLBACK_SCAN_ENABLED
+
+        if PULLBACK_SCAN_ENABLED:
+            try:
+                await asyncio.wait_for(
+                    self.pullback_engine.scan(
+                        session,
+                        base_url=self.radar.base_url,
+                        scan_ts=self.radar.last_scan_ts,
+                        pool_rows=self.radar.last_all_rows,
+                        fallback_symbols=self.radar.heavyweight_symbol_list,
+                    ),
+                    timeout=120,
+                )
+            except asyncio.TimeoutError:
+                logger.error("回踩扫描超时（120s），跳过本轮")
         # 多榜共振 → TradingView BB-Wicks 信号监听（CDP；同时只跑一个任务）
         task = getattr(self, "_tv_alert_task", None)
         if task is None or task.done():
@@ -1441,72 +1444,68 @@ class RadarService:
         except Exception as exc:  # noqa: BLE001
             logger.warning("TV 信号监听 tick 失败: %s", exc)
 
-    async def _sandbox_loop(self) -> None:
-        """S/T 日池自动入场/出场：与主雷达解耦，带锁防重叠。"""
-        interval = max(20.0, float(SANDBOX_SCAN_SEC or 60))
-        await asyncio.sleep(min(5.0, interval / 4))
+    async def _refresh_equity_pool(self) -> None:
+        if not OI_EQUITY_ENABLED:
+            return
+        try:
+            session = await self._ensure_session()
+            feed = await fetch_fallback_feed(session, reason="equity_pool")
+            if not feed or not feed.tickers:
+                logger.warning("币股池 ticker 为空")
+                return
+            pool, stats = build_equity_pool(
+                feed.tickers,
+                venue=feed.source_id,
+                oi_map=feed.oi_map,
+                scan_ts=time.time(),
+            )
+            self._equity_pool = [x.to_dict() for x in pool]
+            self._equity_stats = stats
+            alerts, states = await scan_equity_patterns(
+                session,
+                base_url=self.radar.base_url,
+                equity_pool=pool,
+                scan_ts=time.time(),
+            )
+            self._equity_alerts = alerts
+            self._equity_states = states
+            self._equity_scan_ts = time.time()
+            if alerts:
+                from oi_mornitor.pattern_alert_stats import record_equity_alert_from_scan
+
+                for a in alerts:
+                    if a.get("record_signal"):
+                        record_equity_alert_from_scan(a)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("币股池刷新失败: %s", exc)
+
+    async def _equity_loop(self) -> None:
+        interval = max(60.0, float(OI_EQUITY_SCAN_INTERVAL_SEC or 300))
+        await asyncio.sleep(min(15.0, interval / 4))
         while self._running:
-            started = time.time()
             try:
-                async with self._sandbox_scan_lock:
-                    session = await self._ensure_session()
-                    # 整轮硬超时，防止备选所连环超时卡死循环
-                    hard_timeout = max(50.0, float(SANDBOX_KLINE_FETCH_TIMEOUT_SEC or 45) + 15)
-                    try:
-                        alerts = await asyncio.wait_for(
-                            self.sandbox_engine.scan(
-                                session,
-                                base_url=self.radar.base_url,
-                                scan_ts=self.radar.last_scan_ts or time.time(),
-                                pool_rows=self.radar.last_all_rows,
-                                fallback_symbols=self.radar.heavyweight_symbol_list,
-                                pattern_states=self.pattern_engine.last_states,
-                            ),
-                            timeout=hard_timeout,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("沙盒扫描整轮超时 %.0fs，进入下一轮", hard_timeout)
-                        alerts = []
-                    if alerts:
-                        logger.info(
-                            "沙盒扫描告警 %d 条: %s",
-                            len(alerts),
-                            ",".join(
-                                f"{a.get('type')}:{a.get('symbol')}"
-                                for a in alerts[:8]
-                            ),
-                        )
+                await self._refresh_equity_pool()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("沙盒扫描异常: %s", exc)
-            elapsed = time.time() - started
-            await asyncio.sleep(max(5.0, interval - elapsed))
+                logger.warning("币股循环异常: %s", exc)
+            await asyncio.sleep(interval)
 
-    async def _open_trade_loop(self) -> None:
-        """已开仓 / 卡片挂单快扫：尽快触价更新交易逻辑与评价。"""
+    async def _card_lifecycle_loop(self) -> None:
+        """活跃卡片快扫：近场/触价/SL·TP 状态更新。"""
         interval = max(5.0, float(OPEN_TRADE_SCAN_SEC or 15))
         while self._running:
             try:
                 session = await self._ensure_session()
-                alerts = await self.sandbox_engine.scan_open_trades(
+                await self.card_engine.scan_card_lifecycle(
                     session,
                     base_url=self.radar.base_url,
                     pool_rows=self.radar.last_all_rows,
-                    pattern_states=self.pattern_engine.last_states,
                 )
-                if alerts:
-                    logger.info(
-                        "持仓快扫更新 %d 条: %s",
-                        len(alerts),
-                        ",".join(
-                            f"{a.get('type')}:{a.get('symbol')}" for a in alerts[:8]
-                        ),
-                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("持仓快扫异常: %s", exc)
+                logger.warning("卡片生命周期扫描异常: %s", exc)
             await asyncio.sleep(interval)
 
     async def _card_price_loop(self) -> None:
@@ -1517,7 +1516,7 @@ class RadarService:
         while self._running:
             try:
                 session = await self._ensure_session()
-                result = await self.sandbox_engine.refresh_card_market_prices(
+                result = await self.card_engine.refresh_card_market_prices(
                     session,
                     base_url=self.radar.base_url,
                     pool_rows=self.radar.last_all_rows,
@@ -1560,15 +1559,16 @@ class RadarService:
                 "若超时请在 .env 添加 HTTPS_PROXY=http://127.0.0.1:7890"
             )
         self._task = asyncio.create_task(self._loop(interval_sec), name="oi-radar-loop")
-        self._open_trade_task = asyncio.create_task(
-            self._open_trade_loop(), name="oi-open-trade-loop"
-        )
-        self._sandbox_task = asyncio.create_task(
-            self._sandbox_loop(), name="oi-sandbox-loop"
+        self._card_lifecycle_task = asyncio.create_task(
+            self._card_lifecycle_loop(), name="oi-card-lifecycle-loop"
         )
         self._card_price_task = asyncio.create_task(
             self._card_price_loop(), name="oi-card-price-loop"
         )
+        if OI_EQUITY_ENABLED:
+            self._equity_task = asyncio.create_task(
+                self._equity_loop(), name="oi-equity-loop"
+            )
         from oi_mornitor.pattern_alert_settle_report import run_settle_report_loop
 
         self._settle_report_task = asyncio.create_task(
@@ -1590,11 +1590,11 @@ class RadarService:
             name="oi-moonshot-a",
         )
         logger.info(
-            "雷达后台循环已启动，间隔 %ds；持仓快扫 %.0fs；沙盒扫描 %.0fs；卡片市价 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A 慢扫",
+            "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A 慢扫",
             interval_sec,
             max(5.0, float(OPEN_TRADE_SCAN_SEC or 15)),
-            max(20.0, float(SANDBOX_SCAN_SEC or 60)),
             max(60.0, float(CARD_PRICE_REFRESH_SEC or 300)),
+            max(60.0, float(OI_EQUITY_SCAN_INTERVAL_SEC or 300)) if OI_EQUITY_ENABLED else 0,
         )
 
     def _on_moonshot_a_alerts(self, alerts: list[dict[str, Any]]) -> None:
@@ -1638,83 +1638,12 @@ class RadarService:
         logger.info("moonshot 全市场宇宙 %d 个永续", len(out))
         return out
 
-    async def _maybe_moonshot_sandbox(self, session: aiohttp.ClientSession) -> None:
-        """B 蓄势试一丁点纸面；C 触发才正式开仓信号进沙盒。"""
-        from oi_mornitor.config import MOONSHOT_SANDBOX_B, MOONSHOT_SANDBOX_C
-        from oi_mornitor.moonshot_funnel import MS_FIND_TOP, MS_READY_BREAK
-
-        eng = self.moonshot_engine
-        if eng is None or not eng.enabled:
-            return
-        # C 触发
-        if MOONSHOT_SANDBOX_C:
-            for row in eng.c_triggers():
-                key = f"C:{row.symbol}:{int(row.updated_at)}"
-                if key in self._moonshot_sandbox_keys:
-                    continue
-                if row.state == MS_FIND_TOP:
-                    continue
-                try:
-                    result = await self.sandbox_engine.manual_enter(
-                        session,
-                        symbol=row.symbol,
-                        logic="S",
-                        side="LONG",
-                        interval="15m",
-                        base_url=self.radar.base_url,
-                        pattern_state={"hl": row.last_hl, "lh_price": row.last_lh},
-                    )
-                    self._moonshot_sandbox_keys.add(key)
-                    if result.get("ok"):
-                        logger.info("moonshot C → 沙盒试仓 %s", row.symbol)
-                    else:
-                        logger.info(
-                            "moonshot C 沙盒跳过 %s: %s",
-                            row.symbol,
-                            result.get("error"),
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("moonshot C 沙盒异常 %s: %s", row.symbol, exc)
-        # B 蓄势：更克制，仅 READY_BREAK 且未持仓
-        if MOONSHOT_SANDBOX_B:
-            for row in eng.b_candidates_for_sandbox():
-                if row.state != MS_READY_BREAK:
-                    continue
-                key = f"B:{row.symbol}"
-                if key in self._moonshot_sandbox_keys:
-                    continue
-                # 已有仓则跳过
-                open_syms = {
-                    p.symbol.upper() for p in self.sandbox_engine.tracker.list_positions()
-                }
-                if row.symbol in open_syms:
-                    self._moonshot_sandbox_keys.add(key)
-                    continue
-                try:
-                    result = await self.sandbox_engine.manual_enter(
-                        session,
-                        symbol=row.symbol,
-                        logic="S",
-                        side="LONG",
-                        interval="15m",
-                        base_url=self.radar.base_url,
-                        pattern_state={"hl": row.last_hl, "lh_price": row.last_lh},
-                    )
-                    self._moonshot_sandbox_keys.add(key)
-                    if result.get("ok"):
-                        logger.info("moonshot B → 沙盒试丁点 %s score=%.1f", row.symbol, row.score)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("moonshot B 沙盒异常 %s: %s", row.symbol, exc)
-        # 防止集合无限涨
-        if len(self._moonshot_sandbox_keys) > 500:
-            self._moonshot_sandbox_keys = set(list(self._moonshot_sandbox_keys)[-200:])
-
     async def stop(self) -> None:
         self._running = False
         for attr in (
             "_task",
-            "_open_trade_task",
-            "_sandbox_task",
+            "_card_lifecycle_task",
+            "_equity_task",
             "_card_price_task",
             "_settle_report_task",
             "_moonshot_task",
@@ -1732,10 +1661,16 @@ class RadarService:
             self._session = None
 
     def get_snapshot(self) -> dict[str, Any]:
+        pool_meta = merge_equity_into_pool_meta(
+            self.radar.last_pool_meta,
+            self._equity_stats,
+        )
         return {
             "scan_ts": self.radar.last_scan_ts,
             "meta": self.radar.last_global_meta,
-            "pool_meta": self.radar.last_pool_meta,
+            "pool_meta": pool_meta,
+            "equity_pool": list(self._equity_pool),
+            "equity_scan_ts": self._equity_scan_ts,
             "hot_tickers": self.radar.last_hot_tickers,
             "all_tickers": self.radar.last_all_rows,
             "market_matrix": self.matrix.last_matrix,
@@ -1746,7 +1681,12 @@ class RadarService:
                     fallback_symbols=self.radar.heavyweight_symbol_list,
                 ),
                 **self.pullback_engine.get_payload(),
-                **self.sandbox_engine.get_payload(),
+                **self.card_engine.get_payload(),
+                "equity_enabled": OI_EQUITY_ENABLED,
+                "equity_pool": list(self._equity_pool),
+                "equity_alerts": list(self._equity_alerts),
+                "equity_states": list(self._equity_states),
+                "equity_scan_ts": self._equity_scan_ts,
             },
             "pool_size": self.radar.last_pool_meta.get("eligible_count")
             or len(self.radar.last_all_rows),

@@ -330,18 +330,52 @@ def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     return pushed
 
 
+def format_volume_price_main_message(alert: dict[str, Any]) -> str:
+    """MAIN 群量价信号文案。"""
+    pair = _pair_label(str(alert.get("symbol") or ""))
+    type_label = str(alert.get("type_label") or alert.get("status_label") or "量价信号")
+    side = str(alert.get("side") or "").lower()
+    side_label = "多" if side in ("long", "bull") else ("空" if side in ("short", "bear") else "")
+    iv = str(alert.get("interval") or "—")
+    t = _fmt_time(alert.get("kline_close_time") or alert.get("kline_open_time") or alert.get("time"))
+    price = _fmt_price(alert.get("price") or alert.get("close") or alert.get("entry_hint"))
+    score = alert.get("score")
+    score_s = f"{float(score):.2f}" if score is not None else "—"
+    obs = "（观察档）" if alert.get("observation_only") else ""
+    head = f"{type_label}{obs}"
+    if side_label:
+        head = f"{head} ({side_label})"
+    return (
+        f"📊 热门 · {head}\n"
+        f"💰 交易对: {pair}\n"
+        f"⏰ 周期: {iv}\n"
+        f"⏰ 时间: {t}\n"
+        f"💵 参考价: {price}\n"
+        f"📈 评分: {score_s}"
+    )
+
+
 def _maybe_send_main_card(alert: dict[str, Any], text: str) -> bool:
+    from oi_mornitor.main_card_policy import is_main_card_eligible
     from oi_mornitor.telegram_push_toggles import is_main_push_enabled
 
     if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
         return False
-    try:
-        from oi_mornitor.focus_symbols import is_focus_symbol
-    except Exception:  # noqa: BLE001
+    if not is_main_card_eligible(alert):
         return False
-    sym = str(alert.get("symbol") or "")
-    if not is_focus_symbol(sym):
+    return send_telegram_text(text, chat_id=MAIN_CARD_TELEGRAM_CHAT_ID)
+
+
+def send_main_volume_price_telegram(alert: dict[str, Any]) -> bool:
+    """量价信号 → 仅 MAIN 群（热门币白名单）。"""
+    from oi_mornitor.main_card_policy import is_main_card_eligible
+    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    if not is_main_card_eligible(alert):
         return False
+    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
+        return False
+    text = format_volume_price_main_message(alert)
     return send_telegram_text(text, chat_id=MAIN_CARD_TELEGRAM_CHAT_ID)
 
 def send_pattern_oi_telegram(alert: dict[str, Any]) -> bool:
@@ -373,3 +407,7 @@ async def send_candle_card_telegram_async(alert: dict[str, Any]) -> bool:
 
 async def send_structure_card_telegram_async(alert: dict[str, Any]) -> bool:
     return await asyncio.to_thread(send_structure_card_telegram, alert)
+
+
+async def send_main_volume_price_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_main_volume_price_telegram, alert)

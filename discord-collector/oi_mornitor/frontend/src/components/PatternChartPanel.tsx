@@ -183,7 +183,6 @@ const LAYER_TOGGLES: { key: keyof ChartLayers; label: string }[] = [
 /** H_max / LH / L₁ / HL / 扳机 等水平价线 */
 const STRUCTURE_LINE_KINDS = new Set(["h_max", "lh", "l1", "hl", "trigger"]);
 const LIQ_LINE_KINDS = new Set(["liq_short", "liq_long"]);
-const SANDBOX_MARKER_PREFIX = "sandbox_";
 /** 形态结构箭头标记（与价线对应） */
 const STRUCTURE_MARKER_KINDS = new Set([
   "h_max",
@@ -267,38 +266,19 @@ function alignMarkerTime(
   return candleTimes[hi];
 }
 
-function extractSandboxMarkers(
-  ...lists: Array<PatternChartData["markers"] | undefined>
-): PatternChartData["markers"] {
-  const out: NonNullable<PatternChartData["markers"]> = [];
-  const seen = new Set<string>();
-  for (const list of lists) {
-    for (const m of list ?? []) {
-      const kind = String(m.kind || "");
-      if (!kind.startsWith(SANDBOX_MARKER_PREFIX)) continue;
-      const key = `${m.time}:${kind}:${m.text || ""}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(m);
-    }
-  }
-  return out;
-}
-
 /**
  * 用当前已加载的全部 K 线重算形态/结构标记（避免 refresh 只带尾部 80 根把历史标记冲掉）。
  */
 function rebuildChartMarkers(
   candles: PatternCandle[],
   state: PatternState | undefined,
-  sandbox: PatternChartData["markers"] | undefined,
 ): PatternChartData["markers"] {
   const built = buildChartFromCandles(
     candles,
     state as unknown as Record<string, unknown> | undefined,
     {},
   );
-  return [...built.markers, ...(sandbox ?? [])];
+  return built.markers;
 }
 
 function toCandleMarkers(
@@ -720,13 +700,13 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
         const showPattern = layersRef.current.candlePattern;
         const showStructure = layersRef.current.structure;
-        const sandbox = extractSandboxMarkers(payload.markers, metaRef.current?.markers);
-        const extra = [...sandbox, ...alertEntryMarkersRef.current];
-        const rebuilt = rebuildChartMarkers(
-          sortedCandles,
-          (metaRef.current?.state || payload.state) as PatternState | undefined,
-          extra,
-        );
+        const rebuilt = [
+          ...rebuildChartMarkers(
+            sortedCandles,
+            (metaRef.current?.state || payload.state) as PatternState | undefined,
+          ),
+          ...alertEntryMarkersRef.current,
+        ];
         const markers = toCandleMarkers(rebuilt, showPattern, showStructure, sortedCandles);
         if (markers.length) {
           series.setMarkers(markers);
@@ -1164,12 +1144,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       const series = seriesRef.current;
       const candles = candlesRef.current;
       if (!series || !candles.length) return;
-      const sandbox = extractSandboxMarkers(metaRef.current?.markers);
-      const rebuilt = rebuildChartMarkers(
-        candles,
-        metaRef.current?.state,
-        [...sandbox, ...markers],
-      );
+      const rebuilt = [
+        ...rebuildChartMarkers(candles, metaRef.current?.state),
+        ...markers,
+      ];
       if (metaRef.current) metaRef.current = { ...metaRef.current, markers: rebuilt };
       series.setMarkers(
         toCandleMarkers(

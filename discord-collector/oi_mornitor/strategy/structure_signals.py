@@ -16,6 +16,7 @@ from oi_mornitor.config import (
     STRUCTURE_CURVE_DOWN_SLOPE,
     STRUCTURE_CURVE_UP_SLOPE,
 )
+from oi_mornitor.signal_policy import is_blocked_structure_kind
 from oi_mornitor.strategy.candle_signals import closed_bar_index, compute_oi_anomaly_flags
 
 # 与用户规格对齐的可调默认
@@ -149,6 +150,43 @@ def _break_vol_ok(row: pd.Series) -> bool:
     return vr is not None and vr >= TOP_BREAK_VOL_MULT
 
 
+def _atr_at(df: pd.DataFrame, idx: int, period: int = 14) -> float:
+    if idx < 1:
+        return 0.0
+    start = max(1, idx - period + 1)
+    trs: list[float] = []
+    for i in range(start, idx + 1):
+        row = df.iloc[i]
+        prev = df.iloc[i - 1]
+        h = float(row["high"])
+        l = float(row["low"])
+        pc = float(prev["close"])
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if not trs:
+        return 0.0
+    return sum(trs) / len(trs)
+
+
+def _top_break_quality_ok(df: pd.DataFrame, j: int, mid: float) -> bool:
+    """破位质量：跌破幅度 ≥ 0.6×ATR，或已连续 2 根收在中轨下。"""
+    if j < 0 or j >= len(df):
+        return False
+    close_j = float(df.iloc[j]["close"])
+    if close_j >= mid:
+        return False
+    depth = mid - close_j
+    atr = _atr_at(df, j)
+    if atr > 0 and depth >= 0.6 * atr:
+        return True
+    streak = 1
+    for k in range(j - 1, max(-1, j - 3), -1):
+        if float(df.iloc[k]["close"]) < mid:
+            streak += 1
+        else:
+            break
+    return streak >= 2
+
+
 def _candle_body(row: pd.Series) -> float:
     return max(0.0, float(row["body_top"]) - float(row["body_bottom"]))
 
@@ -261,7 +299,10 @@ def filter_structure_card_hits(
     out: list[dict[str, Any]] = []
     block_sweep = _us_open_sweep_blocked(now_ms)
     for hit in hits:
-        if block_sweep and str(hit.get("kind") or "") == "liquidity_sweep":
+        kind = str(hit.get("kind") or "")
+        if is_blocked_structure_kind(kind):
+            continue
+        if block_sweep and kind == "liquidity_sweep":
             continue
         out.append(hit)
     return out
@@ -390,6 +431,8 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
                 continue
             if not _break_vol_ok(row):
                 continue
+            if not _top_break_quality_ok(df, j, mid):
+                continue
             vr = _vol_ratio(row)
             out.append({
                 "kind": "hs_vegas_break",
@@ -444,6 +487,8 @@ def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
             if not (float(row["close"]) < mid and float(prev["close"]) >= prev_mid):
                 continue
             if not _break_vol_ok(row):
+                continue
+            if not _top_break_quality_ok(df, j, mid):
                 continue
             vr = _vol_ratio(row)
             out.append({
@@ -613,8 +658,7 @@ def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
         if uw / rng < SWEEP_WICK_MIN_PCT:
             continue
         vr = _vol_ratio(row)
-        oi_on = bool(row.get("oi_anomaly")) if "oi_anomaly" in row.index else False
-        if not oi_on and not _break_vol_ok(row):
+        if not _break_vol_ok(row):
             continue
         if i in used:
             continue

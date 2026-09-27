@@ -68,6 +68,7 @@ from oi_mornitor.strategy.structure_signals import (
     filter_structure_card_hits,
     find_last_closed_structure_hits,
 )
+from oi_mornitor.signal_policy import is_disabled_pattern_interval
 from oi_mornitor.symbol_aliases import is_stablecoin_symbol
 from oi_mornitor.telegram_push_toggles import (
     is_candle_push_enabled,
@@ -380,6 +381,50 @@ def _top_amplitude_symbols(
     return out
 
 
+def _eligible_alt_pool_rows(
+    pool_rows: list[dict[str, Any]],
+    *,
+    majors: set[str],
+) -> list[dict[str, Any]]:
+    return [
+        r
+        for r in pool_rows
+        if r.get("status") != "warming"
+        and str(r.get("symbol") or "").upper() not in majors
+        and not is_stablecoin_symbol(str(r.get("symbol") or ""))
+    ]
+
+
+def pick_candle_card_alt_flow_symbols(
+    pool_rows: list[dict[str, Any]],
+    *,
+    majors: set[str] | None = None,
+    top_n: int = CANDLE_CARD_ALT_TOP_N,
+    tf: str = CANDLE_CARD_ALT_RANK_TF,
+) -> list[str]:
+    """山寨卡片 · 合约流入 TopN（射击之星 / 顶部结构主池）。"""
+    majors = {s.upper() for s in (majors or CANDLE_CARD_MAJOR_SYMBOLS)}
+    eligible = _eligible_alt_pool_rows(pool_rows, majors=majors)
+    return _top_amplitude_symbols(
+        eligible, tf, "contract_flow", top_n=top_n, exclude=majors
+    )
+
+
+def pick_candle_card_alt_gainer_symbols(
+    pool_rows: list[dict[str, Any]],
+    *,
+    majors: set[str] | None = None,
+    top_n: int = CANDLE_CARD_ALT_TOP_N,
+    tf: str = CANDLE_CARD_ALT_RANK_TF,
+) -> list[str]:
+    """山寨卡片 · 15m 涨幅 TopN（仅倒锤 / 二次探底等「跌后看多」）。"""
+    majors = {s.upper() for s in (majors or CANDLE_CARD_MAJOR_SYMBOLS)}
+    eligible = _eligible_alt_pool_rows(pool_rows, majors=majors)
+    return _top_amplitude_symbols(
+        eligible, tf, "price", top_n=top_n, exclude=majors
+    )
+
+
 def pick_candle_card_alt_symbols(
     pool_rows: list[dict[str, Any]],
     *,
@@ -387,25 +432,16 @@ def pick_candle_card_alt_symbols(
     top_n: int = CANDLE_CARD_ALT_TOP_N,
     tf: str = CANDLE_CARD_ALT_RANK_TF,
 ) -> list[str]:
-    """山寨推送池：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN。"""
-    majors = {s.upper() for s in (majors or CANDLE_CARD_MAJOR_SYMBOLS)}
-    eligible = [
-        r
-        for r in pool_rows
-        if r.get("status") != "warming"
-        and str(r.get("symbol") or "").upper() not in majors
-        and not is_stablecoin_symbol(str(r.get("symbol") or ""))
-    ]
-    price_top = _top_amplitude_symbols(
-        eligible, tf, "price", top_n=top_n, exclude=majors
+    """山寨推送池并集（兼容旧调用）。"""
+    flow = pick_candle_card_alt_flow_symbols(
+        pool_rows, majors=majors, top_n=top_n, tf=tf
     )
-    # 流动性幅度 ≈ 合约主动流入量级（与矩阵「合约流入」榜一致）
-    flow_top = _top_amplitude_symbols(
-        eligible, tf, "contract_flow", top_n=top_n, exclude=majors
+    gainers = pick_candle_card_alt_gainer_symbols(
+        pool_rows, majors=majors, top_n=top_n, tf=tf
     )
     out: list[str] = []
     seen: set[str] = set()
-    for sym in price_top + flow_top:
+    for sym in flow + gainers:
         if sym in seen:
             continue
         seen.add(sym)
@@ -581,20 +617,20 @@ class PatternMonitorEngine:
         self.tracker = PatternStateTracker()
         try:
             n_state = self.tracker.purge_breakout_states()
-            from oi_mornitor.pattern_alert_stats import purge_legacy_breakout_stats
-            from oi_mornitor.pattern_alert_ticker import purge_legacy_breakout_ticker_items
+            from oi_mornitor.pattern_alert_stats import purge_retired_pattern_stats
+            from oi_mornitor.pattern_alert_ticker import purge_retired_pattern_ticker_items
 
-            n_ticker = purge_legacy_breakout_ticker_items()
-            n_stats = purge_legacy_breakout_stats()
+            n_ticker = purge_retired_pattern_ticker_items()
+            n_stats = purge_retired_pattern_stats()
             if n_state or n_ticker or n_stats:
                 logger.info(
-                    "已清理旧带量突破数据：状态 %d · ticker %d · 胜率 %d",
+                    "已清理停推/legacy 数据：状态 %d · ticker %d · 胜率 %d",
                     n_state,
                     n_ticker,
                     n_stats,
                 )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("清理旧带量突破数据失败: %s", exc)
+            logger.warning("清理停推/legacy 数据失败: %s", exc)
         self._last_alerts: list[dict[str, Any]] = []
         self._last_states: list[dict[str, Any]] = []
         self._last_scan_ts: float = 0.0
@@ -611,7 +647,6 @@ class PatternMonitorEngine:
         # 可选：潜力暴涨漏斗引擎（由 RadarService 注入）
         self.moonshot_engine = None
         self._last_moonshot_payload: dict[str, Any] = {}
-        self._moonshot_sandbox_done: set[str] = set()
 
     @property
     def last_alerts(self) -> list[dict[str, Any]]:
@@ -1301,11 +1336,16 @@ class PatternMonitorEngine:
                 logger.warning("形态/结构卡片扫描失败: %s", exc)
 
         try:
+            from oi_mornitor.config import MAIN_CARD_INTERVALS
+            from oi_mornitor.notify_telegram import send_main_volume_price_telegram_async
             from oi_mornitor.pattern_alert_ticker import record_ticker_from_alerts
             from oi_mornitor.volume_price.ticker_bridge import scan_volume_price_ticker_alerts
 
             vp_alerts: list[dict[str, Any]] = []
             try:
+                vp_tfs = tuple(
+                    x for x in ("15m", "1h", "4h") if x in MAIN_CARD_INTERVALS
+                ) or ("15m",)
                 klines_1h_map = await asyncio.wait_for(
                     fetch_pattern_klines_batch(
                         session,
@@ -1316,15 +1356,53 @@ class PatternMonitorEngine:
                     ),
                     timeout=45,
                 )
+                klines_4h_map: dict[str, list] = {}
+                if "4h" in vp_tfs:
+                    klines_4h_map = await asyncio.wait_for(
+                        fetch_pattern_klines_batch(
+                            session,
+                            base_url=base_url,
+                            symbols=symbols,
+                            interval="4h",
+                            limit=min(120, PATTERN_KLINE_LIMIT),
+                        ),
+                        timeout=45,
+                    )
                 vp_alerts = scan_volume_price_ticker_alerts(
                     klines_map,
                     klines_map_1h=klines_1h_map,
+                    klines_map_4h=klines_4h_map or None,
+                    signal_tfs=vp_tfs,
                     scan_ts=self._last_scan_ts,
                 )
             except asyncio.TimeoutError:
-                logger.warning("量价 ticker 1h K 线拉取超时（45s），跳过")
+                logger.warning("量价 ticker HTF K 线拉取超时（45s），跳过")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("量价 ticker 扫描失败: %s", exc)
+
+            if vp_alerts:
+                pushed_main = getattr(self, "_main_vp_pushed_keys", None)
+                if not isinstance(pushed_main, set):
+                    pushed_main = set()
+                    self._main_vp_pushed_keys = pushed_main
+                n_main_vp = 0
+                for va in vp_alerts:
+                    vk = (
+                        f"{va.get('type')}:{va.get('symbol')}:"
+                        f"{va.get('kline_close_time')}:{va.get('type_label')}"
+                    )
+                    if vk in pushed_main:
+                        continue
+                    try:
+                        if await send_main_volume_price_telegram_async(va):
+                            pushed_main.add(vk)
+                            n_main_vp += 1
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("MAIN 量价推送失败: %s", exc)
+                if len(pushed_main) > 5000:
+                    self._main_vp_pushed_keys = set(list(pushed_main)[-2000:])
+                if n_main_vp:
+                    logger.info("MAIN 群量价推送 %d 条", n_main_vp)
 
             n_vp = record_ticker_from_alerts(vp_alerts)
             n = record_ticker_from_alerts(self._last_alerts)
@@ -1344,121 +1422,9 @@ class PatternMonitorEngine:
         watchlist: list[Any],
         scan_ts: float,
     ) -> list[dict[str, Any]]:
-        """最近收盘柱：K 线形态 ∩ 柱级 OI 异动 → Toast + Telegram 推荐短线。"""
-        now_ms = int(time.time() * 1000)
-        iv_by_sym = {w.symbol: w.interval for w in watchlist}
-        candidates: list[str] = []
-
-        for sym, klines in klines_map.items():
-            if not klines or len(klines) < 30:
-                continue
-            try:
-                df = enrich_indicators(klines_to_df(klines))
-                if df.empty or "bb_basis" not in df.columns:
-                    continue
-                # 无 OI 先看是否有形态；有再拉 OI 确认交集
-                markers = collect_candle_signal_markers(df)
-                closed_idx = len(df) - 1
-                if "close_time" in df.columns:
-                    try:
-                        ct = int(df.iloc[closed_idx]["close_time"])
-                        if ct > now_ms and closed_idx > 0:
-                            closed_idx -= 1
-                    except (TypeError, ValueError):
-                        pass
-                closed_ts = int(df.iloc[closed_idx]["open_time"] // 1000)
-                has_pat = any(
-                    int(m.get("time") or 0) == closed_ts
-                    and str(m.get("kind") or "") in PATTERN_MARKER_KINDS
-                    for m in markers
-                )
-                if has_pat:
-                    candidates.append(sym)
-            except Exception:  # noqa: BLE001
-                continue
-
-        if not candidates:
-            return []
-
-        sem = asyncio.Semaphore(max(4, min(OI_OI_BATCH_CONCURRENCY, 12)))
-
-        async def _oi_one(sym: str) -> tuple[str, dict[int, float]]:
-            async with sem:
-                oi = await fetch_open_interest_hist(
-                    session,
-                    base_url=base_url,
-                    symbol=sym,
-                    interval=iv_by_sym.get(sym) or PATTERN_KLINE_INTERVAL,
-                    limit=min(120, PATTERN_KLINE_LIMIT),
-                )
-                return sym, oi
-
-        oi_pairs = await asyncio.gather(
-            *[_oi_one(s) for s in candidates],
-            return_exceptions=True,
-        )
-        oi_by_sym: dict[str, dict[int, float]] = {}
-        for item in oi_pairs:
-            if isinstance(item, Exception):
-                continue
-            sym, oi = item
-            if oi:
-                oi_by_sym[sym] = oi
-
-        out: list[dict[str, Any]] = []
-        for sym in candidates:
-            oi_map = oi_by_sym.get(sym) or {}
-            if not oi_map:
-                continue
-            klines = klines_map.get(sym) or []
-            try:
-                df = enrich_indicators(klines_to_df(klines))
-                df["oi"] = [
-                    oi_map.get(int(ot // 1000), float("nan"))
-                    for ot in df["open_time"].tolist()
-                ]
-                combos = find_last_closed_pattern_oi_combos(df, now_ms=now_ms)
-            except Exception:  # noqa: BLE001
-                continue
-            if not combos:
-                continue
-            hit = combos[0]
-            close_ts = int(hit["time"])
-            dedupe = f"{sym}:{close_ts}:{hit.get('kind')}"
-            if dedupe in self._combo_seen:
-                continue
-            self._combo_seen.add(dedupe)
-            if len(self._combo_seen) > 800:
-                self._combo_seen = set(list(self._combo_seen)[-400:])
-
-            kind = str(hit.get("kind") or "")
-            text = str(hit.get("text") or kind)
-            side_hint = _combo_side_hint(kind)
-            last_price = float(klines[-1][4]) if klines else float(hit.get("price") or 0)
-            iv = iv_by_sym.get(sym) or PATTERN_KLINE_INTERVAL
-            alert = {
-                "symbol": sym,
-                "type": "candle_pattern_oi",
-                "interval": iv,
-                "status": "CANDLE_OI_COMBO",
-                "status_label": "形态+OI · 推荐短线",
-                "signal_kind": kind,
-                "signal_text": text,
-                "side_hint": side_hint,
-                "last_price": last_price,
-                "message": f"{text} · 推荐{side_hint}",
-                "scan_ts": scan_ts,
-                "kline_close_time": close_ts * 1000,
-            }
-            out.append(alert)
-            logger.info("⚡ 形态+OI短线 %s %s %s", sym, text, side_hint)
-            if not is_candle_push_enabled():
-                try:
-                    await send_pattern_oi_telegram_async(alert)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Telegram 短线推荐失败 %s: %s", sym, exc)
-
-        return out
+        """形态∩柱级 OI 短线已停推（假反转灌水）；保留接口兼容。"""
+        del session, base_url, klines_map, watchlist, scan_ts
+        return []
 
     def _card_emit_throttled(self, sym: str, iv: str, side: str, close_ts: int) -> bool:
         """同币同周期同方向在 CARD_PUSH_COOLDOWN_BARS 根 K 内只推一次。"""
@@ -1498,35 +1464,41 @@ class PatternMonitorEngine:
     ) -> list[dict[str, Any]]:
         """多周期蜡烛形态 + 顶部/底部结构 → Telegram 卡片。
 
-        主流 BTC/ETH/SOL：15m/30m/1h/4h。
-        山寨：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN → 15m/30m/1h。
+        主流 BTC/ETH/SOL：15m/1h/4h。
+        山寨：流入 Top7 + 涨幅 Top7（dip）→ 15m/1h。
         """
         if not is_candle_push_enabled() and not is_structure_push_enabled():
             return []
 
         majors = {s.upper() for s in CANDLE_CARD_MAJOR_SYMBOLS}
         rows = pool_rows if pool_rows is not None else self._last_pool_rows
-        alt_syms = pick_candle_card_alt_symbols(rows or [], majors=majors)
-        # 池子尚未暖好时，短暂回退形态 watchlist（排除主流）
-        if not alt_syms and watchlist:
-            alt_syms = [
+        alt_flow = pick_candle_card_alt_flow_symbols(rows or [], majors=majors)
+        alt_gainers = pick_candle_card_alt_gainer_symbols(rows or [], majors=majors)
+        # 池子尚未暖好时，短暂回退形态 watchlist（排除主流）→ 仅流入池
+        if not alt_flow and watchlist:
+            alt_flow = [
                 str(w.symbol).upper()
                 for w in watchlist
                 if str(w.symbol).upper() not in majors
             ][: CANDLE_CARD_ALT_TOP_N * 2]
 
-        jobs: list[tuple[str, str, bool]] = []
+        # (symbol, interval, is_major, pool_role: all|flow|dip)
+        jobs: list[tuple[str, str, bool, str]] = []
         for sym in sorted(majors):
             for iv in CANDLE_CARD_MAJOR_INTERVALS:
-                jobs.append((sym, iv, True))
-        for sym in sorted(set(alt_syms)):
+                jobs.append((sym, iv, True, "all"))
+        for sym in sorted(set(alt_flow)):
             for iv in CANDLE_CARD_ALT_INTERVALS:
-                jobs.append((sym, iv, False))
+                jobs.append((sym, iv, False, "flow"))
+        for sym in sorted(set(alt_gainers) - set(alt_flow)):
+            for iv in CANDLE_CARD_ALT_INTERVALS:
+                jobs.append((sym, iv, False, "dip"))
 
         logger.debug(
-            "形态卡片任务 majors=%s alts=%s jobs=%d",
+            "形态卡片任务 majors=%s flow=%s dip=%s jobs=%d",
             sorted(majors),
-            alt_syms,
+            alt_flow,
+            sorted(set(alt_gainers) - set(alt_flow)),
             len(jobs),
         )
         now = time.time()
@@ -1576,13 +1548,19 @@ class PatternMonitorEngine:
             return rows or []
 
         async def _emit_candle(
-            sym: str, iv: str, is_major: bool, df: Any, closed_ts: int
+            sym: str,
+            iv: str,
+            is_major: bool,
+            pool_role: str,
+            df: Any,
+            closed_ts: int,
         ) -> list[dict[str, Any]]:
             if not is_candle_push_enabled():
                 return []
-            # 彻底屏蔽已停用的 30m 周期（hits 留空即可，不发出 alert）
-            if iv == "30m":
+            if is_disabled_pattern_interval(iv):
                 return []
+            allow_shoot = pool_role in ("all", "flow")
+            allow_hammer = pool_role in ("all", "flow", "dip")
             try:
                 preview = collect_candle_signal_markers(df)
             except Exception:  # noqa: BLE001
@@ -1592,34 +1570,18 @@ class PatternMonitorEngine:
                 for m in preview
                 if int(m.get("time") or 0) == closed_ts
             }
-            need_shoot = "shooting_star" in kinds_on_bar
-            need_hammer = "inverted_hammer" in kinds_on_bar
+            need_shoot = allow_shoot and "shooting_star" in kinds_on_bar
+            need_hammer = allow_hammer and "inverted_hammer" in kinds_on_bar
             if not need_shoot and not need_hammer:
                 return []
 
-            work = df
-            if need_hammer:
-                async with sem:
-                    oi_map = await fetch_open_interest_hist(
-                        session,
-                        base_url=base_url,
-                        symbol=sym,
-                        interval=iv,
-                        limit=min(fetch_limit, 500),
-                    )
-                if oi_map:
-                    work = df.copy()
-                    work["oi"] = [
-                        oi_map.get(int(ot // 1000), float("nan"))
-                        for ot in work["open_time"].tolist()
-                    ]
             try:
                 hits = find_last_closed_candle_card_hits(
-                    work,
+                    df,
                     now_ms=now_ms,
-                    allow_shooting_star=True,
-                    allow_consecutive_shoot=is_major,
-                    allow_inverted_hammer_oi=True,
+                    allow_shooting_star=need_shoot,
+                    allow_consecutive_shoot=False,
+                    allow_inverted_hammer=need_hammer,
                 )
             except Exception:  # noqa: BLE001
                 return []
@@ -1763,9 +1725,10 @@ class PatternMonitorEngine:
                     self._card_last_emit[f"struct:{sym}:{iv}:{side}"] = close_ts
             return out
 
-        async def _one(sym: str, iv: str, is_major: bool) -> list[dict[str, Any]]:
-            # 彻底屏蔽已停用的 30m 周期：拉 K 线 / 算指标 / 扫形态 / 推 TG 一律跳过
-            if iv == "30m":
+        async def _one(
+            sym: str, iv: str, is_major: bool, pool_role: str = "all"
+        ) -> list[dict[str, Any]]:
+            if is_disabled_pattern_interval(iv):
                 return []
             klines = await _klines_for(sym, iv)
             min_bars = 80 if is_structure_push_enabled() else 30
@@ -1790,7 +1753,9 @@ class PatternMonitorEngine:
 
             out: list[dict[str, Any]] = []
             if is_candle_push_enabled():
-                out.extend(await _emit_candle(sym, iv, is_major, df, closed_ts))
+                out.extend(
+                    await _emit_candle(sym, iv, is_major, pool_role, df, closed_ts)
+                )
             if is_structure_push_enabled():
                 out.extend(await _emit_structure(sym, iv, df))
             if len(self._card_seen) > 1200:
@@ -1798,7 +1763,7 @@ class PatternMonitorEngine:
             return out
 
         results = await asyncio.gather(
-            *[_one(s, iv, maj) for s, iv, maj in jobs],
+            *[_one(s, iv, maj, role) for s, iv, maj, role in jobs],
             return_exceptions=True,
         )
         alerts: list[dict[str, Any]] = []

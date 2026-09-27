@@ -39,6 +39,30 @@ BINANCE_BAN_COOLDOWN_SEC = float(os.getenv("OI_BINANCE_BAN_COOLDOWN_SEC", "1800"
 # 候选池：fapi 全市场 ticker/24hr 聚合 + OI 量级分层（略降门槛以覆盖更多山寨异动）
 OI_TIER_MID_MIN_USD = float(os.getenv("OI_TIER_MID_MIN_USD", "5000000"))
 OI_TIER_HEAVY_MIN_USD = float(os.getenv("OI_TIER_HEAVY_MIN_USD", "50000000"))
+
+# —— 币股白名单池（与加密 OI 分层并行，不并入 build_tier_pool）——
+OI_EQUITY_ENABLED = os.getenv("OI_EQUITY_ENABLED", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+OI_EQUITY_SCAN_INTERVAL_SEC = int(os.getenv("OI_EQUITY_SCAN_INTERVAL_SEC", "300"))
+OI_EQUITY_KLINE_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_EQUITY_KLINE_INTERVALS", "1h,4h").split(",")
+    if x.strip()
+) or ("1h", "4h")
+OI_EQUITY_MIN_TURNOVER_USD = float(os.getenv("OI_EQUITY_MIN_TURNOVER_USD", "500000"))
+OI_EQUITY_MAX_POOL = int(os.getenv("OI_EQUITY_MAX_POOL", "18"))
+OI_EQUITY_SIGNAL_SESSION_ONLY = os.getenv("OI_EQUITY_SIGNAL_SESSION_ONLY", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+OI_EQUITY_SESSION_START_UTC = os.getenv("OI_EQUITY_SESSION_START_UTC", "13:30").strip()
+OI_EQUITY_SESSION_END_UTC = os.getenv("OI_EQUITY_SESSION_END_UTC", "20:00").strip()
+OI_EQUITY_STATS_LEVERAGE = float(os.getenv("OI_EQUITY_STATS_LEVERAGE", "5"))
+OI_EQUITY_CARD_TELEGRAM = os.getenv("OI_EQUITY_CARD_TELEGRAM", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+OI_EQUITY_WHITELIST_EXTRA = os.getenv("OI_EQUITY_WHITELIST_EXTRA", "").strip()
+
 OI_OI_BATCH_CONCURRENCY = int(os.getenv("OI_OI_BATCH_CONCURRENCY", "8"))
 # 并发拉单 symbol OI 的上限（被 ban 时降速：默认 8）
 # 监控池上限：0=不限；默认 200 减少后续 K 线/形态扫描的 symbol 数量
@@ -101,6 +125,9 @@ BREAKOUT_LOOKBACK = int(os.getenv("OI_BREAKOUT_LOOKBACK", "50"))
 BREAKOUT_KLINE_LIMIT = BREAKOUT_LOOKBACK + 2
 BREAKOUT_VOL_MULT = float(os.getenv("OI_BREAKOUT_VOL_MULT", "2.5"))
 BREAKOUT_BODY_RATIO = float(os.getenv("OI_BREAKOUT_BODY_RATIO", "0.65"))
+PULLBACK_SCAN_ENABLED = os.getenv("OI_PULLBACK_SCAN_ENABLED", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 PULLBACK_VOL_SHRINK_RATIO = float(os.getenv("OI_PULLBACK_VOL_SHRINK", "0.6"))
 PULLBACK_TOUCH_TOLERANCE = float(os.getenv("OI_PULLBACK_TOUCH_TOL", "0.003"))
 BREAKOUT_WATCH_MAX_SEC = int(os.getenv("OI_BREAKOUT_WATCH_MAX_SEC", "7200"))
@@ -166,6 +193,24 @@ MAIN_CARD_DEFAULT_SYMBOLS = tuple(
     for s in os.getenv("OI_MAIN_CARD_DEFAULT_SYMBOLS", "BTCUSDT,ETHUSDT").split(",")
     if s.strip()
 )
+
+from oi_mornitor.signal_policy import filter_active_intervals
+
+MAIN_CARD_INTERVALS = filter_active_intervals(
+    tuple(
+        x.strip().lower()
+        for x in os.getenv("OI_MAIN_CARD_INTERVALS", "15m,1h,4h").split(",")
+        if x.strip()
+    )
+)
+MAIN_CARD_TYPE_PREFIXES = tuple(
+    x.strip()
+    for x in os.getenv(
+        "OI_MAIN_CARD_TYPE_PREFIXES",
+        "射击之星,倒锤子,量价确认,量价推进",
+    ).split(",")
+    if x.strip()
+)
 # 形态信号列表结算摘要 → MAIN 群（北京时间 04/08/12/16/20/24 点各发一档）
 STATS_SETTLE_TELEGRAM = os.getenv(
     "OI_STATS_SETTLE_TELEGRAM", "1"
@@ -190,11 +235,16 @@ CANDLE_CARD_ALT_INTERVALS = tuple(
     for x in os.getenv("OI_CANDLE_CARD_ALT_INTERVALS", "15m,1h").split(",")
     if x.strip()
 )
+
+from oi_mornitor.signal_policy import filter_active_intervals
+
+CANDLE_CARD_MAJOR_INTERVALS = filter_active_intervals(CANDLE_CARD_MAJOR_INTERVALS)
+CANDLE_CARD_ALT_INTERVALS = filter_active_intervals(CANDLE_CARD_ALT_INTERVALS)
 # 山寨：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN
 CANDLE_CARD_ALT_TOP_N = int(os.getenv("OI_CANDLE_CARD_ALT_TOP_N", "7"))
 CANDLE_CARD_ALT_RANK_TF = os.getenv("OI_CANDLE_CARD_ALT_RANK_TF", "15m").strip() or "15m"
 # 各周期 K 线刷新间隔（秒），避免每轮雷达都打满高周期接口
-_CANDLE_CARD_REFRESH_DEFAULTS = {"15m": 45, "30m": 90, "1h": 180, "4h": 600}
+_CANDLE_CARD_REFRESH_DEFAULTS = {"15m": 45, "1h": 180, "4h": 600}
 CANDLE_CARD_REFRESH_SEC: dict[str, int] = {}
 for _iv, _sec in _CANDLE_CARD_REFRESH_DEFAULTS.items():
     CANDLE_CARD_REFRESH_SEC[_iv] = int(

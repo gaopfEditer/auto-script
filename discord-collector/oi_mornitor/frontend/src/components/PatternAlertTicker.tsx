@@ -5,6 +5,7 @@ import { formatAlertHoverDetail } from "../utils/alertHoverDetail";
 import { isOiOperator } from "../utils/oiOperator";
 import {
   ALERT_SETTLE_RULES_SUMMARY,
+  isRetiredPatternAlert,
   loadAlertStats,
   outcomeLabel,
   formatAlertTotalPnlPct,
@@ -224,7 +225,8 @@ function pruneTickerItems(items: TickerItem[], now = Date.now()): TickerItem[] {
   return sortTickerByTime(
     items
       .map((t) => normalizeTickerItem(t, now))
-      .filter((t) => t.signalAt > cutoff),
+      .filter((t) => t.signalAt > cutoff)
+      .filter((t) => !isRetiredPatternAlert(t.alert, t.key)),
   ).slice(-TICKER_MAX); // 保留最近 TICKER_MAX 条，仍保持早→晚
 }
 
