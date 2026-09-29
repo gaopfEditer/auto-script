@@ -35,6 +35,11 @@ import {
 } from "./bitget-staged-order.js";
 
 import { isStagedTradeSignal } from "./discord-signal-staged-trade.js";
+import { normalizeExecution } from "./discord-signal-execution.js";
+import {
+  prepareAutoTradeForOrder,
+  telegramTradeRequiresTpsl,
+} from "./telegram-auto-trade.js";
 
 import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
 
@@ -347,10 +352,14 @@ export function createBitgetOrderService(store, log) {
 
     if (!resolved) return { skipped: "channel_not_configured" };
 
-
-
-
     const autoTradeSym = String(input.symbol ?? input.parsed?.symbol ?? "").trim();
+    let parsed = { ...(input.parsed ?? {}) };
+    let executionJson = input.executionJson;
+    const ex0 = normalizeExecution(executionJson, parsed);
+    const prepared = await prepareAutoTradeForOrder(parsed, ex0, autoTradeSym);
+    parsed = prepared.parsed;
+    executionJson = prepared.execution;
+    input = { ...input, parsed, executionJson };
 
     if (isAutoTradeExcludedMajorSymbol(autoTradeSym)) {
 
@@ -360,7 +369,23 @@ export function createBitgetOrderService(store, log) {
 
     }
 
-    if (isStagedTradeSignal(input.parsed) || resolved.channel.stagedTrade) {
+    const isStaged = isStagedTradeSignal(parsed) || resolved.channel.stagedTrade;
+    if (
+      !isStaged &&
+      !telegramTradeRequiresTpsl(normalizeExecution(executionJson, parsed))
+    ) {
+      log.warn(
+        `Bitget 跳过 card=#${input.cardId}：务必设置止盈止损（已试默认 TP/SL 仍缺有效入场）`
+      );
+      await persistOrderResult(input.cardId, parsed, {
+        status: "skipped",
+        reason: "missing_tpsl",
+        at: new Date().toISOString(),
+      });
+      return { skipped: "missing_tpsl" };
+    }
+
+    if (isStaged) {
 
       return runStagedTrade({
 
@@ -368,7 +393,7 @@ export function createBitgetOrderService(store, log) {
 
         channelId: input.channelId,
 
-        parsed: input.parsed,
+        parsed,
 
         channelName: input.channelName,
 
@@ -398,9 +423,9 @@ export function createBitgetOrderService(store, log) {
 
     const built = buildBitgetOrderPlan({
 
-      parsed: input.parsed,
+      parsed,
 
-      executionJson: input.executionJson,
+      executionJson,
 
       channelTrade: resolved.channel,
 
@@ -418,7 +443,7 @@ export function createBitgetOrderService(store, log) {
 
       );
 
-      await persistOrderResult(input.cardId, input.parsed, {
+      await persistOrderResult(input.cardId, parsed, {
 
         status: "skipped",
 

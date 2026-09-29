@@ -4,6 +4,7 @@
 import { normalizeHumanSymbol } from "./card-fields.js";
 import { isShortDirection, resolveTradeDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
+import { applyDefaultTpSl } from "./card-liquidation-engine.js";
 import { detectSymbolTier } from "./card-backtest-policy.js";
 import { config } from "./config.js";
 
@@ -263,10 +264,32 @@ export function buildBitgetOrderPlan(input) {
   if (!sizeResult.ok) return { ok: false, reason: sizeResult.error ?? "size_too_small" };
   const size = sizeResult.size;
 
-  const tps = ex.planned?.takeProfitPrices ?? [];
+  let tps = (ex.planned?.takeProfitPrices ?? [])
+    .map((p) => String(p ?? "").trim())
+    .filter(Boolean);
+  let slRaw = String(ex.planned?.stopLossPrice ?? parsed.stopLoss ?? parsed.stop_loss ?? "").trim();
+  const tpNums = tps
+    .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  let slNum = slRaw ? Number(slRaw.replace(/[^\d.]/g, "")) : null;
+  if (!Number.isFinite(slNum) || slNum <= 0) slNum = null;
+
+  if ((!tpNums.length || slNum == null) && refPrice > 0) {
+    const applied = applyDefaultTpSl(refPrice, isShortDirection(direction), tpNums, slNum);
+    tps = applied.tps.map((p) => String(p));
+    slRaw = String(applied.sl);
+    slNum = applied.sl;
+    ex.planned.takeProfitPrices = tps;
+    ex.planned.stopLossPrice = slRaw;
+    parsed.takeProfits = tps;
+    parsed.stopLoss = slRaw;
+  }
+
   const tp = tps.length ? String(tps[0]).replace(/[^\d.]/g, "") : null;
-  const slRaw = String(ex.planned?.stopLossPrice ?? parsed.stopLoss ?? parsed.stop_loss ?? "").trim();
   const sl = slRaw ? slRaw.replace(/[^\d.]/g, "") : null;
+  if (!tp || !sl) {
+    return { ok: false, reason: "missing_tpsl" };
+  }
 
   /** @type {BitgetOrderPlan} */
   const plan = {

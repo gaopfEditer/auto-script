@@ -141,6 +141,19 @@ export function prepareTelegramTradeParsed(parsed, execution) {
   return { parsed: next, execution };
 }
 
+/**
+ * 自动开单前：补市价入场 + 缺省 TP/SL（5/8/12% + 5% SL）。
+ * @param {Record<string, unknown>} parsed
+ * @param {ReturnType<typeof normalizeExecution>} execution
+ * @param {string} symbol
+ */
+export async function prepareAutoTradeForOrder(parsed, execution, symbol) {
+  const nextParsed = { ...parsed };
+  const nextEx = { ...execution, planned: { ...execution.planned } };
+  await enrichTelegramMarketEntry(nextParsed, nextEx, symbol);
+  return prepareTelegramTradeParsed(nextParsed, nextEx);
+}
+
 /** @param {ReturnType<typeof normalizeExecution>} execution */
 export function telegramTradeRequiresTpsl(execution) {
   const tps = execution.planned?.takeProfitPrices ?? [];

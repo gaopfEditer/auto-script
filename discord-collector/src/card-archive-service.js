@@ -48,9 +48,7 @@ import { recordTelegramCardAlertStats } from "./telegram-card-alert-stats.js";
 import { formatPipelineLog, formatSendCdpLog } from "./signal-pipeline-log.js";
 import {
   isTelegramAutoTradeChannel,
-  enrichTelegramMarketEntry,
-  prepareTelegramTradeParsed,
-  telegramTradeCanStagedOpen,
+  prepareAutoTradeForOrder,
   telegramTradeRequiresTpsl,
 } from "./telegram-auto-trade.js";
 import {
@@ -453,14 +451,13 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     let execution = normalizeExecution(executionJson, parsedJson);
     /** @type {Record<string, unknown>} */
     const parsedForTrade = { ...(parsedJson && typeof parsedJson === "object" ? parsedJson : {}) };
-    await enrichTelegramMarketEntry(parsedForTrade, execution, symbol);
-    const prepared = prepareTelegramTradeParsed(parsedForTrade, execution);
+    const prepared = await prepareAutoTradeForOrder(parsedForTrade, execution, symbol);
     execution = prepared.execution;
     const parsed = prepared.parsed;
 
-    if (!telegramTradeRequiresTpsl(execution) && !telegramTradeCanStagedOpen(parsed, execution)) {
+    if (!telegramTradeRequiresTpsl(execution)) {
       log.warn(
-        `Telegram 自动交易跳过 card=#${cardId} channel=${channelId}：缺 symbol/方向或无法分阶段开仓`
+        `Telegram 自动交易跳过 card=#${cardId} channel=${channelId}：务必设置止盈止损（已试默认 TP/SL 仍缺有效入场或方向）`
       );
       return { bitget: { skipped: "missing_tpsl" }, weex: { skipped: "missing_tpsl" } };
     }
