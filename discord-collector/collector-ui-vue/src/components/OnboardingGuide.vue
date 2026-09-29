@@ -135,7 +135,6 @@ onUnmounted(() => {
   transform: translateX(-50%);
   width: min(520px, calc(100vw - 2rem));
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 12px;
   padding: 1rem 1.1rem 0.85rem;
   color: #e8eaed;

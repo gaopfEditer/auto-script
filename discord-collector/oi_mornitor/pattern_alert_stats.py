@@ -227,7 +227,7 @@ def _side_from_alert(alert: dict[str, Any]) -> str | None:
 
 
 def _entry_from_alert(alert: dict[str, Any]) -> float | None:
-    for k in ("price", "close", "last_price", "entry_price"):
+    for k in ("price", "close", "entry_hint", "last_price", "entry_price"):
         try:
             n = float(alert.get(k))
         except (TypeError, ValueError):

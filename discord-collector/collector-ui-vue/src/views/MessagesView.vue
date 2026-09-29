@@ -127,7 +127,6 @@ button {
   border-radius: 8px;
   padding: 0.65rem 0.85rem;
   margin-bottom: 0.5rem;
-  border: 1px solid #3f4147;
 }
 .location {
   font-size: 0.82rem;

@@ -426,7 +426,6 @@ onMounted(async () => {
   flex-shrink: 0;
   padding: 0.35rem 0.65rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #2b2d31;
   color: #b5bac1;
   font-size: 0.75rem;

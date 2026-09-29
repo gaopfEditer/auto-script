@@ -1346,15 +1346,20 @@ class PatternMonitorEngine:
                 vp_tfs = tuple(
                     x for x in ("15m", "1h", "4h") if x in MAIN_CARD_INTERVALS
                 ) or ("15m",)
+                # Vegas 过滤需 ≥680 根 1h；原先 cap 120 会导致「量价确认·空」永远被滤掉
+                vp_1h_limit = min(
+                    max(PATTERN_KLINE_LIMIT, 680),
+                    PATTERN_CHART_MAX_LIMIT,
+                )
                 klines_1h_map = await asyncio.wait_for(
                     fetch_pattern_klines_batch(
                         session,
                         base_url=base_url,
                         symbols=symbols,
                         interval="1h",
-                        limit=min(120, PATTERN_KLINE_LIMIT),
+                        limit=vp_1h_limit,
                     ),
-                    timeout=45,
+                    timeout=90,
                 )
                 klines_4h_map: dict[str, list] = {}
                 if "4h" in vp_tfs:
@@ -1376,7 +1381,7 @@ class PatternMonitorEngine:
                     scan_ts=self._last_scan_ts,
                 )
             except asyncio.TimeoutError:
-                logger.warning("量价 ticker HTF K 线拉取超时（45s），跳过")
+                logger.warning("量价 ticker HTF K 线拉取超时，跳过")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("量价 ticker 扫描失败: %s", exc)
 
@@ -1405,9 +1410,24 @@ class PatternMonitorEngine:
                     logger.info("MAIN 群量价推送 %d 条", n_main_vp)
 
             n_vp = record_ticker_from_alerts(vp_alerts)
+            n_vp_stats = 0
+            if vp_alerts:
+                try:
+                    from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+                    for va in vp_alerts:
+                        if record_alert_from_push(va):
+                            n_vp_stats += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("量价信号胜率入库失败: %s", exc)
             n = record_ticker_from_alerts(self._last_alerts)
-            if n_vp or n:
-                logger.info("形态 ticker 落盘 %d 条（量价 %d）", n + n_vp, n_vp)
+            if n_vp or n or n_vp_stats:
+                logger.info(
+                    "形态 ticker 落盘 %d 条（量价 %d）；量价胜率入库 %d 条",
+                    n + n_vp,
+                    n_vp,
+                    n_vp_stats,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态 ticker 落盘失败: %s", exc)
 

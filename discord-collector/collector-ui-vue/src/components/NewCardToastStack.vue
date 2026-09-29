@@ -132,7 +132,6 @@ function closeOne(key) {
   margin-bottom: 0.45rem;
   padding: 0.35rem 0.5rem;
   background: rgba(30, 31, 34, 0.92);
-  border: 1px solid #3f4147;
   border-radius: 8px;
   backdrop-filter: blur(8px);
 }
@@ -148,7 +147,6 @@ function closeOne(key) {
   flex-shrink: 0;
 }
 .stack-tool-btn {
-  border: 1px solid #3f4147;
   background: #35373c;
   color: #dbdee1;
   font-size: 0.68rem;
@@ -194,7 +192,6 @@ function closeOne(key) {
   right: 0;
   height: 100%;
   border-radius: 10px;
-  border: 1px solid #3f4147;
   background: #25262a;
 }
 .stack-layer.layer-1 {
@@ -320,7 +317,6 @@ function closeOne(key) {
   gap: 0.4rem;
 }
 .toast-btn {
-  border: 1px solid #3f4147;
   background: #35373c;
   color: #dbdee1;
   font-size: 0.72rem;

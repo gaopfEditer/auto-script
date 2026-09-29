@@ -843,7 +843,6 @@ h3 {
 .field input,
 .field select {
   background: #2b2d31;
-  border: 1px solid #3f4147;
   color: #dbdee1;
   border-radius: 6px;
   padding: 0.4rem 0.5rem;
@@ -874,7 +873,6 @@ h3 {
   margin-top: 0.5rem;
   padding: 0.45rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #5865f2;
   color: #fff;
   font-weight: 600;
@@ -1028,7 +1026,6 @@ h3 {
   padding: 0.12rem 0.55rem;
   border-radius: 999px;
   background: rgba(63, 65, 71, 0.55);
-  border: 1px solid #3f4147;
 }
 .card-grid :deep(.signal-card) {
   margin-bottom: 0;
@@ -1048,7 +1045,6 @@ h3 {
   width: min(720px, 100%);
   max-height: min(85vh, 900px);
   background: #2b2d31;
-  border: 1px solid #3f4147;
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   display: flex;
@@ -1061,7 +1057,6 @@ h3 {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.85rem 1rem;
-  border-bottom: 1px solid #3f4147;
   flex-shrink: 0;
 }
 .modal-head-actions {
@@ -1149,7 +1144,6 @@ h3 {
   color: #b5bac1;
 }
 .eval-block {
-  border-top: 1px solid #3f4147;
   padding-top: 0.75rem;
 }
 .eval-hint {

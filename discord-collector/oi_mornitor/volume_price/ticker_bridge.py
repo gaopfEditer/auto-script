@@ -1,4 +1,4 @@
-"""量价信号 → 形态 ticker alert（仅 ticker，不进 TG / 胜率库）。"""
+"""量价信号 → 形态 ticker + 胜率库（pattern_monitor 扫描后落盘；MAIN 群另推 TG）。"""
 from __future__ import annotations
 
 import time

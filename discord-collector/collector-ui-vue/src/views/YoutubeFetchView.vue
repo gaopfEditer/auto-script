@@ -1242,7 +1242,6 @@ https://youtu.be/..."
   display: flex;
   gap: 0.35rem;
   background: #2b2d31;
-  border: 1px solid #3f4147;
   border-radius: 10px;
   padding: 0.25rem;
 }
@@ -1270,7 +1269,6 @@ https://youtu.be/..."
   flex: 0 0 auto;
   width: auto;
   margin: 0;
-  border: 1px solid #3f4147;
   background: #2b2d31;
   color: #dbdee1;
   border-radius: 6px;
@@ -1328,7 +1326,6 @@ https://youtu.be/..."
   display: flex;
   gap: 0.25rem;
   margin: 0.75rem 0 0;
-  border-bottom: 1px solid #3f4147;
   padding-bottom: 0;
 }
 .detail-tab {
@@ -1364,7 +1361,6 @@ https://youtu.be/..."
   min-height: clamp(280px, 55vh, calc(100dvh - 240px));
   overflow: auto;
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 8px;
   padding: 0.75rem 0.85rem;
   -webkit-overflow-scrolling: touch;
@@ -1388,7 +1384,6 @@ https://youtu.be/..."
 }
 .paste-files li {
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 8px;
   padding: 0.5rem 0.6rem;
   cursor: pointer;
@@ -1491,7 +1486,6 @@ https://youtu.be/..."
 }
 .summary-block-top {
   background: #2b2d31;
-  border: 1px solid #3f4147;
   border-radius: 10px;
   padding: 0.65rem 0.75rem;
 }
@@ -1500,7 +1494,6 @@ https://youtu.be/..."
   flex-direction: column;
   gap: 0.35rem;
   background: #2b2d31;
-  border: 1px solid #3f4147;
   border-radius: 10px;
   padding: 0.55rem 0.65rem;
 }
@@ -1521,7 +1514,6 @@ https://youtu.be/..."
   flex-direction: column;
   align-items: flex-start;
   gap: 0.1rem;
-  border: 1px solid #3f4147;
   background: #1e1f22;
   color: #dbdee1;
   border-radius: 8px;
@@ -1577,7 +1569,6 @@ https://youtu.be/..."
   margin: 0;
   padding: 0.65rem 0.7rem 0.75rem;
   background: #2b2d31;
-  border: 1px solid #3f4147;
   border-radius: 10px;
   border-top: 3px solid #5865f2;
 }
@@ -1705,7 +1696,6 @@ https://youtu.be/..."
   max-width: 100%;
   flex: 0 1 auto;
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 8px;
   padding: 0.6rem 0.7rem;
   cursor: pointer;
@@ -1724,7 +1714,6 @@ https://youtu.be/..."
   margin-left: auto;
   font-size: 0.62rem;
   color: #949ba4;
-  border: 1px solid #3f4147;
   border-radius: 999px;
   padding: 0.08rem 0.35rem;
 }
@@ -1752,7 +1741,6 @@ https://youtu.be/..."
 }
 .coin-edit-btn {
   margin-top: 0.45rem;
-  border: 1px solid #3f4147;
   background: #2b2d31;
   color: #dbdee1;
   font-size: 0.72rem;
@@ -1778,7 +1766,6 @@ https://youtu.be/..."
   width: min(720px, 100%);
   max-height: min(85vh, 900px);
   background: #2b2d31;
-  border: 1px solid #3f4147;
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   display: flex;
@@ -1791,7 +1778,6 @@ https://youtu.be/..."
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.85rem 1rem;
-  border-bottom: 1px solid #3f4147;
   flex-shrink: 0;
 }
 .modal-head h3 {
@@ -1926,7 +1912,6 @@ https://youtu.be/..."
   height: clamp(320px, 58vh, calc(100dvh - 220px));
   overflow: auto;
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 8px;
   padding: 0.65rem 0.75rem;
   -webkit-overflow-scrolling: touch;
@@ -1946,7 +1931,6 @@ https://youtu.be/..."
 }
 .panel {
   background: #2b2d31;
-  border: 1px solid #3f4147;
   border-radius: 10px;
   padding: 1rem 1.1rem;
   min-height: 0;
@@ -2005,7 +1989,6 @@ h2 {
 .field textarea,
 .field input {
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 8px;
   color: #dbdee1;
   padding: 0.55rem 0.65rem;
@@ -2034,7 +2017,6 @@ h2 {
   flex-wrap: wrap;
 }
 .btn {
-  border: 1px solid #3f4147;
   background: #1e1f22;
   color: #dbdee1;
   padding: 0.5rem 0.85rem;
@@ -2069,7 +2051,6 @@ h2 {
 .submit-results li,
 .jobs li {
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 8px;
   padding: 0.55rem 0.65rem;
   font-size: 0.82rem;

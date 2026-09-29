@@ -298,7 +298,6 @@ h2 {
 .field input,
 .field select {
   background: #2b2d31;
-  border: 1px solid #3f4147;
   color: #dbdee1;
   border-radius: 6px;
   padding: 0.4rem 0.5rem;
@@ -308,7 +307,6 @@ h2 {
   margin-top: 0.5rem;
   padding: 0.45rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #5865f2;
   color: #fff;
   font-weight: 600;
@@ -334,7 +332,6 @@ h2 {
   flex-shrink: 0;
   padding: 0.35rem 0.65rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #2b2d31;
   color: #b5bac1;
   font-size: 0.75rem;

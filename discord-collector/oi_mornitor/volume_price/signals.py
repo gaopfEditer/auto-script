@@ -135,9 +135,43 @@ def generate_signals(
 ) -> tuple[list[VolumePriceSignal], pd.DataFrame]:
     """生成量价信号；返回 (signals, 带 bar_class 的 enriched DataFrame)。"""
     ctx = prepare_htf_context(df, signal_tfs=signal_tfs)
-    fit_src = train_df if train_df is not None else ctx
-    th = thresholds or fit_classify_thresholds(fit_src)
-    enriched = classify_bars(ctx, th, trend_end_col="h1_trend_end", h1_dir_col="h1_dir")
+    if thresholds is not None:
+        enriched = classify_bars(
+            ctx,
+            thresholds,
+            trend_end_col="h1_trend_end",
+            h1_dir_col="h1_dir",
+        )
+    else:
+        # 按 symbol+周期 拟合分位数；整池 watchlist 一起 fit 会把 vol_z 阈值抬过高，几乎不出 thrust/confirm
+        fit_src = train_df if train_df is not None else ctx
+        parts: list[pd.DataFrame] = []
+        for (sym, tf), chunk in ctx.groupby(["symbol", "tf"], sort=False):
+            if str(tf) not in signal_tfs:
+                continue
+            if train_df is not None:
+                mask = (fit_src["symbol"] == sym) & (fit_src["tf"].astype(str) == str(tf))
+                th_src = fit_src.loc[mask] if mask.any() else chunk
+            else:
+                th_src = chunk
+            th_g = fit_classify_thresholds(th_src)
+            parts.append(
+                classify_bars(
+                    chunk,
+                    th_g,
+                    trend_end_col="h1_trend_end",
+                    h1_dir_col="h1_dir",
+                )
+            )
+        if parts:
+            enriched = (
+                pd.concat(parts, ignore_index=True)
+                .sort_values(["symbol", "tf", "ts"])
+                .reset_index(drop=True)
+            )
+        else:
+            enriched = ctx.copy()
+            enriched["bar_class"] = "other"
 
     signals: list[VolumePriceSignal] = []
     for (sym, tf), chunk in enriched.groupby(["symbol", "tf"], sort=False):

@@ -740,7 +740,6 @@ function isDiscordRow(row) {
   padding: 0.55rem 0.65rem;
   border-radius: 8px;
   background: #1e1f22;
-  border: 1px solid #3f4147;
   flex-shrink: 0;
 }
 .tg-head {
@@ -781,7 +780,6 @@ function isDiscordRow(row) {
   margin-bottom: 0.4rem;
   padding: 0.35rem 0.5rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #111214;
   color: #dbdee1;
   font-size: 0.72rem;
@@ -837,7 +835,6 @@ function isDiscordRow(row) {
   padding: 0.22rem 0.5rem;
   border-radius: 999px;
   background: linear-gradient(135deg, #2b2d31 0%, #1e1f22 100%);
-  border: 1px solid #3f4147;
   font-size: 0.68rem;
   color: #dbdee1;
   line-height: 1.3;
@@ -867,7 +864,6 @@ function isDiscordRow(row) {
   padding: 0.45rem 0.55rem;
   border-radius: 8px;
   background: #111214;
-  border: 1px solid #3f4147;
 }
 .sim-block-title {
   display: block;
@@ -889,7 +885,6 @@ function isDiscordRow(row) {
   gap: 0.3rem;
   padding: 0.35rem 0.4rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #1a1b1e;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
@@ -929,7 +924,6 @@ function isDiscordRow(row) {
   box-sizing: border-box;
   padding: 0.38rem 0.45rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #1a1b1e;
   color: #fff;
   font-size: 0.82rem;
@@ -952,7 +946,6 @@ function isDiscordRow(row) {
   margin-bottom: 0.4rem;
   padding: 0.4rem 0.5rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #111214;
   color: #dbdee1;
   font-size: 0.72rem;
@@ -969,7 +962,6 @@ function isDiscordRow(row) {
 }
 .sim-link {
   padding: 0.2rem 0.45rem;
-  border: 1px solid #3f4147;
   border-radius: 4px;
   background: transparent;
   color: #949ba4;
@@ -1000,7 +992,6 @@ function isDiscordRow(row) {
   max-height: 120px;
   overflow: auto;
   font-size: 0.65rem;
-  border-top: 1px solid #3f4147;
   padding-top: 0.35rem;
 }
 .sim-hist-row {
@@ -1043,7 +1034,6 @@ function isDiscordRow(row) {
   margin: 0 0.5rem 0.5rem;
   padding: 0.4rem 0.6rem;
   border-radius: 6px;
-  border: 1px solid #3f4147;
   background: #1e1f22;
   color: #dbdee1;
 }

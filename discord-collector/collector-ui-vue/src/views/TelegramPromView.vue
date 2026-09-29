@@ -728,7 +728,6 @@ button.ghost {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border: 1px solid #3f4147;
   border-radius: 10px;
   background: #2b2d31;
   overflow: hidden;
@@ -738,7 +737,6 @@ button.ghost {
   align-items: center;
   gap: 0.55rem;
   padding: 0.55rem 0.7rem;
-  border-bottom: 1px solid #3f4147;
   background: #232428;
   flex-shrink: 0;
 }
@@ -831,7 +829,6 @@ button.ghost {
   max-width: 100%;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #3f4147;
   background: #1e1f22;
 }
 .msg-media img {

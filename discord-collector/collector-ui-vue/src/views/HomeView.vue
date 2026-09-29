@@ -30,7 +30,6 @@ import { RouterLink } from "vue-router";
   padding: 2rem;
   background: #2b2d31;
   border-radius: 12px;
-  border: 1px solid #3f4147;
 }
 h1 {
   margin: 0 0 0.5rem;
@@ -60,7 +59,6 @@ code {
   padding: 0.75rem 1rem;
   border-radius: 8px;
   font-weight: 600;
-  border: 1px solid #3f4147;
   background: #1e1f22;
   color: #dbdee1;
   text-decoration: none;

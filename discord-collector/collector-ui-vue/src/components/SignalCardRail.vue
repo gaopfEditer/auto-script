@@ -592,7 +592,6 @@ onMounted(async () => {
   text-decoration: none;
   padding: 0.15rem 0.35rem;
   border-radius: 4px;
-  border: 1px solid #3f4147;
 }
 .signal-head-link:hover {
   color: #fff;
@@ -617,7 +616,6 @@ onMounted(async () => {
   position: relative;
 }
 .signal-eval-btn {
-  border: 1px solid #3f4147;
   background: #35373c;
   color: #dbdee1;
   font-size: 0.62rem;

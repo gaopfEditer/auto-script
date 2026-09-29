@@ -243,7 +243,6 @@ async function toggleDebug() {
   padding: 0.15rem;
   border-radius: 8px;
   background: #1e1f22;
-  border: 1px solid #3f4147;
   flex-shrink: 0;
 }
 .module-link {
@@ -285,7 +284,6 @@ async function toggleDebug() {
   white-space: nowrap;
 }
 .ws-status {
-  border: 1px solid #3f4147;
   background: #2b2d31;
   color: #949ba4;
   padding: 0.3rem 0.55rem;
@@ -363,7 +361,6 @@ async function toggleDebug() {
   color: #fff;
 }
 .debug-toggle {
-  border: 1px solid #3f4147;
   background: #2b2d31;
   color: #b5bac1;
   padding: 0.3rem 0.65rem;

@@ -886,7 +886,6 @@ onMounted(() => {
   width: min(22rem, calc(100vw - 2rem));
   padding: 0.65rem 0.75rem;
   border-radius: 8px;
-  border: 1px solid #3f4147;
   background: #1e1f22;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   color: #dbdee1;
@@ -942,7 +941,6 @@ a {
 }
 .panel {
   background: #2b2d31;
-  border: 1px solid #3f4147;
   border-radius: 12px;
   padding: 1.15rem 1.25rem;
   margin-bottom: 1rem;
@@ -963,7 +961,6 @@ a {
 .filters-bar {
   padding: 0.55rem 0.65rem;
   border-radius: 10px;
-  border: 1px solid #3f4147;
   background: linear-gradient(180deg, rgba(30, 31, 34, 0.92) 0%, rgba(24, 25, 28, 0.96) 100%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
@@ -1084,7 +1081,6 @@ a {
   user-select: none;
   padding: 0.35rem 0.55rem 0.35rem 0.35rem;
   border-radius: 999px;
-  border: 1px solid #3f4147;
   background: #1a1b1f;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -1202,7 +1198,6 @@ a {
   overflow-x: auto;
 }
 .draft-wrap {
-  border: 1px solid #3f4147;
   border-radius: 8px;
 }
 table {
@@ -1214,7 +1209,6 @@ th,
 td {
   text-align: left;
   padding: 0.45rem 0.35rem;
-  border-bottom: 1px solid #3f4147;
   vertical-align: middle;
 }
 th {

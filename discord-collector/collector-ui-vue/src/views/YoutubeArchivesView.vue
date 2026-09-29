@@ -457,7 +457,6 @@ onMounted(async () => {
   background: #1e1f22;
 }
 .archives-list {
-  border-right: 1px solid #3f4147;
   min-height: 0;
   overflow: auto;
   padding: 0.75rem 0.85rem 1rem;
@@ -516,7 +515,6 @@ onMounted(async () => {
   flex: 1;
   min-width: 0;
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 6px;
   color: #dbdee1;
   padding: 0.25rem 0.4rem;
@@ -535,7 +533,6 @@ onMounted(async () => {
   gap: 0.35rem;
 }
 .btn-preset {
-  border: 1px solid #3f4147;
   background: #2b2d31;
   color: #b5bac1;
   padding: 0.18rem 0.45rem;
@@ -579,7 +576,6 @@ code {
   border-radius: 4px;
 }
 .btn-sm {
-  border: 1px solid #3f4147;
   background: #2b2d31;
   color: #dbdee1;
   padding: 0.25rem 0.55rem;
@@ -606,7 +602,6 @@ code {
   background: #2b2d31;
 }
 .items li:hover {
-  border-color: #3f4147;
 }
 .items li.on {
   border-color: #5865f2;
@@ -781,7 +776,6 @@ code {
   }
   .archives-list {
     border-right: none;
-    border-bottom: 1px solid #3f4147;
   }
 }
 </style>

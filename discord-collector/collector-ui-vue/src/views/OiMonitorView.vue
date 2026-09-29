@@ -191,7 +191,6 @@ onUnmounted(() => {
   right: 10px;
   z-index: 5;
   appearance: none;
-  border: 1px solid #3f4147;
   background: rgba(30, 31, 34, 0.92);
   color: #dbdee1;
   border-radius: 6px;
@@ -213,7 +212,6 @@ onUnmounted(() => {
 .oi-card {
   width: min(520px, 100%);
   background: #1e1f22;
-  border: 1px solid #3f4147;
   border-radius: 12px;
   padding: 1.35rem 1.4rem;
 }
