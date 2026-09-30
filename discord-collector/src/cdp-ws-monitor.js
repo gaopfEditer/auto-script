@@ -229,6 +229,24 @@ function isAlreadyOnDiscordChannel(pageUrl, targetUrl) {
  * @param {string} g guildId（或 @me）
  * @param {string} c channelId
  */
+/** @param {string} hostname */
+function isDiscordHost(hostname) {
+  const h = String(hostname || "").toLowerCase();
+  if (h === "discord.com" || h === "discordapp.com") return true;
+  return h.endsWith(".discord.com") || h.endsWith(".discordapp.com");
+}
+
+/** @param {string} url */
+function isDiscordPageUrl(url) {
+  const s = String(url || "").trim();
+  if (!s || s === "about:blank") return false;
+  try {
+    return isDiscordHost(new URL(s).hostname);
+  } catch {
+    return /discord\.com|discordapp\.com/i.test(s);
+  }
+}
+
 function scoreDiscordPageForChannelNav(url, g, c) {
   let u;
   try {
@@ -236,8 +254,7 @@ function scoreDiscordPageForChannelNav(url, g, c) {
   } catch {
     return -1;
   }
-  const host = u.hostname.toLowerCase();
-  if (!host.includes("discord.com") && !host.includes("discordapp.com")) return -1;
+  if (!isDiscordHost(u.hostname)) return -1;
   let score = 1;
   const chMatch = (u.pathname || "").match(/\/channels\/([^/]+)\/([^/]+)/);
   if (chMatch) {
@@ -253,39 +270,185 @@ function scoreDiscordPageForChannelNav(url, g, c) {
 }
 
 /**
+ * @param {string} pageUrl
+ * @param {string} targetUrl
+ */
+function scorePageUrlForDiscordNav(pageUrl, targetUrl) {
+  const parsed = parseDiscordChannelUrl(targetUrl);
+  if (parsed) {
+    if (isAlreadyOnDiscordChannel(pageUrl, targetUrl)) return 1000;
+    return scoreDiscordPageForChannelNav(pageUrl, parsed.guildId, parsed.channelId);
+  }
+  return isDiscordPageUrl(pageUrl) ? 10 : -1;
+}
+
+/**
+ * @param {import('playwright').Page} page
+ * @param {string} targetUrl
+ */
+function scorePlaywrightPageForDiscordNav(page, targetUrl) {
+  if (page.isClosed()) return null;
+  let u = "";
+  try {
+    u = page.url();
+  } catch {
+    return null;
+  }
+  const score = scorePageUrlForDiscordNav(u, targetUrl);
+  if (score < 0) return null;
+  return { page, url: u, score };
+}
+
+/**
  * 在已连接的 Chrome 里找 Discord 标签，绝不新建。
+ * 优先已挂载 CDP 的页（Playwright contexts().pages() 偶发漏列时仍可用）。
  * @param {import('playwright').Browser} br
  * @param {string} targetUrl
- * @returns {{ page: import('playwright').Page, ctx: import('playwright').BrowserContext, url: string, score: number } | null}
+ * @param {{ mounted?: { page: import('playwright').Page }[] }} [opts]
+ * @returns {{ page: import('playwright').Page, url: string, score: number } | null}
  */
-function pickExistingDiscordPage(br, targetUrl) {
-  const parsed = parseDiscordChannelUrl(targetUrl);
-  /** @type {{ page: import('playwright').Page, ctx: import('playwright').BrowserContext, url: string, score: number } | null} */
+function pickExistingDiscordPage(br, targetUrl, opts = {}) {
+  /** @type {Map<import('playwright').Page, { page: import('playwright').Page, url: string, score: number }>} */
+  const byPage = new Map();
+
+  const consider = (/** @type {import('playwright').Page} */ page) => {
+    const hit = scorePlaywrightPageForDiscordNav(page, targetUrl);
+    if (hit) byPage.set(page, hit);
+  };
+
+  for (const entry of opts.mounted || []) {
+    if (entry?.page) consider(entry.page);
+  }
+  try {
+    for (const ctx of br.contexts()) {
+      for (const page of ctx.pages()) consider(page);
+    }
+  } catch {
+    /* browser 断连 */
+  }
+
   let best = null;
-  let bestScore = -1;
-  for (const ctx of br.contexts()) {
-    for (const page of ctx.pages()) {
-      if (page.isClosed()) continue;
-      let u = "";
-      try {
-        u = page.url();
-      } catch {
-        continue;
-      }
-      let score = -1;
-      if (parsed) {
-        if (isAlreadyOnDiscordChannel(u, targetUrl)) score = 1000;
-        else score = scoreDiscordPageForChannelNav(u, parsed.guildId, parsed.channelId);
-      } else if (/discord\.com|discordapp\.com/i.test(u)) {
-        score = 10;
-      }
-      if (score > bestScore) {
-        bestScore = score;
-        best = { page, ctx, url: u, score };
-      }
+  for (const hit of byPage.values()) {
+    if (!best || hit.score > best.score) best = hit;
+  }
+  return best;
+}
+
+/**
+ * @param {import('playwright').Browser} br
+ * @param {string} targetUrl
+ * @param {{ mounted?: { page: import('playwright').Page }[], log?: Logger }} opts
+ */
+async function pickExistingDiscordPageAsync(br, targetUrl, opts = {}) {
+  let picked = pickExistingDiscordPage(br, targetUrl, opts);
+  if (picked) return picked;
+
+  /** @type {import('playwright').Page[]} */
+  const pages = [];
+  const seen = new Set();
+  for (const entry of opts.mounted || []) {
+    if (entry?.page && !seen.has(entry.page)) {
+      seen.add(entry.page);
+      pages.push(entry.page);
     }
   }
-  return bestScore >= 0 ? best : null;
+  try {
+    for (const ctx of br.contexts()) {
+      for (const page of ctx.pages()) {
+        if (!seen.has(page)) {
+          seen.add(page);
+          pages.push(page);
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  for (const page of pages) {
+    if (page.isClosed()) continue;
+    let u = "";
+    try {
+      u = page.url();
+    } catch {
+      continue;
+    }
+    if (!isDiscordPageUrl(u)) {
+      try {
+        const href = await page.evaluate(() => location.href);
+        if (isDiscordPageUrl(href)) u = String(href);
+      } catch {
+        /* cross-origin / 未加载 */
+      }
+    }
+    const score = scorePageUrlForDiscordNav(u, targetUrl);
+    if (score >= 0) return { page, url: u, score };
+  }
+
+  try {
+    const cdp = await br.newBrowserCDPSession();
+    const { targetInfos } = await cdp.send("Target.getTargets");
+    await cdp.detach().catch(() => {});
+    /** @type {{ url: string, score: number } | null} */
+    let bestTarget = null;
+    for (const t of targetInfos || []) {
+      if (String(t.type || "") !== "page") continue;
+      const u = String(t.url || "");
+      const score = scorePageUrlForDiscordNav(u, targetUrl);
+      if (score >= 0 && (!bestTarget || score > bestTarget.score)) {
+        bestTarget = { url: u, score };
+      }
+    }
+    if (bestTarget) {
+      for (const page of pages) {
+        let u = "";
+        try {
+          u = page.url();
+        } catch {
+          continue;
+        }
+        if (u === bestTarget.url || isAlreadyOnDiscordChannel(u, targetUrl)) {
+          return { page, url: u || bestTarget.url, score: bestTarget.score };
+        }
+      }
+      opts.log?.warn?.(
+        `CDP Target 可见 Discord 页 ${shortenUrl(bestTarget.url, 120)}，但 Playwright 未映射到 Page（可尝试刷新 Discord 标签）`
+      );
+    }
+  } catch (e) {
+    opts.log?.debug?.(`Target.getTargets 失败: ${/** @type {Error} */ (e).message}`);
+  }
+
+  return null;
+}
+
+/** @param {import('playwright').Browser} br @param {{ page: import('playwright').Page }[]} [mounted] */
+function summarizeBrowserTabsForLog(br, mounted = []) {
+  /** @type {string[]} */
+  const lines = [];
+  const seen = new Set();
+  const add = (/** @type {import('playwright').Page} */ page, tag) => {
+    if (seen.has(page)) return;
+    seen.add(page);
+    let u = "(closed)";
+    try {
+      u = page.isClosed() ? "(closed)" : page.url() || "(empty)";
+    } catch {
+      u = "(error)";
+    }
+    lines.push(`${tag}:${shortenUrl(u, 100)}`);
+  };
+  for (const entry of mounted) {
+    if (entry?.page) add(entry.page, "mounted");
+  }
+  try {
+    for (const ctx of br.contexts()) {
+      for (const page of ctx.pages()) add(page, "ctx");
+    }
+  } catch {
+    lines.push("ctx:(browser disconnected)");
+  }
+  return lines.length ? lines.join(" | ") : "(无可见标签)";
 }
 
 /** @param {import('playwright').Browser} br */
@@ -1102,10 +1265,14 @@ export async function startCdpWebSocketMonitor(opts, log) {
       const url = String(targetUrl || "").trim();
       if (!url) throw new Error("empty target url");
 
-      const picked = pickExistingDiscordPage(br, url);
+      let picked = pickExistingDiscordPage(br, url, { mounted });
+      if (!picked) {
+        picked = await pickExistingDiscordPageAsync(br, url, { mounted, log });
+      }
       if (!picked) {
         const tabCount = countBrowserPages(br);
-        const msg = `未找到已打开的 Discord 标签（当前 Chrome ${tabCount} 个标签），拒绝新建以免堆积崩溃。请在调试 Chrome 中保留至少一个 discord.com 网页。`;
+        const tabs = summarizeBrowserTabsForLog(br, mounted);
+        const msg = `未找到已打开的 Discord 标签（Chrome ${tabCount} 个标签；${tabs}），拒绝新建以免堆积崩溃。请在 **同一调试 Chrome（CDP 9222）** 中保留 discord.com 网页。`;
         log.warn(`CDP ${msg}`);
         throw new Error(msg);
       }
@@ -1510,11 +1677,16 @@ export async function startCdpWebSocketMonitor(opts, log) {
       if (!browser?.isConnected?.()) {
         return { ok: false, error: "CDP 浏览器未连接" };
       }
-      const picked = pickExistingDiscordPage(browser, targetUrl);
+      let picked = pickExistingDiscordPage(browser, targetUrl, { mounted });
       if (!picked) {
+        picked = await pickExistingDiscordPageAsync(browser, targetUrl, { mounted, log });
+      }
+      if (!picked) {
+        const tabs = summarizeBrowserTabsForLog(browser, mounted);
+        log.warn(`[discord-channel] 未找到 Discord 标签；${tabs}`);
         return {
           ok: false,
-          error: "未找到已打开的 Discord 标签，拒绝新建。请在调试 Chrome 中保留 discord.com 网页。",
+          error: `未找到已打开的 Discord 标签（拒绝新建）。调试 Chrome 须与 CDP_CONNECT_URL 同一实例。当前可见: ${tabs.slice(0, 280)}`,
         };
       }
       const pickedPageUrl = picked.url;

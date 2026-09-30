@@ -288,6 +288,8 @@ async function main() {
   let frameSeq = 0;
   /** @type {null | ((guildId: string, channelId: string, trace?: { clientTraceId?: string }) => Promise<unknown>)} */
   let navigateDiscordImpl = null;
+  /** @type {{ state: 'disabled' | 'pending' | 'ready' | 'error', attempt: number, error?: string }} */
+  let cdpBoot = { state: config.cdpConnectUrl ? "pending" : "disabled", attempt: 0 };
 
   app.get("/api/frames", async (req, res) => {
     try {
@@ -312,6 +314,26 @@ async function main() {
     }
   });
 
+  /** @type {Awaited<ReturnType<typeof startCdpWebSocketMonitor>> | null} */
+  let session = null;
+
+  function cdpStatusSnapshot() {
+    const ready = typeof navigateDiscordImpl === "function" && Boolean(session);
+    return {
+      state: cdpBoot.state,
+      ready,
+      connectUrl: config.cdpConnectUrl || null,
+      mountedTabs: session?.mounted ?? 0,
+      bootAttempt: cdpBoot.attempt,
+      bootError: cdpBoot.error || null,
+      hint: !config.cdpConnectUrl
+        ? "未配置 CDP_CONNECT_URL，Gateway 不会采集"
+        : !ready
+          ? "CDP 未就绪：请确认 Chrome 已 --remote-debugging-port=9222 且已登录 Discord；collect:ui 会自动重试"
+          : null,
+    };
+  }
+
   app.get("/api/health", (_req, res) => {
     res.json({
       ok: true,
@@ -320,6 +342,7 @@ async function main() {
       mysqlHost: config.mysql.host,
       mysqlPort: config.mysql.port,
       mysqlDatabase: config.mysql.database,
+      cdp: cdpStatusSnapshot(),
     });
   });
 
@@ -906,6 +929,10 @@ async function main() {
     res.json({ ok: true, ...discordIngest.getCdpPage() });
   });
 
+  app.get("/api/discord/cdp-status", (_req, res) => {
+    res.json({ ok: true, ...cdpStatusSnapshot() });
+  });
+
   app.get("/api/discord/guilds", async (_req, res) => {
     try {
       const rows = await store.listDiscordGuilds();
@@ -1053,8 +1080,6 @@ async function main() {
     }
   });
 
-  /** @type {Awaited<ReturnType<typeof startCdpWebSocketMonitor>> | null} */
-  let session = null;
   /** @type {{ stop: () => void } | null} */
   let channelRotate = null;
 
@@ -1200,70 +1225,89 @@ async function main() {
   log.info(
     `[api] /api/cards /api/v1/cards /api/discord/signal-cards（debugMode=${isDebugMode()}）`
   );
-  if (config.cdpConnectUrl) {
+  const cdpMonitorOpts = {
+    startUrl: config.startUrl,
+    cdpConnectUrl: config.cdpConnectUrl,
+    pageReloadIntervalMs: config.pageReloadIntervalMs,
+    cdpAutoGoto: config.cdpAutoGoto,
+    cdpVisibilityKeepalive: config.cdpVisibilityKeepalive,
+    networkTrace: config.collectNetworkTrace,
+    wsFrameTrace: config.collectWsFrameTrace,
+    diagnosticSink,
+    onConnectionLost: (info) => systemTelegram.notifyCdpDisconnected(info),
+    onReconnected: (info) => systemTelegram.notifyCdpReconnected?.(info),
+    onData(buf, meta) {
+      frameSeq += 1;
+      const { payload, proc } = buildFrameChannelPayload(
+        buf,
+        meta,
+        frameSeq,
+        config.requiredTopLevelKeys
+      );
+      if (isForwardableFramePayload(payload)) {
+        broadcast("frame", { ...payload, debugMode: isDebugMode() });
+        void discordIngest.onWsFrame(payload).catch((e) => {
+          log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
+        });
+        if (config.framePersist) {
+          void store
+            .insertFrame({
+              receivedAt: proc.receivedAt,
+              payloadHash: hashBuffer(buf),
+              opcode: meta.opcode,
+              requestId: meta.requestId || null,
+              rawPayload: buf,
+              parsedJson: proc.ok ? proc.parsedJson : null,
+              parseError: proc.ok ? null : proc.parseError,
+            })
+            .catch((err) => log.error(`MySQL: ${err.message}`));
+        }
+      }
+    },
+  };
+
+  async function bootCdpMonitor() {
+    if (!config.cdpConnectUrl) {
+      cdpBoot = { state: "disabled", attempt: 0 };
+      log.warn("未配置 CDP_CONNECT_URL — Discord Gateway 采集未启动（仅 REST/历史消息可用）");
+      return;
+    }
     log.info(`CDP 附加: ${config.cdpConnectUrl} — 请在 Chrome 中打开并登录 ${config.startUrl}`);
+    const cdpLog = createLogger("cdp");
+    for (;;) {
+      cdpBoot = { state: "pending", attempt: cdpBoot.attempt + 1 };
+      try {
+        if (session) {
+          await session.close().catch(() => {});
+          session = null;
+        }
+        navigateDiscordImpl = null;
+        session = await startCdpWebSocketMonitor(cdpMonitorOpts, cdpLog);
+        navigateDiscordImpl = (g, c, t) => session.navigateDiscordChannel(g, c, t);
+        webhookForward.setBrowserPost((url, payload) => session.postWebhookViaBrowser(url, payload));
+        channelRotate?.stop();
+        channelRotate = startCdpChannelRotate({
+          enabled: config.cdpChannelRotate,
+          intervalMs: config.cdpChannelRotateIntervalMs,
+          dwellMs: config.cdpChannelRotateDwellMs,
+          startUrl: config.startUrl,
+          navigate: (g, c) => session.navigateDiscordChannel(g, c),
+          log: createLogger("channel-rotate"),
+        });
+        cdpBoot = { state: "ready", attempt: cdpBoot.attempt };
+        log.info(`CDP 就绪（#${cdpBoot.attempt}），已挂载 ${session.mounted} 个标签页`);
+        return;
+      } catch (e) {
+        const msg = String(/** @type {Error} */ (e).message ?? e);
+        cdpBoot = { state: "error", attempt: cdpBoot.attempt, error: msg };
+        const delay = Math.min(30_000, 1500 * 2 ** Math.min(cdpBoot.attempt - 1, 4));
+        log.error(`CDP 启动失败 #${cdpBoot.attempt}: ${msg} — ${Math.round(delay / 1000)}s 后重试`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
   }
 
-  void (async () => {
-    try {
-      session = await startCdpWebSocketMonitor(
-        {
-          startUrl: config.startUrl,
-          cdpConnectUrl: config.cdpConnectUrl,
-          pageReloadIntervalMs: config.pageReloadIntervalMs,
-          cdpAutoGoto: config.cdpAutoGoto,
-          cdpVisibilityKeepalive: config.cdpVisibilityKeepalive,
-          networkTrace: config.collectNetworkTrace,
-          wsFrameTrace: config.collectWsFrameTrace,
-          diagnosticSink,
-          onConnectionLost: (info) => systemTelegram.notifyCdpDisconnected(info),
-          onReconnected: (info) => systemTelegram.notifyCdpReconnected?.(info),
-          onData(buf, meta) {
-            frameSeq += 1;
-            const { payload, proc } = buildFrameChannelPayload(
-              buf,
-              meta,
-              frameSeq,
-              config.requiredTopLevelKeys
-            );
-            if (isForwardableFramePayload(payload)) {
-              broadcast("frame", { ...payload, debugMode: isDebugMode() });
-              void discordIngest.onWsFrame(payload).catch((e) => {
-                log.debug(`discord ingest ws: ${/** @type {Error} */ (e).message}`);
-              });
-              if (config.framePersist) {
-                void store
-                  .insertFrame({
-                    receivedAt: proc.receivedAt,
-                    payloadHash: hashBuffer(buf),
-                    opcode: meta.opcode,
-                    requestId: meta.requestId || null,
-                    rawPayload: buf,
-                    parsedJson: proc.ok ? proc.parsedJson : null,
-                    parseError: proc.ok ? null : proc.parseError,
-                  })
-                  .catch((err) => log.error(`MySQL: ${err.message}`));
-              }
-            }
-          },
-        },
-        createLogger("cdp")
-      );
-      navigateDiscordImpl = (g, c, t) => session.navigateDiscordChannel(g, c, t);
-      webhookForward.setBrowserPost((url, payload) => session.postWebhookViaBrowser(url, payload));
-      channelRotate?.stop();
-      channelRotate = startCdpChannelRotate({
-        enabled: config.cdpChannelRotate,
-        intervalMs: config.cdpChannelRotateIntervalMs,
-        dwellMs: config.cdpChannelRotateDwellMs,
-        startUrl: config.startUrl,
-        navigate: (g, c) => session.navigateDiscordChannel(g, c),
-        log: createLogger("channel-rotate"),
-      });
-    } catch (e) {
-      log.error(`CDP 启动失败: ${/** @type {Error} */ (e).message ?? e}`);
-    }
-  })();
+  void bootCdpMonitor();
 }
 
 main().catch((e) => {
