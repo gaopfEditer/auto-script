@@ -554,3 +554,14 @@ MOONSHOT_STATE_DB = Path(
     os.getenv("OI_MOONSHOT_STATE_DB") or (_PKG_ROOT / "data" / "moonshot_state.db")
 )
 
+
+
+# —— 新信号 / 回测 / K 线预热（v1.0）——
+SIGNAL_PARAMS_VERSION = os.getenv("OI_SIGNAL_PARAMS_VERSION", "v1.0").strip() or "v1.0"
+TAKER_FEE_PCT = float(os.getenv("OI_TAKER_FEE_PCT", "0.05"))
+SLIPPAGE_PCT = float(os.getenv("OI_SLIPPAGE_PCT", "0.02"))
+KLINE_EMA_WARMUP_MULT = int(os.getenv("OI_KLINE_EMA_WARMUP_MULT", "3"))
+KLINE_CACHE_MIN_BARS = int(os.getenv("OI_KLINE_CACHE_MIN_BARS", "2028"))
+SIGNAL_LOG_DB = Path(
+    os.getenv("OI_SIGNAL_LOG_DB") or (_PKG_ROOT / "data" / "signal_log.db")
+)

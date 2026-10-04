@@ -5,7 +5,8 @@
 """
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,15 @@ from oi_mornitor.config import (
 )
 from oi_mornitor.signal_policy import is_blocked_structure_kind
 from oi_mornitor.strategy.candle_signals import closed_bar_index, compute_oi_anomaly_flags
+from oi_mornitor.strategy.features import (
+    apply_vegas_mid,
+    confirmed_swing_prefixes,
+    confirmed_swings,
+    mark_causal_swings,
+)
+from oi_mornitor.strategy.params import SWING_LEFT, SWING_RIGHT
+
+logger = logging.getLogger(__name__)
 
 # 与用户规格对齐的可调默认
 SWING_ORDER = 5
@@ -74,62 +84,45 @@ CURVE_LOOKBACK = 20
 
 
 def _ensure_structure_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """补齐 Vegas 中轨 / 均量 / 影线等列（幂等）。"""
-    out = df
-    need_copy = False
-
-    def _ensure(col: str, series: pd.Series) -> None:
-        nonlocal out, need_copy
-        if col in out.columns:
-            return
-        if not need_copy:
-            out = out.copy()
-            need_copy = True
-        out[col] = series
-
-    if "vegas_e1" in out.columns and "vegas_e2" in out.columns:
-        mid = (out["vegas_e1"].astype(float) + out["vegas_e2"].astype(float)) / 2.0
-        _ensure("vegas_mid", mid)
-        _ensure("vegas_fast_lo", out[["vegas_e1", "vegas_e2"]].min(axis=1))
-        _ensure("vegas_fast_hi", out[["vegas_e1", "vegas_e2"]].max(axis=1))
-    elif "close" in out.columns:
-        e144 = out["close"].ewm(span=144, adjust=False).mean()
-        e169 = out["close"].ewm(span=169, adjust=False).mean()
-        _ensure("ema144", e144)
-        _ensure("ema169", e169)
-        _ensure("vegas_mid", (e144 + e169) / 2.0)
-        _ensure("vegas_fast_lo", pd.concat([e144, e169], axis=1).min(axis=1))
-        _ensure("vegas_fast_hi", pd.concat([e144, e169], axis=1).max(axis=1))
+    """补齐 Vegas 中轨 / 均量 / 影线等列。vegas_mid 一律按 A 组中点覆盖。"""
+    out = apply_vegas_mid(df)
 
     vol_src = out["vol_sma20"] if "vol_sma20" in out.columns else out["volume"].rolling(20).mean()
     if "vol_ma20" not in out.columns:
-        if not need_copy:
-            out = out.copy()
-            need_copy = True
         out["vol_ma20"] = vol_src.astype(float)
 
     body_bottom = out[["open", "close"]].min(axis=1)
     body_top = out[["open", "close"]].max(axis=1)
-    _ensure("body_bottom", body_bottom)
-    _ensure("body_top", body_top)
-    _ensure("lower_wick", body_bottom - out["low"])
-    _ensure("upper_wick", out["high"] - body_top)
-    _ensure("candle_range", (out["high"] - out["low"]).clip(lower=0))
+    if "body_bottom" not in out.columns:
+        out["body_bottom"] = body_bottom
+    if "body_top" not in out.columns:
+        out["body_top"] = body_top
+    if "lower_wick" not in out.columns:
+        out["lower_wick"] = body_bottom - out["low"]
+    if "upper_wick" not in out.columns:
+        out["upper_wick"] = out["high"] - body_top
+    if "candle_range" not in out.columns:
+        out["candle_range"] = (out["high"] - out["low"]).clip(lower=0)
     return out
 
 
-def mark_swing_points(df: pd.DataFrame, *, order: int = SWING_ORDER) -> pd.DataFrame:
-    """前后 order 根范围内的局部高低点（等价 argrelextrema）。"""
-    out = df.copy()
-    win = order * 2 + 1
-    hi_roll = out["high"].rolling(win, center=True).max()
-    lo_roll = out["low"].rolling(win, center=True).min()
-    out["is_swing_high"] = (out["high"] >= hi_roll) & out["high"].notna() & hi_roll.notna()
-    out["is_swing_low"] = (out["low"] <= lo_roll) & out["low"].notna() & lo_roll.notna()
-    # 边缘 rolling 为 NaN，不标
-    out["is_swing_high"] = out["is_swing_high"].fillna(False)
-    out["is_swing_low"] = out["is_swing_low"].fillna(False)
-    return out
+def mark_swing_points(
+    df: pd.DataFrame,
+    *,
+    order: int = SWING_ORDER,
+    left: int | None = None,
+    right: int | None = None,
+) -> pd.DataFrame:
+    """因果摆动点：左 left 右 right，禁止 center=True（避免前视）。
+
+    ``order`` 仅作兼容参数；实际窗口取 ``left``/``right``（默认 5/3）。
+    """
+    del order  # 旧对称窗口已废弃
+    return mark_causal_swings(
+        df,
+        left=SWING_LEFT if left is None else left,
+        right=SWING_RIGHT if right is None else right,
+    )
 
 
 def _ts_sec(open_time_ms: int) -> int:
@@ -335,8 +328,23 @@ def _neckline_between(
     return float(df.iloc[abs_pos]["low"]), abs_pos
 
 
+def _run_detector(
+    name: str,
+    fn: Callable[[pd.DataFrame], list[dict[str, Any]]],
+    work: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    try:
+        return fn(work)
+    except Exception:
+        logger.exception("结构检测器 %s 失败，已隔离", name)
+        return []
+
+
 def detect_structure_events(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """全历史扫描，返回带元数据的结构事件（触发 K 位置）。"""
+    """全历史扫描，返回带元数据的结构事件（触发 K 位置）。
+
+    每个检测器单独隔离异常，避免一个 NameError 吞掉全部结构信号。
+    """
     if df is None or df.empty or len(df) < 40:
         return []
     work = _ensure_structure_cols(df)
@@ -345,14 +353,17 @@ def detect_structure_events(df: pd.DataFrame) -> list[dict[str, Any]]:
     work = _attach_oi_anomaly(work)
     work = mark_swing_points(work, order=SWING_ORDER)
     events: list[dict[str, Any]] = []
-
-    events.extend(_detect_hs_vegas(work))
-    events.extend(_detect_m_top_vegas(work))
-    events.extend(_detect_bottom_reversal(work))
+    detectors: list[tuple[str, Callable[[pd.DataFrame], list[dict[str, Any]]]]] = [
+        ("hs_vegas_break", _detect_hs_vegas),
+        ("m_top_vegas_break", _detect_m_top_vegas),
+        ("bottom_secondary_test", _detect_bottom_reversal),
+        ("liquidity_sweep", _detect_liquidity_sweep),
+    ]
     # events.extend(_detect_spring_2b(work))  # 破底翻确认：已停用
-    events.extend(_detect_liquidity_sweep(work))
     if ENABLE_CURVATURE_DECAY:
-        events.extend(_detect_curvature_decay(work))
+        detectors.append(("curvature_decay", _detect_curvature_decay))
+    for name, fn in detectors:
+        events.extend(_run_detector(name, fn, work))
     return events
 
 
@@ -393,9 +404,10 @@ def find_last_closed_structure_hits(
 
 def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
     """头肩顶 + 右肩后跌破 Vegas 中轨（或破颈线且收在中轨下）。"""
-    highs = [(i, float(df.iloc[i]["high"])) for i in range(len(df)) if bool(df.iloc[i]["is_swing_high"])]
+    highs = confirmed_swings(df, len(df) - 1, which="high")
     if len(highs) < 3:
         return []
+    prefixes = confirmed_swing_prefixes(df, which="high")
     out: list[dict[str, Any]] = []
     used_triggers: set[int] = set()
 
@@ -415,8 +427,11 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
         )
 
         end = min(len(df), i3 + 1 + HS_VEGAS_SCAN_BARS)
-        for j in range(i3 + 1, end):
+        for j in range(max(i3 + 1, i3 + SWING_RIGHT), end):
             if j in used_triggers:
+                continue
+            highs_j = [h[0] for h in prefixes[j] if h[0] <= i3]
+            if len(highs_j) < 3 or highs_j[-3:] != [i1, i2, i3]:
                 continue
             row = df.iloc[j]
             prev = df.iloc[j - 1]
@@ -456,9 +471,10 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
     """M 顶：两高近似等高，之后实体跌破 Vegas 中轨。"""
-    highs = [(i, float(df.iloc[i]["high"])) for i in range(len(df)) if bool(df.iloc[i]["is_swing_high"])]
+    highs = confirmed_swings(df, len(df) - 1, which="high")
     if len(highs) < 2:
         return []
+    prefixes = confirmed_swing_prefixes(df, which="high")
     out: list[dict[str, Any]] = []
     used: set[int] = set()
     for a in range(len(highs) - 1):
@@ -475,8 +491,11 @@ def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
             continue
 
         end = min(len(df), i2 + 1 + HS_VEGAS_SCAN_BARS)
-        for j in range(i2 + 1, end):
+        for j in range(max(i2 + 1, i2 + SWING_RIGHT), end):
             if j in used:
+                continue
+            highs_j = [h[0] for h in prefixes[j] if h[0] <= i2]
+            if len(highs_j) < 2 or highs_j[-2:] != [i1, i2]:
                 continue
             row = df.iloc[j]
             prev = df.iloc[j - 1]
@@ -576,7 +595,7 @@ def _detect_bottom_reversal(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _detect_spring_2b(df: pd.DataFrame) -> list[dict[str, Any]]:
     """2B / Wyckoff Spring：跌破前低后 1~3 根内放量收回。"""
-    lows = [(i, float(df.iloc[i]["low"])) for i in range(len(df)) if bool(df.iloc[i]["is_swing_low"])]
+    lows = confirmed_swings(df, len(df) - 1, which="low")
     if len(lows) < 2:
         return []
     out: list[dict[str, Any]] = []
@@ -627,14 +646,14 @@ def _detect_spring_2b(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
     """流动性掠夺：浅刺前高 + 长上影收阴 + 收在前高之下。"""
-    highs = [(i, float(df.iloc[i]["high"])) for i in range(len(df)) if bool(df.iloc[i]["is_swing_high"])]
+    highs = confirmed_swings(df, len(df) - 1, which="high")
     if not highs:
         return []
     out: list[dict[str, Any]] = []
     used: set[int] = set()
     n = len(df)
     for i in range(SWING_ORDER + 1, n):
-        prior = [h for h in highs if h[0] < i - 1]
+        prior = [h for h in highs if h[0] < i - 1 and h[0] + SWING_RIGHT <= i]
         if not prior:
             continue
         pi, ph = prior[-1]
@@ -663,6 +682,10 @@ def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
         if i in used:
             continue
         mid = float(row["vegas_mid"]) if pd.notna(row.get("vegas_mid")) else float(row["close"])
+        oi_on = False
+        if "oi_anomaly" in row.index:
+            raw_oi = row.get("oi_anomaly")
+            oi_on = bool(raw_oi) if pd.notna(raw_oi) else False
         out.append({
             "kind": "liquidity_sweep",
             "side": "bear",

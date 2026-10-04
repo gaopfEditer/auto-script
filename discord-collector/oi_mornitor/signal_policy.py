@@ -1,17 +1,24 @@
-"""形态信号列表 / 卡片 / 胜率库 共用推送策略（2026-09 优化）。"""
+"""形态信号列表 / 卡片 / 胜率库 共用推送策略。
+
+V 前缀与 (oi异动) 已从屏蔽改为加分标签，不再拦截推送。
+仍屏蔽：连续插针、二次射击之星、量价推进·空。
+"""
 from __future__ import annotations
 
 import re
 from typing import Any
 
-# —— 停推：OI 异动反转、V 前缀、连续插针、二次射击之星 ——
+# —— 停推：连续插针、二次射击之星（V / OI 异动改为加分，不在此列）——
 _BLOCKED_LABEL_SUBSTR = (
-    "(oi异动)",
-    "oi异动",
     "连续上插针",
     "连续下插针",
     "非上轨连续上插针",
     "非下轨连续下插针",
+)
+
+_BONUS_LABEL_SUBSTR = (
+    "(oi异动)",
+    "oi异动",
 )
 
 _BLOCKED_LABEL_EXACT = frozenset(
@@ -56,20 +63,35 @@ def normalize_type_label(raw: str) -> str:
     return s
 
 
-def is_blocked_marker_text(text: str) -> bool:
-    """图表 marker 文案：停推类仍可在图上标注，但部分完全屏蔽。"""
+def marker_bonus_tags(text: str) -> dict[str, bool]:
+    """从文案提取加分标签：贴近 Vegas 的 V 前缀、OI 异动。"""
+    s = str(text or "").strip()
+    return {
+        "near_vegas": bool(_V_PREFIX_RE.match(s)),
+        "oi_anomaly": any(x in s for x in _BONUS_LABEL_SUBSTR),
+    }
+
+
+def evaluate_marker_text(text: str) -> tuple[bool, str]:
+    """返回 (blocked, reason)。V / OI 异动不屏蔽。"""
     s = str(text or "").strip()
     if not s:
-        return False
+        return False, ""
     if any(x in s for x in _BLOCKED_LABEL_SUBSTR):
-        return True
-    if s in _BLOCKED_LABEL_EXACT or "（2）" in s:
-        return True
-    if _V_PREFIX_RE.match(s):
-        return True
+        return True, "continuous_wick"
+    if s in _BLOCKED_LABEL_EXACT:
+        return True, "exact_blocked"
+    if "（2）" in s:
+        return True, "repeat_shoot"
     if "连续" in s and "插针" in s:
-        return True
-    return False
+        return True, "continuous_wick"
+    return False, ""
+
+
+def is_blocked_marker_text(text: str) -> bool:
+    """图表 marker 文案：停推类仍可在图上标注，但部分完全屏蔽。"""
+    blocked, _reason = evaluate_marker_text(text)
+    return blocked
 
 
 def is_blocked_card_type_label(type_label: str) -> bool:
@@ -84,15 +106,8 @@ def is_blocked_card_type_label(type_label: str) -> bool:
         return False
     if lab in _BLOCKED_LABEL_EXACT:
         return True
-    if any(x in lab for x in _BLOCKED_LABEL_SUBSTR):
-        return True
-    if "（2）" in lab:
-        return True
-    if _V_PREFIX_RE.match(lab):
-        return True
-    if "连续" in lab and "插针" in lab:
-        return True
-    return False
+    blocked, _reason = evaluate_marker_text(lab)
+    return blocked
 
 
 def is_blocked_structure_kind(kind: str) -> bool:

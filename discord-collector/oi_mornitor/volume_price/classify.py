@@ -127,3 +127,55 @@ def classify_bars(
         classes.append(_classify_one(row, thresholds, trend_end=trend_end, h1_dir=h1_dir))
     out["bar_class"] = classes
     return out
+
+
+def classify_bars_rolling(
+    df: pd.DataFrame,
+    *,
+    window: int = 500,
+    min_periods: int = 50,
+    quantile: float = 0.8,
+    trend_end_col: str = "h1_trend_end",
+    h1_dir_col: str = "h1_dir",
+) -> pd.DataFrame:
+    """用过去 window 根（不含当前）的 0.8 分位做阈值，避免样本内拟合。"""
+    out = df.copy()
+    q_hi = float(quantile)
+    q_lo = 1.0 - q_hi
+    hist = out.shift(1)
+    rolled = {
+        "efficiency_high": hist["efficiency"].rolling(window, min_periods=min_periods).quantile(q_hi),
+        "efficiency_low": hist["efficiency"].rolling(window, min_periods=min_periods).quantile(q_lo),
+        "vol_z_high": hist["vol_z"].rolling(window, min_periods=min_periods).quantile(q_hi),
+        "vol_z_low": hist["vol_z"].rolling(window, min_periods=min_periods).quantile(q_lo),
+        "range_z_high": hist["range_z"].rolling(window, min_periods=min_periods).quantile(q_hi),
+        "range_z_low": hist["range_z"].rolling(window, min_periods=min_periods).quantile(q_lo),
+    }
+    classes: list[str] = []
+    for i, row in out.iterrows():
+        th = ClassifyThresholds(
+            efficiency_high=float(rolled["efficiency_high"].loc[i])
+            if pd.notna(rolled["efficiency_high"].loc[i])
+            else 0.65,
+            efficiency_low=float(rolled["efficiency_low"].loc[i])
+            if pd.notna(rolled["efficiency_low"].loc[i])
+            else 0.25,
+            vol_z_high=float(rolled["vol_z_high"].loc[i])
+            if pd.notna(rolled["vol_z_high"].loc[i])
+            else 1.0,
+            vol_z_low=float(rolled["vol_z_low"].loc[i])
+            if pd.notna(rolled["vol_z_low"].loc[i])
+            else -0.5,
+            range_z_high=float(rolled["range_z_high"].loc[i])
+            if pd.notna(rolled["range_z_high"].loc[i])
+            else 1.0,
+            range_z_low=float(rolled["range_z_low"].loc[i])
+            if pd.notna(rolled["range_z_low"].loc[i])
+            else -0.5,
+            quantile=quantile,
+        )
+        trend_end = bool(row[trend_end_col]) if trend_end_col in out.columns else False
+        h1_dir = int(row[h1_dir_col]) if h1_dir_col in out.columns and pd.notna(row.get(h1_dir_col)) else 0
+        classes.append(_classify_one(row, th, trend_end=trend_end, h1_dir=h1_dir))
+    out["bar_class"] = classes
+    return out

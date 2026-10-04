@@ -27,9 +27,11 @@ def _make_bars(n: int, *, symbol: str = "BTCUSDT", tf: str = "15m") -> pd.DataFr
         h = max(o, c) + 0.05
         l = min(o, c) - 0.05
         vol = 1000.0
+        open_ts = ts0 + i * 900_000
         rows.append(
             {
-                "ts": ts0 + i * 900_000,
+                "ts": open_ts,
+                "close_time": open_ts + 899_999,
                 "symbol": symbol,
                 "tf": tf,
                 "open": o,
