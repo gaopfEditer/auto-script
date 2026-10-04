@@ -7,7 +7,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from oi_mornitor.volume_price.classify import ClassifyThresholds, classify_bars, fit_classify_thresholds
+from oi_mornitor.strategy.features import ensure_close_time
+from oi_mornitor.strategy.params import VP_THRESHOLD_QUANTILE, VP_THRESHOLD_ROLLING
+from oi_mornitor.volume_price.classify import (
+    ClassifyThresholds,
+    classify_bars,
+    classify_bars_rolling,
+    fit_classify_thresholds,
+)
 from oi_mornitor.volume_price.features import add_volume_price_features
 
 DEFAULT_SIGNAL_TFS = ("15m", "1h")
@@ -52,7 +59,7 @@ def _position_from_close(close: float, ema: float, *, tangle_pct: float = EMA_TA
 
 
 def _add_htf_columns(df: pd.DataFrame, htf: pd.DataFrame, prefix: str) -> pd.DataFrame:
-    """将高周期趋势列 asof 合并到低周期（仅用已收盘 HTF  bar）。"""
+    """将高周期趋势列按 close_time 对齐合并（只用已收盘 HTF，禁止前视）。"""
     if htf.empty:
         out = df.copy()
         out[f"{prefix}_position"] = "tangled"
@@ -61,7 +68,10 @@ def _add_htf_columns(df: pd.DataFrame, htf: pd.DataFrame, prefix: str) -> pd.Dat
         out[f"{prefix}_ema"] = np.nan
         return out
 
-    h = htf.sort_values("ts").copy()
+    left_tf = str(df["tf"].iloc[0]) if "tf" in df.columns and len(df) else "15m"
+    right_tf = str(htf["tf"].iloc[0]) if "tf" in htf.columns and len(htf) else "1h"
+    h = ensure_close_time(htf.sort_values("ts").copy(), tf=right_tf)
+    left = ensure_close_time(df.sort_values("ts").copy(), tf=left_tf)
     h[f"{prefix}_ema"] = _ema(h["close"])
     h[f"{prefix}_position"] = [
         _position_from_close(c, e) for c, e in zip(h["close"], h[f"{prefix}_ema"], strict=False)
@@ -70,15 +80,14 @@ def _add_htf_columns(df: pd.DataFrame, htf: pd.DataFrame, prefix: str) -> pd.Dat
     stretch = (h["close"] - h[f"{prefix}_ema"]).abs() / h[f"{prefix}_ema"].replace(0, np.nan)
     h[f"{prefix}_trend_end"] = stretch >= TREND_STRETCH_PCT
 
-    merge_cols = ["ts", f"{prefix}_position", f"{prefix}_dir", f"{prefix}_trend_end", f"{prefix}_ema"]
-    left = df.sort_values("ts").copy()
+    merge_cols = ["close_time", f"{prefix}_position", f"{prefix}_dir", f"{prefix}_trend_end", f"{prefix}_ema"]
     merged = pd.merge_asof(
-        left,
-        h[merge_cols],
-        on="ts",
+        left.sort_values("close_time"),
+        h[merge_cols].sort_values("close_time"),
+        on="close_time",
         direction="backward",
     )
-    return merged
+    return merged.sort_values("ts").reset_index(drop=True)
 
 
 def prepare_htf_context(
@@ -143,8 +152,8 @@ def generate_signals(
             h1_dir_col="h1_dir",
         )
     else:
-        # 按 symbol+周期 拟合分位数；整池 watchlist 一起 fit 会把 vol_z 阈值抬过高，几乎不出 thrust/confirm
-        fit_src = train_df if train_df is not None else ctx
+        # 默认：过去 500 根滚动 0.8 分位（不含当前 K）。显式传入 train_df 时仍用样本外拟合。
+        fit_src = train_df
         parts: list[pd.DataFrame] = []
         for (sym, tf), chunk in ctx.groupby(["symbol", "tf"], sort=False):
             if str(tf) not in signal_tfs:
@@ -152,17 +161,25 @@ def generate_signals(
             if train_df is not None:
                 mask = (fit_src["symbol"] == sym) & (fit_src["tf"].astype(str) == str(tf))
                 th_src = fit_src.loc[mask] if mask.any() else chunk
-            else:
-                th_src = chunk
-            th_g = fit_classify_thresholds(th_src)
-            parts.append(
-                classify_bars(
-                    chunk,
-                    th_g,
-                    trend_end_col="h1_trend_end",
-                    h1_dir_col="h1_dir",
+                th_g = fit_classify_thresholds(th_src)
+                parts.append(
+                    classify_bars(
+                        chunk,
+                        th_g,
+                        trend_end_col="h1_trend_end",
+                        h1_dir_col="h1_dir",
+                    )
                 )
-            )
+            else:
+                parts.append(
+                    classify_bars_rolling(
+                        chunk,
+                        window=VP_THRESHOLD_ROLLING,
+                        quantile=VP_THRESHOLD_QUANTILE,
+                        trend_end_col="h1_trend_end",
+                        h1_dir_col="h1_dir",
+                    )
+                )
         if parts:
             enriched = (
                 pd.concat(parts, ignore_index=True)

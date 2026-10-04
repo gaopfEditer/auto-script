@@ -770,14 +770,18 @@ async def fetch_klines_with_fallback(
         fn = _KLINE_FETCHERS.get(sid)
         if not fn:
             continue
+        page_cap = KLINE_SOURCE_PAGE_CAPS.get(sid, 300)
         for cand in symbol_lookup_candidates(sym, sid):
             try:
-                rows = await fn(
+                rows = await _fetch_source_klines_paged(
+                    fn,
                     session,
+                    source=sid,
                     symbol=cand,
                     interval=interval,
                     limit=limit,
                     end_time=end_time,
+                    page_cap=page_cap,
                 )
             except Exception as exc:  # noqa: BLE001 — 单源失败继续
                 logger.warning("K线备选 %s 异常 %s: %s", sid, cand, exc)
@@ -800,3 +804,54 @@ async def fetch_klines_with_fallback(
 
     logger.warning("K线全部来源失败 %s %s", sym, interval)
     return [], ""
+
+
+async def _fetch_source_klines_paged(
+    fn,
+    session: aiohttp.ClientSession,
+    *,
+    source: str,
+    symbol: str,
+    interval: str,
+    limit: int,
+    end_time: int | None,
+    page_cap: int,
+) -> list[list[Any]]:
+    """备选所按页上限分页，直到凑够 limit 或没有更早 K。"""
+    want = max(int(limit), 1)
+    if want <= page_cap:
+        return await fn(
+            session,
+            symbol=symbol,
+            interval=interval,
+            limit=want,
+            end_time=end_time,
+        )
+    by_open: dict[int, list[Any]] = {}
+    cursor = end_time
+    pages = 0
+    while len(by_open) < want and pages < 12:
+        batch_n = min(page_cap, want - len(by_open) + 5)
+        batch = await fn(
+            session,
+            symbol=symbol,
+            interval=interval,
+            limit=batch_n,
+            end_time=cursor,
+        )
+        pages += 1
+        if not batch:
+            break
+        for row in batch:
+            try:
+                by_open[int(row[0])] = row
+            except (TypeError, ValueError, IndexError):
+                continue
+        oldest = min(int(r[0]) for r in batch)
+        if not klines_page_has_more(len(batch), batch_n, source):
+            break
+        next_end = oldest - 1
+        if cursor is not None and next_end >= int(cursor):
+            break
+        cursor = next_end
+    return sorted(by_open.values(), key=lambda r: int(r[0]))[-want:]

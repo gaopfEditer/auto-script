@@ -17,7 +17,17 @@ from oi_mornitor.config import (
     STRATEGY_SHOOT_WICK_RATIO,
 )
 from oi_mornitor.signal_policy import is_blocked_marker_text
-from oi_mornitor.strategy.indicators import detect_inverted_hammer, detect_shooting_star
+from oi_mornitor.strategy.indicators import (
+    detect_hammer,
+    detect_inverted_hammer,
+    detect_shooting_star,
+    inverted_hammer_confirmed,
+)
+from oi_mornitor.strategy.params import (
+    INV_HAMMER_BODY_MAX,
+    INV_HAMMER_LOWER_WICK_MAX,
+    INV_HAMMER_WICK_RATIO,
+)
 
 CONT_WICK_COUNT = 2
 SHOOT_REPEAT_BARS = 5
@@ -111,12 +121,16 @@ def _trimmed_mean_abs_prev(
 
 PATTERN_MARKER_KINDS = frozenset({
     "shooting_star",
-    "inverted_hammer",
+    "hammer",
+    "inverted_hammer",  # 兼容旧 kind；新代码用 hammer
+    "inv_hammer",
     "continuous_upper_wick",
     "continuous_lower_wick",
     "continuous_non_upper_wick",
     "continuous_non_lower_wick",
 })
+HAMMER_KINDS = frozenset({"hammer", "inverted_hammer"})
+INV_HAMMER_KINDS = frozenset({"inv_hammer"})
 
 
 def compute_oi_anomaly_flags(df: pd.DataFrame) -> tuple[list[bool], list[float | None]]:
@@ -372,7 +386,7 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
             pattern_hit = True
         else:
             below_mid = l <= basis
-            if below_mid and detect_inverted_hammer(
+            if below_mid and detect_hammer(
                 row, wick_ratio=STRATEGY_SHOOT_WICK_RATIO
             ):
                 _append_marker(
@@ -381,10 +395,36 @@ def collect_candle_signal_markers(df: pd.DataFrame) -> list[dict[str, Any]]:
                     position="belowBar",
                     color="#00bcd4",
                     shape="arrowUp",
-                    text=sig_prefix("倒锤子", near_vegas=near_v, oi_anomaly=oi_on),
+                    text=sig_prefix("锤子线", near_vegas=near_v, oi_anomaly=oi_on),
                     price=l,
-                    kind="inverted_hammer",
+                    kind="hammer",
                     oi_anomaly=oi_on,
+                )
+        if i >= 1:
+            prev = df.iloc[i - 1]
+            if (
+                not pd.isna(prev.get("bb_basis"))
+                and float(prev["low"]) <= float(prev["bb_basis"])
+                and detect_inverted_hammer(
+                    prev,
+                    wick_ratio=INV_HAMMER_WICK_RATIO,
+                    lower_wick_max=INV_HAMMER_LOWER_WICK_MAX,
+                    body_max=INV_HAMMER_BODY_MAX,
+                )
+                and inverted_hammer_confirmed(prev, row)
+            ):
+                prev_near_v = near_vegas_channel(prev)
+                prev_oi = bool(oi_flags[i - 1]) if i - 1 < len(oi_flags) else False
+                _append_marker(
+                    markers,
+                    time=t,
+                    position="belowBar",
+                    color="#26a69a",
+                    shape="arrowUp",
+                    text=sig_prefix("倒锤子", near_vegas=prev_near_v, oi_anomaly=prev_oi),
+                    price=l,
+                    kind="inv_hammer",
+                    oi_anomaly=prev_oi,
                 )
 
         if len(markers) > before_n:
@@ -475,13 +515,17 @@ def _candle_card_hits_at_index(
     *,
     allow_shooting_star: bool = True,
     allow_consecutive_shoot: bool = False,
-    allow_inverted_hammer: bool = True,
+    allow_hammer: bool = True,
+    allow_inv_hammer: bool = True,
+    allow_inverted_hammer: bool | None = None,
     allow_inverted_hammer_oi: bool | None = None,
     filter_kinds: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """单根 K 上的蜡烛卡片命中（与 Telegram 卡片推送同口径）。"""
+    if allow_inverted_hammer is not None:
+        allow_hammer = bool(allow_inverted_hammer)
     if allow_inverted_hammer_oi is not None:
-        allow_inverted_hammer = allow_inverted_hammer and bool(allow_inverted_hammer_oi)
+        allow_hammer = allow_hammer and bool(allow_inverted_hammer_oi)
     if idx < 0 or idx >= len(df):
         return []
     row = df.iloc[idx]
@@ -522,8 +566,8 @@ def _candle_card_hits_at_index(
             trend = _trend_return(df, idx, CANDLE_SHOOT_TREND_LOOKBACK)
             if trend is None or trend < CANDLE_SHOOT_TREND_MIN_PCT:
                 continue
-        elif kind == "inverted_hammer":
-            if not allow_inverted_hammer:
+        elif kind in HAMMER_KINDS:
+            if not allow_hammer:
                 continue
             basis = float(row["bb_basis"])
             lower = float(row["bb_lower"])
@@ -535,17 +579,43 @@ def _candle_card_hits_at_index(
             trend = _trend_return(df, idx, CANDLE_HAMMER_TREND_LOOKBACK)
             if trend is None or trend > -CANDLE_HAMMER_TREND_MIN_PCT:
                 continue
+            type_label = "锤子线"
+            card_kind = "hammer"
+        elif kind in INV_HAMMER_KINDS:
+            if not allow_inv_hammer:
+                continue
+            if idx < 1:
+                continue
+            signal_row = df.iloc[idx - 1]
+            basis = float(signal_row["bb_basis"])
+            lower = float(signal_row["bb_lower"])
+            below_mid = float(signal_row["low"]) <= basis
+            lower_zone = lower + (basis - lower) * 0.15
+            in_lower_zone = float(signal_row["close"]) <= lower_zone or at_lower_band(signal_row)
+            signal_near_v = near_vegas_channel(signal_row)
+            if CANDLE_SHOOT_REQUIRE_POSITION and not (
+                below_mid and (in_lower_zone or signal_near_v)
+            ):
+                continue
+            trend = _trend_return(df, idx - 1, CANDLE_HAMMER_TREND_LOOKBACK)
+            if trend is None or trend > -CANDLE_HAMMER_TREND_MIN_PCT:
+                continue
             type_label = "倒锤子"
-            card_kind = "inverted_hammer"
+            card_kind = "inv_hammer"
+            near_v = signal_near_v
         else:
             continue
 
-        if filter_kinds is not None and card_kind not in filter_kinds:
-            continue
+        if filter_kinds is not None:
+            aliases = set(filter_kinds)
+            if "inverted_hammer" in aliases:
+                aliases.add("hammer")
+            if card_kind not in aliases:
+                continue
         if card_kind in seen_kinds:
             continue
         seen_kinds.add(card_kind)
-        side = "bull" if card_kind == "inverted_hammer" else "bear"
+        side = "bull" if card_kind in ("hammer", "inv_hammer", "inverted_hammer") else "bear"
         hits.append({
             "time": closed_ts,
             "bar_index": idx,
@@ -605,6 +675,8 @@ def iter_candle_card_hits_in_range(
                 bar_markers,
                 allow_shooting_star=allow_shooting_star,
                 allow_consecutive_shoot=allow_consecutive_shoot,
+                allow_hammer=True,
+                allow_inv_hammer=True,
                 allow_inverted_hammer_oi=False,
                 filter_kinds=kinds,
             )
@@ -618,14 +690,16 @@ def find_last_closed_candle_card_hits(
     now_ms: int | None = None,
     allow_shooting_star: bool = True,
     allow_consecutive_shoot: bool = False,
-    allow_inverted_hammer: bool = True,
+    allow_hammer: bool = True,
+    allow_inv_hammer: bool = True,
+    allow_inverted_hammer: bool | None = None,
     allow_inverted_hammer_oi: bool | None = None,
 ) -> list[dict[str, Any]]:
     """最近收盘柱上的 Telegram 卡片信号。
 
-    - 射击之星：位置 + 前序涨幅；不要求 OI；(oi异动)/V*/（2）/连续插针 停推
-    - 倒锤子：与射击之星对称（中轨下 + 前序跌幅）；OI 仅作 tag
-    - 射击之星位置过滤：收盘须在 BB 上轨区或近 Vegas 通道（CANDLE_SHOOT_REQUIRE_POSITION）
+    - 射击之星：位置 + 前序涨幅；不要求 OI；连续插针 / （2）仍停推
+    - 锤子线：中轨下 + 前序跌幅；V / OI 异动为加分标签
+    - 倒锤子：需下一根收盘高于实体上沿才确认
     """
     if df.empty or "open_time" not in df.columns or "bb_basis" not in df.columns:
         return []
@@ -641,6 +715,8 @@ def find_last_closed_candle_card_hits(
         bar_markers,
         allow_shooting_star=allow_shooting_star,
         allow_consecutive_shoot=allow_consecutive_shoot,
+        allow_hammer=allow_hammer,
+        allow_inv_hammer=allow_inv_hammer,
         allow_inverted_hammer=allow_inverted_hammer,
         allow_inverted_hammer_oi=allow_inverted_hammer_oi,
     )

@@ -11,7 +11,9 @@ _INTERVAL_ORDER = {"15m": 0, "1h": 1, "4h": 2}
 
 _FAMILY_LABELS: dict[str, str] = {
     "shooting_star": "射击之星",
-    "inverted_hammer": "倒锤子",
+    "hammer": "锤子线",
+    "inverted_hammer": "锤子线",
+    "inv_hammer": "倒锤子",
     "vp_thrust": "量价推进",
     "vp_confirm": "量价确认",
     "reversal": "反转",
@@ -32,16 +34,19 @@ def _norm_label(raw: str) -> str:
 def mtf_resonance_family(type_label: str, side: str) -> str | None:
     """将 typeLabel 映射为共振形态族；不在白名单则 None。"""
     lab = _norm_label(type_label)
-    if not lab or _V_PREFIX_RE.match(lab):
-        return None
-    if "(oi异动)" in lab or "oi异动" in lab:
+    if lab:
+        lab = _V_PREFIX_RE.sub("", lab)
+        lab = lab.replace("(oi异动)", "").replace("oi异动", "")
+    if not lab:
         return None
     if "射击之星" in lab:
         if "连续" in lab or "（2）" in lab:
             return None
         return "shooting_star"
     if "倒锤子" in lab:
-        return "inverted_hammer"
+        return "inv_hammer"
+    if "锤子" in lab:
+        return "hammer"
     if "量价推进" in lab:
         return "vp_thrust"
     if "量价确认" in lab:

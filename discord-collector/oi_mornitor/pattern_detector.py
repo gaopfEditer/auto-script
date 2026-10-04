@@ -48,6 +48,10 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["vegas_filter"] = out["close"].ewm(span=STRATEGY_VEGAS_FILTER, adjust=False).mean()
     for i, period in enumerate(STRATEGY_VEGAS_PERIODS, start=1):
         out[f"vegas_e{i}"] = out["close"].ewm(span=period, adjust=False).mean()
+    if "vegas_e1" in out.columns and "vegas_e2" in out.columns:
+        out["vegas_mid"] = (
+            out["vegas_e1"].astype(float) + out["vegas_e2"].astype(float)
+        ) / 2.0
 
     win = PATTERN_PIVOT_WINDOW
     out["is_pivot_high"] = out["high"] == out["high"].rolling(win, center=True).max()

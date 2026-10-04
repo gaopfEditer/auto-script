@@ -26,7 +26,11 @@ def enrich_strategy_indicators(df: pd.DataFrame) -> pd.DataFrame:
         out[f"vegas_e{i}"] = out["close"].ewm(span=period, adjust=False).mean()
     out["vegas_filter"] = out["close"].ewm(span=STRATEGY_VEGAS_FILTER, adjust=False).mean()
     vegas_cols = [f"vegas_e{i}" for i in range(1, len(STRATEGY_VEGAS_PERIODS) + 1)]
-    out["vegas_mid"] = out[vegas_cols].mean(axis=1)
+    # vegas_mid 统一定义：A 组 (EMA144+EMA169)/2，不再用四线均值
+    if "vegas_e1" in out.columns and "vegas_e2" in out.columns:
+        out["vegas_mid"] = (out["vegas_e1"].astype(float) + out["vegas_e2"].astype(float)) / 2.0
+    else:
+        out["vegas_mid"] = out[vegas_cols].mean(axis=1)
     out["vegas_min"] = out[vegas_cols].min(axis=1)
     out["vegas_max"] = out[vegas_cols].max(axis=1)
     return out
@@ -86,12 +90,12 @@ def detect_shooting_star(
     return True
 
 
-def detect_inverted_hammer(
+def detect_hammer(
     row: pd.Series,
     *,
     wick_ratio: float = STRATEGY_SHOOT_WICK_RATIO,
 ) -> bool:
-    """倒锤子 — 与 tradingview-bollinger-wicks.pine detect_inverted_shooting_star 一致。"""
+    """锤子线（长下影）：原函数误名为倒锤子，逻辑与 Pine detect_inverted_shooting_star 一致。"""
     o = float(row["open"])
     h = float(row["high"])
     l = float(row["low"])
@@ -102,6 +106,41 @@ def detect_inverted_hammer(
     if body <= 0:
         return False
     return lower_w >= body * wick_ratio and upper_w < lower_w / 3.0
+
+
+def detect_inverted_hammer(
+    row: pd.Series,
+    *,
+    wick_ratio: float = 2.0,
+    lower_wick_max: float = 0.25,
+    body_max: float = 0.35,
+) -> bool:
+    """真正的倒锤子：底部长上影，实体小、下影短。确认需看下一根。"""
+    o = float(row["open"])
+    h = float(row["high"])
+    l = float(row["low"])
+    c = float(row["close"])
+    body = abs(c - o)
+    rng = h - l
+    if rng <= 0:
+        return False
+    upper_w = h - max(o, c)
+    lower_w = min(o, c) - l
+    if body <= 0:
+        return upper_w >= rng * 0.6 and lower_w <= rng * lower_wick_max
+    if upper_w < body * wick_ratio:
+        return False
+    if lower_w > rng * lower_wick_max:
+        return False
+    if body > rng * body_max:
+        return False
+    return True
+
+
+def inverted_hammer_confirmed(signal_row: pd.Series, next_row: pd.Series) -> bool:
+    """下一根收盘高于倒锤子实体上沿才确认。"""
+    body_top = max(float(signal_row["open"]), float(signal_row["close"]))
+    return float(next_row["close"]) > body_top
 
 
 def near_bb_upper(row: pd.Series, *, pct_in_band: float = 0.85) -> bool:

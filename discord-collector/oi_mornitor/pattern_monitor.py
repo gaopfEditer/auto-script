@@ -5,6 +5,7 @@ import asyncio
 import logging
 import random
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -92,10 +93,29 @@ _SHORT_PATTERN_KINDS = frozenset({
     "continuous_non_upper_wick",
 })
 _LONG_PATTERN_KINDS = frozenset({
+    "hammer",
     "inverted_hammer",
+    "inv_hammer",
     "continuous_lower_wick",
     "continuous_non_lower_wick",
 })
+_CARD_SEEN_HIGH_WATER = 1200
+_CARD_SEEN_KEEP = 600
+
+
+def remember_card_seen(
+    seen: OrderedDict[str, bool],
+    key: str,
+    *,
+    high_water: int = _CARD_SEEN_HIGH_WATER,
+    keep: int = _CARD_SEEN_KEEP,
+) -> None:
+    """发送成功后写入去重键；按插入顺序裁剪，避免 set 无序丢掉新键。"""
+    seen[key] = True
+    seen.move_to_end(key)
+    if len(seen) > high_water:
+        while len(seen) > keep:
+            seen.popitem(last=False)
 _INTERVAL_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 
 
@@ -363,6 +383,14 @@ def _abs_amplitude_score(row: dict[str, Any], tf: str, domain: str) -> float:
     return abs(float(m.get("magnitude_usd") or 0.0))
 
 
+def _signed_price_change(row: dict[str, Any], tf: str) -> float:
+    m = _rank_metric(row, tf, "price")
+    try:
+        return float(m.get("change_rate") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _top_amplitude_symbols(
     rows: list[dict[str, Any]],
     tf: str,
@@ -419,6 +447,32 @@ def pick_candle_card_alt_flow_symbols(
     )
 
 
+def _top_signed_price_symbols(
+    rows: list[dict[str, Any]],
+    tf: str,
+    *,
+    top_n: int,
+    direction: str,
+    exclude: set[str] | None = None,
+) -> list[str]:
+    """真涨幅（change_rate>0）或真跌幅（change_rate<0）榜。"""
+    exclude = {s.upper() for s in (exclude or set())}
+    scored: list[tuple[str, float]] = []
+    for row in rows:
+        rate = _signed_price_change(row, tf)
+        if direction == "gain" and rate <= 0:
+            continue
+        if direction == "lose" and rate >= 0:
+            continue
+        sym = str(row.get("symbol") or "").upper()
+        if not sym or sym in exclude:
+            continue
+        scored.append((sym, rate))
+    reverse = direction == "gain"
+    scored.sort(key=lambda x: x[1], reverse=reverse)
+    return [sym for sym, _ in scored[:top_n]]
+
+
 def pick_candle_card_alt_gainer_symbols(
     pool_rows: list[dict[str, Any]],
     *,
@@ -426,11 +480,26 @@ def pick_candle_card_alt_gainer_symbols(
     top_n: int = CANDLE_CARD_ALT_TOP_N,
     tf: str = CANDLE_CARD_ALT_RANK_TF,
 ) -> list[str]:
-    """山寨卡片 · 15m 涨幅 TopN（仅倒锤 / 二次探底等「跌后看多」）。"""
+    """山寨卡片 · 真涨幅榜（change_rate > 0）。"""
     majors = {s.upper() for s in (majors or CANDLE_CARD_MAJOR_SYMBOLS)}
     eligible = _eligible_alt_pool_rows(pool_rows, majors=majors)
-    return _top_amplitude_symbols(
-        eligible, tf, "price", top_n=top_n, exclude=majors
+    return _top_signed_price_symbols(
+        eligible, tf, top_n=top_n, direction="gain", exclude=majors
+    )
+
+
+def pick_candle_card_alt_loser_symbols(
+    pool_rows: list[dict[str, Any]],
+    *,
+    majors: set[str] | None = None,
+    top_n: int = CANDLE_CARD_ALT_TOP_N,
+    tf: str = CANDLE_CARD_ALT_RANK_TF,
+) -> list[str]:
+    """山寨卡片 · 真跌幅榜（change_rate < 0）。"""
+    majors = {s.upper() for s in (majors or CANDLE_CARD_MAJOR_SYMBOLS)}
+    eligible = _eligible_alt_pool_rows(pool_rows, majors=majors)
+    return _top_signed_price_symbols(
+        eligible, tf, top_n=top_n, direction="lose", exclude=majors
     )
 
 
@@ -448,9 +517,12 @@ def pick_candle_card_alt_symbols(
     gainers = pick_candle_card_alt_gainer_symbols(
         pool_rows, majors=majors, top_n=top_n, tf=tf
     )
+    losers = pick_candle_card_alt_loser_symbols(
+        pool_rows, majors=majors, top_n=top_n, tf=tf
+    )
     out: list[str] = []
     seen: set[str] = set()
-    for sym in flow + gainers:
+    for sym in flow + gainers + losers:
         if sym in seen:
             continue
         seen.add(sym)
@@ -648,7 +720,7 @@ class PatternMonitorEngine:
         # symbol:close_ts → 已推过的形态+OI 短线推荐
         self._combo_seen: set[str] = set()
         # symbol:interval:kind:close_ts → 已推过的蜡烛卡片
-        self._card_seen: set[str] = set()
+        self._card_seen: OrderedDict[str, bool] = OrderedDict()
         # symbol:interval:side → 最近一次实际推送的收盘时间戳（秒），用于同向节流
         self._card_last_emit: dict[str, int] = {}
         # (symbol, interval) → (fetched_at, klines)
@@ -1494,7 +1566,7 @@ class PatternMonitorEngine:
         """多周期蜡烛形态 + 顶部/底部结构 → Telegram 卡片。
 
         主流 BTC/ETH/SOL：15m/1h/4h。
-        山寨：流入 Top7 + 涨幅 Top7（dip）→ 15m/1h。
+        山寨：流入 Top7 + 真涨幅榜 + 真跌幅榜 → 15m/1h。
         """
         if not is_candle_push_enabled() and not is_structure_push_enabled():
             return []
@@ -1503,6 +1575,7 @@ class PatternMonitorEngine:
         rows = pool_rows if pool_rows is not None else self._last_pool_rows
         alt_flow = pick_candle_card_alt_flow_symbols(rows or [], majors=majors)
         alt_gainers = pick_candle_card_alt_gainer_symbols(rows or [], majors=majors)
+        alt_losers = pick_candle_card_alt_loser_symbols(rows or [], majors=majors)
         # 池子尚未暖好时，短暂回退形态 watchlist（排除主流）→ 仅流入池
         if not alt_flow and watchlist:
             alt_flow = [
@@ -1511,7 +1584,7 @@ class PatternMonitorEngine:
                 if str(w.symbol).upper() not in majors
             ][: CANDLE_CARD_ALT_TOP_N * 2]
 
-        # (symbol, interval, is_major, pool_role: all|flow|dip)
+        # (symbol, interval, is_major, pool_role: all|flow|gain|dip)
         jobs: list[tuple[str, str, bool, str]] = []
         for sym in sorted(majors):
             for iv in CANDLE_CARD_MAJOR_INTERVALS:
@@ -1521,22 +1594,29 @@ class PatternMonitorEngine:
                 jobs.append((sym, iv, False, "flow"))
         for sym in sorted(set(alt_gainers) - set(alt_flow)):
             for iv in CANDLE_CARD_ALT_INTERVALS:
+                jobs.append((sym, iv, False, "gain"))
+        for sym in sorted(set(alt_losers) - set(alt_flow) - set(alt_gainers)):
+            for iv in CANDLE_CARD_ALT_INTERVALS:
                 jobs.append((sym, iv, False, "dip"))
 
         logger.debug(
-            "形态卡片任务 majors=%s flow=%s dip=%s jobs=%d",
+            "形态卡片任务 majors=%s flow=%s gain=%s dip=%s jobs=%d",
             sorted(majors),
             alt_flow,
-            sorted(set(alt_gainers) - set(alt_flow)),
+            alt_gainers,
+            alt_losers,
             len(jobs),
         )
         now = time.time()
         now_ms = int(now * 1000)
         sem = asyncio.Semaphore(max(4, min(OI_OI_BATCH_CONCURRENCY, 10)))
+        from oi_mornitor.strategy.params import ema_warmup_bars
+
         fetch_limit = min(
             max(
                 STRUCTURE_KLINE_LIMIT if is_structure_push_enabled() else 120,
                 PATTERN_KLINE_LIMIT,
+                ema_warmup_bars(144),
             ),
             PATTERN_CHART_MAX_LIMIT,
         )
@@ -1561,13 +1641,16 @@ class PatternMonitorEngine:
             ):
                 return klines_map[sym]
             async with sem:
-                rows = await fetch_pattern_klines(
+                from oi_mornitor.kline_cache import fetch_klines_cached
+
+                rows, src = await fetch_klines_cached(
                     session,
-                    base_url=base_url,
                     symbol=sym,
                     interval=iv,
-                    limit=fetch_limit,
+                    min_bars=fetch_limit,
+                    base_url=base_url,
                 )
+                logger.info("K线数据源 %s %s %s n=%d", src or "unknown", sym, iv, len(rows or []))
             if rows:
                 self._card_kline_cache[key] = (now, rows)
                 if len(self._card_kline_cache) > 400:
@@ -1588,7 +1671,7 @@ class PatternMonitorEngine:
                 return []
             if is_disabled_pattern_interval(iv):
                 return []
-            allow_shoot = pool_role in ("all", "flow")
+            allow_shoot = pool_role in ("all", "flow", "gain")
             allow_hammer = pool_role in ("all", "flow", "dip")
             try:
                 preview = collect_candle_signal_markers(df)
@@ -1600,8 +1683,9 @@ class PatternMonitorEngine:
                 if int(m.get("time") or 0) == closed_ts
             }
             need_shoot = allow_shoot and "shooting_star" in kinds_on_bar
-            need_hammer = allow_hammer and "inverted_hammer" in kinds_on_bar
-            if not need_shoot and not need_hammer:
+            need_hammer = allow_hammer and bool(kinds_on_bar & {"hammer", "inverted_hammer"})
+            need_inv = allow_hammer and "inv_hammer" in kinds_on_bar
+            if not need_shoot and not need_hammer and not need_inv:
                 return []
 
             try:
@@ -1610,7 +1694,8 @@ class PatternMonitorEngine:
                     now_ms=now_ms,
                     allow_shooting_star=need_shoot,
                     allow_consecutive_shoot=False,
-                    allow_inverted_hammer=need_hammer,
+                    allow_hammer=need_hammer,
+                    allow_inv_hammer=need_inv,
                 )
             except Exception:  # noqa: BLE001
                 return []
@@ -1622,8 +1707,7 @@ class PatternMonitorEngine:
                 dedupe = f"{sym}:{iv}:{kind}:{close_ts}"
                 if dedupe in self._card_seen:
                     continue
-                self._card_seen.add(dedupe)
-                side = "bull" if kind == "inverted_hammer" else "bear"
+                side = "bull" if kind in ("hammer", "inv_hammer", "inverted_hammer") else "bear"
                 if self._card_emit_throttled(sym, iv, side, close_ts):
                     continue
                 type_label = str(hit.get("type_label") or kind)
@@ -1663,6 +1747,7 @@ class PatternMonitorEngine:
                     logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
                     ok = False
                 if ok:
+                    remember_card_seen(self._card_seen, dedupe)
                     self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
             return out
 
@@ -1702,7 +1787,6 @@ class PatternMonitorEngine:
                 dedupe = f"{sym}:{iv}:struct:{kind}:{close_ts}"
                 if dedupe in self._card_seen:
                     continue
-                self._card_seen.add(dedupe)
                 side = str(hit.get("side") or "")
                 if side in ("bull", "bear") and self._structure_emit_throttled(sym, iv, side, close_ts):
                     continue
@@ -1750,8 +1834,10 @@ class PatternMonitorEngine:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Telegram 结构卡片失败 %s: %s", sym, exc)
                     ok = False
-                if ok and side in ("bull", "bear"):
-                    self._card_last_emit[f"struct:{sym}:{iv}:{side}"] = close_ts
+                if ok:
+                    remember_card_seen(self._card_seen, dedupe)
+                    if side in ("bull", "bear"):
+                        self._card_last_emit[f"struct:{sym}:{iv}:{side}"] = close_ts
             return out
 
         async def _one(
@@ -1787,8 +1873,6 @@ class PatternMonitorEngine:
                 )
             if is_structure_push_enabled():
                 out.extend(await _emit_structure(sym, iv, df))
-            if len(self._card_seen) > 1200:
-                self._card_seen = set(list(self._card_seen)[-600:])
             return out
 
         results = await asyncio.gather(
