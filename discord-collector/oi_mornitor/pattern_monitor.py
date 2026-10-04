@@ -81,6 +81,9 @@ from oi_mornitor.notify_telegram import (
     send_pattern_oi_telegram_async,
     send_structure_card_telegram_async,
 )
+from oi_mornitor.signal_log import insert_signal
+from oi_mornitor.signal_policy import evaluate_marker_text
+from oi_mornitor.strategy.params import PARAMS_VERSION
 from oi_mornitor.tv_alert_sync import symbols_on_n_boards
 
 logger = logging.getLogger("OI_Radar")
@@ -1682,6 +1685,43 @@ class PatternMonitorEngine:
                 for m in preview
                 if int(m.get("time") or 0) == closed_ts
             }
+            close_ms = closed_ts * 1000
+            if "close_time" in df.columns and "open_time" in df.columns:
+                try:
+                    cidx = closed_bar_index(df, now_ms=int(time.time() * 1000))
+                    if cidx >= 0:
+                        close_ms = int(df.iloc[cidx]["close_time"])
+                except (TypeError, ValueError, KeyError):
+                    pass
+            for m in preview:
+                if int(m.get("time") or 0) != closed_ts:
+                    continue
+                blocked, reason = evaluate_marker_text(str(m.get("text") or ""))
+                kind = str(m.get("kind") or "")
+                side = "bull" if kind in _LONG_PATTERN_KINDS else "bear"
+                try:
+                    insert_signal(
+                        {
+                            "symbol": sym,
+                            "exchange": "binance_um",
+                            "tf": iv,
+                            "bar_open_ts": closed_ts * 1000,
+                            "bar_close_ts": close_ms,
+                            "side": side,
+                            "family": "pattern",
+                            "kind": kind,
+                            "price_close": float(m.get("price") or 0),
+                            "reject_reason": reason if blocked else None,
+                            "tags": {
+                                "near_vegas": str(m.get("text") or "").startswith("V"),
+                                "oi_anomaly": bool(m.get("oi_anomaly")),
+                                "pool_role": pool_role,
+                            },
+                            "params_version": PARAMS_VERSION,
+                        }
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("signal_log 写入失败 %s %s %s", sym, iv, kind)
             need_shoot = allow_shoot and "shooting_star" in kinds_on_bar
             need_hammer = allow_hammer and bool(kinds_on_bar & {"hammer", "inverted_hammer"})
             need_inv = allow_hammer and "inv_hammer" in kinds_on_bar
