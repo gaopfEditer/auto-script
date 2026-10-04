@@ -1913,6 +1913,55 @@ class PatternMonitorEngine:
                 )
             if is_structure_push_enabled():
                 out.extend(await _emit_structure(sym, iv, df))
+            try:
+                from oi_mornitor.strategy.scan_all import collect_all_events, events_on_bar
+                from oi_mornitor.strategy.scoring import score_side
+
+                cidx = closed_bar_index(df, now_ms=now_ms)
+                if cidx >= 0:
+                    evs = events_on_bar(collect_all_events(df.iloc[: cidx + 1]), cidx)
+                    row = df.iloc[cidx]
+                    board = {"gain": "gainer", "dip": "loser"}.get(pool_role, "none")
+                    scores = {
+                        iv: {
+                            "long": score_side(evs, side="long", tf=iv, row=row, board=board, asof_idx=cidx)["score"],
+                            "short": score_side(evs, side="short", tf=iv, row=row, board=board, asof_idx=cidx)["score"],
+                        }
+                    }
+                    # 单周期先落库；共振等其他周期分数齐了再算。这里只记本周期新模块。
+                    close_ms = int(row["close_time"]) if "close_time" in df.columns else int(row["open_time"])
+                    for ev in evs:
+                        if ev.get("family") in ("pattern",) and ev.get("kind") in (
+                            "shooting_star",
+                            "hammer",
+                            "inverted_hammer",
+                            "inv_hammer",
+                            "hs_vegas_break",
+                            "m_top_vegas_break",
+                            "bottom_secondary_test",
+                            "liquidity_sweep",
+                        ):
+                            continue
+                        insert_signal(
+                            {
+                                "symbol": sym,
+                                "exchange": "binance_um",
+                                "tf": iv,
+                                "bar_open_ts": int(row.get("open_time") or 0),
+                                "bar_close_ts": close_ms,
+                                "side": ev.get("side"),
+                                "family": ev.get("family"),
+                                "kind": ev.get("kind"),
+                                "strength": ev.get("strength"),
+                                "price_close": ev.get("price_close"),
+                                "features": ev.get("features"),
+                                "tags": {**(ev.get("tags") or {}), "pool_role": pool_role},
+                                "score_tf": scores[iv].get(ev.get("side") or "long"),
+                                "params_version": PARAMS_VERSION,
+                            }
+                        )
+            except Exception:
+                logger.debug("新信号仅记日志失败 %s %s", sym, iv, exc_info=True)
             return out
 
         results = await asyncio.gather(
