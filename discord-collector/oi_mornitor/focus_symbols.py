@@ -45,8 +45,15 @@ def _load() -> list[str]:
                             out.append(n)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("读取特别关注失败: %s", exc)
+        defaults = [_normalize(s) for s in MAIN_CARD_DEFAULT_SYMBOLS if _normalize(s)]
         if not out:
-            out = [_normalize(s) for s in MAIN_CARD_DEFAULT_SYMBOLS if _normalize(s)]
+            out = list(defaults)
+        else:
+            seen = set(out)
+            for n in defaults:
+                if n and n not in seen:
+                    out.append(n)
+                    seen.add(n)
         _symbols = out
         return list(out)
 

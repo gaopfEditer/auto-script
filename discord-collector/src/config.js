@@ -97,6 +97,19 @@ export const config = {
     3_000,
     Number(process.env.COLLECTOR_CDP_CHANNEL_ROTATE_DWELL_MS) || 12_000
   ),
+  /** CDP 断连 Telegram 提醒（需信号 TG 已配置），默认开 */
+  cdpTelegramNotifyDisconnect: !["0", "false", "no", "off"].includes(
+    String(process.env.COLLECTOR_CDP_TELEGRAM_DISCONNECT ?? "1").toLowerCase()
+  ),
+  /** CDP 首次连接 / 重连成功 Telegram 提醒，默认开 */
+  cdpTelegramNotifyConnect: !["0", "false", "no", "off"].includes(
+    String(process.env.COLLECTOR_CDP_TELEGRAM_CONNECT ?? "1").toLowerCase()
+  ),
+  /** CDP 断连持续超过该毫秒且仍未恢复才推 Telegram（默认 15 分钟） */
+  cdpTelegramDisconnectAfterMs: Math.max(
+    60_000,
+    Number(process.env.COLLECTOR_CDP_TELEGRAM_DISCONNECT_AFTER_MS) || 15 * 60_000,
+  ),
   /**
    * Discord 页定时刷新间隔（ms）。0=不刷新。
    * 未配置且 startUrl 为 /channels/… 时默认 5 分钟，避免 Gateway 假死。

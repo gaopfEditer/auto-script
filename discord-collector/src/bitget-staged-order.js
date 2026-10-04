@@ -215,7 +215,10 @@ export async function executeStagedMarketOpen(client, input) {
   const holdSide = side === "buy" ? "long" : "short";
   const fillPrice = refPrice;
   const initialSl = calcInitialStopLoss(fillPrice, direction, initialSlPct);
-  if (initialSl && !isValidStopLoss(fillPrice, initialSl, holdSide)) {
+  if (!initialSl) {
+    return { ok: false, reason: "missing_initial_sl", error: "无法计算初始止损价" };
+  }
+  if (!isValidStopLoss(fillPrice, initialSl, holdSide)) {
     return {
       ok: false,
       reason: "invalid_initial_sl",
@@ -395,6 +398,21 @@ export async function executeStagedMarketOpen(client, input) {
   }
 
   if (attemptErrors.length) record.openRetryErrors = attemptErrors;
+
+  const slAttached = Boolean(
+    record.slOrderId ||
+      record.presetStopLossPrice ||
+      (input.dryRun && initialSl)
+  );
+  if (!slAttached) {
+    return {
+      ok: false,
+      reason: "stop_loss_not_attached",
+      error: String(record.slError ?? record.openPresetSlError ?? "开仓后未挂上止损，已中止记为成功"),
+      record,
+    };
+  }
+
   return { ok: true, record };
 }
 

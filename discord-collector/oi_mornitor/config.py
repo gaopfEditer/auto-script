@@ -188,9 +188,14 @@ MAIN_CARD_TELEGRAM_CHAT_ID = (
     or os.getenv("OI_MAIN_CARD_TELEGRAM_CHAT_ID")
     or ""
 ).strip()
+_MAIN_CARD_DEFAULT_ENV = (
+    "BTCUSDT,ETHUSDT,"
+    "QQQUSDT,SOXLUSDT,"
+    "AAPLUSDT,MSFTUSDT,NVDAUSDT,AMZNUSDT,GOOGLUSDT,GOOGUSDT,METAUSDT,TSLAUSDT"
+)
 MAIN_CARD_DEFAULT_SYMBOLS = tuple(
     s.strip().upper()
-    for s in os.getenv("OI_MAIN_CARD_DEFAULT_SYMBOLS", "BTCUSDT,ETHUSDT").split(",")
+    for s in os.getenv("OI_MAIN_CARD_DEFAULT_SYMBOLS", _MAIN_CARD_DEFAULT_ENV).split(",")
     if s.strip()
 )
 

@@ -370,10 +370,8 @@ export function createBitgetOrderService(store, log) {
     }
 
     const isStaged = isStagedTradeSignal(parsed) || resolved.channel.stagedTrade;
-    if (
-      !isStaged &&
-      !telegramTradeRequiresTpsl(normalizeExecution(executionJson, parsed))
-    ) {
+    const exAfterPrepare = normalizeExecution(executionJson, parsed);
+    if (!isStaged && !telegramTradeRequiresTpsl(exAfterPrepare)) {
       log.warn(
         `Bitget 跳过 card=#${input.cardId}：务必设置止盈止损（已试默认 TP/SL 仍缺有效入场）`
       );

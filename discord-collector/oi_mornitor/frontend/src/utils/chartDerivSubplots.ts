@@ -27,6 +27,8 @@ export type ChartDerivSubplots = {
   oi: Array<LineData | WhitespaceData>;
   spotNet: Array<HistogramData | WhitespaceData>;
   futuresNet: Array<HistogramData | WhitespaceData>;
+  /** 对齐后有点数的条数（用于区分「接口空」与「时间对不齐」） */
+  stats: { oi: number; spotNet: number; futuresNet: number };
 };
 
 function sleep(ms: number): Promise<void> {
@@ -34,6 +36,18 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** 429/418 时读 Retry-After（秒）或指数退避，最多 attempts 次。 */
+const DERIV_DIRECT_TIMEOUT_MS = 8_000;
+
+async function fetchWithTimeout(url: string, timeoutMs = DERIV_DIRECT_TIMEOUT_MS): Promise<Response> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchWithBackoff(
   url: string,
   attempts = 3,
@@ -41,7 +55,7 @@ async function fetchWithBackoff(
   let delay = 800;
   let last: Response | null = null;
   for (let i = 0; i < attempts; i++) {
-    last = await fetch(url);
+    last = await fetchWithTimeout(url, DERIV_DIRECT_TIMEOUT_MS);
     if (last.status !== 429 && last.status !== 418) return last;
     const ra = last.headers.get("Retry-After");
     const waitMs =
@@ -126,6 +140,18 @@ function toLineData(points: AlignedDerivPoint[]): Array<LineData | WhitespaceDat
   );
 }
 
+function countSeriesValues(
+  rows: Array<LineData | WhitespaceData | HistogramData>,
+): number {
+  let n = 0;
+  for (const row of rows) {
+    if (row != null && "value" in row && row.value != null && Number.isFinite(Number(row.value))) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
 function toHistData(
   points: AlignedDerivPoint[],
 ): Array<HistogramData | WhitespaceData> {
@@ -151,7 +177,7 @@ async function fetchPointsViaBackend(
     interval,
     limit: String(limit),
   });
-  const res = await fetchWithBackoff(`${path}?${params.toString()}`);
+  const res = await fetchWithBackoff(`${path}?${params.toString()}`, 2);
   if (!res.ok) return [];
   const body = (await res.json().catch(() => null)) as {
     ok?: boolean;
@@ -234,13 +260,15 @@ async function fetchSpotNet(
   interval: ChartTimeframe,
   limit: number,
 ): Promise<DerivTsPoint[]> {
+  const viaBackend = await fetchPointsViaBackend("/api/patterns/spot-net", symbol, interval, limit);
+  if (viaBackend.length) return viaBackend;
   try {
     const direct = await fetchSpotNetDirect(symbol, interval, limit);
     if (direct.length) return direct;
   } catch {
-    /* fall through */
+    /* ignore */
   }
-  return fetchPointsViaBackend("/api/patterns/spot-net", symbol, interval, limit);
+  return [];
 }
 
 async function fetchFuturesNet(
@@ -248,13 +276,15 @@ async function fetchFuturesNet(
   interval: ChartTimeframe,
   limit: number,
 ): Promise<DerivTsPoint[]> {
+  const viaBackend = await fetchPointsViaBackend("/api/patterns/futures-net", symbol, interval, limit);
+  if (viaBackend.length) return viaBackend;
   try {
     const direct = await fetchFuturesNetDirect(symbol, interval, limit);
     if (direct.length) return direct;
   } catch {
-    /* fall through */
+    /* ignore */
   }
-  return fetchPointsViaBackend("/api/patterns/futures-net", symbol, interval, limit);
+  return [];
 }
 
 /** 拉取并对齐到主图 candle open times。 */
@@ -267,14 +297,15 @@ export async function fetchChartDerivSubplots(
     .filter((t) => Number.isFinite(t) && t > 0)
     .sort((a, b) => a - b);
   if (!symbol || !times.length) {
-    return { oi: [], spotNet: [], futuresNet: [] };
+    return { oi: [], spotNet: [], futuresNet: [], stats: { oi: 0, spotNet: 0, futuresNet: 0 } };
   }
+  const apiSymbol = toUsdtSymbol(symbol) || symbol.trim().toUpperCase();
   const limit = Math.min(500, Math.max(times.length + 8, 50));
 
   const [oiMap, spotRaw, futRaw] = await Promise.all([
-    fetchBinanceOpenInterestHist(symbol, interval, { limit }),
-    fetchSpotNet(symbol, interval, limit),
-    fetchFuturesNet(symbol, interval, limit),
+    fetchBinanceOpenInterestHist(apiSymbol, interval, { limit }),
+    fetchSpotNet(apiSymbol, interval, limit),
+    fetchFuturesNet(apiSymbol, interval, limit),
   ]);
 
   const oiPts: DerivTsPoint[] = [...oiMap.entries()].map(([time, value]) => ({
@@ -282,10 +313,18 @@ export async function fetchChartDerivSubplots(
     value,
   }));
 
+  const oi = toLineData(alignPointsToCandleTimes(times, oiPts, interval));
+  const spotNet = toHistData(alignPointsToCandleTimes(times, spotRaw, interval));
+  const futuresNet = toHistData(alignPointsToCandleTimes(times, futRaw, interval));
   return {
-    oi: toLineData(alignPointsToCandleTimes(times, oiPts, interval)),
-    spotNet: toHistData(alignPointsToCandleTimes(times, spotRaw, interval)),
-    futuresNet: toHistData(alignPointsToCandleTimes(times, futRaw, interval)),
+    oi,
+    spotNet,
+    futuresNet,
+    stats: {
+      oi: countSeriesValues(oi),
+      spotNet: countSeriesValues(spotNet),
+      futuresNet: countSeriesValues(futuresNet),
+    },
   };
 }
 

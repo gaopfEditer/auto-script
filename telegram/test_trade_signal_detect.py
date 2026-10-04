@@ -50,6 +50,10 @@ ASHLEY_CHAT_2 = "我一般不會，，因為群裡有兄弟做單，我要看止
 ASHLEY_CHAT_3 = "沒喊，我自己的掛單昨天入場了"
 
 TWITTER_COMPACT = "#uni\n做多"
+NINE_CALL_MOVR = "买了点movr，窄止损"
+KAI_AXS = "#AXS  多"
+ASHLEY_TPSL = "止盈：1.19-1.25-1.35\n止損：1.125"
+ASHLEY_MOVE_COMPACT = "MOVE\n做多上車"
 
 
 class TradeSignalFilterTest(unittest.TestCase):
@@ -90,6 +94,41 @@ class TradeSignalFilterTest(unittest.TestCase):
         self.assertEqual(sig.direction, "多")
         self.assertEqual(sig.entry, "市价")
         self.assertIsNone(signal_skip_reason(sig, TWITTER_COMPACT, sender="test"))
+
+    def test_nine_call_casual_buy_long(self) -> None:
+        self.assertTrue(looks_like_trade_message(NINE_CALL_MOVR))
+        sig = parse_trade_text(NINE_CALL_MOVR, sender="Nine")
+        self.assertIsNotNone(sig)
+        assert sig is not None
+        self.assertEqual(sig.symbol, "MOVR")
+        self.assertEqual(sig.direction, "多")
+
+    def test_kai_hash_direction_only(self) -> None:
+        self.assertTrue(looks_like_trade_message(KAI_AXS))
+        sig = parse_trade_text(KAI_AXS, sender="KAI")
+        assert sig is not None
+        self.assertEqual(sig.symbol, "AXS")
+        self.assertEqual(sig.direction, "多")
+
+    def test_ashley_tpsl_supplement(self) -> None:
+        self.assertTrue(looks_like_trade_message(ASHLEY_TPSL))
+        sig = parse_trade_text(ASHLEY_TPSL, sender="Ashley帶你賺U")
+        assert sig is not None
+        self.assertTrue(sig.has_tpsl)
+        self.assertIsNone(signal_skip_reason(sig, ASHLEY_TPSL, sender="Ashley帶你賺U"))
+
+    def test_ashley_move_compact_two_lines(self) -> None:
+        refined = refine_trade_text(ASHLEY_MOVE_COMPACT)
+        self.assertIn("MOVE", refined)
+        self.assertIn("做多", refined)
+        self.assertTrue(looks_like_trade_message(ASHLEY_MOVE_COMPACT))
+        sig = parse_trade_text(ASHLEY_MOVE_COMPACT, sender="Ashley帶你賺U")
+        assert sig is not None
+        self.assertEqual(sig.symbol, "MOVE")
+        self.assertEqual(sig.direction, "多")
+        self.assertIsNone(
+            signal_skip_reason(sig, ASHLEY_MOVE_COMPACT, sender="Ashley帶你賺U")
+        )
 
 
 if __name__ == "__main__":

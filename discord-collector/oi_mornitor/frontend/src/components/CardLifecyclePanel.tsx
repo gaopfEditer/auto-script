@@ -4,15 +4,22 @@ import { displaySymbol } from "../utils/symbol";
 import { fmtMetaPrice, fmtTs } from "../utils/format";
 import { resolveSandboxCardAuthor } from "../utils/cardAuthor";
 
-type PhaseFilter = "all" | "active" | "entered" | "closed" | "sl" | "tp";
+type StatusFilter = "all" | "tp" | "sl";
 
-const PHASE_FILTERS: Array<{ id: PhaseFilter; label: string }> = [
+type TimeRangeKey = "24h" | "3d" | "1w" | "1m" | "3m";
+
+const STATUS_OPTIONS: Array<{ id: StatusFilter; label: string }> = [
   { id: "all", label: "全部" },
-  { id: "active", label: "进行中" },
-  { id: "entered", label: "已入场" },
-  { id: "closed", label: "已出场" },
   { id: "tp", label: "止盈" },
   { id: "sl", label: "止损" },
+];
+
+const TIME_RANGES: Array<{ id: TimeRangeKey; label: string; ms: number }> = [
+  { id: "24h", label: "24h", ms: 24 * 3600_000 },
+  { id: "3d", label: "3d", ms: 3 * 86400_000 },
+  { id: "1w", label: "1w", ms: 7 * 86400_000 },
+  { id: "1m", label: "1m", ms: 30 * 86400_000 },
+  { id: "3m", label: "3m", ms: 90 * 86400_000 },
 ];
 
 function phaseClass(phase?: string): string {
@@ -43,6 +50,20 @@ function fmtDist(v?: number | null): string {
   const n = Number(v);
   const sign = n > 0 ? "+" : "";
   return `${sign}${n.toFixed(2)}%`;
+}
+
+/** 发单/建卡时间（秒） */
+function cardEventSec(o: SandboxCardOrder): number {
+  const raw = Number(o.signal_at ?? o.created_at ?? o.updated_at ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return raw > 1e12 ? Math.floor(raw / 1000) : Math.floor(raw);
+}
+
+function matchesStatus(o: SandboxCardOrder, filter: StatusFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "tp") return Boolean(o.phase_tp || o.phase === "止盈" || o.outcome === "take_profit");
+  if (filter === "sl") return Boolean(o.phase_sl || o.phase === "止损" || o.outcome === "stop_loss");
+  return true;
 }
 
 function StepDots(props: {
@@ -82,28 +103,61 @@ export const CardLifecyclePanel = memo(function CardLifecyclePanel(props: {
   refreshing?: boolean;
 }) {
   const { open, orders, priceTs, onClose, onSelectSymbol, onRefreshPrices, refreshing } = props;
-  const [filter, setFilter] = useState<PhaseFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [timeRange, setTimeRange] = useState<TimeRangeKey>("1w");
+  /** 空集合 = 不过滤人员；非空 = 仅所选作者 */
+  const [selectedAuthors, setSelectedAuthors] = useState<Set<string>>(() => new Set());
+
+  const authorOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of orders) {
+      const a = resolveSandboxCardAuthor(o);
+      if (a) set.add(a);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  }, [orders]);
+
+  const rangeMs = TIME_RANGES.find((r) => r.id === timeRange)?.ms ?? TIME_RANGES[2].ms;
 
   const rows = useMemo(() => {
-    let list = [...orders];
-    if (filter === "active") {
-      list = list.filter((o) =>
-        ["watching", "near", "ordered", "filled"].includes(String(o.status)),
-      );
-    } else if (filter === "entered") {
-      list = list.filter((o) => o.phase_entered || o.status === "filled" || o.status === "closed");
-    } else if (filter === "closed") {
-      list = list.filter((o) => o.status === "closed");
-    } else if (filter === "sl") {
-      list = list.filter((o) => o.phase_sl || o.phase === "止损");
-    } else if (filter === "tp") {
-      list = list.filter((o) => o.phase_tp || o.phase === "止盈");
-    }
-    list.sort((a, b) => Number(b.updated_at || b.created_at || 0) - Number(a.updated_at || a.created_at || 0));
+    const nowSec = Math.floor(Date.now() / 1000);
+    const minSec = nowSec - Math.floor(rangeMs / 1000);
+
+    let list = orders.filter((o) => {
+      const ts = cardEventSec(o);
+      if (ts > 0 && ts < minSec) return false;
+      if (!matchesStatus(o, statusFilter)) return false;
+      if (selectedAuthors.size > 0) {
+        const author = resolveSandboxCardAuthor(o);
+        if (!author || !selectedAuthors.has(author)) return false;
+      }
+      return true;
+    });
+
+    list.sort((a, b) => cardEventSec(a) - cardEventSec(b));
     return list;
-  }, [orders, filter]);
+  }, [orders, statusFilter, timeRange, rangeMs, selectedAuthors]);
+
+  const toggleAuthor = (name: string) => {
+    setSelectedAuthors((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const selectAllAuthors = () => setSelectedAuthors(new Set(authorOptions));
+  const clearAuthors = () => setSelectedAuthors(new Set());
 
   if (!open) return null;
+
+  const authorFilterLabel =
+    selectedAuthors.size === 0
+      ? "全部人员"
+      : selectedAuthors.size === authorOptions.length
+        ? "全部人员"
+        : `已选 ${selectedAuthors.size} 人`;
 
   return (
     <div className="card-life-overlay" role="dialog" aria-modal="true" aria-label="卡片生命周期">
@@ -112,7 +166,7 @@ export const CardLifecyclePanel = memo(function CardLifecyclePanel(props: {
           <div>
             <h3>卡片生命周期</h3>
             <p className="card-life-sub">
-              建立 → 监听 → 入场 → 出场 / 止损 / 止盈
+              建立 → 监听 → 入场 → 出场 / 止损 / 止盈 · 按发单时间从早到晚
               {priceTs ? ` · 市价更新 ${fmtTs(priceTs)}` : ""}
             </p>
           </div>
@@ -134,25 +188,83 @@ export const CardLifecyclePanel = memo(function CardLifecyclePanel(props: {
         </header>
 
         <div className="card-life-filters">
-          {PHASE_FILTERS.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              className={filter === f.id ? "on" : ""}
-              onClick={() => setFilter(f.id)}
+          <label className="card-life-filter-field">
+            <span className="card-life-filter-label">时间范围</span>
+            <select
+              className="card-life-select"
+              value={timeRange}
+              onChange={(e) => setTimeRange(e.target.value as TimeRangeKey)}
             >
-              {f.label}
-            </button>
-          ))}
+              {TIME_RANGES.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="card-life-filter-field">
+            <span className="card-life-filter-label">状态</span>
+            <select
+              className="card-life-select"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            >
+              {STATUS_OPTIONS.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <span className="card-life-count">{rows.length} 张</span>
         </div>
+
+        {authorOptions.length ? (
+          <div className="card-life-author-bar">
+            <div className="card-life-author-head">
+              <span className="card-life-filter-label">人员（多选）</span>
+              <span className="card-life-author-meta">{authorFilterLabel}</span>
+              <button type="button" className="card-life-link-btn" onClick={selectAllAuthors}>
+                全选
+              </button>
+              <button type="button" className="card-life-link-btn" onClick={clearAuthors}>
+                清空
+              </button>
+            </div>
+            <div className="card-life-author-chips">
+              {authorOptions.map((name) => {
+                const on = selectedAuthors.size > 0 && selectedAuthors.has(name);
+                return (
+                  <label key={name} className={`card-life-author-chip${on ? " on" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => {
+                        if (selectedAuthors.size === 0) {
+                          setSelectedAuthors(new Set([name]));
+                          return;
+                        }
+                        toggleAuthor(name);
+                      }}
+                    />
+                    {name}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
 
         <div className="card-life-table-wrap">
           <table className="sandbox-table card-life-table">
             <thead>
               <tr>
+                <th>时间</th>
                 <th>阶段</th>
                 <th>链路</th>
+                <th>人员</th>
                 <th>卡片</th>
                 <th>币种</th>
                 <th>方向</th>
@@ -161,18 +273,27 @@ export const CardLifecyclePanel = memo(function CardLifecyclePanel(props: {
                 <th>距下一TP</th>
                 <th>距SL</th>
                 <th>入场 / 出场</th>
-                <th>时间</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((o) => {
                 const author = resolveSandboxCardAuthor(o);
+                const eventSec = cardEventSec(o);
                 return (
                   <tr
                     key={o.card_id}
                     className="clickable"
                     onClick={() => onSelectSymbol(o.symbol)}
                   >
+                    <td className="sandbox-tf">
+                      {eventSec ? fmtTs(eventSec) : "—"}
+                      {o.closed_at ? (
+                        <>
+                          <br />
+                          <span className="sandbox-pnl-sub">平 {fmtTs(o.closed_at)}</span>
+                        </>
+                      ) : null}
+                    </td>
                     <td>
                       <span className={phaseClass(o.phase)}>{o.phase || o.status}</span>
                     </td>
@@ -186,10 +307,8 @@ export const CardLifecyclePanel = memo(function CardLifecyclePanel(props: {
                         tp={o.phase_tp}
                       />
                     </td>
-                    <td>
-                      {o.card_id}
-                      {author ? <span className="sandbox-pnl-sub">{author}</span> : null}
-                    </td>
+                    <td>{author || "—"}</td>
+                    <td>{o.card_id}</td>
                     <td>${displaySymbol(o.symbol)}</td>
                     <td>{o.side}</td>
                     <td>{o.last_price != null ? fmtMetaPrice(o.last_price) : "—"}</td>
@@ -220,21 +339,12 @@ export const CardLifecyclePanel = memo(function CardLifecyclePanel(props: {
                         </>
                       ) : null}
                     </td>
-                    <td>
-                      {fmtTs(o.signal_at || o.created_at || 0)}
-                      {o.closed_at ? (
-                        <>
-                          <br />
-                          <span className="sandbox-pnl-sub">平 {fmtTs(o.closed_at)}</span>
-                        </>
-                      ) : null}
-                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          {!rows.length ? <p className="muted card-life-empty">暂无卡片记录</p> : null}
+          {!rows.length ? <p className="muted card-life-empty">暂无符合筛选的卡片</p> : null}
         </div>
       </div>
     </div>

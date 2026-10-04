@@ -34,6 +34,11 @@ EQUITY_CORE_BASES: tuple[str, ...] = (
 EQUITY_SECONDARY_BASES: tuple[str, ...] = (
     "SPY",
     "META",
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "GOOGL",
+    "GOOG",
     "AVGO",
     "TSM",
     "PLTR",
@@ -44,10 +49,11 @@ EQUITY_SATELLITE_BASES: tuple[str, ...] = (
     "SMCI",
     "IWM",
     "TLT",
+    "SOXL",
 )
 # 仅观察，默认不进可交易扫描池
 EQUITY_OBSERVE_BASES: frozenset[str] = frozenset(
-    {"SPCX", "SOXL", "SOXS", "GME", "RIOT"}
+    {"SPCX", "SOXS", "GME", "RIOT"}
 )
 
 # 交易所符号别名（小写匹配）；解析顺序：perp > tradfi/xstock
@@ -62,6 +68,11 @@ EQUITY_SYMBOL_ALIASES: dict[str, tuple[str, ...]] = {
     "HOOD": ("HOODUSDT", "HOODXUSDT"),
     "CRCL": ("CRCLUSDT", "CRCLXUSDT"),
     "META": ("METAUSDT", "METAXUSDT"),
+    "AAPL": ("AAPLUSDT", "AAPLXUSDT"),
+    "MSFT": ("MSFTUSDT", "MSFTXUSDT"),
+    "AMZN": ("AMZNUSDT", "AMZNXUSDT"),
+    "GOOGL": ("GOOGLUSDT", "GOOGUSDT", "GOOGLXUSDT", "GOOGXUSDT"),
+    "GOOG": ("GOOGUSDT", "GOOGLUSDT", "GOOGXUSDT", "GOOGLXUSDT"),
     "AVGO": ("AVGOUSDT", "AVGOXUSDT"),
     "TSM": ("TSMUSDT", "TSMXUSDT"),
     "PLTR": ("PLTRUSDT", "PLTRXUSDT"),
@@ -88,6 +99,12 @@ EQUITY_UI_TAGS: dict[str, str] = {
     "XAU": "macro",
     "SPY": "macro",
     "META": "beta",
+    "AAPL": "mag7",
+    "MSFT": "mag7",
+    "AMZN": "mag7",
+    "GOOGL": "mag7",
+    "GOOG": "mag7",
+    "SOXL": "leveraged",
     "AVGO": "beta",
     "TSM": "beta",
     "PLTR": "beta",

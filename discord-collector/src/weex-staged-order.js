@@ -99,7 +99,10 @@ export async function executeWeexStagedMarketOpen(client, input) {
   const holdSide = side === "buy" ? "long" : "short";
   const fillPrice = refPrice;
   const initialSl = calcInitialStopLoss(fillPrice, direction, initialSlPct);
-  if (initialSl && !isValidStopLoss(fillPrice, initialSl, holdSide)) {
+  if (!initialSl) {
+    return { ok: false, reason: "missing_initial_sl", error: "无法计算初始止损价" };
+  }
+  if (!isValidStopLoss(fillPrice, initialSl, holdSide)) {
     return { ok: false, reason: "invalid_initial_sl", error: `止损 ${initialSl} 相对市价 ${fillPrice} 无效` };
   }
 
@@ -159,6 +162,15 @@ export async function executeWeexStagedMarketOpen(client, input) {
     }
   } catch (e) {
     return { ok: false, reason: "open_failed", error: String(/** @type {Error} */ (e).message ?? e) };
+  }
+
+  if (!record.presetStopLossPrice && !input.dryRun) {
+    return {
+      ok: false,
+      reason: "stop_loss_not_attached",
+      error: "市价开仓未附带止损价",
+      record,
+    };
   }
 
   return { ok: true, record };

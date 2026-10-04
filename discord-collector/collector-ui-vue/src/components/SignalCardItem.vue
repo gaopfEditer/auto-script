@@ -4,7 +4,7 @@ import { RouterLink } from "vue-router";
 import {
   cardExecution,
   outcomeLabel,
-  hasEvaluation,
+  cardHasCompletedEvaluation,
   cardProfitBadge,
   resolveCardEvalOutcome,
   formatCardId,
@@ -109,8 +109,7 @@ function isActive(card) {
 
 /** @param {Record<string, unknown>} card */
 function cardHasEvaluation(card) {
-  const ex = cardExecution(/** @type {import("../lib/discordSignalApi.js").SignalCard} */ (card));
-  return hasEvaluation(ex, String(card.note ?? ""));
+  return cardHasCompletedEvaluation(card);
 }
 
 /** @param {Record<string, unknown>} card */

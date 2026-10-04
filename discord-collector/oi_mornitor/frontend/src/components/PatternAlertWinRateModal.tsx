@@ -13,6 +13,8 @@ import {
   reverifyAlertStatsByKeys,
   formatAlertTotalPnlPct,
   formatAlertTypeOptionLabel,
+  formatMtfResonanceBadge,
+  hasMtfResonance,
   formatIntervalOptionLabel,
   formatDaytypeOptionLabel,
   formatSessionOptionLabel,
@@ -175,6 +177,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   const [assetClassFilter, setAssetClassFilter] = useState<AlertStatsAssetFilter>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [intervalFilter, setIntervalFilter] = useState<string>("all");
+  const [mtfOnly, setMtfOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<AlertStatsRecord[]>([]);
   const [summary, setSummary] = useState<AlertWinRateSummary>(
@@ -214,6 +217,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
         typeFilter,
         intervalFilter,
         assetClassFilter,
+        mtfResonanceOnly: mtfOnly,
       });
       setRows(res.items);
       setSummary(res.summary);
@@ -258,7 +262,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     setPage(1);
     void reloadPage({ page: 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, sessionFilter, daytypeFilter, assetClassFilter, typeFilter, intervalFilter]);
+  }, [filter, sessionFilter, daytypeFilter, assetClassFilter, typeFilter, intervalFilter, mtfOnly]);
 
   useEffect(() => {
     if (!open) return;
@@ -485,7 +489,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
           <section className="pattern-wr-entry-rules" aria-label="入场条件明细">
             <p className="pattern-wr-entry-rules-lead">
               列表「类型」对应的入场达成条件（与结构/蜡烛扫描代码一致；完整版见{" "}
-              <code>SIGNAL_LOGIC.md §5.5</code>）。
+              <code>docs/signal-logic.md §5.5</code>）。
             </p>
             <ul className="pattern-wr-entry-rules-list">
               {PATTERN_ENTRY_RULES.map((rule) => (
@@ -602,6 +606,17 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
               ))}
             </select>
           </label>
+          <label className="pattern-wr-mtf-filter" title="15m/1h/4h 同币同向、同形态族，4h 内 ≥2 周期">
+            <input
+              type="checkbox"
+              checked={mtfOnly}
+              onChange={(e) => {
+                setMtfOnly(e.target.checked);
+                setPage(1);
+              }}
+            />
+            <span>仅多周期共振</span>
+          </label>
         </div>
 
         <div className="pattern-wr-table-wrap">
@@ -629,6 +644,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                   <th>方向</th>
                   <th>类型</th>
                   <th>周期</th>
+                  <th>共振</th>
                   <th>入场</th>
                   <th>结果</th>
                   <th>回溯盈亏</th>
@@ -682,6 +698,18 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                       </td>
                       <td className="muted" onClick={openChart}>
                         {r.interval || "—"}
+                      </td>
+                      <td onClick={openChart}>
+                        {hasMtfResonance(r) ? (
+                          <span
+                            className={`pattern-wr-mtf-badge${r.mtfResonance!.tiers >= 3 ? " triple" : ""}`}
+                            title={`多周期共振：${formatMtfResonanceBadge(r.mtfResonance)}`}
+                          >
+                            {formatMtfResonanceBadge(r.mtfResonance)}
+                          </span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
                       </td>
                       <td className="mono" onClick={openChart}>
                         {fmtPrice(r.entry)}

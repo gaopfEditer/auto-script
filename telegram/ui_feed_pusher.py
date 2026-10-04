@@ -162,6 +162,8 @@ def sender_filter_patterns(profile: dict[str, Any]) -> list[str]:
 
 
 def sender_allowed_for_profile(profile: dict[str, Any], sender: str) -> bool:
+    if profile.get("is_all") is True:
+        return True
     patterns = sender_filter_patterns(profile)
     return sender_matches_main(sender, patterns)
 

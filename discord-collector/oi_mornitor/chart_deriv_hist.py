@@ -40,7 +40,11 @@ async def fetch_spot_net_taker_hist(
     现货 K 线 → 净主动买入（base）：2 * takerBuyBase - volume。
     返回 [{time: 秒, value: net}, ...]
     """
-    sym = symbol.strip().upper()
+    from oi_mornitor.symbol_aliases import normalize_usdt_symbol
+
+    sym = normalize_usdt_symbol(symbol)
+    if not sym:
+        return []
     period = _norm_period(interval)
     cap = min(max(int(limit), 1), 1000)
     base = (spot_base_url or SPOT_BASE_URL).rstrip("/")
@@ -86,7 +90,11 @@ async def fetch_futures_net_taker_hist(
     takerlongshortRatio → buyVol - sellVol。
     返回 [{time: 秒, value: net}, ...]
     """
-    sym = symbol.strip().upper()
+    from oi_mornitor.symbol_aliases import normalize_usdt_symbol
+
+    sym = normalize_usdt_symbol(symbol)
+    if not sym:
+        return []
     period = _norm_period(interval)
     cap = min(max(int(limit), 1), 500)
     url = (

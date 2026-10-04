@@ -1351,24 +1351,27 @@ class RadarService:
         self._running = False
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
-        # 代理失效时关闭 trust_env，改为直连，否则所有请求都会卡在 127.0.0.1:7890
-        want_trust = bool(proxy_url()) and not self.radar.proxy_disabled()
+        from oi_mornitor.http_session import make_http_session
+
+        # 显式 proxy=，避免 trust_env + NO_PROXY 导致币安 data 接口直连 451/超时
+        px = proxy_url() if not self.radar.proxy_disabled() else None
+        want_proxy = bool(px)
         # 禁止在并发请求中途 close 旧 session（会导致 AssertionError / Session is closed，主循环假死）
         if self._session is not None and not self._session.closed:
-            if self._session_trust_env != want_trust:
+            if self._session_trust_env != want_proxy:
                 logger.warning(
-                    "代理状态变化（trust_env %s→%s），本轮仍复用旧 session，避免并发关闭",
+                    "代理状态变化（显式代理 %s→%s），本轮仍复用旧 session，避免并发关闭",
                     self._session_trust_env,
-                    want_trust,
+                    want_proxy,
                 )
             return self._session
-        self._session = aiohttp.ClientSession(
-            headers={"User-Agent": "oi-mornitor/1.0"},
-            trust_env=want_trust,
-            connector=aiohttp.TCPConnector(limit=20, ttl_dns_cache=300),
+        self._session = make_http_session(trust_env=False, default_proxy=px)
+        self._session_trust_env = want_proxy
+        logger.info(
+            "HTTP session 显式代理=%s（%s）",
+            want_proxy,
+            px or "直连",
         )
-        self._session_trust_env = want_trust
-        logger.info("HTTP session trust_env=%s（代理%s）", want_trust, "开" if want_trust else "关/直连")
         return self._session
 
     async def scan_once(self) -> list[dict[str, Any]]:

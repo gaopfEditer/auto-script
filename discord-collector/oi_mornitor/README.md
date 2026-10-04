@@ -5,7 +5,8 @@
 免签（无需 API Key）的币安 U 本位永续 **持仓量(OI) 异动雷达**，基于 `asyncio + aiohttp` 异步架构。  
 前端：**React 18 + Vite**（组件 memo 优化，SSE 实时推送）。
 
-> **信号 / 拐点 / 扳机线 / Vegas / 锤子完整说明** → [`SIGNAL_LOGIC.md`](./SIGNAL_LOGIC.md)
+> **信号 / 拐点 / 扳机线 / Vegas / 锤子完整说明** → [`docs/signal-logic.md`](./docs/signal-logic.md)
+> **文档索引** → [`docs/README.md`](./docs/README.md)（币种捕获 + 信号逻辑）
 
 ## 功能
 

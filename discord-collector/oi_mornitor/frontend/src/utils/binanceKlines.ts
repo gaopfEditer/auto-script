@@ -231,14 +231,49 @@ function oiPointsToMap(
   return out;
 }
 
-/** 币安 U 本位历史持仓量；time 为秒。直连失败则走本机 /api/patterns/oi-hist。 */
+const DERIV_FETCH_TIMEOUT_MS = 12_000;
+
+async function fetchWithTimeout(url: string, timeoutMs = DERIV_FETCH_TIMEOUT_MS): Promise<Response> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 币安 U 本位历史持仓量；time 为秒。优先本机 /api/patterns/oi-hist（代理），再短时直连。 */
 export async function fetchBinanceOpenInterestHist(
   symbol: string,
   interval: ChartTimeframe,
   opts?: { limit?: number },
 ): Promise<Map<number, number>> {
-  const sym = symbol.trim().toUpperCase();
+  const sym = toUsdtSymbol(symbol) || symbol.trim().toUpperCase();
   const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 500);
+  const proxyParams = new URLSearchParams({
+    symbol: sym,
+    interval,
+    limit: String(limit),
+  });
+  try {
+    const res = await fetchWithTimeout(
+      `/api/patterns/oi-hist?${proxyParams.toString()}`,
+      DERIV_FETCH_TIMEOUT_MS,
+    );
+    if (res.ok) {
+      const body = (await res.json()) as {
+        ok?: boolean;
+        points?: Array<{ time: number; value: number }>;
+      };
+      if (body.ok && Array.isArray(body.points) && body.points.length) {
+        return oiPointsToMap(body.points);
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+
   const params = new URLSearchParams({
     symbol: sym,
     period: interval,
@@ -246,7 +281,7 @@ export async function fetchBinanceOpenInterestHist(
   });
   const url = `${binanceFapiBase()}/futures/data/openInterestHist?${params.toString()}`;
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, 8_000);
     if (res.ok) {
       const data = (await res.json()) as Array<{
         sumOpenInterest?: string | number;
@@ -255,24 +290,7 @@ export async function fetchBinanceOpenInterestHist(
       if (Array.isArray(data) && data.length) return oiPointsToMap(data);
     }
   } catch {
-    /* fall through */
+    /* ignore */
   }
-
-  try {
-    const proxyParams = new URLSearchParams({
-      symbol: sym,
-      interval,
-      limit: String(limit),
-    });
-    const res = await fetch(`/api/patterns/oi-hist?${proxyParams.toString()}`);
-    if (!res.ok) return new Map();
-    const body = (await res.json()) as {
-      ok?: boolean;
-      points?: Array<{ time: number; value: number }>;
-    };
-    if (!body.ok || !Array.isArray(body.points)) return new Map();
-    return oiPointsToMap(body.points);
-  } catch {
-    return new Map();
-  }
+  return new Map();
 }

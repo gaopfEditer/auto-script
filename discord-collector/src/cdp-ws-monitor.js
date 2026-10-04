@@ -1180,7 +1180,8 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *   wsFrameTrace?: boolean,
  *   diagnosticSink?: (evt: Record<string, unknown>) => void,
  *   onConnectionLost?: (info: { reason: string, connectUrl: string, message: string }) => void | Promise<void>,
- *   onReconnected?: (info: { connectUrl: string, attempt: number }) => void | Promise<void>,
+ *   onConnected?: (info: { connectUrl: string, tabCount: number }) => void | Promise<void>,
+ *   onReconnected?: (info: { connectUrl: string, attempt: number, tabCount: number }) => void | Promise<void>,
  *   onData: (buf: Buffer, meta: { requestId: string, opcode: number, isBinaryHint: boolean, pageUrl?: string }) => void
  * }} opts — diagnosticSink：实时诊断（collect UI），与 networkTrace 独立；仅 sink 时也会挂 CDP 监听
  * @param {Logger} log
@@ -1496,9 +1497,12 @@ export async function startCdpWebSocketMonitor(opts, log) {
       scheduleAttachReconnect();
     });
 
+    const tabCount = mounted.length;
     if (isReconnect) {
       reconnectAttempt = 0;
-      void opts.onReconnected?.({ connectUrl, attempt });
+      void opts.onReconnected?.({ connectUrl, attempt, tabCount });
+    } else {
+      void opts.onConnected?.({ connectUrl, tabCount });
     }
   }
 

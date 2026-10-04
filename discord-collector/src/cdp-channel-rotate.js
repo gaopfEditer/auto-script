@@ -4,6 +4,7 @@
  */
 import { parseDiscordChannelUrl } from "./cdp-ws-monitor.js";
 import { getSignalChannelIds } from "./discord-signal-config.js";
+import { DABIAOKE_SIGNAL_CHANNEL_ID } from "./discord-telegram-push-config.js";
 
 /**
  * @param {{
@@ -46,7 +47,10 @@ export function startCdpChannelRotate(opts) {
     const ids = [...getSignalChannelIds()];
     const start = parseDiscordChannelUrl(String(opts.startUrl || ""));
     if (start?.channelId) ids.push(start.channelId);
-    const uniq = [...new Set(ids.map((x) => String(x).trim()).filter(Boolean))];
+    const trimmed = ids.map((x) => String(x).trim()).filter(Boolean);
+    const priority = [DABIAOKE_SIGNAL_CHANNEL_ID].filter((id) => trimmed.includes(id));
+    const rest = trimmed.filter((id) => !priority.includes(id));
+    const uniq = [...new Set([...priority, ...rest])];
     return uniq.map((channelId) => ({ guildId, channelId }));
   }
 
@@ -67,9 +71,16 @@ export function startCdpChannelRotate(opts) {
         await navigate(t.guildId, t.channelId)
       );
       if (out && out.ok === false) {
-        log.warn?.(
-          `[channel-rotate] ${idx + 1}/${targets.length} ${t.channelId} 失败: ${out.error || "unknown"}`
-        );
+        const err = out.error || "unknown";
+        if (err.includes("未连接")) {
+          log.warn?.(
+            `[channel-rotate] ${idx + 1}/${targets.length} ${t.channelId} 失败: ${err}（调试 Chrome/CDP 断线或重连中；见 collect:ui 日志 [CDP] 与 GET /api/discord/cdp-status）`
+          );
+        } else {
+          log.warn?.(
+            `[channel-rotate] ${idx + 1}/${targets.length} ${t.channelId} 失败: ${err}`
+          );
+        }
       } else if (out?.skipped) {
         log.info?.(
           `[channel-rotate] ${idx + 1}/${targets.length} 跳过 ${t.channelId}（${out.reason || "skipped"}）`

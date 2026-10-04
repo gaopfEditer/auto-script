@@ -39,7 +39,11 @@ async function collect() {
   const store = await openStore(config.mysql, createLogger("store"));
   const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
   const webhookForward = createDiscordWebhookForward(createLogger("webhook-forward"));
-  const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"));
+  const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"), {
+    cdpNotifyDisconnect: config.cdpTelegramNotifyDisconnect,
+    cdpNotifyConnect: config.cdpTelegramNotifyConnect,
+    cdpDisconnectNotifyAfterMs: config.cdpTelegramDisconnectAfterMs,
+  });
   const discordIngest = createDiscordMessageIngest(store, createLogger("discord-ingest"), undefined, {
     telegramPush,
     webhookForward,
@@ -60,7 +64,8 @@ async function collect() {
         });
       },
       onConnectionLost: (info) => systemTelegram.notifyCdpDisconnected(info),
-      onReconnected: (info) => systemTelegram.notifyCdpReconnected?.(info),
+      onConnected: (info) => systemTelegram.notifyCdpConnected(info),
+      onReconnected: (info) => systemTelegram.notifyCdpReconnected(info),
       onData(buf, meta) {
         frameCount += 1;
         const { payload, proc } = buildFrameChannelPayload(

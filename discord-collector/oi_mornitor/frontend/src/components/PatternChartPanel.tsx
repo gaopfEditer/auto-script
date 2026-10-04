@@ -57,6 +57,7 @@ import {
 import {
   DERIV_OI_LINE_COLOR,
   fetchChartDerivSubplots,
+  type ChartDerivSubplots,
 } from "../utils/chartDerivSubplots";
 import {
   buildOiMaLine,
@@ -568,6 +569,14 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const [layers, setLayers] = useState<ChartLayers>(DEFAULT_LAYERS);
   const [oiSubLoading, setOiSubLoading] = useState(false);
   const [oiSubErr, setOiSubErr] = useState("");
+  /** 副图 LWC 实例就绪代数（挂载后 +1，驱动数据 effect 重跑） */
+  const [oiChartsGen, setOiChartsGen] = useState(0);
+  /** 主图 LWC 就绪代数（副图挂载依赖 chartApi） */
+  const [mainChartGen, setMainChartGen] = useState(0);
+  const pendingDerivPayloadRef = useRef<{
+    payload: ChartDerivSubplots;
+    times: number[];
+  } | null>(null);
   const [alertOverlayCount, setAlertOverlayCount] = useState(0);
   layersRef.current = layers;
 
@@ -1471,6 +1480,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
       chartApi.current = chart;
       seriesRef.current = series;
+      setMainChartGen((g) => g + 1);
 
       const hideCrosshairPrice = () => {
         const label = crosshairPriceRef.current;
@@ -1673,6 +1683,62 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     const samples = candles.flatMap((c) => [c.open, c.high, c.low, c.close]);
     applyPriceAxisFormat(seed, samples);
   }, [lastPrice, data?.candles, candleCount, applyPriceAxisFormat]);
+
+  const applyDerivSubplotsToCharts = useCallback(
+    (payload: ChartDerivSubplots, times: number[]) => {
+      oiSeriesRef.current?.setData(payload.oi);
+      oiMaSeriesRef.current?.setData(buildOiMaLine(payload.oi));
+      spotNetSeriesRef.current?.setData(payload.spotNet);
+      spotNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.spotNet));
+      futNetSeriesRef.current?.setData(payload.futuresNet);
+      futNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.futuresNet));
+      const anchorLine = buildCrosshairAnchorLine(times);
+      oiCrossAnchorRef.current?.setData(anchorLine);
+      spotCrossAnchorRef.current?.setData(anchorLine);
+      futCrossAnchorRef.current?.setData(anchorLine);
+
+      const fillMap = (
+        rows: Array<{ time?: unknown; value?: unknown }>,
+        target: { current: Map<number, number> },
+      ) => {
+        const m = new Map<number, number>();
+        for (const row of rows) {
+          if (row == null || !("value" in row) || row.value == null) continue;
+          const t = Number(row.time);
+          const v = Number(row.value);
+          if (Number.isFinite(t) && Number.isFinite(v)) m.set(t, v);
+        }
+        target.current = m;
+      };
+      fillMap(payload.oi, oiValueByTimeRef);
+      fillMap(payload.spotNet, spotNetByTimeRef);
+      fillMap(payload.futuresNet, futNetByTimeRef);
+
+      const range = chartApi.current?.timeScale().getVisibleLogicalRange();
+      if (range && chartApi.current) {
+        derivSyncingRef.current = true;
+        try {
+          const tsOpts = chartApi.current.timeScale().options();
+          const spacing = {
+            barSpacing: tsOpts.barSpacing,
+            rightOffset: tsOpts.rightOffset,
+          };
+          for (const api of [
+            oiChartApi.current,
+            spotNetChartApi.current,
+            futNetChartApi.current,
+          ]) {
+            if (!api) continue;
+            api.timeScale().applyOptions(spacing);
+            api.timeScale().setVisibleLogicalRange(range);
+          }
+        } finally {
+          derivSyncingRef.current = false;
+        }
+      }
+    },
+    [],
+  );
 
   /** 持仓量副图：挂载 / 销毁 LWC 实例，并与主图时间轴同步 */
   useEffect(() => {
@@ -1975,6 +2041,14 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       });
     }
 
+    setOiChartsGen((g) => g + 1);
+
+    const pending = pendingDerivPayloadRef.current;
+    if (pending) {
+      applyDerivSubplotsToCharts(pending.payload, pending.times);
+      pendingDerivPayloadRef.current = null;
+    }
+
     return () => {
       main.timeScale().unsubscribeVisibleLogicalRangeChange(onMainRange);
       main.unsubscribeCrosshairMove(onMainCrosshair);
@@ -2004,7 +2078,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       futCrossAnchorRef.current = null;
       if (crosshairVLineRef.current) crosshairVLineRef.current.style.display = "none";
     };
-  }, [layers.oi, symbol, timeframe]);
+  }, [layers.oi, symbol, timeframe, candleCount > 0, mainChartGen, applyDerivSubplotsToCharts]);
 
   /** 持仓量副图数据：与当前已加载 K 线时间戳对齐 */
   useEffect(() => {
@@ -2057,62 +2131,26 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         const payload = await fetchChartDerivSubplots(symbol, timeframe, times);
         if (cancelled) return;
         // 副图实例可能比本 effect 晚一帧挂好
-        for (let i = 0; i < 12 && !oiSeriesRef.current; i++) {
+        for (let i = 0; i < 24 && !oiSeriesRef.current; i++) {
           await new Promise((r) => requestAnimationFrame(() => r(null)));
           if (cancelled) return;
         }
-        oiSeriesRef.current?.setData(payload.oi);
-        oiMaSeriesRef.current?.setData(buildOiMaLine(payload.oi));
-        spotNetSeriesRef.current?.setData(payload.spotNet);
-        spotNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.spotNet));
-        futNetSeriesRef.current?.setData(payload.futuresNet);
-        futNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.futuresNet));
-        const anchorLine = buildCrosshairAnchorLine(times);
-        oiCrossAnchorRef.current?.setData(anchorLine);
-        spotCrossAnchorRef.current?.setData(anchorLine);
-        futCrossAnchorRef.current?.setData(anchorLine);
-
-        const fillMap = (
-          rows: Array<{ time?: unknown; value?: unknown }>,
-          target: { current: Map<number, number> },
-        ) => {
-          const m = new Map<number, number>();
-          for (const row of rows) {
-            if (row == null || !("value" in row) || row.value == null) continue;
-            const t = Number(row.time);
-            const v = Number(row.value);
-            if (Number.isFinite(t) && Number.isFinite(v)) m.set(t, v);
-          }
-          target.current = m;
-        };
-        fillMap(payload.oi, oiValueByTimeRef);
-        fillMap(payload.spotNet, spotNetByTimeRef);
-        fillMap(payload.futuresNet, futNetByTimeRef);
-
-        const range = chartApi.current?.timeScale().getVisibleLogicalRange();
-        if (range && chartApi.current) {
-          derivSyncingRef.current = true;
-          try {
-            const tsOpts = chartApi.current.timeScale().options();
-            const spacing = {
-              barSpacing: tsOpts.barSpacing,
-              rightOffset: tsOpts.rightOffset,
-            };
-            for (const api of [
-              oiChartApi.current,
-              spotNetChartApi.current,
-              futNetChartApi.current,
-            ]) {
-              if (!api) continue;
-              api.timeScale().applyOptions(spacing);
-              api.timeScale().setVisibleLogicalRange(range);
-            }
-          } finally {
-            derivSyncingRef.current = false;
-          }
+        if (!oiSeriesRef.current) {
+          pendingDerivPayloadRef.current = { payload, times };
+        } else {
+          applyDerivSubplotsToCharts(payload, times);
         }
-        if (!payload.oi.length && !payload.spotNet.length && !payload.futuresNet.length) {
-          setOiSubErr("副图数据为空");
+        const { oi: oiN, spotNet: spotN, futuresNet: futN } = payload.stats;
+        if (oiN + spotN + futN === 0) {
+          setOiSubErr(
+            "副图数据为空（币安 openInterest / 净买入未返回）。请确认 discord-collector/.env 已设 HTTPS_PROXY 且 OI 服务已重启；现货接口在国内常 451，合约 OI 需走代理。",
+          );
+        } else if (oiN === 0 || spotN === 0 || futN === 0) {
+          const parts: string[] = [];
+          if (oiN === 0) parts.push("OI");
+          if (spotN === 0) parts.push("现货净买入");
+          if (futN === 0) parts.push("合约净买入");
+          setOiSubErr(`${parts.join("、")} 暂无数据（其余副图正常）`);
         }
       } catch (e) {
         if (!cancelled) {
@@ -2126,7 +2164,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     return () => {
       cancelled = true;
     };
-  }, [layers.oi, symbol, timeframe, candleCount, lastCandleTime]);
+  }, [layers.oi, symbol, timeframe, candleCount, oiChartsGen, applyDerivSubplotsToCharts]);
 
   const activeKinds = new Set(data?.markers?.map((m) => m.kind).filter(Boolean) ?? []);
   data?.price_lines?.forEach((l) => activeKinds.add(l.kind));

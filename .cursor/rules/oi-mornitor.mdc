@@ -7,7 +7,7 @@ alwaysApply: false
 # OI Monitor（`oi_mornitor/`）
 
 独立 **Python :8765** 服务。Discord UI 只 iframe；**禁止**把 OI 逻辑搬进 `collector-ui-server.js`。  
-详文：`oi_mornitor/SIGNAL_LOGIC.md`、`oi_mornitor/README.md`。配置集中在 `config.py`。
+详文：`oi_mornitor/docs/README.md`（[`signal-logic.md`](discord-collector/oi_mornitor/docs/signal-logic.md) · [`coin-capture.md`](discord-collector/oi_mornitor/docs/coin-capture.md)）、`oi_mornitor/README.md`。配置集中在 `config.py`。
 
 ## 与 Discord 边界
 

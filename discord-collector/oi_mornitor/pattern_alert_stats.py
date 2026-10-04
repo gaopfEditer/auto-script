@@ -18,6 +18,7 @@ from oi_mornitor.signal_policy import (
     is_disabled_pattern_interval,
     is_retired_pattern_stats_record,
 )
+from oi_mornitor.pattern_mtf_resonance import attach_mtf_resonance
 from oi_mornitor.symbol_aliases import human_base_asset, normalize_usdt_symbol
 
 logger = logging.getLogger(__name__)
@@ -556,6 +557,7 @@ def list_alert_stats_page(
     interval: str | None = None,
     symbol: str | None = None,
     asset_class: str | None = None,
+    mtf_resonance_only: bool = False,
 ) -> dict[str, Any]:
     """分页列表；type/interval/session/daytype Options 互相联动。"""
     page = max(1, int(page or 1))
@@ -627,6 +629,13 @@ def list_alert_stats_page(
     pages = max(1, (total + size - 1) // size) if total else 1
     if page > pages:
         page = pages
+    attach_mtf_resonance(filtered)
+    if mtf_resonance_only:
+        filtered = [r for r in filtered if isinstance(r.get("mtfResonance"), dict)]
+        total = len(filtered)
+        pages = max(1, (total + size - 1) // size) if total else 1
+        if page > pages:
+            page = pages
     start = (page - 1) * size
     chunk = filtered[start : start + size]
     return {

@@ -100,18 +100,22 @@ export function prepareTelegramTradeParsed(parsed, execution) {
     const tpNums = tps
       .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
       .filter((n) => Number.isFinite(n) && n > 0);
-    const slNum = parseSlNum(slRaw);
-    const needDefault = !tps.length || slNum == null;
-    if (needDefault) {
+    let slNum = parseSlNum(slRaw);
+    const needDefaultTp = !tps.length;
+    const needDefaultSl = slNum == null;
+    if (needDefaultTp || needDefaultSl) {
       const applied = applyDefaultTpSl(entryNum, isShort, tpNums, slNum);
-      if (!tps.length) {
+      if (needDefaultTp) {
         tps = applied.tps.map((p) => String(p));
       }
-      if (slNum == null && applied.sl != null) {
+      if (needDefaultSl && applied.sl != null) {
         slRaw = String(applied.sl);
+        slNum = applied.sl;
       }
       if (!next.exitPlan || typeof next.exitPlan !== "object") {
         next.exitPlan = buildDefaultTelegramExitPlan();
+      } else if (needDefaultSl) {
+        next.exitPlan = { .../** @type {Record<string, unknown>} */ (next.exitPlan), defaultApplied: true };
       }
     }
   }
@@ -155,10 +159,14 @@ export async function prepareAutoTradeForOrder(parsed, execution, symbol) {
 }
 
 /** @param {ReturnType<typeof normalizeExecution>} execution */
+export function telegramTradeRequiresStopLoss(execution) {
+  return parseSlNum(execution.planned?.stopLossPrice) != null;
+}
+
+/** @param {ReturnType<typeof normalizeExecution>} execution */
 export function telegramTradeRequiresTpsl(execution) {
   const tps = execution.planned?.takeProfitPrices ?? [];
-  const sl = String(execution.planned?.stopLossPrice ?? "").trim();
-  return tps.length >= 1 && Boolean(sl);
+  return tps.length >= 1 && telegramTradeRequiresStopLoss(execution);
 }
 
 /**

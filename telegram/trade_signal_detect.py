@@ -67,6 +67,19 @@ _DIR_LONG_LOOSE = re.compile(
 _MARKET_DIR_LONG = re.compile(r"市[价價]\s*多|市[价價]多", re.I)
 _MARKET_DIR_SHORT = re.compile(r"市[价價]\s*空|市[价價]空", re.I)
 _SYM_HASH = re.compile(r"#([A-Za-z]{2,12})(?![A-Za-z0-9])")
+# 买了点 movr / 买了点MOVR
+_SYM_AFTER_BUY = re.compile(
+    r"(?:买了点?|买点|入(?:了)?点|补(?:了)?点|加(?:了)?点)\s*([A-Za-z]{2,12})(?![A-Za-z0-9])",
+    re.I,
+)
+_BUY_LONG_HINT = re.compile(
+    r"买了点?|买点|入(?:了)?点|补(?:了)?点|加(?:了)?点|抄底|上车",
+    re.I,
+)
+_TG_FORWARD_PREFIX = re.compile(
+    r"^\[\d{4}/\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?\]\s*[^:]+:\s*",
+    re.M,
+)
 _MARKET_PRICE = re.compile(
     r"市[价價]\s*[多空]\s+([0-9]+(?:\.[0-9]+)?)",
     re.I,
@@ -155,7 +168,8 @@ _STRUCTURE_LINE = re.compile(
     r"市[价價]\s*[多空]|"
     r"\bENTRY\b|\bTP\s*\d|\bSL\b|"
     r"轻[仓倉](?:入)?[多空]|重[仓倉](?:入)?[多空]|"
-    r"做多|做空|开多|开空|多单|空单"
+    r"做多|做空|开多|开空|多单|空单|"
+    r"买了点?|买点|窄止损|宽止损"
     r")",
     re.I,
 )
@@ -193,6 +207,22 @@ _NOTE = re.compile(
     r"(?:备注|備註|注意|提示)\s*[:：]?\s*([^\n]{1,80})",
 )
 _FARE = re.compile(r"(?:发车|發車|上车信号|开单)", re.I)
+# 单独一行的 ticker（Ashley：MOVE + 下一行「做多上車」）
+_TICKER_ONLY_LINE = re.compile(
+    r"^\s*\$?([A-Za-z]{2,12})(?:/(?:USDT|USD))?\s*$",
+    re.I,
+)
+
+
+def _ticker_only_symbol(line: str) -> str:
+    m = _TICKER_ONLY_LINE.match((line or "").strip())
+    if not m:
+        return ""
+    cand = _norm_sym(m.group(1))
+    if cand and cand not in _SYM_BLOCK and len(cand) >= 2:
+        return cand
+    return ""
+
 
 # 排除误伤的常见英文词
 _SYM_BLOCK = frozenset(
@@ -315,6 +345,11 @@ def _norm_sym(raw: str) -> str:
 
 
 def _pick_symbol(text: str) -> str:
+    bm = _SYM_AFTER_BUY.search(text)
+    if bm:
+        cand = _norm_sym(bm.group(1))
+        if cand and cand not in _SYM_BLOCK and len(cand) >= 2:
+            return cand
     lm = _SYM_LABEL.search(text)
     if lm:
         cand = _norm_sym(lm.group(1))
@@ -343,6 +378,11 @@ def _pick_symbol(text: str) -> str:
 
 
 def _pick_direction(text: str) -> str:
+    if _BUY_LONG_HINT.search(text) and not _DIR_SHORT.search(text) and not re.search(
+        r"卖(?:了|出)|减仓空|做空", text
+    ):
+        if _SL.search(text) or _SL_POS.search(text) or _pick_symbol(text):
+            return "多"
     if re.search(r"轻[仓倉](?:入)?多|重[仓倉](?:入)?多|入多(?![A-Za-z0-9])", text):
         return "多"
     if re.search(r"轻[仓倉](?:入)?空|重[仓倉](?:入)?空|入空(?![A-Za-z0-9])", text):
@@ -428,10 +468,21 @@ def refine_trade_text(text: str) -> str:
     若整段已是紧凑信号则原样返回。
     """
     raw = strip_promotional_lines(text or "")
+    raw = _TG_FORWARD_PREFIX.sub("", raw).strip()
     if not raw.strip():
         return ""
     lines = raw.splitlines()
-    picked = [ln for ln in lines if _STRUCTURE_LINE.search(_t2s(ln))]
+    t_all = _t2s(raw)
+    has_dir_hint = bool(_pick_direction(t_all))
+    picked: list[str] = []
+    for ln in lines:
+        chunk = ln.strip()
+        if not chunk:
+            continue
+        if _STRUCTURE_LINE.search(_t2s(chunk)):
+            picked.append(ln.rstrip())
+        elif has_dir_hint and _ticker_only_symbol(chunk):
+            picked.append(ln.rstrip())
     if picked:
         return "\n".join(picked).strip()
     return raw.strip()
@@ -465,6 +516,16 @@ def is_structured_trade_message(text: str) -> bool:
     # twitter先行等紧凑信号：#SYMBOL + 方向（无进场/TP/SL，后续默认规则或市价补全）
     if has_symbol and has_dir and len(t) <= 80:
         return True
+    # 口语开仓：买了点 movr + 止损
+    sym_casual = bool(_SYM_AFTER_BUY.search(t) or (_pick_symbol(t) and _BUY_LONG_HINT.search(t)))
+    if sym_casual and has_dir and (has_sl or has_tp):
+        return True
+    if sym_casual and _pick_direction(t) == "多" and has_sl:
+        return True
+    # 同发言人后续只补止盈止损（窗口合并）
+    if (has_tp or has_sl) and _has_numeric_price(t) and len(t) <= 160:
+        if not _CASUAL_CHAT.search(t):
+            return True
     return False
 
 
@@ -617,6 +678,8 @@ def _looks_like_trade_message_inner(t: str) -> bool:
         return True
     if _TP_LEVELS.search(t):
         return True
+    if _BUY_LONG_HINT.search(t) and (_SYM_AFTER_BUY.search(t) or _SL.search(t) or _SL_POS.search(t)):
+        return True
     return False
 
 
@@ -707,18 +770,26 @@ def parse_trade_text(text: str, *, sender: str = "", msg_id: int | None = None) 
 
 
 def looks_like_trade_message(text: str) -> bool:
-    """粗筛：是否值得进窗口分析（须为结构化策略，排除闲聊）。"""
+    """粗筛：是否 worth 进窗口分析（须为结构化策略，排除闲聊）。"""
     if is_spam_or_recap_message(text):
-        return False
-    if is_casual_chat_only(text):
         return False
     refined = refine_trade_text(text)
     target = refined or _t2s(strip_promotional_lines(text))
     if not target.strip():
         return False
+    # 止盈/止损补发：勿被 is_casual 误杀（与 pending 开仓卡合并）
+    peek = parse_trade_text(text)
+    if peek and peek.has_tpsl and not peek.has_core:
+        if is_structured_trade_message(target):
+            return True
+    if is_casual_chat_only(text):
+        return False
     if not is_structured_trade_message(target):
         return False
-    return _looks_like_trade_message_inner(target)
+    if _looks_like_trade_message_inner(target):
+        return True
+    peek2 = parse_trade_text(text)
+    return bool(peek2 and peek2.has_core)
 
 
 def has_prom_tag(text: str) -> bool:

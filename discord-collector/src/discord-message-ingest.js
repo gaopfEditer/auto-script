@@ -517,11 +517,30 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       for (const r of rows) {
         const cid = String(r.channelId ?? "").trim();
         const content = normalizeSignalText(String(r.content ?? ""));
-        if (!cid || !content) continue;
+        if (!cid) continue;
+        if (!content) {
+          if (isSignalChannel(cid)) {
+            log.debug(
+              `信号卡片跳过空正文 channel=${cid} message=${r.messageId}（若仅图片需 OCR/人工）`
+            );
+          }
+          continue;
+        }
         if (!isSignalChannel(cid)) continue;
         if (signalCards.dedup.isDuplicate(cid, content)) {
-          log.debug(`信号卡片跳过重复 channel=${cid} preview=${content.slice(0, 80)}`);
-          continue;
+          const mid = String(r.messageId ?? r.message_id ?? "").trim();
+          let allowRetry = false;
+          if (mid && store.getSignalCardByMessageId) {
+            const existing = await store.getSignalCardByMessageId(mid);
+            if (!existing) allowRetry = true;
+          }
+          if (!allowRetry) {
+            log.debug(`信号卡片跳过重复 channel=${cid} preview=${content.slice(0, 80)}`);
+            continue;
+          }
+          log.info(
+            `信号正文曾处理但未建卡，重试 channel=${cid} message=${mid} preview=${content.slice(0, 60)}`
+          );
         }
         const src = String(r.source ?? "");
         log.info(
@@ -535,7 +554,10 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
           log.warn(`signal card: ${/** @type {Error} */ (e).message}`);
           continue;
         }
-        await signalCards.dedup.remember(cid, content);
+        const skipped = String(cardResult?.skipped ?? "");
+        if (cardResult?.card || cardResult?.merged || skipped !== "parse_failed") {
+          await signalCards.dedup.remember(cid, content);
+        }
 
         if (
           telegramPush?.enabled &&
@@ -555,8 +577,25 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       const gatewayRows = isRestBatch
         ? []
         : toPersist.filter((r) => String(r.source ?? "") !== "rest_api");
-      const restInserted = Array.isArray(result.insertedRows) ? result.insertedRows : [];
-      await runSignalCardPipeline([...gatewayRows, ...restInserted]);
+      /** @type {ReturnType<typeof extractMessageFromPayload>[]} */
+      let restCardRows = Array.isArray(result.insertedRows) ? [...result.insertedRows] : [];
+      if (isRestBatch) {
+        // REST 拉历史：库里已有 message_id 时 inserted=0，仍尝试对近几小时信号补建卡（Gateway 曾断时）
+        const insertedIds = new Set(restCardRows.map((r) => String(r.messageId ?? "")).filter(Boolean));
+        const recentMs = 6 * 60 * 60 * 1000;
+        const now = Date.now();
+        for (const r of toPersist) {
+          const cid = String(r.channelId ?? "").trim();
+          if (!cid || !isSignalChannel(cid)) continue;
+          const mid = String(r.messageId ?? "").trim();
+          if (mid && insertedIds.has(mid)) continue;
+          if (now - Number(r.createdAtMs ?? 0) > recentMs) continue;
+          if (!String(r.content ?? "").trim()) continue;
+          restCardRows.push(r);
+          if (mid) insertedIds.add(mid);
+        }
+      }
+      await runSignalCardPipeline([...gatewayRows, ...restCardRows]);
     }
 
     if (!config.telegramPriorityForward && telegramPush?.enabled && !isRestBatch && result.inserted > 0) {

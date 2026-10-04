@@ -198,20 +198,29 @@ export function canTraceMessage(card) {
   return Boolean(mid && !card.isManual && !mid.startsWith("manual-"));
 }
 
-/** @param {SignalExecution} ex @param {string} [note] */
+/**
+ * 是否已有可展示盈亏的评价（计划止盈/止损、备注 alone 不算「已评价」）。
+ * @param {SignalExecution} ex @param {string} [note]
+ */
 export function hasEvaluation(ex, note = "") {
-  const a = ex.actual;
-  return Boolean(
-    a.buyPrice ||
-      a.sellPrice ||
-      a.stopLossPrice ||
-      a.exitPrice ||
-      (a.takeProfitPrices?.length ?? 0) > 0 ||
-      a.closedAt ||
-      (ex.outcome && ex.outcome !== "pending") ||
-      ex.outcomeNote ||
-      String(note ?? "").trim()
+  void note;
+  const profit = calcProfitPercents(
+    ex.actual.buyPrice,
+    ex.actual.sellPrice,
+    ex.direction,
+    undefined,
+    ex.symbol,
+    ex.planned?.entryPrice ?? ex.actual.buyPrice
   );
+  return Boolean(profit);
+}
+
+/**
+ * 卡片级「已评价」：须能算出盈亏率（含 progress / backtest / autoEval）。
+ * @param {import("./discordSignalApi.js").SignalCard | Record<string, unknown>} card
+ */
+export function cardHasCompletedEvaluation(card) {
+  return resolveCardPnlPct(/** @type {Record<string, unknown>} */ (card)) != null;
 }
 
 /** @param {SignalExecution} ex @param {string} [note] @returns {string[]} */

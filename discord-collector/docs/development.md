@@ -21,7 +21,7 @@ Cursor 规则在仓库根 `.cursor/rules/`（按打开的文件自动带上对�
 | `discord-collector-cdp.mdc` | Discord / X CDP |
 | `telegram-listen.mdc` | `telegram/` · `#prom` 10 分钟合并 |
 
-OI 推送与拐点完整说明仍以 [`oi_mornitor/SIGNAL_LOGIC.md`](../oi_mornitor/SIGNAL_LOGIC.md) 为准。
+OI 文档索引 [`oi_mornitor/docs/README.md`](../oi_mornitor/docs/README.md)：币种捕获 [`coin-capture.md`](../oi_mornitor/docs/coin-capture.md)、信号逻辑 [`signal-logic.md`](../oi_mornitor/docs/signal-logic.md)。
 
 ---
 

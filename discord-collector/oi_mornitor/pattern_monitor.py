@@ -20,6 +20,7 @@ from oi_mornitor.config import (
     CANDLE_CARD_REFRESH_SEC,
     CARD_PUSH_COOLDOWN_BARS,
     FAPI_BASE_URL,
+    HTTP_TIMEOUT_SEC,
     MATRIX_TOP_N,
     OI_OI_BATCH_CONCURRENCY,
     PATTERN_AUTO_PICK_COUNT,
@@ -158,21 +159,29 @@ async def fetch_open_interest_hist(
     limit: int = 500,
 ) -> dict[int, float]:
     """币安 openInterestHist → {open_time秒: sumOpenInterest}。失败返回空。"""
-    sym = symbol.strip().upper()
+    from oi_mornitor import http_backoff
+    from oi_mornitor.symbol_aliases import normalize_usdt_symbol
+
+    sym = normalize_usdt_symbol(symbol)
+    if not sym:
+        return {}
     cap = min(max(limit, 1), 500)
+    period = (interval or "15m").strip().lower()
     url = (
         f"{base_url.rstrip('/')}/futures/data/openInterestHist"
-        f"?symbol={sym}&period={interval}&limit={cap}"
+        f"?symbol={sym}&period={period}&limit={cap}"
     )
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
-            if resp.status != 200:
-                return {}
-            data = await resp.json()
-    except Exception as exc:
-        logger.debug("OI hist 拉取失败 %s %s: %s", sym, interval, exc)
-        return {}
-    if not isinstance(data, list):
+    timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SEC)
+    status, data = await http_backoff.get_json(
+        session,
+        url,
+        timeout=timeout,
+        max_attempts=3,
+        label=f"oi-hist:{sym}",
+    )
+    if status != 200 or not isinstance(data, list):
+        if status and status != 200:
+            logger.warning("OI hist 拉取失败 %s %s HTTP %s", sym, period, status)
         return {}
     out: dict[int, float] = {}
     for row in data:

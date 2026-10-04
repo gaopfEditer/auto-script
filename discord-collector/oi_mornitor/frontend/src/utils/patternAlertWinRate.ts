@@ -50,6 +50,16 @@ export type AlertStatsRecord = {
   /** TG 交易卡片 id（source=telegram_card） */
   cardId?: string;
   channelId?: string;
+  /** 15m/1h/4h 多周期共振（服务端 list 页计算） */
+  mtfResonance?: AlertMtfResonance;
+};
+
+export type AlertMtfResonance = {
+  /** 共振周期数 2 或 3 */
+  tiers: number;
+  intervals: string[];
+  family: string;
+  familyLabel: string;
 };
 
 export type AlertWinRateSummary = {
@@ -494,6 +504,7 @@ export async function fetchAlertStatsPage(opts: {
   intervalFilter?: string;
   symbol?: string;
   assetClassFilter?: AlertStatsAssetFilter;
+  mtfResonanceOnly?: boolean;
 }): Promise<AlertStatsPageResult> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? ALERT_STATS_PAGE_SIZE));
@@ -515,6 +526,7 @@ export async function fetchAlertStatsPage(opts: {
     assetClass: assetClassFilter,
   });
   if (symbol) params.set("symbol", symbol);
+  if (opts.mtfResonanceOnly) params.set("mtfResonance", "1");
   const empty: AlertStatsPageResult = {
     items: [],
     total: 0,
@@ -1637,6 +1649,19 @@ export function filterAlertStatsByType(
       "未标注";
     return label === typeLabel;
   });
+}
+
+/** 列表「共振」列展示 */
+export function formatMtfResonanceBadge(res?: AlertMtfResonance | null): string {
+  if (!res || !Number.isFinite(res.tiers) || res.tiers < 2) return "";
+  const ivs = (res.intervals ?? []).join("+") || "—";
+  const fam = String(res.familyLabel || res.family || "").trim();
+  return `${res.tiers}周期 · ${ivs}${fam ? ` · ${fam}` : ""}`;
+}
+
+export function hasMtfResonance(rec: Pick<AlertStatsRecord, "mtfResonance">): boolean {
+  const t = rec.mtfResonance?.tiers;
+  return typeof t === "number" && t >= 2;
 }
 
 export function formatAlertStatsTime(ms: number): string {

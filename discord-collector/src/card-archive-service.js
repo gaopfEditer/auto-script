@@ -49,7 +49,8 @@ import { formatPipelineLog, formatSendCdpLog } from "./signal-pipeline-log.js";
 import {
   isTelegramAutoTradeChannel,
   prepareAutoTradeForOrder,
-  telegramTradeRequiresTpsl,
+  TELEGRAM_TRADE_INITIAL_SL_PCT,
+  telegramTradeRequiresStopLoss,
 } from "./telegram-auto-trade.js";
 import {
   isAutoTradeChannel,
@@ -455,11 +456,11 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     execution = prepared.execution;
     const parsed = prepared.parsed;
 
-    if (!telegramTradeRequiresTpsl(execution)) {
+    if (!telegramTradeRequiresStopLoss(execution)) {
       log.warn(
-        `Telegram 自动交易跳过 card=#${cardId} channel=${channelId}：务必设置止盈止损（已试默认 TP/SL 仍缺有效入场或方向）`
+        `Telegram 自动交易跳过 card=#${cardId} channel=${channelId}：必须挂止损（默认 ${TELEGRAM_TRADE_INITIAL_SL_PCT}%）；无法补全入场价或方向`
       );
-      return { bitget: { skipped: "missing_tpsl" }, weex: { skipped: "missing_tpsl" } };
+      return { bitget: { skipped: "missing_stop_loss" }, weex: { skipped: "missing_stop_loss" } };
     }
 
     /** @type {Record<string, unknown>} */

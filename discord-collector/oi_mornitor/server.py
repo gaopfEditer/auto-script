@@ -278,6 +278,8 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
     interval = str(q.get("interval") or q.get("iv") or "all").strip() or "all"
     symbol = str(q.get("symbol") or q.get("sym") or "").strip()
     asset_class = str(q.get("assetClass") or q.get("asset_class") or "all").strip() or "all"
+    mtf_raw = str(q.get("mtfResonance") or q.get("mtf") or "0").strip().lower()
+    mtf_resonance_only = mtf_raw in ("1", "true", "yes", "on")
     payload = list_alert_stats_page(
         page=page,
         page_size=page_size,
@@ -288,6 +290,7 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
         interval=interval,
         symbol=symbol or None,
         asset_class=asset_class,
+        mtf_resonance_only=mtf_resonance_only,
     )
     return _json_response({"ok": True, **payload})
 

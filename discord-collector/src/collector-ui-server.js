@@ -21,7 +21,7 @@ import { createDiscordTelegramMessagePush } from "./discord-telegram-message-pus
 import { createDiscordWebhookForward } from "./discord-webhook-forward.js";
 import { createSystemTelegramAlert } from "./discord-system-telegram.js";
 import { registerDiscordSignalRoutes } from "./discord-signal-api.js";
-import { COIN_ACTION_SIGNAL_CHANNEL_ID } from "./discord-signal-config.js";
+import { COIN_ACTION_SIGNAL_CHANNEL_ID, getSignalChannelIds } from "./discord-signal-config.js";
 import { getBitgetTradeStatus, loadBitgetTradeConfig } from "./bitget-trade-config.js";
 import { getWeexTradeStatus, loadWeexTradeConfig } from "./weex-trade-config.js";
 import { parseTelegramTradeTextLite, buildDefaultTelegramExitPlan } from "./telegram-auto-trade.js";
@@ -192,7 +192,11 @@ async function main() {
   const { store, offline: mysqlOffline, hint: mysqlHint } = await tryOpenStore(config.mysql, storeLog);
   const telegramPush = createDiscordTelegramMessagePush(createLogger("telegram-push"));
   const webhookForward = createDiscordWebhookForward(createLogger("webhook-forward"));
-  const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"));
+  const systemTelegram = createSystemTelegramAlert(createLogger("system-telegram"), {
+    cdpNotifyDisconnect: config.cdpTelegramNotifyDisconnect,
+    cdpNotifyConnect: config.cdpTelegramNotifyConnect,
+    cdpDisconnectNotifyAfterMs: config.cdpTelegramDisconnectAfterMs,
+  });
   const bitgetOrder = createBitgetOrderService(store, createLogger("bitget"));
   const weexOrder = createWeexOrderService(store, createLogger("weex"));
   const bitgetManual = createBitgetManualService(createLogger("bitget-manual"));
@@ -323,7 +327,9 @@ async function main() {
       state: cdpBoot.state,
       ready,
       connectUrl: config.cdpConnectUrl || null,
-      mountedTabs: session?.mounted ?? 0,
+      mountedTabs: Array.isArray(session?.mounted)
+        ? session.mounted.length
+        : Number(session?.mounted) || 0,
       bootAttempt: cdpBoot.attempt,
       bootError: cdpBoot.error || null,
       hint: !config.cdpConnectUrl
@@ -778,7 +784,7 @@ async function main() {
         "白名单来源：telegram/channel_profiles.json 的 send 数组（下方群名）",
         "listen.py 监听到上述群的结构化信号 → 建卡 + 推 TELEGRAM_PUSH_CHAT_ID + 按勾选平台开单",
         "Bitget / WEEX 勾选与单笔保证金会同步到服务端（localStorage 备份）",
-        "Telegram 开单：20x · 市价 · 须挂 TP/SL；缺省为 5% 止损 + TP 5/8/12%（分批 30/30/40）",
+        "Telegram 开单：20x · 市价 · 必须挂止损（缺省 5%）；止盈缺省 5/8/12%（分批 30/30/40）；无有效止损不会下单",
         "TP1 后止损移至开仓价，TP2 后移至 TP1；清算/回溯与 exitPlan 一致",
         "BTC / ETH 主流币不自动开单；无数字入场且无法补默认 TP/SL 时跳过下单",
         "下方可粘贴 Telegram 信号正文做本地模拟（Enter 提交，Shift+Enter 换行）",
@@ -1225,6 +1231,7 @@ async function main() {
   log.info(
     `[api] /api/cards /api/v1/cards /api/discord/signal-cards（debugMode=${isDebugMode()}）`
   );
+  log.info(`信号卡片监听 ${getSignalChannelIds().size} 个 Discord 频道（DISCORD_SIGNAL_CHANNEL_IDS 非空则覆盖内置列表）`);
   const cdpMonitorOpts = {
     startUrl: config.startUrl,
     cdpConnectUrl: config.cdpConnectUrl,
@@ -1235,7 +1242,8 @@ async function main() {
     wsFrameTrace: config.collectWsFrameTrace,
     diagnosticSink,
     onConnectionLost: (info) => systemTelegram.notifyCdpDisconnected(info),
-    onReconnected: (info) => systemTelegram.notifyCdpReconnected?.(info),
+    onConnected: (info) => systemTelegram.notifyCdpConnected(info),
+    onReconnected: (info) => systemTelegram.notifyCdpReconnected(info),
     onData(buf, meta) {
       frameSeq += 1;
       const { payload, proc } = buildFrameChannelPayload(

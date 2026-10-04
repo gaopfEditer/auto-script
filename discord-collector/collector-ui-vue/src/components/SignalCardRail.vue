@@ -21,7 +21,8 @@ import {
   takeProfitText,
   buildExecutionPayload,
   executionEquals,
-  hasEvaluation,
+  cardHasCompletedEvaluation,
+  hasEvaluatedYield,
   evaluationSummaryLines,
   seedActualFromPlanned,
   cardProfitBadge,
@@ -229,8 +230,13 @@ function applyUpdated(updated) {
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
 function cardHasEvaluation(card) {
+  return cardHasCompletedEvaluation(card);
+}
+
+/** 评价表单是否已有可编辑的实际成交字段（含未算盈亏的草稿） */
+function cardEvalDraftFilled(card) {
   const ex = cardExecution(card);
-  return hasEvaluation(ex, card.note ?? "");
+  return cardHasCompletedEvaluation(card) || hasEvaluatedYield(ex);
 }
 
 /** @param {import("../lib/discordSignalApi.js").SignalCard} card */
@@ -519,7 +525,7 @@ onMounted(async () => {
             <div
               v-if="canManageCards"
               class="signal-eval-wrap"
-              :class="{ open: evalExpandedById[card.id], filled: cardHasEvaluation(card) }"
+              :class="{ open: evalExpandedById[card.id], filled: cardEvalDraftFilled(card) }"
             >
               <button
                 type="button"

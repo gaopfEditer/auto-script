@@ -1,6 +1,6 @@
 /**
  * 形态信号入场条件明细（与 structure_signals / candle_signals / pattern_detector 对齐）。
- * 胜率弹窗「入场规则」与 SIGNAL_LOGIC.md §5.5 同源摘要。
+ * 胜率弹窗「入场规则」与 docs/signal-logic.md §5.5 同源摘要。
  */
 
 export type PatternEntryRule = {

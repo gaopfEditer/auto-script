@@ -40,7 +40,8 @@ import {
   executionEquals,
   seedActualFromPlanned,
   takeProfitText,
-  hasEvaluation,
+  cardHasCompletedEvaluation,
+  hasEvaluatedYield,
   evaluationSummaryLines,
 } from "../lib/signalExecution.js";
 import { resolveCardSourceLink } from "../lib/cardSourceLink.js";
@@ -730,8 +731,11 @@ onUnmounted(() => {
             <div class="block eval-block">
               <h4>评价 / 实际成交</h4>
               <template v-if="canManageCards">
-                <p v-if="hasEvaluation(cardExecution(selected), selected.note)" class="muted eval-hint">
-                  已填写评价，可在下方修改
+                <p v-if="cardHasCompletedEvaluation(selected)" class="muted eval-hint">
+                  已填写评价（含盈亏率），可在下方修改
+                </p>
+                <p v-else-if="hasEvaluatedYield(cardExecution(selected))" class="muted eval-hint">
+                  已填部分成交价，补全出场价后可算盈亏
                 </p>
                 <SignalEvaluationForm
                   v-model="execDraft"
@@ -745,7 +749,7 @@ onUnmounted(() => {
                 <p v-if="evalError" class="err">{{ evalError }}</p>
               </template>
               <template v-else>
-                <p v-if="hasEvaluation(cardExecution(selected), selected.note)" class="muted">
+                <p v-if="cardHasCompletedEvaluation(selected)" class="muted">
                   <span v-for="(line, i) in evaluationSummaryLines(cardExecution(selected), selected.note)" :key="i">
                     {{ line }}<br />
                   </span>

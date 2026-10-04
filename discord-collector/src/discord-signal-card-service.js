@@ -40,6 +40,11 @@ import {
   resolveAuthorKey,
   authorKeysMatch,
 } from "./card-signal-merge.js";
+import {
+  markTelegramCardPushSent,
+  shouldSkipTelegramCardPushDuplicate,
+} from "./telegram-card-push-dedup.js";
+import { formatPipelineLog } from "./signal-pipeline-log.js";
 
 /** @param {Record<string, unknown>} row */
 export function resolveMessageSignalAt(row) {
@@ -310,6 +315,126 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
   }
 
   /**
+   * @param {ReturnType<typeof signalCardToClient>} clientCard
+   * @param {NonNullable<ReturnType<typeof getSignalChannelConfig>>} chCfg
+   * @param {Record<string, string>} cardsByStyle
+   * @param {string} fallback
+   */
+  function resolveTelegramStyleText(clientCard, chCfg, cardsByStyle, fallback) {
+    const style = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";
+    return (
+      pickCardSinkText(clientCard, style) ||
+      cardsByStyle[style] ||
+      Object.values(cardsByStyle).find((v) => String(v ?? "").trim()) ||
+      fallback
+    );
+  }
+
+  /**
+   * 信号卡片 → Telegram（同 messageId / 同 card 去重；合并默认不二次推送）。
+   * @param {{
+   *   text: string,
+   *   channelId: string,
+   *   channelName?: string,
+   *   cardId?: number,
+   *   messageId?: string,
+   *   symbol?: string,
+   *   telegramSentAt?: string | null,
+   *   event?: "create" | "update",
+   * }} input
+   * @param {{ skipTelegram?: boolean }} [opts]
+   */
+  async function sendSignalCardTelegram(input, opts = {}) {
+    if (!telegram.enabled || opts.skipTelegram) return { skipped: "telegram_disabled" };
+    const event = input.event === "update" ? "update" : "create";
+    const channelId = String(input.channelId ?? "").trim();
+    const channelName = input.channelName;
+    const cardId = input.cardId;
+    const messageRef = String(input.messageId ?? "").trim();
+    const bodyText = String(input.text ?? "").trim();
+    if (!bodyText) return { skipped: "empty" };
+
+    if (
+      event === "update" &&
+      !config.telegramPushOnCardUpdate &&
+      input.telegramSentAt
+    ) {
+      log.info(
+        formatPipelineLog("tg_push_skip", {
+          cardId: cardId ?? "?",
+          channelId,
+          channelName: channelName ?? "",
+          symbol: String(input.symbol ?? ""),
+          event,
+          reason: "update_already_sent",
+        }),
+      );
+      return { skipped: "update_already_sent" };
+    }
+
+    const dedupInput = {
+      channelId,
+      symbol: String(input.symbol ?? "").trim(),
+      bodyText,
+      cardId: cardId ?? null,
+      messageRef,
+    };
+    if (shouldSkipTelegramCardPushDuplicate(dedupInput)) {
+      log.info(
+        formatPipelineLog("tg_push_skip", {
+          cardId: cardId ?? "?",
+          channelId,
+          channelName: channelName ?? "",
+          symbol: String(input.symbol ?? ""),
+          event,
+          messageRef: messageRef || "?",
+          reason: "duplicate_message",
+        }),
+      );
+      return { skipped: "duplicate_message" };
+    }
+
+    let claimed = false;
+    const firstPush = !input.telegramSentAt;
+    if (cardId && firstPush && store.claimSignalCardTelegramSend) {
+      claimed = await store.claimSignalCardTelegramSend(cardId);
+      if (!claimed) {
+        log.info(
+          formatPipelineLog("tg_push_skip", {
+            cardId,
+            channelId,
+            channelName: channelName ?? "",
+            symbol: String(input.symbol ?? ""),
+            event,
+            reason: "already_sent",
+            detail: "claim 失败",
+          }),
+        );
+        return { skipped: "already_sent" };
+      }
+    }
+
+    try {
+      await telegram.send(bodyText, {
+        channelId,
+        channelName,
+        cardId,
+      });
+      markTelegramCardPushSent(dedupInput);
+      if (cardId && store.markSignalCardTelegramSent) {
+        await store.markSignalCardTelegramSent(cardId);
+      }
+      return { ok: true };
+    } catch (e) {
+      if (claimed && cardId && store.releaseSignalCardTelegramSend) {
+        await store.releaseSignalCardTelegramSend(cardId);
+      }
+      log.warn(`Telegram 推送失败: ${/** @type {Error} */ (e).message}`);
+      return { error: String(/** @type {Error} */ (e).message ?? e) };
+    }
+  }
+
+  /**
    * 同频道 + 同作者 + 同币种 30 分钟内 → 合并到已有卡片。
    * @param {{
    *   channelId: string,
@@ -400,22 +525,27 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     });
     const updated = await store.getSignalCardById?.(openId);
     const clientCard = signalCardToClient(updated ?? target);
-    const mergeText =
-      pickCardSinkText(clientCard, chCfg.telegramStyle) ||
-      mergedCardsByStyle[chCfg.telegramStyle] ||
-      Object.values(mergedCardsByStyle)[0] ||
-      patch.rawContent;
-    if (telegram.enabled && !opts.skipTelegram) {
-      try {
-        await telegram.send(String(mergeText), {
-          channelId,
-          channelName: chCfg.name,
-          cardId: openId,
-        });
-        await store.markSignalCardTelegramSent?.(openId);
-      } catch (e) {
-        log.warn(`雷同信号合并后 Telegram 失败: ${/** @type {Error} */ (e).message}`);
-      }
+    const mergeText = resolveTelegramStyleText(
+      clientCard,
+      chCfg,
+      mergedCardsByStyle,
+      patch.rawContent,
+    );
+    const tgResult = await sendSignalCardTelegram(
+      {
+        text: String(mergeText),
+        channelId,
+        channelName: chCfg.name,
+        cardId: openId,
+        messageId: String(row.messageId ?? row.message_id ?? ""),
+        symbol: String(clientCard.symbol ?? symbol),
+        telegramSentAt: clientCard.telegramSentAt,
+        event: "update",
+      },
+      opts,
+    );
+    if (tgResult.ok) {
+      clientCard.telegramSentAt = new Date().toISOString();
     }
     await syncCommunityFeedCard({
       text: String(mergeText),
@@ -533,22 +663,22 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         });
         const updated = await store.getSignalCardById?.(openId);
         const clientCard = signalCardToClient(updated ?? openCard);
-        const mergeText =
-          pickCardSinkText(clientCard, chCfg.telegramStyle) ||
-          cardsByStyle[chCfg.telegramStyle] ||
-          Object.values(cardsByStyle)[0] ||
-          content;
-        if (telegram.enabled && !opts.skipTelegram) {
-          try {
-            await telegram.send(String(mergeText), {
-              channelId,
-              channelName: chCfg.name,
-              cardId: openId,
-            });
-            await store.markSignalCardTelegramSent?.(openId);
-          } catch (e) {
-            log.warn(`军长止损合并后 Telegram 失败: ${/** @type {Error} */ (e).message}`);
-          }
+        const mergeText = resolveTelegramStyleText(clientCard, chCfg, cardsByStyle, content);
+        const tgResult = await sendSignalCardTelegram(
+          {
+            text: String(mergeText),
+            channelId,
+            channelName: chCfg.name,
+            cardId: openId,
+            messageId: String(row.messageId ?? row.message_id ?? ""),
+            symbol: String(clientCard.symbol ?? symbol),
+            telegramSentAt: clientCard.telegramSentAt,
+            event: "update",
+          },
+          opts,
+        );
+        if (tgResult.ok) {
+          clientCard.telegramSentAt = new Date().toISOString();
         }
         await syncCommunityFeedCard({
           text: String(mergeText),
@@ -847,17 +977,22 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     const deferJunzhangTelegram =
       isJunzhang && (parsed.signalPhase === "open" || parsed.awaitingTpsl === true);
 
-    if (telegram.enabled && !opts.skipTelegram && !deferJunzhangTelegram) {
-      try {
-        await telegram.send(telegramText, {
+    if (!deferJunzhangTelegram) {
+      const tgResult = await sendSignalCardTelegram(
+        {
+          text: telegramText,
           channelId,
           channelName: chCfg.name,
           cardId,
-        });
-        await store.markSignalCardTelegramSent(cardId);
+          messageId,
+          symbol,
+          telegramSentAt: null,
+          event: "create",
+        },
+        opts,
+      );
+      if (tgResult.ok) {
         cardRow.telegram_sent_at = cardRow.telegramSentAt = new Date().toISOString();
-      } catch (e) {
-        log.warn(`Telegram 推送失败: ${/** @type {Error} */ (e).message}`);
       }
     } else if (deferJunzhangTelegram) {
       log.info(`军长开仓卡 #${cardId} 待止损（约 2 分钟内）后再推 Telegram symbol=${symbol}`);

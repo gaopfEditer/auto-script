@@ -68,9 +68,50 @@ export function looksLikeDiscordMessage(obj) {
   const author = asRecord(o.author);
   if (author?.id != null) return true;
   if (o.webhook_id != null) return true;
-  if (typeof o.content === "string") return true;
+  if (typeof o.content === "string" && o.content.trim()) return true;
   if (Array.isArray(o.attachments) && o.attachments.length) return true;
+  if (extractDiscordMessageContent(o)) return true;
   return false;
+}
+
+/**
+ * 正文 + embed 字段（不少 KOL 信号只在 embed 里，content 为空）。
+ * @param {Record<string, unknown>} m
+ */
+export function extractDiscordMessageContent(m) {
+  const parts = [];
+  const raw = typeof m.content === "string" ? m.content.trim() : "";
+  if (raw) parts.push(raw);
+
+  const embeds = Array.isArray(m.embeds) ? m.embeds : [];
+  for (const item of embeds) {
+    const e = asRecord(item);
+    if (!e) continue;
+    for (const key of ["title", "description", "url"]) {
+      const v = String(e[key] ?? "").trim();
+      if (v) parts.push(v);
+    }
+    const fields = Array.isArray(e.fields) ? e.fields : [];
+    for (const f of fields) {
+      const fr = asRecord(f);
+      if (!fr) continue;
+      const name = String(fr.name ?? "").trim();
+      const value = String(fr.value ?? "").trim();
+      if (name && value) parts.push(`${name}: ${value}`);
+      else if (value) parts.push(value);
+      else if (name) parts.push(name);
+    }
+  }
+
+  const deduped = [];
+  const seen = new Set();
+  for (const p of parts) {
+    const line = p.replace(/\s+/g, " ").trim();
+    if (!line || seen.has(line)) continue;
+    seen.add(line);
+    deduped.push(line);
+  }
+  return deduped.join("\n").trim();
 }
 
 /**
@@ -92,7 +133,7 @@ export function normalizeDiscordMessage(data, eventType, source = "gateway_ws") 
     channelId: m.channel_id != null ? String(m.channel_id) : "",
     authorId: author?.id != null ? String(author.id) : "",
     createdAtMs: snowflakeToMs(id),
-    content: typeof m.content === "string" ? m.content : "",
+    content: extractDiscordMessageContent(m),
     authorUsername: author?.username != null ? String(author.username) : null,
     authorGlobalName: author?.global_name != null ? String(author.global_name) : null,
     authorAvatar: author ? avatarFromAuthor(author) : null,

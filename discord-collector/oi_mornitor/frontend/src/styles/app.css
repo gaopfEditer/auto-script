@@ -1877,6 +1877,41 @@ button {
   color: var(--muted);
 }
 
+.pattern-wr-mtf-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.pattern-wr-mtf-filter input {
+  accent-color: var(--accent);
+}
+
+.pattern-wr-mtf-badge {
+  display: inline-block;
+  max-width: 11rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: #c8f56a;
+  background: rgba(184, 255, 60, 0.12);
+  border: 1px solid rgba(184, 255, 60, 0.35);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pattern-wr-mtf-badge.triple {
+  color: #ffe082;
+  background: rgba(255, 213, 79, 0.12);
+  border-color: rgba(255, 213, 79, 0.45);
+}
+
 .pattern-wr-type-filter select {
   appearance: none;
   max-width: min(420px, 72vw);
@@ -3243,6 +3278,97 @@ button {
   margin-left: auto;
   font-size: 0.75rem;
   color: #8b93a7;
+}
+
+.card-life-filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+}
+
+.card-life-filter-label {
+  color: #8b93a7;
+  white-space: nowrap;
+}
+
+.card-life-select {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  color: #dce3f0;
+  font-size: 0.75rem;
+  padding: 5px 28px 5px 10px;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, #9aa3b5 50%),
+    linear-gradient(135deg, #9aa3b5 50%, transparent 50%);
+  background-position: calc(100% - 14px) 52%, calc(100% - 9px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.card-life-author-bar {
+  padding: 8px 16px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.card-life-author-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.card-life-author-meta {
+  font-size: 0.72rem;
+  color: #7a8396;
+}
+
+.card-life-link-btn {
+  border: none;
+  background: none;
+  color: #64b5f6;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.card-life-author-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 72px;
+  overflow: auto;
+}
+
+.card-life-author-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #b8bfd0;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.card-life-author-chip.on {
+  background: rgba(100, 181, 246, 0.16);
+  border-color: rgba(100, 181, 246, 0.4);
+  color: #90caf9;
+}
+
+.card-life-author-chip input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
 }
 
 .card-life-table-wrap {
