@@ -53,7 +53,7 @@ def main() -> None:
         action="store_true",
         help="强制重新构建前端",
     )
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
     _setup_logging()
 
     if args.mode == "web":
@@ -88,13 +88,13 @@ def main() -> None:
         raise SystemExit(coin_main())
 
     if args.mode == "backtest":
-        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        sys.argv = [sys.argv[0], *extra]
         from oi_mornitor.scripts.run_backtest import main as bt_main
 
         raise SystemExit(bt_main())
 
     if args.mode == "signal-backtest":
-        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        sys.argv = [sys.argv[0], *extra]
         from oi_mornitor.scripts.run_signal_backtest import main as sig_bt_main
 
         raise SystemExit(sig_bt_main())

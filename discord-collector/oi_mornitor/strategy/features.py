@@ -157,6 +157,40 @@ def mark_causal_swings(
     return out
 
 
+def confirmed_swing_prefixes(
+    df: pd.DataFrame,
+    *,
+    which: str = "high",
+    left: int = SWING_LEFT,
+    right: int = SWING_RIGHT,
+) -> list[list[tuple[int, float]]]:
+    """by_asof[j] = 截至 j 已确认的摆动点列表。"""
+    n = 0 if df is None else len(df)
+    if n == 0:
+        return []
+    col = "is_swing_high" if which == "high" else "is_swing_low"
+    price_col = "high" if which == "high" else "low"
+    work = df if col in df.columns else mark_causal_swings(df, left=left, right=right)
+    pending: list[tuple[int, int, float]] = []
+    for i in range(n):
+        if not bool(work.iloc[i][col]):
+            continue
+        confirm = int(work.iloc[i].get("swing_confirm_at", i + right) or (i + right))
+        if confirm < 0:
+            confirm = i + right
+        pending.append((confirm, i, float(work.iloc[i][price_col])))
+    pending.sort()
+    prefixes: list[list[tuple[int, float]]] = []
+    acc: list[tuple[int, float]] = []
+    k = 0
+    for j in range(n):
+        while k < len(pending) and pending[k][0] <= j:
+            acc.append((pending[k][1], pending[k][2]))
+            k += 1
+        prefixes.append(list(acc))
+    return prefixes
+
+
 def confirmed_swings(
     df: pd.DataFrame,
     asof_idx: int,

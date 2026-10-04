@@ -21,6 +21,7 @@ from oi_mornitor.signal_policy import is_blocked_structure_kind
 from oi_mornitor.strategy.candle_signals import closed_bar_index, compute_oi_anomaly_flags
 from oi_mornitor.strategy.features import (
     apply_vegas_mid,
+    confirmed_swing_prefixes,
     confirmed_swings,
     mark_causal_swings,
 )
@@ -406,6 +407,7 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
     highs = confirmed_swings(df, len(df) - 1, which="high")
     if len(highs) < 3:
         return []
+    prefixes = confirmed_swing_prefixes(df, which="high")
     out: list[dict[str, Any]] = []
     used_triggers: set[int] = set()
 
@@ -428,7 +430,7 @@ def _detect_hs_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
         for j in range(max(i3 + 1, i3 + SWING_RIGHT), end):
             if j in used_triggers:
                 continue
-            highs_j = [h[0] for h in confirmed_swings(df, j, which="high") if h[0] <= i3]
+            highs_j = [h[0] for h in prefixes[j] if h[0] <= i3]
             if len(highs_j) < 3 or highs_j[-3:] != [i1, i2, i3]:
                 continue
             row = df.iloc[j]
@@ -472,6 +474,7 @@ def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
     highs = confirmed_swings(df, len(df) - 1, which="high")
     if len(highs) < 2:
         return []
+    prefixes = confirmed_swing_prefixes(df, which="high")
     out: list[dict[str, Any]] = []
     used: set[int] = set()
     for a in range(len(highs) - 1):
@@ -491,7 +494,7 @@ def _detect_m_top_vegas(df: pd.DataFrame) -> list[dict[str, Any]]:
         for j in range(max(i2 + 1, i2 + SWING_RIGHT), end):
             if j in used:
                 continue
-            highs_j = [h[0] for h in confirmed_swings(df, j, which="high") if h[0] <= i2]
+            highs_j = [h[0] for h in prefixes[j] if h[0] <= i2]
             if len(highs_j) < 2 or highs_j[-2:] != [i1, i2]:
                 continue
             row = df.iloc[j]
