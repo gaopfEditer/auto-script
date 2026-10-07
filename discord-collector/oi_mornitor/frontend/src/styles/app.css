@@ -135,6 +135,22 @@ button {
   width: 0;
 }
 
+.mercu-focus-list.is-scroll {
+  cursor: grab;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.mercu-focus-list.is-sliding {
+  cursor: grabbing;
+  touch-action: none;
+  scroll-behavior: auto;
+}
+
+.mercu-focus-list.is-sliding .mercu-focus-chip {
+  pointer-events: none;
+}
+
 .mercu-focus-rank {
   font-size: 0.58rem;
   color: #666;
@@ -1912,6 +1928,61 @@ button {
   border-color: rgba(255, 213, 79, 0.45);
 }
 
+.pattern-wr-conf-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.pattern-wr-conf-badge.tier-A {
+  color: #b8ff3c;
+  background: rgba(184, 255, 60, 0.14);
+  border-color: rgba(184, 255, 60, 0.45);
+}
+.pattern-wr-conf-badge.tier-B {
+  color: #80cbc4;
+  background: rgba(128, 203, 196, 0.12);
+  border-color: rgba(128, 203, 196, 0.4);
+}
+.pattern-wr-conf-badge.tier-C {
+  color: #ffb74d;
+  background: rgba(255, 183, 77, 0.1);
+  border-color: rgba(255, 183, 77, 0.35);
+}
+.pattern-wr-conf-badge.tier-D {
+  color: #90a4ae;
+  background: rgba(144, 164, 174, 0.08);
+  border-color: rgba(144, 164, 174, 0.25);
+}
+
+.pattern-wr-mcap-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.pattern-wr-mcap-badge.tier-t1 {
+  color: #e1bee7;
+  background: rgba(206, 147, 216, 0.12);
+  border-color: rgba(206, 147, 216, 0.35);
+}
+.pattern-wr-mcap-badge.tier-t2 {
+  color: #90caf9;
+  background: rgba(144, 202, 249, 0.1);
+  border-color: rgba(144, 202, 249, 0.35);
+}
+.pattern-wr-mcap-badge.tier-t3 {
+  color: #bcaaa4;
+  background: rgba(188, 170, 164, 0.08);
+  border-color: rgba(188, 170, 164, 0.28);
+}
+
 .pattern-wr-type-filter select {
   appearance: none;
   max-width: min(420px, 72vw);
@@ -2745,6 +2816,16 @@ button {
   gap: 10px;
   font-size: 0.72rem;
   color: var(--muted);
+}
+
+.pattern-chart-meta .pattern-chart-mcap {
+  color: #b0bec5;
+}
+
+.pattern-chart-meta .pattern-chart-tier {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  vertical-align: middle;
 }
 
 .pat-status-tag {

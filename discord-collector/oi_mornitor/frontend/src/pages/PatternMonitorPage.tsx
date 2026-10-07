@@ -313,8 +313,13 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
     }
   }, []);
 
-  const { symbols: focusSymbols, add: addFocus, remove: removeFocus, has: hasFocus } =
-    useSpecialFocus();
+  const {
+    symbols: focusSymbols,
+    entries: focusEntries,
+    add: addFocus,
+    remove: removeFocus,
+    has: hasFocus,
+  } = useSpecialFocus();
 
   const autoPickCount = pattern?.auto_pick_count ?? 50;
   const heavyPool = pattern?.heavyweight_pool_size ?? 0;
@@ -338,6 +343,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         poolMeta={snapshot.pool_meta}
         poolSize={snapshot.pool_size}
         focusSymbols={focusSymbols}
+        focusEntries={focusEntries}
         onRemoveFocus={(sym) => void removeFocus(sym)}
       />
 

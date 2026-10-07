@@ -7,14 +7,19 @@ from typing import Any
 import pandas as pd
 
 from oi_mornitor.config import (
+    PATTERN_WICK_RATIO,
+    STRATEGY_SHOOT_WICK_MAX_RATIO,
+    STRATEGY_SHOOT_WICK_RATIO,
+)
+from oi_mornitor.candle_card_config import (
     CANDLE_HAMMER_TREND_LOOKBACK,
     CANDLE_HAMMER_TREND_MIN_PCT,
     CANDLE_SHOOT_REQUIRE_POSITION,
     CANDLE_SHOOT_TREND_LOOKBACK,
     CANDLE_SHOOT_TREND_MIN_PCT,
-    PATTERN_WICK_RATIO,
-    STRATEGY_SHOOT_WICK_MAX_RATIO,
-    STRATEGY_SHOOT_WICK_RATIO,
+    CANDLE_VOL_BYPASS_CONTEXT,
+    candle_volume_confirmed,
+    volume_ratio_from_row,
 )
 from oi_mornitor.signal_policy import is_blocked_marker_text
 from oi_mornitor.strategy.indicators import detect_inverted_hammer, detect_shooting_star
@@ -504,6 +509,11 @@ def _candle_card_hits_at_index(
         oi_on = bool(m.get("oi_anomaly"))
         trend: float | None = None
 
+        vol_ratio = volume_ratio_from_row(row)
+        if not candle_volume_confirmed(vol_ratio):
+            continue
+        bypass_ctx = CANDLE_VOL_BYPASS_CONTEXT and vol_ratio is not None
+
         if kind == "shooting_star":
             is_consec = "射击之星（2）" in text or "（2）" in text
             if is_consec:
@@ -512,31 +522,35 @@ def _candle_card_hits_at_index(
                 continue
             type_label = "射击之星"
             card_kind = "shooting_star"
-            if CANDLE_SHOOT_REQUIRE_POSITION:
-                basis = float(row["bb_basis"])
-                upper = float(row["bb_upper"])
-                upper_zone = basis + (upper - basis) * 0.85
-                in_upper_zone = float(row["close"]) >= upper_zone
-                if not (in_upper_zone or near_v):
-                    continue
-            trend = _trend_return(df, idx, CANDLE_SHOOT_TREND_LOOKBACK)
-            if trend is None or trend < CANDLE_SHOOT_TREND_MIN_PCT:
-                continue
+            if not bypass_ctx:
+                if CANDLE_SHOOT_REQUIRE_POSITION:
+                    basis = float(row["bb_basis"])
+                    upper = float(row["bb_upper"])
+                    upper_zone = basis + (upper - basis) * 0.85
+                    in_upper_zone = float(row["close"]) >= upper_zone
+                    if not (in_upper_zone or near_v):
+                        continue
+                if CANDLE_SHOOT_TREND_MIN_PCT > 0:
+                    trend = _trend_return(df, idx, CANDLE_SHOOT_TREND_LOOKBACK)
+                    if trend is None or trend < CANDLE_SHOOT_TREND_MIN_PCT:
+                        continue
         elif kind == "inverted_hammer":
             if not allow_inverted_hammer:
                 continue
-            basis = float(row["bb_basis"])
-            lower = float(row["bb_lower"])
-            below_mid = float(row["low"]) <= basis
-            lower_zone = lower + (basis - lower) * 0.15
-            in_lower_zone = float(row["close"]) <= lower_zone or at_lower_band(row)
-            if CANDLE_SHOOT_REQUIRE_POSITION and not (below_mid and (in_lower_zone or near_v)):
-                continue
-            trend = _trend_return(df, idx, CANDLE_HAMMER_TREND_LOOKBACK)
-            if trend is None or trend > -CANDLE_HAMMER_TREND_MIN_PCT:
-                continue
             type_label = "倒锤子"
             card_kind = "inverted_hammer"
+            if not bypass_ctx:
+                basis = float(row["bb_basis"])
+                lower = float(row["bb_lower"])
+                below_mid = float(row["low"]) <= basis
+                lower_zone = lower + (basis - lower) * 0.15
+                in_lower_zone = float(row["close"]) <= lower_zone or at_lower_band(row)
+                if CANDLE_SHOOT_REQUIRE_POSITION and not (below_mid and (in_lower_zone or near_v)):
+                    continue
+                if CANDLE_HAMMER_TREND_MIN_PCT > 0:
+                    trend = _trend_return(df, idx, CANDLE_HAMMER_TREND_LOOKBACK)
+                    if trend is None or trend > -CANDLE_HAMMER_TREND_MIN_PCT:
+                        continue
         else:
             continue
 
@@ -545,6 +559,11 @@ def _candle_card_hits_at_index(
         if card_kind in seen_kinds:
             continue
         seen_kinds.add(card_kind)
+        trend = _trend_return(
+            df,
+            idx,
+            CANDLE_SHOOT_TREND_LOOKBACK if card_kind == "shooting_star" else CANDLE_HAMMER_TREND_LOOKBACK,
+        )
         side = "bull" if card_kind == "inverted_hammer" else "bear"
         hits.append({
             "time": closed_ts,
@@ -565,6 +584,7 @@ def _candle_card_hits_at_index(
             "prior_low": prior_low,
             "near_vegas": bool(near_v),
             "trend_pct": trend,
+            "vol_ratio": vol_ratio,
         })
     return hits
 
@@ -623,9 +643,9 @@ def find_last_closed_candle_card_hits(
 ) -> list[dict[str, Any]]:
     """最近收盘柱上的 Telegram 卡片信号。
 
-    - 射击之星：位置 + 前序涨幅；不要求 OI；(oi异动)/V*/（2）/连续插针 停推
-    - 倒锤子：与射击之星对称（中轨下 + 前序跌幅）；OI 仅作 tag
-    - 射击之星位置过滤：收盘须在 BB 上轨区或近 Vegas 通道（CANDLE_SHOOT_REQUIRE_POSITION）
+    - 射击之星 / 倒锤子：K 线形态 + 放量 ≥ MA20×倍数；(oi异动)/V*/（2）/连续插针 停推
+    - 默认放量直通（OI_CANDLE_VOL_BYPASS_CONTEXT）：不要求位置/趋势背景
+    - 严模式：OI_CANDLE_SHOOT_REQUIRE_POSITION / OI_CANDLE_*_TREND_MIN_PCT
     """
     if df.empty or "open_time" not in df.columns or "bb_basis" not in df.columns:
         return []

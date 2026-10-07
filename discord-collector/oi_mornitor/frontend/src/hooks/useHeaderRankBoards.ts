@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  dormantFunnelToItems,
   emptyBinanceBoards,
   HEADER_FETCH_MS,
   type BinanceLeaderboardsPayload,
+  type DormantFunnelPayload,
   type HeaderBoardItem,
 } from "../utils/headerRankBoards";
 
+const DORMANT_FETCH_MS = 5 * 60 * 1000;
+
 export function useHeaderRankBoards() {
   const [boards, setBoards] = useState(emptyBinanceBoards());
+  const [dormantBoard, setDormantBoard] = useState<HeaderBoardItem[]>([]);
+  const [dormantMeta, setDormantMeta] = useState<{
+    updatedAt: number | null;
+    slowScanAt: number | null;
+    fastScanAt: number | null;
+  }>({ updatedAt: null, slowScanAt: null, fastScanAt: null });
   const [meta, setMeta] = useState<{
     sourceLabel: string;
     updatedAt: number | null;
@@ -63,18 +73,52 @@ export function useHeaderRankBoards() {
     }
   }, [applyPayload]);
 
+  const fetchDormantFunnel = useCallback(async () => {
+    try {
+      const res = await fetch("/api/dormant-funnel", { cache: "no-store" });
+      if (!res.ok) return;
+      const body = (await res.json()) as DormantFunnelPayload;
+      setDormantBoard(dormantFunnelToItems(body));
+      setDormantMeta({
+        updatedAt: body.updated_at ? body.updated_at * 1000 : null,
+        slowScanAt: body.slow_scan_at ? body.slow_scan_at * 1000 : null,
+        fastScanAt: body.fast_scan_at ? body.fast_scan_at * 1000 : null,
+      });
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     void fetchLeaderboards();
     const id = window.setInterval(() => void fetchLeaderboards(), HEADER_FETCH_MS);
     return () => window.clearInterval(id);
   }, [fetchLeaderboards]);
 
+  useEffect(() => {
+    void fetchDormantFunnel();
+    const id = window.setInterval(() => void fetchDormantFunnel(), DORMANT_FETCH_MS);
+    return () => window.clearInterval(id);
+  }, [fetchDormantFunnel]);
+
   const boardItems = useCallback(
-    (id: keyof typeof boards): HeaderBoardItem[] => boards[id] ?? [],
-    [boards],
+    (id: keyof typeof boards | "dormant"): HeaderBoardItem[] => {
+      if (id === "dormant") return dormantBoard;
+      return boards[id] ?? [];
+    },
+    [boards, dormantBoard],
   );
 
-  const hasBoardData = Object.values(boards).some((rows) => rows.length > 0);
+  const hasBoardData =
+    Object.values(boards).some((rows) => rows.length > 0) || dormantBoard.length > 0;
 
-  return { boards, boardItems, meta, hasBoardData, refresh: fetchLeaderboards };
+  return {
+    boards,
+    boardItems,
+    meta,
+    dormantMeta,
+    hasBoardData,
+    refresh: fetchLeaderboards,
+    refreshDormant: fetchDormantFunnel,
+  };
 }

@@ -8,6 +8,7 @@ import type {
   PatternChartMarker,
   PatternPriceLine,
 } from "../types";
+import { CHART_EMA_LINES, type ChartEmaKey } from "./chartLayers";
 import { buildCandleSignalMarkers } from "./candleSignals";
 import { evaluateSweepMomentum } from "./sweepMomentum";
 
@@ -74,6 +75,7 @@ export function buildChartFromCandles(
 ): {
   bb: { upper: Pt[]; mid: Pt[]; lower: Pt[] };
   vegas: Record<"filter" | "a1" | "a2" | "b1" | "b2", Pt[]>;
+  ema: Record<ChartEmaKey, Pt[]>;
   macd: { line: Pt[]; signal: Pt[]; hist: Pt[] };
   markers: PatternChartMarker[];
   price_lines: PatternPriceLine[];
@@ -111,6 +113,24 @@ export function buildChartFromCandles(
       const v = vals[ki];
       if (v != null && Number.isFinite(v)) vegas[key].push({ time: t, value: v });
     });
+  }
+
+  const ema: Record<ChartEmaKey, Pt[]> = {
+    e13: [],
+    e33: [],
+    e99: [],
+    e144: [],
+  };
+  const emaByPeriod = CHART_EMA_LINES.map(({ key, period }) => ({
+    key,
+    series: emaSeries(closes, period),
+  }));
+  for (let i = 0; i < candles.length; i++) {
+    const t = candles[i].time;
+    for (const { key, series } of emaByPeriod) {
+      const v = series[i];
+      if (v != null && Number.isFinite(v)) ema[key].push({ time: t, value: v });
+    }
   }
 
   const ema12 = emaSeries(closes, 12);
@@ -257,5 +277,18 @@ export function buildChartFromCandles(
   });
   if (sweep) analysis.sweep_momentum = sweep;
 
-  return { bb, vegas, macd, markers, price_lines, analysis };
+  return { bb, vegas, ema, macd, markers, price_lines, analysis };
+}
+
+/** 全量 K 线重算副图指标（避免分页/尾部刷新只合并一段 BB·EMA·MACD）。 */
+export function buildChartIndicatorSeries(
+  candles: PatternCandle[],
+  state?: Record<string, unknown> | null,
+  opts?: { symbol?: string; oiByTime?: Map<number, number> },
+): Pick<
+  ReturnType<typeof buildChartFromCandles>,
+  "bb" | "vegas" | "ema" | "macd"
+> {
+  const built = buildChartFromCandles(candles, state, opts);
+  return { bb: built.bb, vegas: built.vegas, ema: built.ema, macd: built.macd };
 }

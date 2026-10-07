@@ -14,6 +14,16 @@ export const VOLUME_ABOVE_MA_ALPHA = 0.5;
 export const VOLUME_MA_COLOR = "rgba(255, 213, 79, 0.88)";
 export const OI_MA_COLOR = "rgba(255, 183, 77, 0.88)";
 export const NET_BUY_MA_COLOR = "rgba(255, 213, 79, 0.88)";
+/** OI 副图持仓柱（与蓝线 OI、黄线 MA 同 scale） */
+export const OI_BAR_COLOR = "rgba(0, 230, 118, 0.42)";
+
+export type OiPanelAxis = {
+  axisBottom: number;
+  axisTop: number;
+  flat: boolean;
+  yMin: number;
+  yMax: number;
+};
 
 /** 与 pattern 信号口径一致的 SMA（含当前 bar） */
 export function smaAt(values: number[], period: number, i: number): number | null {
@@ -87,6 +97,101 @@ export function buildSignedHistMaLine(
     out.push({ time: hist[i].time as UTCTimestamp, value: avg });
   }
   return out;
+}
+
+/** 可见 logical 区间内 OI + MA 的 min/max（不用全历史） */
+export function visibleOiDomain(
+  logicalFrom: number,
+  logicalTo: number,
+  oi: Array<LineData | WhitespaceData>,
+  ma: LineData[],
+): { yMin: number; yMax: number } | null {
+  if (!oi.length) return null;
+  const i0 = Math.max(0, Math.floor(logicalFrom));
+  const i1 = Math.min(oi.length - 1, Math.ceil(logicalTo));
+  if (i0 > i1) return null;
+
+  const maByTime = new Map<number, number>();
+  for (const p of ma) {
+    if (Number.isFinite(p.value)) maByTime.set(p.time as number, p.value);
+  }
+
+  let yMin = Infinity;
+  let yMax = -Infinity;
+  const ingest = (v: number) => {
+    if (!Number.isFinite(v)) return;
+    yMin = Math.min(yMin, v);
+    yMax = Math.max(yMax, v);
+  };
+
+  for (let i = i0; i <= i1; i++) {
+    const row = oi[i];
+    if (row != null && "value" in row && row.value != null) {
+      ingest(Number(row.value));
+    }
+    const t = row?.time as number | undefined;
+    if (t != null && maByTime.has(t)) ingest(maByTime.get(t)!);
+  }
+
+  if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) return null;
+  return { yMin, yMax };
+}
+
+/**
+ * yMin/yMax → 轴下沿/上沿；yMax==yMin 时不做比例除法，柱子在 rebuild 时画半高。
+ */
+export function computeOiPanelAxis(yMin: number, yMax: number): OiPanelAxis {
+  const flat = yMin === yMax;
+  if (flat) {
+    const eps = Math.max(Math.abs(yMin) * 0.05, 1);
+    const axisBottom = yMin - eps;
+    const axisTop = yMax + eps;
+    return { axisBottom, axisTop, flat: true, yMin, yMax };
+  }
+  const pad = (yMax - yMin) * 0.05;
+  return {
+    axisBottom: yMin - pad,
+    axisTop: yMax + pad,
+    flat: false,
+    yMin,
+    yMax,
+  };
+}
+
+/** 柱从 axisBottom 起画；flat 时整窗半高，否则 value=原始 OI */
+export function buildOiHistogramBars(
+  oi: Array<LineData | WhitespaceData>,
+  axis: OiPanelAxis,
+): Array<HistogramData | WhitespaceData> {
+  const span = axis.axisTop - axis.axisBottom;
+  const halfVal = axis.axisBottom + 0.5 * span;
+  return oi.map((row) => {
+    const t = row.time as UTCTimestamp;
+    if (!("value" in row) || row.value == null) {
+      return { time: t };
+    }
+    const raw = Number(row.value);
+    const value = axis.flat ? halfVal : raw;
+    return {
+      time: row.time as UTCTimestamp,
+      value,
+      color: OI_BAR_COLOR,
+    };
+  });
+}
+
+export function oiAutoscaleForVisibleRange(
+  logicalFrom: number,
+  logicalTo: number,
+  oi: Array<LineData | WhitespaceData>,
+  ma: LineData[],
+): { priceRange: { minValue: number; maxValue: number } } | null {
+  const domain = visibleOiDomain(logicalFrom, logicalTo, oi, ma);
+  if (!domain) return null;
+  const axis = computeOiPanelAxis(domain.yMin, domain.yMax);
+  return {
+    priceRange: { minValue: axis.axisBottom, maxValue: axis.axisTop },
+  };
 }
 
 export function buildOiMaLine(

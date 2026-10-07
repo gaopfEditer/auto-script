@@ -12,7 +12,7 @@ import { deriveAllLists } from "../utils/deriveLists";
 
 export function RadarPage() {
   const { snapshot, online } = useRadarSSE();
-  const { symbols: focusSymbols, remove: removeFocus } = useSpecialFocus();
+  const { symbols: focusSymbols, entries: focusEntries, remove: removeFocus } = useSpecialFocus();
   const [timeframe, setTimeframe] = useState<OiTimeframe>("5m");
   const {
     all_tickers: all,
@@ -34,6 +34,7 @@ export function RadarPage() {
         poolMeta={snapshot.pool_meta}
         poolSize={snapshot.pool_size}
         focusSymbols={focusSymbols}
+        focusEntries={focusEntries}
         onRemoveFocus={(sym) => void removeFocus(sym)}
       />
       <div className="mercu-body">

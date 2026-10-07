@@ -1341,6 +1341,7 @@ class RadarService:
         self._card_price_task: asyncio.Task[None] | None = None
         self._settle_report_task: asyncio.Task[None] | None = None
         self._moonshot_task: asyncio.Task[None] | None = None
+        self._dormant_ignition_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
         self._equity_task: asyncio.Task[None] | None = None
         self._equity_pool: list[dict[str, Any]] = []
@@ -1592,8 +1593,20 @@ class RadarService:
             ),
             name="oi-moonshot-a",
         )
+        from oi_mornitor.dormant_ignition_runner import run_dormant_ignition_loop
+
+        self._dormant_ignition_task = asyncio.create_task(
+            run_dormant_ignition_loop(
+                lambda: self._running,
+                get_pool_rows=lambda: self.radar.last_all_rows,
+                get_session=self._ensure_session,
+                base_url=self.radar.base_url,
+                on_alerts=self._on_dormant_ignition_alerts,
+            ),
+            name="oi-dormant-ignition",
+        )
         logger.info(
-            "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A 慢扫",
+            "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A + 第三梯队沉寂爆发",
             interval_sec,
             max(5.0, float(OPEN_TRADE_SCAN_SEC or 15)),
             max(60.0, float(CARD_PRICE_REFRESH_SEC or 300)),
@@ -1610,6 +1623,15 @@ class RadarService:
             self.pattern_engine._last_moonshot_payload = self.moonshot_engine.get_payload()
         except Exception as exc:  # noqa: BLE001
             logger.warning("合并 moonshot A 警报失败: %s", exc)
+
+    def _on_dormant_ignition_alerts(self, alerts: list[dict[str, Any]]) -> None:
+        if not alerts:
+            return
+        try:
+            cur = list(self.pattern_engine._last_alerts or [])
+            self.pattern_engine._last_alerts = (alerts + cur)[-40:]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("合并沉寂爆发警报失败: %s", exc)
 
     async def _moonshot_full_universe(self) -> list[str] | None:
         """全市场 USDT 永续枚举（仅 OI_MOONSHOT_FULL_SCAN=1）。"""
@@ -1650,6 +1672,7 @@ class RadarService:
             "_card_price_task",
             "_settle_report_task",
             "_moonshot_task",
+            "_dormant_ignition_task",
         ):
             task = getattr(self, attr, None)
             if task:

@@ -11,9 +11,12 @@ import {
   outcomeLabel,
   retryFailedAlertStats,
   reverifyAlertStatsByKeys,
+  recalculateAllSettlementsV2,
   formatAlertTotalPnlPct,
   formatAlertTypeOptionLabel,
   formatMtfResonanceBadge,
+  formatConfluenceBadge,
+  confluenceTitle,
   hasMtfResonance,
   formatIntervalOptionLabel,
   formatDaytypeOptionLabel,
@@ -29,6 +32,12 @@ import {
   type AlertStatsTypeOption,
   type AlertWinRateSummary,
 } from "../utils/patternAlertWinRate";
+import {
+  formatMcapTierBadge,
+  formatMcapTierOptionLabel,
+  mcapTierTitle,
+  type McapTierOption,
+} from "../utils/mcapTier";
 import { PATTERN_ENTRY_RULES } from "../utils/patternEntryRules";
 import { isOiOperator } from "../utils/oiOperator";
 import type { ChartAlertEntryFocus } from "../types";
@@ -178,6 +187,8 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [intervalFilter, setIntervalFilter] = useState<string>("all");
   const [mtfOnly, setMtfOnly] = useState(false);
+  const [confluenceTier, setConfluenceTier] = useState("B");
+  const [mcapTierFilter, setMcapTierFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<AlertStatsRecord[]>([]);
   const [summary, setSummary] = useState<AlertWinRateSummary>(
@@ -187,6 +198,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   const [intervalOptions, setIntervalOptions] = useState<AlertStatsIntervalOption[]>([]);
   const [sessionOptions, setSessionOptions] = useState<AlertStatsSessionOption[]>([]);
   const [daytypeOptions, setDaytypeOptions] = useState<AlertStatsDaytypeOption[]>([]);
+  const [mcapTierOptions, setMcapTierOptions] = useState<McapTierOption[]>([]);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [loadingList, setLoadingList] = useState(false);
@@ -218,6 +230,8 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
         intervalFilter,
         assetClassFilter,
         mtfResonanceOnly: mtfOnly,
+        confluenceMinTier: confluenceTier,
+        mcapTierFilter,
       });
       setRows(res.items);
       setSummary(res.summary);
@@ -225,6 +239,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
       setIntervalOptions(res.intervalOptions ?? []);
       setSessionOptions(res.sessionOptions ?? []);
       setDaytypeOptions(res.daytypeOptions ?? []);
+      setMcapTierOptions(res.mcapTierOptions ?? []);
       setTotal(res.total);
       setPages(res.pages);
       setPage(res.page);
@@ -262,7 +277,17 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     setPage(1);
     void reloadPage({ page: 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, sessionFilter, daytypeFilter, assetClassFilter, typeFilter, intervalFilter, mtfOnly]);
+  }, [
+    filter,
+    sessionFilter,
+    daytypeFilter,
+    assetClassFilter,
+    typeFilter,
+    intervalFilter,
+    mtfOnly,
+    confluenceTier,
+    mcapTierFilter,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -310,6 +335,25 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
       await retryFailedAlertStats(() => bump());
       setStatusNote("失败项重试完成");
       setSelected(new Set());
+      await reloadPage();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const onRecalculateV2All = async () => {
+    if (retrying) return;
+    if (!window.confirm("按 V2 规则重算全库胜率？将拉 K 线，可能需数分钟。")) return;
+    setRetrying(true);
+    setStatusNote("V2 全库重算中…");
+    try {
+      const out = await recalculateAllSettlementsV2();
+      if (!out.ok) {
+        setStatusNote(out.error || "重算失败");
+        return;
+      }
+      setStatusNote(`V2 已更新 ${out.updated ?? 0} 条`);
+      if (out.summary) onStatsChange?.(out.summary);
       await reloadPage();
     } finally {
       setRetrying(false);
@@ -419,6 +463,15 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
             </button>
             {canWriteStats ? (
               <>
+                <button
+                  type="button"
+                  className="pattern-wr-retry"
+                  disabled={retrying}
+                  onClick={() => void onRecalculateV2All()}
+                  title="服务端按 invalid/ATR SL + R 倍数 TP 重算全库"
+                >
+                  {retrying ? "重算中…" : "一键重算 V2"}
+                </button>
                 <button
                   type="button"
                   className="pattern-wr-retry selected"
@@ -606,6 +659,43 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
               ))}
             </select>
           </label>
+          <label className="pattern-wr-type-filter" title="按市值梯队筛选；与结构回测一致">
+            <span>市值梯队</span>
+            <select
+              value={mcapTierFilter}
+              onChange={(e) => {
+                setMcapTierFilter(e.target.value);
+                setPage(1);
+              }}
+              aria-label="按市值梯队筛选"
+            >
+              {(mcapTierOptions.length
+                ? mcapTierOptions
+                : [{ id: "all", label: "全部梯队", count: 0, wins: 0, losses: 0, winRate: null }]
+              ).map((o) => (
+                <option key={o.id} value={o.id}>
+                  {formatMcapTierOptionLabel(o)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="pattern-wr-type-filter" title="与结构形态回测同源 signal_confluence">
+            <span>综合分</span>
+            <select
+              value={confluenceTier}
+              onChange={(e) => {
+                setConfluenceTier(e.target.value);
+                setPage(1);
+              }}
+              aria-label="按综合分档位筛选"
+            >
+              <option value="all">全部档位</option>
+              <option value="A">A 档</option>
+              <option value="B">B 档及以上</option>
+              <option value="C">C 档及以上</option>
+              <option value="D">仅 D 档</option>
+            </select>
+          </label>
           <label className="pattern-wr-mtf-filter" title="15m/1h/4h 同币同向、同形态族，4h 内 ≥2 周期">
             <input
               type="checkbox"
@@ -641,10 +731,12 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                   ) : null}
                   <th>时间</th>
                   <th>币种</th>
+                  <th title="市值一/二/三梯队">梯队</th>
                   <th>方向</th>
                   <th>类型</th>
                   <th>周期</th>
                   <th>共振</th>
+                  <th title="形态族+周期+共振+来源；A≥78 B≥58 C≥40">综合</th>
                   <th>入场</th>
                   <th>结果</th>
                   <th>回溯盈亏</th>
@@ -685,6 +777,18 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                         <strong>${r.symbol}</strong>
                       </td>
                       <td onClick={openChart}>
+                        {r.mcapTier ? (
+                          <span
+                            className={`pattern-wr-mcap-badge tier-${r.mcapTier}`}
+                            title={mcapTierTitle(r.mcapTier)}
+                          >
+                            {formatMcapTierBadge(r.mcapTier)}
+                          </span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                      <td onClick={openChart}>
                         <span
                           className={`pattern-wr-dir ${
                             r.dir === "多" ? "long" : r.dir === "空" ? "short" : "flat"
@@ -706,6 +810,18 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                             title={`多周期共振：${formatMtfResonanceBadge(r.mtfResonance)}`}
                           >
                             {formatMtfResonanceBadge(r.mtfResonance)}
+                          </span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                      <td onClick={openChart}>
+                        {r.confluence ? (
+                          <span
+                            className={`pattern-wr-conf-badge tier-${r.confluence.tier}`}
+                            title={confluenceTitle(r.confluence)}
+                          >
+                            {formatConfluenceBadge(r.confluence)}
                           </span>
                         ) : (
                           <span className="muted">—</span>

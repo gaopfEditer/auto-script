@@ -533,6 +533,16 @@ export interface PatternChartDerivatives {
   };
 }
 
+/** 形态图头部：市值梯队（与 mcap_tier.py / chart-meta 同源） */
+export interface PatternChartMcapTier {
+  id: string;
+  label: string;
+  mcapNote?: string;
+  strategyHint?: string;
+  listedInTierConfig?: boolean;
+  marketCapUsd?: number;
+}
+
 export interface PatternChartAnalysis {
   status?: string;
   status_label?: string;
@@ -589,6 +599,12 @@ export interface PatternChartData {
     b1?: { time: number; value: number }[];
     b2?: { time: number; value: number }[];
   };
+  ema?: {
+    e13?: { time: number; value: number }[];
+    e33?: { time: number; value: number }[];
+    e99?: { time: number; value: number }[];
+    e144?: { time: number; value: number }[];
+  };
   macd?: {
     line?: { time: number; value: number }[];
     signal?: { time: number; value: number }[];
@@ -606,6 +622,7 @@ export interface PatternChartData {
     quote_volume?: number;
     oi_tier?: string;
   };
+  mcapTier?: PatternChartMcapTier;
   error?: string;
 }
 

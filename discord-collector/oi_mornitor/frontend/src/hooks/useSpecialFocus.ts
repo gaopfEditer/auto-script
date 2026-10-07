@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { displaySymbol } from "../utils/symbol";
+import type { FocusEntryMeta } from "../utils/headerRankBoards";
 
 const LS_KEY = "oi_special_focus_symbols_v1";
+const LS_ENTRIES_KEY = "oi_special_focus_entries_v1";
 const DEFAULT_FOCUS = ["BTCUSDT", "ETHUSDT"];
 
 function normalizeSymbol(raw: string): string {
@@ -29,9 +31,22 @@ function readLocal(): string[] {
   }
 }
 
-function writeLocal(symbols: string[]) {
+function readLocalEntries(): Record<string, FocusEntryMeta> {
+  try {
+    const raw = localStorage.getItem(LS_ENTRIES_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed as Record<string, FocusEntryMeta>;
+  } catch {
+    return {};
+  }
+}
+
+function writeLocal(symbols: string[], entries: Record<string, FocusEntryMeta>) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(symbols));
+    localStorage.setItem(LS_ENTRIES_KEY, JSON.stringify(entries));
   } catch {
     /* ignore */
   }
@@ -39,35 +54,46 @@ function writeLocal(symbols: string[]) {
 
 export function useSpecialFocus() {
   const [symbols, setSymbols] = useState<string[]>(() => readLocal());
+  const [entries, setEntries] = useState<Record<string, FocusEntryMeta>>(() => readLocalEntries());
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const pull = async () => {
       try {
-        const res = await fetch("/api/focus-symbols");
-        const data = (await res.json()) as { ok?: boolean; symbols?: string[] };
+        const res = await fetch("/api/focus-symbols", { cache: "no-store" });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          symbols?: string[];
+          entries?: Record<string, FocusEntryMeta>;
+        };
         if (!cancelled && data.ok && Array.isArray(data.symbols)) {
           const next = data.symbols.map(normalizeSymbol).filter(Boolean);
           const uniq = [...new Set(next)];
+          const ent = data.entries && typeof data.entries === "object" ? data.entries : {};
           setSymbols(uniq.length ? uniq : [...DEFAULT_FOCUS]);
-          writeLocal(uniq.length ? uniq : [...DEFAULT_FOCUS]);
+          setEntries(ent);
+          writeLocal(uniq.length ? uniq : [...DEFAULT_FOCUS], ent);
         }
       } catch {
         /* 用 localStorage */
       } finally {
         if (!cancelled) setReady(true);
       }
-    })();
+    };
+    void pull();
+    const id = window.setInterval(pull, 5 * 60_000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
   }, []);
 
-  const sync = useCallback(async (next: string[]) => {
+  const sync = useCallback(async (next: string[], ent = entries) => {
     const cleaned = [...new Set(next.map(normalizeSymbol).filter(Boolean))];
     setSymbols(cleaned);
-    writeLocal(cleaned);
+    setEntries(ent);
+    writeLocal(cleaned, ent);
     try {
       await fetch("/api/focus-symbols", {
         method: "PUT",
@@ -78,7 +104,7 @@ export function useSpecialFocus() {
       /* 本地已更新 */
     }
     return cleaned;
-  }, []);
+  }, [entries]);
 
   const add = useCallback(
     async (symbol: string) => {
@@ -93,9 +119,14 @@ export function useSpecialFocus() {
   const remove = useCallback(
     async (symbol: string) => {
       const n = normalizeSymbol(symbol);
-      return sync(symbols.filter((s) => s !== n));
+      const nextEnt = { ...entries };
+      delete nextEnt[n];
+      return sync(
+        symbols.filter((s) => s !== n),
+        nextEnt,
+      );
     },
-    [symbols, sync],
+    [symbols, entries, sync],
   );
 
   const toggle = useCallback(
@@ -115,5 +146,5 @@ export function useSpecialFocus() {
 
   const label = useCallback((symbol: string) => displaySymbol(symbol), []);
 
-  return { symbols, ready, add, remove, toggle, has, label, sync };
+  return { symbols, entries, ready, add, remove, toggle, has, label, sync };
 }

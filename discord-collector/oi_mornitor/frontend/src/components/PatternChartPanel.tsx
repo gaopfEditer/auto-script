@@ -13,6 +13,7 @@ import {
   type LogicalRange,
   type SeriesMarker,
   type UTCTimestamp,
+  type WhitespaceData,
 } from "lightweight-charts";
 import type { ChartAlertEntryFocus, PatternCandle, PatternChartData, PatternState } from "../types";
 import {
@@ -24,6 +25,11 @@ import {
   fmtNum,
   fmtPct,
 } from "../utils/format";
+import {
+  formatChartMcapDisplay,
+  formatMcapTierBadge,
+  mcapTierTitle,
+} from "../utils/mcapTier";
 import { alignPriceToReference, displaySymbol } from "../utils/symbol";
 import { CoinAvatar } from "./CoinAvatar";
 import type { TickerRow } from "../types";
@@ -40,16 +46,20 @@ import {
   type ChartTimeframe,
   chartCandlesApiUrl,
   fetchPatternChart,
-  mergeBbSeries,
   mergeCandlesByTime,
-  mergeMacdMap,
-  mergeVegasMap,
   oldestCandleOpenMs,
   resolveChartHasMore,
   type VegasKey,
+  vegasSeriesLineWidth,
 } from "../utils/chartTimeframe";
+import {
+  CHART_EMA_LINES,
+  DEFAULT_CHART_LAYERS,
+  TRAIN_CHART_LAYER_TOGGLES,
+  type ChartEmaKey,
+} from "../utils/chartLayers";
 import { chartLocalization, chartTimeScaleOptions, formatCandleLocalTime } from "../utils/chartLocale";
-import { buildChartFromCandles } from "../utils/chartIndicators";
+import { buildChartFromCandles, buildChartIndicatorSeries } from "../utils/chartIndicators";
 import {
   buildAlertEntryMarkers,
   fetchAlertStatsForSymbol,
@@ -60,20 +70,24 @@ import {
   type ChartDerivSubplots,
 } from "../utils/chartDerivSubplots";
 import {
+  buildOiHistogramBars,
   buildOiMaLine,
   buildSignedHistMaLine,
   buildVolumeMaData,
+  computeOiPanelAxis,
   NET_BUY_MA_COLOR,
   NET_BUY_MA_PERIOD,
+  oiAutoscaleForVisibleRange,
   OI_MA_COLOR,
   OI_MA_PERIOD,
+  visibleOiDomain,
   VOLUME_MA_COLOR,
   VOLUME_MA_PERIOD,
   volumeLiveUpdate,
 } from "../utils/chartMaSeries";
 
 /** 仅当左缘已贴到数据起点附近（几乎要露空白）才预取；真正空白是 from < 0 */
-const LEFT_HISTORY_PAD = 5;
+const LEFT_HISTORY_PAD = 24;
 /** 当前选中币种：定时重拉近期 K 线（毫秒） */
 const CHART_KLINE_REFRESH_MS = 60_000;
 /** 自动向左续载的上限 */
@@ -85,7 +99,10 @@ const CHART_HISTORY_MAX = 5000;
  */
 function needsLeftHistory(range: LogicalRange, len: number): boolean {
   if (len <= 0 || len >= CHART_HISTORY_MAX) return false;
-  return range.from < 0 || range.from < LEFT_HISTORY_PAD;
+  if (range.from < 0) return true;
+  const span = Math.max(1, range.to - range.from);
+  const pad = Math.max(LEFT_HISTORY_PAD, Math.min(160, span * 0.22));
+  return range.from < pad;
 }
 
 function restoreLogicalRange(
@@ -153,31 +170,18 @@ interface Props {
   addWatchBusy?: boolean;
 }
 
-type ChartLayers = {
-  bb: boolean;
-  volume: boolean;
-  macd: boolean;
-  candlePattern: boolean;
-  structure: boolean;
+type ChartLayers = typeof DEFAULT_CHART_LAYERS & {
   /** 下方持仓量 / 净买入副图（默认关） */
   oi: boolean;
 };
 
 const DEFAULT_LAYERS: ChartLayers = {
-  bb: true,
-  volume: true,
-  macd: true,
-  candlePattern: true,
-  structure: true,
+  ...DEFAULT_CHART_LAYERS,
   oi: false,
 };
 
 const LAYER_TOGGLES: { key: keyof ChartLayers; label: string }[] = [
-  { key: "bb", label: "布林" },
-  { key: "volume", label: `量能·MA${VOLUME_MA_PERIOD}` },
-  { key: "macd", label: "MACD" },
-  { key: "candlePattern", label: "K线形态" },
-  { key: "structure", label: "形态线" },
+  ...TRAIN_CHART_LAYER_TOGGLES,
   { key: "oi", label: "持仓量" },
 ];
 
@@ -503,8 +507,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const oiChartApi = useRef<IChartApi | null>(null);
   const spotNetChartApi = useRef<IChartApi | null>(null);
   const futNetChartApi = useRef<IChartApi | null>(null);
+  const oiHistSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const oiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const oiMaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const oiLineDataRef = useRef<Array<LineData | WhitespaceData>>([]);
+  const oiMaLineDataRef = useRef<LineData[]>([]);
+  const oiVisibleRefreshRef = useRef<() => void>(() => {});
   const spotNetSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const spotNetMaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const futNetSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -531,6 +539,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const macdLineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
   const vegasRefs = useRef<Partial<Record<VegasKey, ISeriesApi<"Line">>>>({});
+  const emaRefs = useRef<Partial<Record<ChartEmaKey, ISeriesApi<"Line">>>>({});
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const alertEntryLineRef = useRef<IPriceLine | null>(null);
   const alertEntryMarkersRef = useRef<NonNullable<PatternChartData["markers"]>>([]);
@@ -608,6 +617,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       lowerRef.current?.applyOptions({ priceFormat: fmt });
       for (const { key } of VEGAS_SERIES) {
         vegasRefs.current[key]?.applyOptions({ priceFormat: fmt });
+      }
+      for (const { key } of CHART_EMA_LINES) {
+        emaRefs.current[key]?.applyOptions({ priceFormat: fmt });
       }
       chartApi.current?.applyOptions({
         localization: {
@@ -700,10 +712,19 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           .filter((c, i, arr) => i === 0 || c.time !== arr[i - 1].time);
         const prepended = opts?.isPrepend ? sortedCandles.length - prevLen : 0;
 
+        const stateForIndicators = (metaRef.current?.state || payload.state) as
+          | PatternState
+          | undefined;
+        const { bb, vegas, ema, macd } = buildChartIndicatorSeries(
+          sortedCandles,
+          stateForIndicators as Record<string, unknown> | null,
+          { symbol: payload.symbol || symbol },
+        );
+
         // 必须先设精度再 setData：LWC 会按 minMove 量化 OHLC，默认 0.01 会把低价币画成锯齿
         const samplePrices = sortedCandles.flatMap((c) => [c.open, c.high, c.low, c.close]);
         applyPriceAxisFormat(sortedCandles.at(-1)?.close, samplePrices);
-        applyMacdAxisFormat(payload);
+        applyMacdAxisFormat({ ...payload, macd });
 
         series.setData(toCandleData(sortedCandles));
 
@@ -726,26 +747,26 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         if (!payload.partial) {
           applyPriceLines(payload);
           applyAlertEntryPriceLine(sortedCandles);
-          metaRef.current = { ...payload, markers: rebuilt };
+          metaRef.current = { ...payload, bb, vegas, ema, macd, markers: rebuilt };
         } else if (metaRef.current) {
-          metaRef.current = { ...metaRef.current, markers: rebuilt };
+          metaRef.current = { ...metaRef.current, bb, vegas, ema, macd, markers: rebuilt };
           applyAlertEntryPriceLine(sortedCandles);
         }
 
         if (upperRef.current) {
-          const upperPts = [...(payload.bb?.upper ?? [])].sort((a, b) => a.time - b.time);
+          const upperPts = [...(bb.upper ?? [])].sort((a, b) => a.time - b.time);
           upperRef.current.setData(
             upperPts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
           );
         }
         if (midRef.current) {
-          const midPts = [...(payload.bb?.mid ?? [])].sort((a, b) => a.time - b.time);
+          const midPts = [...(bb.mid ?? [])].sort((a, b) => a.time - b.time);
           midRef.current.setData(
             midPts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
           );
         }
         if (lowerRef.current) {
-          const lowerPts = [...(payload.bb?.lower ?? [])].sort((a, b) => a.time - b.time);
+          const lowerPts = [...(bb.lower ?? [])].sort((a, b) => a.time - b.time);
           lowerRef.current.setData(
             lowerPts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
           );
@@ -754,7 +775,16 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         for (const { key } of VEGAS_SERIES) {
           const line = vegasRefs.current[key];
           if (!line) continue;
-          const pts = [...(payload.vegas?.[key] ?? [])].sort((a, b) => a.time - b.time);
+          const pts = [...(vegas[key] ?? [])].sort((a, b) => a.time - b.time);
+          line.setData(
+            pts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+        }
+
+        for (const { key } of CHART_EMA_LINES) {
+          const line = emaRefs.current[key];
+          if (!line) continue;
+          const pts = [...(ema[key] ?? [])].sort((a, b) => a.time - b.time);
           line.setData(
             pts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
           );
@@ -767,7 +797,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         }
 
         if (macdHistRef.current) {
-          const hist = [...(payload.macd?.hist ?? [])].sort((a, b) => a.time - b.time);
+          const hist = [...(macd.hist ?? [])].sort((a, b) => a.time - b.time);
           macdHistRef.current.setData(
             hist.map(
               (p) =>
@@ -780,8 +810,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
             ),
           );
         }
-        const macdLinePts = [...(payload.macd?.line ?? [])].sort((a, b) => a.time - b.time);
-        const macdSigPts = [...(payload.macd?.signal ?? [])].sort((a, b) => a.time - b.time);
+        const macdLinePts = [...(macd.line ?? [])].sort((a, b) => a.time - b.time);
+        const macdSigPts = [...(macd.signal ?? [])].sort((a, b) => a.time - b.time);
         if (macdLineRef.current) {
           macdLineRef.current.setData(
             macdLinePts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
@@ -842,7 +872,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         setErr(e instanceof Error ? e.message : "图表渲染失败");
       }
     },
-    [applyPriceLines, applyAlertEntryPriceLine, applyPriceAxisFormat, applyMacdAxisFormat],
+    [symbol, applyPriceLines, applyAlertEntryPriceLine, applyPriceAxisFormat, applyMacdAxisFormat],
   );
 
   const loadMoreHistoryRef = useRef<() => Promise<void>>(async () => {});
@@ -863,10 +893,13 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     try {
       const prevLen = candlesRef.current.length;
       const prevRange = chartApi.current?.timeScale().getVisibleLogicalRange() ?? null;
-      const chunk = await fetchPatternChart(symbol, timeframeRef.current, {
-        limit: CHART_LOAD_CHUNK,
-        endTimeMs: oldestMs - 1,
-      });
+      const res = await fetch(
+        chartCandlesApiUrl(symbol, timeframeRef.current, {
+          limit: CHART_LOAD_CHUNK,
+          endTimeMs: oldestMs - 1,
+        }),
+      );
+      const chunk = (await res.json()) as PatternChartData;
       if (!chunk.ok || !chunk.candles?.length) {
         hasMoreRef.current = false;
         setHasMore(false);
@@ -885,27 +918,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         resolveChartHasMore(chunk, CHART_LOAD_CHUNK) && merged.length < CHART_HISTORY_MAX;
       setHasMore(hasMoreRef.current);
 
-      const mergedUpper = mergeBbSeries(metaRef.current?.bb?.upper ?? [], chunk.bb?.upper ?? []);
-      const mergedMid = mergeBbSeries(metaRef.current?.bb?.mid ?? [], chunk.bb?.mid ?? []);
-      const mergedLower = mergeBbSeries(metaRef.current?.bb?.lower ?? [], chunk.bb?.lower ?? []);
-      const mergedVegas = mergeVegasMap(metaRef.current?.vegas, chunk.vegas);
-      const mergedMacd = mergeMacdMap(metaRef.current?.macd, chunk.macd);
-      if (metaRef.current) {
-        metaRef.current = {
-          ...metaRef.current,
-          bb: { upper: mergedUpper, mid: mergedMid, lower: mergedLower },
-          vegas: mergedVegas,
-          macd: mergedMacd,
-          oi: [],
-        };
-      }
       applyChartSeries(
         {
           ...chunk,
           partial: true,
-          bb: { upper: mergedUpper, mid: mergedMid, lower: mergedLower },
-          vegas: mergedVegas,
-          macd: mergedMacd,
+          state: metaRef.current?.state ?? chunk.state,
           oi: [],
         },
         merged,
@@ -914,31 +931,34 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
       // 同步 React state，但跳过 data→apply 的二次 setData（否则会丢 isPrepend 视口偏移）
       skipNextDataApplyRef.current = true;
+      const ind = metaRef.current;
       setData((prev) =>
         prev
           ? {
               ...prev,
               candles: merged,
               has_more: hasMoreRef.current,
-              bb: { upper: mergedUpper, mid: mergedMid, lower: mergedLower },
-              vegas: mergedVegas,
-              macd: mergedMacd,
+              bb: ind?.bb ?? prev.bb,
+              vegas: ind?.vegas ?? prev.vegas,
+              ema: ind?.ema ?? prev.ema,
+              macd: ind?.macd ?? prev.macd,
               oi: [],
-              markers: metaRef.current?.markers ?? prev.markers,
+              markers: ind?.markers ?? prev.markers,
             }
           : {
               ...chunk,
               ok: true,
               candles: merged,
               has_more: hasMoreRef.current,
-              bb: { upper: mergedUpper, mid: mergedMid, lower: mergedLower },
-              vegas: mergedVegas,
-              macd: mergedMacd,
+              bb: ind?.bb ?? chunk.bb,
+              vegas: ind?.vegas ?? chunk.vegas,
+              ema: ind?.ema,
+              macd: ind?.macd ?? chunk.macd,
               oi: [],
-              markers: metaRef.current?.markers ?? chunk.markers ?? [],
-              price_lines: metaRef.current?.price_lines ?? [],
-              analysis: metaRef.current?.analysis ?? {},
-              state: metaRef.current?.state ?? ({} as PatternState),
+              markers: ind?.markers ?? chunk.markers ?? [],
+              price_lines: ind?.price_lines ?? [],
+              analysis: ind?.analysis ?? {},
+              state: ind?.state ?? ({} as PatternState),
             },
       );
 
@@ -976,20 +996,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       if (!json.ok || !json.candles?.length) return;
 
       const merged = mergeCandlesByTime(candlesRef.current, json.candles);
-      const mergedUpper = mergeBbSeries(metaRef.current?.bb?.upper ?? [], json.bb?.upper ?? []);
-      const mergedMid = mergeBbSeries(metaRef.current?.bb?.mid ?? [], json.bb?.mid ?? []);
-      const mergedLower = mergeBbSeries(metaRef.current?.bb?.lower ?? [], json.bb?.lower ?? []);
-      const mergedVegas = mergeVegasMap(metaRef.current?.vegas, json.vegas);
-      const mergedMacd = mergeMacdMap(metaRef.current?.macd, json.macd);
 
       setData({
         ...json,
         candles: merged,
-        bb: { upper: mergedUpper, mid: mergedMid, lower: mergedLower },
-        vegas: mergedVegas,
-        macd: mergedMacd,
         oi: [],
-        // markers 由 applyChartSeries 按全量 K 线重算，避免尾部刷新冲掉历史形态
+        // markers / 指标由 applyChartSeries 按全量 K 线重算
         markers: metaRef.current?.markers ?? json.markers,
       });
     } catch {
@@ -1050,6 +1062,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     upperRef.current?.applyOptions({ visible: next.bb });
     midRef.current?.applyOptions({ visible: next.bb });
     lowerRef.current?.applyOptions({ visible: next.bb });
+    for (const { key } of VEGAS_SERIES) {
+      vegasRefs.current[key]?.applyOptions({ visible: next.vegas });
+    }
+    for (const { key } of CHART_EMA_LINES) {
+      emaRefs.current[key]?.applyOptions({ visible: next.ema });
+    }
     volumeRef.current?.applyOptions({ visible: next.volume });
     volumeMaRef.current?.applyOptions({ visible: next.volume });
     macdHistRef.current?.applyOptions({ visible: next.macd });
@@ -1292,6 +1310,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                   price_lines: json.price_lines ?? prev.price_lines,
                   ticker: json.ticker ?? prev.ticker,
                   oi: json.oi ?? prev.oi,
+                  // 若 K 线条数一致，顺带刷新 meta；指标仍由 applyChartSeries 全量重算
+                  ...(prev.candles.length === json.candles.length
+                    ? {
+                        candles: json.candles,
+                      }
+                    : {}),
                 }
               : json,
           );
@@ -1339,6 +1363,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       macdLineRef.current = null;
       macdSignalRef.current = null;
       vegasRefs.current = {};
+      emaRefs.current = {};
       priceLinesRef.current = [];
     }
 
@@ -1424,9 +1449,21 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       for (const { key, color } of VEGAS_SERIES) {
         vegasRefs.current[key] = chart.addLineSeries({
           color,
-          lineWidth: key === "filter" ? 2 : 1,
+          lineWidth: vegasSeriesLineWidth(key),
           priceLineVisible: false,
           lastValueVisible: false,
+          visible: layersRef.current.vegas,
+          priceFormat: seedFmt,
+        });
+      }
+
+      for (const { key, color, period } of CHART_EMA_LINES) {
+        emaRefs.current[key] = chart.addLineSeries({
+          color,
+          lineWidth: period <= 13 ? 2 : period <= 33 ? 1 : 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          visible: layersRef.current.ema,
           priceFormat: seedFmt,
         });
       }
@@ -1567,6 +1604,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       };
       el.addEventListener("pointerup", onPointerUp);
       el.addEventListener("pointercancel", onPointerUp);
+      el.addEventListener("touchend", onPointerUp, { passive: true });
 
       const resizeMain = () => {
         if (chartRef.current && chartApi.current) {
@@ -1620,6 +1658,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         macdLineRef.current = null;
         macdSignalRef.current = null;
         vegasRefs.current = {};
+      emaRefs.current = {};
         priceLinesRef.current = [];
         alertEntryLineRef.current = null;
       };
@@ -1659,6 +1698,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const oiUsd = liveTicker?.current_oi_usd ?? ticker?.current_oi_usd;
   const quoteVol = liveTicker?.quote_volume ?? ticker?.quote_volume;
   const statusLabel = analysis?.status_label || state?.status_label || "—";
+  const mcapTier = data?.mcapTier;
 
   useEffect(() => {
     const seed =
@@ -1684,10 +1724,54 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     applyPriceAxisFormat(seed, samples);
   }, [lastPrice, data?.candles, candleCount, applyPriceAxisFormat]);
 
+  const oiAutoscaleProvider = useCallback(
+    (
+      original: () => { priceRange: { minValue: number; maxValue: number } | null } | null,
+    ) => {
+      const range =
+        oiChartApi.current?.timeScale().getVisibleLogicalRange() ??
+        chartApi.current?.timeScale().getVisibleLogicalRange();
+      const oi = oiLineDataRef.current;
+      const ma = oiMaLineDataRef.current;
+      if (range && oi.length) {
+        const scaled = oiAutoscaleForVisibleRange(range.from, range.to, oi, ma);
+        if (scaled) return scaled;
+      }
+      return original();
+    },
+    [],
+  );
+
+  const refreshOiVisibleLayout = useCallback(() => {
+    const range =
+      oiChartApi.current?.timeScale().getVisibleLogicalRange() ??
+      chartApi.current?.timeScale().getVisibleLogicalRange();
+    const oi = oiLineDataRef.current;
+    const ma = oiMaLineDataRef.current;
+    const hist = oiHistSeriesRef.current;
+    if (!range || !oi.length || !hist) return;
+    const domain = visibleOiDomain(range.from, range.to, oi, ma);
+    if (!domain) return;
+    const axis = computeOiPanelAxis(domain.yMin, domain.yMax);
+    try {
+      hist.applyOptions({ base: axis.axisBottom });
+      hist.setData(buildOiHistogramBars(oi, axis));
+    } catch {
+      /* chart disposed */
+    }
+  }, []);
+
+  useEffect(() => {
+    oiVisibleRefreshRef.current = refreshOiVisibleLayout;
+  }, [refreshOiVisibleLayout]);
+
   const applyDerivSubplotsToCharts = useCallback(
     (payload: ChartDerivSubplots, times: number[]) => {
+      const maLine = buildOiMaLine(payload.oi);
+      oiLineDataRef.current = payload.oi;
+      oiMaLineDataRef.current = maLine;
       oiSeriesRef.current?.setData(payload.oi);
-      oiMaSeriesRef.current?.setData(buildOiMaLine(payload.oi));
+      oiMaSeriesRef.current?.setData(maLine);
       spotNetSeriesRef.current?.setData(payload.spotNet);
       spotNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.spotNet));
       futNetSeriesRef.current?.setData(payload.futuresNet);
@@ -1736,6 +1820,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           derivSyncingRef.current = false;
         }
       }
+      requestAnimationFrame(() => oiVisibleRefreshRef.current());
     },
     [],
   );
@@ -1749,8 +1834,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       oiChartApi.current = null;
       spotNetChartApi.current = null;
       futNetChartApi.current = null;
+      oiHistSeriesRef.current = null;
       oiSeriesRef.current = null;
       oiMaSeriesRef.current = null;
+      oiLineDataRef.current = [];
+      oiMaLineDataRef.current = [];
       spotNetSeriesRef.current = null;
       spotNetMaSeriesRef.current = null;
       futNetSeriesRef.current = null;
@@ -1824,11 +1912,18 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       /* ignore */
     }
 
+    const oiHistSeries = oiChart.addHistogramSeries({
+      priceLineVisible: false,
+      lastValueVisible: false,
+      base: 0,
+      autoscaleInfoProvider: oiAutoscaleProvider,
+    });
     const oiSeries = oiChart.addLineSeries({
       color: DERIV_OI_LINE_COLOR,
       lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: true,
+      autoscaleInfoProvider: oiAutoscaleProvider,
     });
     const oiMaSeries = oiChart.addLineSeries({
       color: OI_MA_COLOR,
@@ -1836,6 +1931,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       lineStyle: LineStyle.Dashed,
       priceLineVisible: false,
       lastValueVisible: false,
+      autoscaleInfoProvider: oiAutoscaleProvider,
     });
     const spotSeries = spotChart.addHistogramSeries({
       priceFormat: { type: "volume" },
@@ -1861,6 +1957,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       priceLineVisible: false,
       lastValueVisible: false,
     });
+    oiHistSeriesRef.current = oiHistSeries;
     oiSeriesRef.current = oiSeries;
     oiMaSeriesRef.current = oiMaSeries;
     spotNetSeriesRef.current = spotSeries;
@@ -2014,6 +2111,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       } finally {
         derivSyncingRef.current = false;
       }
+      requestAnimationFrame(() => oiVisibleRefreshRef.current());
     };
     const onMainRange = (range: LogicalRange | null) => syncFromMain(range);
     main.timeScale().subscribeVisibleLogicalRangeChange(onMainRange);
@@ -2067,8 +2165,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       oiChartApi.current = null;
       spotNetChartApi.current = null;
       futNetChartApi.current = null;
+      oiHistSeriesRef.current = null;
       oiSeriesRef.current = null;
       oiMaSeriesRef.current = null;
+      oiLineDataRef.current = [];
+      oiMaLineDataRef.current = [];
       spotNetSeriesRef.current = null;
       spotNetMaSeriesRef.current = null;
       futNetSeriesRef.current = null;
@@ -2078,7 +2179,15 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       futCrossAnchorRef.current = null;
       if (crosshairVLineRef.current) crosshairVLineRef.current.style.display = "none";
     };
-  }, [layers.oi, symbol, timeframe, candleCount > 0, mainChartGen, applyDerivSubplotsToCharts]);
+  }, [
+    layers.oi,
+    symbol,
+    timeframe,
+    candleCount > 0,
+    mainChartGen,
+    applyDerivSubplotsToCharts,
+    oiAutoscaleProvider,
+  ]);
 
   /** 持仓量副图数据：与当前已加载 K 线时间戳对齐 */
   useEffect(() => {
@@ -2098,7 +2207,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     const placeholders = times.map((t) => ({ time: t as UTCTimestamp }));
     const anchorData = buildCrosshairAnchorLine(times);
     oiSeriesRef.current?.setData(placeholders);
+    oiHistSeriesRef.current?.setData(placeholders);
     oiMaSeriesRef.current?.setData([]);
+    oiLineDataRef.current = [];
+    oiMaLineDataRef.current = [];
     spotNetSeriesRef.current?.setData(placeholders);
     spotNetMaSeriesRef.current?.setData([]);
     futNetSeriesRef.current?.setData(placeholders);
@@ -2193,6 +2305,26 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                   ${fmtMetaPrice(lastPrice)}
                   {pct != null ? ` · ${fmtPct(pct)}` : ""}
                 </span>
+                {mcapTier?.id ? (
+                  <>
+                    <span
+                      className="pattern-chart-mcap"
+                      title={
+                        mcapTier.marketCapUsd != null
+                          ? `流通市值约 ${fmtNum(mcapTier.marketCapUsd)}（CoinGecko Top250）`
+                          : mcapTierTitle(mcapTier.id)
+                      }
+                    >
+                      市值 {formatChartMcapDisplay(mcapTier)}
+                    </span>
+                    <span
+                      className={`pattern-wr-mcap-badge pattern-chart-tier tier-${mcapTier.id}`}
+                      title={mcapTierTitle(mcapTier.id)}
+                    >
+                      {formatMcapTierBadge(mcapTier.id)} · {mcapTier.label}
+                    </span>
+                  </>
+                ) : null}
                 <span>OI {fmtNum(oiUsd)}</span>
                 {deriv?.funding_rate_pct != null ? (
                   <span
@@ -2318,7 +2450,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                     ) : null}
                   </li>
                 ))}
-                {hasVegas
+                {layers.vegas && hasVegas
                   ? VEGAS_SERIES.map((s) => (
                       <li key={`vegas-${s.key}`}>
                         <span className="legend-dot" style={{ background: s.color }} />
@@ -2326,7 +2458,24 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                       </li>
                     ))
                   : null}
-                {(data?.bb?.mid?.length ?? 0) > 0 ? (
+                {layers.ema
+                  ? CHART_EMA_LINES.map((s) => {
+                      const pts = data?.ema?.[s.key];
+                      const last =
+                        pts?.length && Number.isFinite(pts[pts.length - 1]?.value)
+                          ? pts[pts.length - 1]!.value
+                          : null;
+                      return (
+                        <li key={`ema-${s.key}`}>
+                          <span className="legend-dot" style={{ background: s.color }} />
+                          <span style={{ color: s.color }}>
+                            {last != null ? `${s.title}：${fmtMetaPrice(last)}` : s.title}
+                          </span>
+                        </li>
+                      );
+                    })
+                  : null}
+                {layers.bb && (data?.bb?.mid?.length ?? 0) > 0 ? (
                   <li key="bb-mid">
                     <span className="legend-dot" style={{ background: "rgba(255, 193, 7, 0.85)" }} />
                     布林中轨

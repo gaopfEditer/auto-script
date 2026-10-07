@@ -6,11 +6,22 @@ import { displaySymbol } from "../utils/symbol";
 import {
   alertStatsLeverage,
   alertStatsPnlPct,
+  confluenceTitle,
   formatAlertStatsTime,
+  formatConfluenceBadge,
+  formatMtfResonanceBadge,
+  hasMtfResonance,
   outcomeLabel,
+  type AlertConfluence,
+  type AlertMtfResonance,
   type AlertOutcome,
   type AlertStatsRecord,
 } from "../utils/patternAlertWinRate";
+import {
+  formatMcapTierBadge,
+  formatMcapTierOptionLabel,
+  mcapTierTitle,
+} from "../utils/mcapTier";
 
 type KindOption = { id: string; label: string; side: string };
 
@@ -28,6 +39,10 @@ type BacktestSummary = {
 type ByIntervalRow = BacktestSummary & { interval: string; count: number };
 
 type ByTypeRow = BacktestSummary & { typeLabel?: string; label?: string; count: number };
+
+type ByTierRow = BacktestSummary & { tier: string; count: number };
+
+type ByMcapTierRow = BacktestSummary & { id: string; label: string; count: number };
 
 type BacktestListRow = {
   id: string;
@@ -58,6 +73,9 @@ type BacktestItem = {
   pnlPct?: number | null;
   exitPrice?: number | null;
   error?: string;
+  mtfResonance?: AlertMtfResonance;
+  confluence?: AlertConfluence;
+  mcapTier?: string;
 };
 
 type BacktestJob = {
@@ -72,9 +90,12 @@ type BacktestJob = {
     symbols?: number;
   };
   summary?: BacktestSummary | null;
+  confluenceSummary?: BacktestSummary | null;
   filteredSummary?: BacktestSummary | null;
   intervalSummary?: BacktestSummary | null;
   byInterval?: ByIntervalRow[];
+  byTier?: ByTierRow[];
+  byMcapTier?: ByMcapTierRow[];
   byType?: ByTypeRow[];
   params?: {
     startMs?: number;
@@ -83,6 +104,8 @@ type BacktestJob = {
     coverage?: CoverageInfo;
     partial?: boolean;
     liveFunnel?: boolean;
+    confluenceMinTier?: string;
+    mtfResonanceOnly?: boolean;
     funnel?: {
       mode?: string;
       altPoolSource?: string;
@@ -393,6 +416,9 @@ function backtestItemToRecord(row: BacktestItem): AlertStatsRecord {
     error: row.error,
     typeLabel: row.typeLabel,
     interval: row.interval,
+    mtfResonance: row.mtfResonance,
+    confluence: row.confluence,
+    mcapTier: row.mcapTier,
   };
 }
 
@@ -446,7 +472,7 @@ function fmtPnl(rec: AlertStatsRecord): { text: string; cls: string; title?: str
 
 export function BacktestPage() {
   const { snapshot, online } = useRadarSSE();
-  const { symbols: focusSymbols, remove: removeFocus } = useSpecialFocus();
+  const { symbols: focusSymbols, entries: focusEntries, remove: removeFocus } = useSpecialFocus();
   const initSaved = useMemo(() => loadSavedPrefs(), []);
   const initDates = useMemo(() => defaultDateLocals(), []);
 
@@ -512,6 +538,10 @@ export function BacktestPage() {
   });
   const [page, setPage] = useState(1);
   const [typeFilter, setTypeFilter] = useState("all");
+  const [confluenceTier, setConfluenceTier] = useState("all");
+  const [mcapTierFilter, setMcapTierFilter] = useState("all");
+  const [btMtfOnly, setBtMtfOnly] = useState(false);
+  const [btConfluenceMinTier, setBtConfluenceMinTier] = useState("B");
   const [intervalFilter, setIntervalFilter] = useState("all");
   const [fetchLoading, setFetchLoading] = useState(false);
   const [btLoading, setBtLoading] = useState(false);
@@ -768,12 +798,23 @@ export function BacktestPage() {
   }, []);
 
   const pollJob = useCallback(
-    async (jobId: string, p: number, typeF: string, intervalF: string) => {
+    async (
+      jobId: string,
+      p: number,
+      typeF: string,
+      intervalF: string,
+      confTier: string,
+      mtfOnly: boolean,
+      mcapF: string,
+    ) => {
       const qs = new URLSearchParams({
         page: String(p),
         pageSize: "100",
         type: typeF,
         interval: intervalF,
+        confluenceTier: confTier,
+        mtfResonance: mtfOnly ? "1" : "0",
+        mcapTier: mcapF,
       });
       const r = await fetch(`/api/backtest/structure/${encodeURIComponent(jobId)}?${qs}`);
       const body = await r.json();
@@ -792,7 +833,7 @@ export function BacktestPage() {
     setTypeFilter("all");
     setIntervalFilter("all");
     try {
-      await pollJob(jobId, 1, "all", "all");
+      await pollJob(jobId, 1, "all", "all", "all", false, "all");
     } catch (e) {
       const saved = loadSavedPrefs().btSnapshot;
       if (saved?.id === jobId) {
@@ -834,16 +875,52 @@ export function BacktestPage() {
   useEffect(() => {
     if (!job?.id || job.status === "done" || job.status === "failed") return;
     const id = setInterval(() => {
-      void pollJob(job.id, page, typeFilter, intervalFilter).catch(() => undefined);
+      void pollJob(
+        job.id,
+        page,
+        typeFilter,
+        intervalFilter,
+        confluenceTier,
+        btMtfOnly,
+        mcapTierFilter,
+      ).catch(() => undefined);
     }, 1500);
     return () => clearInterval(id);
-  }, [job?.id, job?.status, page, typeFilter, intervalFilter, pollJob]);
+  }, [
+    job?.id,
+    job?.status,
+    page,
+    typeFilter,
+    intervalFilter,
+    confluenceTier,
+    btMtfOnly,
+    mcapTierFilter,
+    pollJob,
+  ]);
 
   useEffect(() => {
     if (!job?.id) return;
     if (job.status !== "done" && job.status !== "running" && job.status !== "failed") return;
-    void pollJob(job.id, page, typeFilter, intervalFilter).catch(() => undefined);
-  }, [job?.id, job?.status, page, typeFilter, intervalFilter, pollJob]);
+    void pollJob(
+      job.id,
+      page,
+      typeFilter,
+      intervalFilter,
+      confluenceTier,
+      btMtfOnly,
+      mcapTierFilter,
+    ).catch(() => undefined);
+  }, [
+    job?.id,
+    job?.status,
+    page,
+    typeFilter,
+    intervalFilter,
+    confluenceTier,
+    btMtfOnly,
+    mcapTierFilter,
+    pollJob,
+  ]);
 
   useEffect(() => {
     void loadJobList().catch(() => undefined);
@@ -923,6 +1000,8 @@ export function BacktestPage() {
           maxDays,
           skipFetch: true,
           liveFunnel: true,
+          confluenceMinTier: btConfluenceMinTier || "all",
+          mtfResonanceOnly: btMtfOnly,
         }),
       });
       const body = await r.json();
@@ -1083,6 +1162,7 @@ export function BacktestPage() {
         poolMeta={snapshot.pool_meta}
         poolSize={snapshot.pool_size}
         focusSymbols={focusSymbols}
+        focusEntries={focusEntries}
         onRemoveFocus={(sym) => void removeFocus(sym)}
       />
       <div className="bt-page">
@@ -1222,6 +1302,27 @@ export function BacktestPage() {
                 value={maxDays}
                 onChange={(e) => setMaxDays(Number(e.target.value) || 730)}
               />
+            </label>
+            <label className="bt-field">
+              <span>综合分摘要（任务级）</span>
+              <select
+                value={btConfluenceMinTier}
+                onChange={(e) => setBtConfluenceMinTier(e.target.value)}
+                aria-label="回测完成后 confluenceSummary 最低档位"
+              >
+                <option value="all">全部（与 summary 一致）</option>
+                <option value="A">仅 A 档</option>
+                <option value="B">B 档及以上（推荐）</option>
+                <option value="C">C 档及以上</option>
+              </select>
+            </label>
+            <label className="bt-check bt-field-inline">
+              <input
+                type="checkbox"
+                checked={btMtfOnly}
+                onChange={(e) => setBtMtfOnly(e.target.checked)}
+              />
+              <span>任务摘要仅统计多周期共振</span>
             </label>
             {klineNote ? <p className="bt-rules">{klineNote}</p> : null}
             {settleRules ? <p className="bt-rules">{settleRules}</p> : null}
@@ -1379,6 +1480,21 @@ export function BacktestPage() {
                       </span>
                     </>
                   ) : null}
+                  {job.confluenceSummary &&
+                  job.params?.confluenceMinTier &&
+                  job.params.confluenceMinTier !== "all" ? (
+                    <span className="bt-live-wr" title="按任务启动时综合分/共振条件统计">
+                      综合{job.params.confluenceMinTier}+
+                      {job.params.mtfResonanceOnly ? "·共振" : ""}{" "}
+                      {job.confluenceSummary.winRate != null
+                        ? `胜率 ${(job.confluenceSummary.winRate * 100).toFixed(1)}%`
+                        : ""}
+                      {job.confluenceSummary.totalPnlPct != null
+                        ? ` · 合计 ${fmtPct(job.confluenceSummary.totalPnlPct)}`
+                        : ""}
+                      {` · ${job.confluenceSummary.total} 条`}
+                    </span>
+                  ) : null}
                   {job.summary ? (
                     <span className="bt-live-wr">
                       {job.status === "running" ? "实时合计 " : "合计 "}
@@ -1447,6 +1563,78 @@ export function BacktestPage() {
                   </div>
                 ) : null}
 
+                {job.byMcapTier && job.byMcapTier.length > 0 ? (
+                  <div className="bt-by-interval">
+                    <p className="bt-muted" style={{ margin: "0 0 8px" }}>
+                      市值梯队（全量回测 · Live 漏斗；悬停卡片看策略提示）
+                    </p>
+                    <div className="bt-interval-grid">
+                      {job.byMcapTier.map((row) => (
+                        <div
+                          key={row.id}
+                          className="bt-interval-card"
+                          title={mcapTierTitle(row.id)}
+                        >
+                          <div className="bt-interval-head">{row.label}</div>
+                          <div className="bt-interval-stats">
+                            <div>
+                              <span className="bt-stat-val">{row.count}</span>
+                              <span className="bt-stat-lab">触发</span>
+                            </div>
+                            <div>
+                              <span className="bt-stat-val">
+                                {row.winRate == null ? "—" : `${(row.winRate * 100).toFixed(1)}%`}
+                              </span>
+                              <span className="bt-stat-lab">胜率</span>
+                            </div>
+                            <div>
+                              <span className={`bt-stat-val ${(row.totalPnlPct ?? 0) >= 0 ? "up" : "down"}`}>
+                                {fmtPct(row.totalPnlPct)}
+                              </span>
+                              <span className="bt-stat-lab">合计</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {job.byTier && job.byTier.length > 0 ? (
+                  <div className="bt-by-interval">
+                    <p className="bt-muted" style={{ margin: "0 0 8px" }}>
+                      综合分分档（与形态信号列表同口径；明细区可按档位筛选）
+                    </p>
+                    <div className="bt-interval-grid">
+                      {job.byTier.map((row) => (
+                        <div key={row.tier} className="bt-interval-card">
+                          <div className="bt-interval-head">{row.tier} 档</div>
+                          <div className="bt-interval-stats">
+                            <div>
+                              <span className="bt-stat-val">{row.count}</span>
+                              <span className="bt-stat-lab">触发</span>
+                            </div>
+                            <div>
+                              <span className="bt-stat-val">
+                                {row.winRate == null ? "—" : `${(row.winRate * 100).toFixed(1)}%`}
+                              </span>
+                              <span className="bt-stat-lab">胜率</span>
+                            </div>
+                            <div>
+                              <span
+                                className={`bt-stat-val ${(row.totalPnlPct ?? 0) >= 0 ? "up" : "down"}`}
+                              >
+                                {fmtPct(row.totalPnlPct)}
+                              </span>
+                              <span className="bt-stat-lab">合计</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {job.byInterval && job.byInterval.length > 0 ? (
                   <div className="bt-by-interval">
                     <div className="bt-interval-grid">
@@ -1489,6 +1677,70 @@ export function BacktestPage() {
                 {job.status === "done" || job.status === "failed" || (job.totalAll ?? 0) > 0 ? (
                   <>
                     <div className="pattern-wr-filters bt-wr-filters">
+                      <label className="pattern-wr-type-filter">
+                        <span>市值梯队</span>
+                        <select
+                          value={mcapTierFilter}
+                          onChange={(e) => {
+                            setMcapTierFilter(e.target.value);
+                            setPage(1);
+                          }}
+                          aria-label="按市值梯队筛选回测明细"
+                        >
+                          <option value="all">
+                            {formatMcapTierOptionLabel({
+                              id: "all",
+                              label: "全部梯队",
+                              count: job.totalAll ?? job.summary?.total ?? 0,
+                              wins: job.summary?.wins ?? 0,
+                              losses: job.summary?.losses ?? 0,
+                              winRate: job.summary?.winRate ?? null,
+                              totalPnlPct: job.summary?.totalPnlPct,
+                            })}
+                          </option>
+                          {(job.byMcapTier ?? []).map((row) => (
+                            <option key={row.id} value={row.id}>
+                              {formatMcapTierOptionLabel({
+                                id: row.id,
+                                label: row.label,
+                                count: row.count,
+                                wins: row.wins,
+                                losses: row.losses,
+                                winRate: row.winRate,
+                                totalPnlPct: row.totalPnlPct,
+                              })}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="pattern-wr-type-filter">
+                        <span>综合分</span>
+                        <select
+                          value={confluenceTier}
+                          onChange={(e) => {
+                            setConfluenceTier(e.target.value);
+                            setPage(1);
+                          }}
+                          aria-label="按综合分档位筛选明细"
+                        >
+                          <option value="all">全部档位</option>
+                          <option value="A">A 档</option>
+                          <option value="B">B 档及以上</option>
+                          <option value="C">C 档及以上</option>
+                          <option value="D">仅 D 档</option>
+                        </select>
+                      </label>
+                      <label className="pattern-wr-mtf-filter">
+                        <input
+                          type="checkbox"
+                          checked={btMtfOnly}
+                          onChange={(e) => {
+                            setBtMtfOnly(e.target.checked);
+                            setPage(1);
+                          }}
+                        />
+                        <span>仅多周期共振</span>
+                      </label>
                       <label className="pattern-wr-type-filter">
                         <span>周期</span>
                         <select
@@ -1575,9 +1827,12 @@ export function BacktestPage() {
                             <tr>
                               <th>时间</th>
                               <th>币种</th>
+                              <th>梯队</th>
                               <th>方向</th>
                               <th>类型</th>
                               <th>周期</th>
+                              <th>共振</th>
+                              <th>综合</th>
                               <th>入场</th>
                               <th>结果</th>
                               <th>回溯盈亏</th>
@@ -1594,6 +1849,18 @@ export function BacktestPage() {
                                     <strong>${displaySymbol(row.symbol)}</strong>
                                   </td>
                                   <td>
+                                    {row.mcapTier ? (
+                                      <span
+                                        className={`pattern-wr-mcap-badge tier-${row.mcapTier}`}
+                                        title={mcapTierTitle(row.mcapTier)}
+                                      >
+                                        {formatMcapTierBadge(row.mcapTier)}
+                                      </span>
+                                    ) : (
+                                      <span className="muted">—</span>
+                                    )}
+                                  </td>
+                                  <td>
                                     <span
                                       className={`pattern-wr-dir ${
                                         rec.dir === "多" ? "long" : rec.dir === "空" ? "short" : "flat"
@@ -1606,6 +1873,30 @@ export function BacktestPage() {
                                     {row.typeLabel || "—"}
                                   </td>
                                   <td className="muted">{row.interval || "—"}</td>
+                                  <td>
+                                    {hasMtfResonance(rec) ? (
+                                      <span
+                                        className="pattern-wr-mtf-badge"
+                                        title={formatMtfResonanceBadge(rec.mtfResonance)}
+                                      >
+                                        {formatMtfResonanceBadge(rec.mtfResonance)}
+                                      </span>
+                                    ) : (
+                                      <span className="muted">—</span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    {row.confluence ? (
+                                      <span
+                                        className={`pattern-wr-conf-badge tier-${row.confluence.tier}`}
+                                        title={confluenceTitle(row.confluence)}
+                                      >
+                                        {formatConfluenceBadge(row.confluence)}
+                                      </span>
+                                    ) : (
+                                      <span className="muted">—</span>
+                                    )}
+                                  </td>
                                   <td className="mono">{fmtPrice(row.entry)}</td>
                                   <td>
                                     <span className={`pattern-wr-out oc-${row.outcome || "pending"}`}>

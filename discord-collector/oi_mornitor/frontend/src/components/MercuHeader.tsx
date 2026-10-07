@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
+import { useLongPressDragScroll } from "../hooks/useLongPressDragScroll";
 import { NavLink, useNavigate } from "react-router-dom";
 import type { PoolMeta } from "../types";
 import { useHeaderRankBoards } from "../hooks/useHeaderRankBoards";
@@ -7,6 +8,7 @@ import {
   focusSymbolsToItems,
   HEADER_BOARDS,
   HEADER_FETCH_MS,
+  type FocusEntryMeta,
   type HeaderBoardId,
 } from "../utils/headerRankBoards";
 import { displaySymbol } from "../utils/symbol";
@@ -17,6 +19,7 @@ interface Props {
   poolMeta?: PoolMeta;
   poolSize: number;
   focusSymbols?: string[];
+  focusEntries?: Record<string, FocusEntryMeta>;
   onRemoveFocus?: (symbol: string) => void;
 }
 
@@ -33,6 +36,7 @@ export const MercuHeader = memo(function MercuHeader({
   poolMeta,
   poolSize,
   focusSymbols = [],
+  focusEntries = {},
   onRemoveFocus,
 }: Props) {
   const [clock, setClock] = useState("");
@@ -40,7 +44,7 @@ export const MercuHeader = memo(function MercuHeader({
   const navigate = useNavigate();
   const canEditFocus = useMemo(() => isOiOperator(), []);
 
-  const { boardItems, meta, hasBoardData } = useHeaderRankBoards();
+  const { boardItems, meta, dormantMeta, hasBoardData } = useHeaderRankBoards();
 
   useEffect(() => {
     const tick = () => {
@@ -77,14 +81,28 @@ export const MercuHeader = memo(function MercuHeader({
     : "—";
 
   const items = useMemo(() => {
-    if (boardId === "focus") return focusSymbolsToItems(focusSymbols);
+    if (boardId === "focus") return focusSymbolsToItems(focusSymbols, focusEntries);
     return boardItems(boardId);
-  }, [boardId, focusSymbols, boardItems]);
+  }, [boardId, focusSymbols, focusEntries, boardItems]);
 
+  const dragScrollEnabled = items.length > 0;
+  const {
+    ref: focusListRef,
+    sliding: focusSliding,
+    isScrollable: focusScrollable,
+    suppressClickRef: focusSuppressClickRef,
+    handlers: focusDragHandlers,
+  } = useLongPressDragScroll(dragScrollEnabled, [boardId, items.length, items.map((i) => i.symbol).join(",")]);
+
+  const dormantFetched = dormantMeta.updatedAt
+    ? new Date(dormantMeta.updatedAt).toLocaleTimeString("zh-CN", { hour12: false })
+    : "—";
   const boardTitle =
     boardId === "focus"
-      ? "特别关注 · 信号另推 MAIN 群"
-      : `${boardLabel} · ${meta.sourceLabel} · 24h · 每 ${HEADER_FETCH_MS / 60_000} 分钟刷新 · 更新 ${fetchedLabel}${meta.error ? ` · ${meta.error}` : ""}`;
+      ? "特别关注 · 含沉寂拉盘点火（自动 36h）"
+      : boardId === "dormant"
+        ? `沉寂拉盘 · 第三梯队小市值 · 慢扫4h筛候选(地量+试盘) · 快扫15m点火 · 更新 ${dormantFetched}`
+        : `${boardLabel} · ${meta.sourceLabel} · 24h · 每 ${HEADER_FETCH_MS / 60_000} 分钟刷新 · 更新 ${fetchedLabel}${meta.error ? ` · ${meta.error}` : ""}`;
 
   return (
     <header className="mercu-header">
@@ -129,9 +147,17 @@ export const MercuHeader = memo(function MercuHeader({
             ))}
           </select>
         </label>
-        <div className="mercu-focus-list" role="list" aria-label={boardLabel}>
+        <div
+          ref={focusListRef}
+          className={`mercu-focus-list${focusScrollable ? " is-scroll" : ""}${focusSliding ? " is-sliding" : ""}`}
+          role="list"
+          aria-label={`${boardLabel}${focusScrollable ? "：长按后左右滑动" : ""}`}
+          {...focusDragHandlers}
+        >
           {boardId === "focus" && items.length === 0 ? (
             <span className="mercu-focus-empty">暂无</span>
+          ) : boardId === "dormant" && items.length === 0 ? (
+            <span className="mercu-focus-empty">暂无候选（等待慢扫/快扫）</span>
           ) : boardId !== "focus" && items.length === 0 ? (
             <span className="mercu-focus-empty">
               {!hasBoardData && meta.error
@@ -154,9 +180,10 @@ export const MercuHeader = memo(function MercuHeader({
                   <button
                     type="button"
                     className="mercu-focus-sym"
-                    onClick={() =>
-                      navigate(`/patterns?symbol=${encodeURIComponent(sym)}`)
-                    }
+                    onClick={() => {
+                      if (focusSuppressClickRef.current) return;
+                      navigate(`/patterns?symbol=${encodeURIComponent(sym)}`);
+                    }}
                     title={`打开 ${displaySymbol(sym)} 形态图`}
                   >
                     {displaySymbol(sym)}

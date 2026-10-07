@@ -96,6 +96,9 @@ def format_candle_card_message(alert: dict[str, Any]) -> str:
             lines.append(f"🛡️ 下方防守: {_fmt_price(prior_low)} (前20根低点)")
         if bb_mid is not None:
             lines.append(f"🎯 上方参考: {_fmt_price(bb_mid)} (布林中轨)")
+    vr = alert.get("vol_ratio")
+    if vr is not None:
+        lines.append(f"📊 量能确认: 信号K放量 {_fmt_vol_x(vr)} MA20")
     return "\n".join(lines)
 
 
@@ -278,16 +281,54 @@ def send_telegram_text(text: str, *, chat_id: str | None = None) -> bool:
     return False
 
 
+def _send_card_text_to_chat(alert: dict[str, Any], text: str, chat_id: str) -> bool:
+    from oi_mornitor.telegram_push_dedupe import (
+        alert_push_dedupe_key,
+        release_telegram_push_claim,
+        try_claim_telegram_push,
+    )
+
+    chat = str(chat_id or "").strip()
+    if not chat:
+        return False
+    dedupe = alert_push_dedupe_key(alert)
+    if not try_claim_telegram_push(chat, dedupe):
+        return False
+    ok = send_telegram_text(text, chat_id=chat)
+    if not ok:
+        release_telegram_push_claim(chat, dedupe)
+    return ok
+
+
+def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
+    """形态群已发送的正文，原样复制到 MAIN（仅白名单币）。"""
+    from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
+    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    if not text.strip():
+        return False
+    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
+        return False
+    primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip()
+    if primary and primary == MAIN_CARD_TELEGRAM_CHAT_ID.strip():
+        return False
+    if not is_main_card_mirror_eligible(alert):
+        return False
+    return _send_card_text_to_chat(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
+
+
 def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
-    """射击之星 / 倒锤子卡片 → Telegram 群；特别关注币另推 MAIN 群。"""
+    """射击之星 / 倒锤子 → OI_CANDLE_CARD 形态群（MAIN 由 pattern_monitor 另推）。"""
     from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
 
     if not is_candle_push_enabled():
         return False
     text = format_candle_card_message(alert)
-    ok = send_telegram_text(text)
-    ok_main = _maybe_send_main_card(alert, text)
-    pushed = ok or ok_main
+    primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
+    ok = _send_card_text_to_chat(alert, text, primary) if primary else False
+    if ok:
+        _mirror_to_main_card(alert, text)
+    pushed = ok
     if pushed:
         try:
             from oi_mornitor.pattern_alert_stats import record_alert_from_push
@@ -305,15 +346,17 @@ def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
 
 
 def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
-    """顶部/底部结构 → Telegram 群；特别关注币另推 MAIN 群。"""
+    """顶部/底部结构 → OI_CANDLE_CARD 形态群（MAIN 由 pattern_monitor 另推）。"""
     from oi_mornitor.telegram_push_toggles import is_structure_push_enabled
 
     if not is_structure_push_enabled():
         return False
     text = format_structure_card_message(alert)
-    ok = send_telegram_text(text)
-    ok_main = _maybe_send_main_card(alert, text)
-    pushed = ok or ok_main
+    primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
+    ok = _send_card_text_to_chat(alert, text, primary) if primary else False
+    if ok:
+        _mirror_to_main_card(alert, text)
+    pushed = ok
     if pushed:
         try:
             from oi_mornitor.pattern_alert_stats import record_alert_from_push
@@ -330,53 +373,51 @@ def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     return pushed
 
 
-def format_volume_price_main_message(alert: dict[str, Any]) -> str:
-    """MAIN 群量价信号文案。"""
+def format_volume_price_card_message(alert: dict[str, Any]) -> str:
+    """量价信号文案（与蜡烛/结构卡片同一形态群版式，无「热门」头）。"""
     pair = _pair_label(str(alert.get("symbol") or ""))
     type_label = str(alert.get("type_label") or alert.get("status_label") or "量价信号")
     side = str(alert.get("side") or "").lower()
-    side_label = "多" if side in ("long", "bull") else ("空" if side in ("short", "bear") else "")
+    side_label = "看涨" if side in ("long", "bull") else ("看跌" if side in ("short", "bear") else "")
+    type_head = f"{type_label} ({side_label})" if side_label else type_label
     iv = str(alert.get("interval") or "—")
     t = _fmt_time(alert.get("kline_close_time") or alert.get("kline_open_time") or alert.get("time"))
-    price = _fmt_price(alert.get("price") or alert.get("close") or alert.get("entry_hint"))
+    price = _fmt_price(alert.get("price") if alert.get("price") is not None else alert.get("close"))
     score = alert.get("score")
     score_s = f"{float(score):.2f}" if score is not None else "—"
-    obs = "（观察档）" if alert.get("observation_only") else ""
-    head = f"{type_label}{obs}"
-    if side_label:
-        head = f"{head} ({side_label})"
-    return (
-        f"📊 热门 · {head}\n"
-        f"💰 交易对: {pair}\n"
-        f"⏰ 周期: {iv}\n"
-        f"⏰ 时间: {t}\n"
-        f"💵 参考价: {price}\n"
-        f"📈 评分: {score_s}"
-    )
+    lines = [
+        f"💰 交易对: {pair}",
+        f"📈 类型: {type_head}",
+        f"⏰ 周期: {iv}",
+        f"⏰ 时间: {t}",
+        f"💵 价格: {price}",
+        f"📈 评分: {score_s}",
+    ]
+    inv = alert.get("invalid_level")
+    if inv is not None:
+        lines.append(f"⛔ 失效: {_fmt_price(inv)}")
+    plan = alert.get("vp_exit_plan")
+    if isinstance(plan, dict) and plan:
+        trim = plan.get("trim")
+        note = plan.get("exit_note")
+        if trim is not None:
+            lines.append(f"📤 减仓: {_fmt_price(trim)}")
+        if note:
+            lines.append(f"🏁 离场: {note}")
+    return "\n".join(lines)
 
 
-def _maybe_send_main_card(alert: dict[str, Any], text: str) -> bool:
-    from oi_mornitor.main_card_policy import is_main_card_eligible
-    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+def send_volume_price_card_telegram(alert: dict[str, Any]) -> bool:
+    """正式量价 → 仅形态群（OI_CANDLE_CARD）；MAIN 只收蜡烛/结构，不收量价确认/推进。"""
+    from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
 
-    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
+    if alert.get("observation_only") or not alert.get("vp_formal"):
         return False
-    if not is_main_card_eligible(alert):
+    if not is_candle_push_enabled():
         return False
-    return send_telegram_text(text, chat_id=MAIN_CARD_TELEGRAM_CHAT_ID)
-
-
-def send_main_volume_price_telegram(alert: dict[str, Any]) -> bool:
-    """量价信号 → 仅 MAIN 群（热门币白名单）。"""
-    from oi_mornitor.main_card_policy import is_main_card_eligible
-    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
-
-    if not is_main_card_eligible(alert):
-        return False
-    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
-        return False
-    text = format_volume_price_main_message(alert)
-    return send_telegram_text(text, chat_id=MAIN_CARD_TELEGRAM_CHAT_ID)
+    text = format_volume_price_card_message(alert)
+    primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
+    return _send_card_text_to_chat(alert, text, primary) if primary else False
 
 def send_pattern_oi_telegram(alert: dict[str, Any]) -> bool:
     """同步发送；未配置或关闭时返回 False。
@@ -409,5 +450,5 @@ async def send_structure_card_telegram_async(alert: dict[str, Any]) -> bool:
     return await asyncio.to_thread(send_structure_card_telegram, alert)
 
 
-async def send_main_volume_price_telegram_async(alert: dict[str, Any]) -> bool:
-    return await asyncio.to_thread(send_main_volume_price_telegram, alert)
+async def send_volume_price_card_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_volume_price_card_telegram, alert)

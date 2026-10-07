@@ -523,6 +523,48 @@ def list_daytype_options(items: list[dict[str, Any]] | None = None) -> list[dict
     return out
 
 
+def list_mcap_tier_options(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """市值梯队下拉：含胜率、合计盈亏（相对当前筛选全集）。"""
+    from oi_mornitor.mcap_tier import MCAP_TIER_ORDER, attach_mcap_tier, mcap_tier_label
+
+    rows = list(items if items is not None else _load())
+    attach_mcap_tier(rows)
+    buckets: dict[str, list[dict[str, Any]]] = {tid: [] for tid in MCAP_TIER_ORDER}
+    for r in rows:
+        tid = str(r.get("mcapTier") or "t3").lower()
+        if tid not in buckets:
+            tid = "t3"
+        buckets[tid].append(r)
+    out: list[dict[str, Any]] = []
+    s_all = summarize(rows)
+    out.append(
+        {
+            "id": "all",
+            "label": "全部梯队",
+            "count": len(rows),
+            "wins": s_all["wins"],
+            "losses": s_all["losses"],
+            "winRate": s_all["winRate"],
+            "totalPnlPct": s_all.get("totalPnlPct"),
+        }
+    )
+    for tid in MCAP_TIER_ORDER:
+        bucket = buckets[tid]
+        s = summarize(bucket)
+        out.append(
+            {
+                "id": tid,
+                "label": mcap_tier_label(tid),
+                "count": len(bucket),
+                "wins": s["wins"],
+                "losses": s["losses"],
+                "winRate": s["winRate"],
+                "totalPnlPct": s.get("totalPnlPct"),
+            }
+        )
+    return out
+
+
 def list_type_options(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """类型下拉：含胜率、总盈亏率（相对当前时间筛选全集）。"""
     rows = items if items is not None else _load()
@@ -558,6 +600,8 @@ def list_alert_stats_page(
     symbol: str | None = None,
     asset_class: str | None = None,
     mtf_resonance_only: bool = False,
+    confluence_min_tier: str | None = None,
+    mcap_tier_filter: str | None = None,
 ) -> dict[str, Any]:
     """分页列表；type/interval/session/daytype Options 互相联动。"""
     page = max(1, int(page or 1))
@@ -630,12 +674,30 @@ def list_alert_stats_page(
     if page > pages:
         page = pages
     attach_mtf_resonance(filtered)
-    if mtf_resonance_only:
-        filtered = [r for r in filtered if isinstance(r.get("mtfResonance"), dict)]
-        total = len(filtered)
-        pages = max(1, (total + size - 1) // size) if total else 1
-        if page > pages:
-            page = pages
+    from oi_mornitor.signal_confluence import attach_signal_confluence
+
+    attach_signal_confluence(filtered)
+    from oi_mornitor.mcap_tier import attach_mcap_tier, filter_by_mcap_tier
+    from oi_mornitor.signal_confluence import filter_items_by_confluence
+
+    attach_mcap_tier(filtered)
+    conf_tier = str(confluence_min_tier or "all").strip() or "all"
+    mcap_f = str(mcap_tier_filter or "all").strip() or "all"
+    filtered = filter_items_by_confluence(
+        filtered,
+        min_tier=conf_tier,
+        mtf_resonance_only=mtf_resonance_only,
+    )
+    pre_mcap = filtered
+    filtered = filter_by_mcap_tier(filtered, mcap_tier=mcap_f)
+    if mtf_resonance_only or conf_tier.lower() != "all" or mcap_f.lower() != "all":
+        type_opts = list_type_options(filtered)
+        interval_opts = list_interval_options(filtered)
+    mcap_opts = list_mcap_tier_options(pre_mcap)
+    total = len(filtered)
+    pages = max(1, (total + size - 1) // size) if total else 1
+    if page > pages:
+        page = pages
     start = (page - 1) * size
     chunk = filtered[start : start + size]
     return {
@@ -649,6 +711,7 @@ def list_alert_stats_page(
         "intervalOptions": interval_opts,
         "sessionOptions": session_opts,
         "daytypeOptions": daytype_opts,
+        "mcapTierOptions": mcap_opts,
         # 兼容旧前端
         "typeLabels": [x["label"] for x in type_opts],
     }
@@ -809,6 +872,9 @@ def record_card_from_archive(card: dict[str, Any]) -> dict[str, Any] | None:
             "channelId": channel_id,
             "recordedAt": _now_ms(),
         }
+        from oi_mornitor.mcap_tier import resolve_mcap_tier
+
+        rec["mcapTier"] = resolve_mcap_tier(trade_symbol or sym_raw)
         _save([rec, *items])
         logger.info(
             "TG交易卡胜率入库 #%s %s %s @%s",
@@ -898,6 +964,22 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
             "assetClass": str(alert.get("asset_class") or "crypto"),
             "recordedAt": _now_ms(),
         }
+        from oi_mornitor.mcap_tier import resolve_mcap_tier
+
+        rec["mcapTier"] = resolve_mcap_tier(trade_symbol or sym_raw)
+        inv = alert.get("invalid_level") or alert.get("invalidLevel")
+        if inv is not None:
+            try:
+                rec["invalid_level"] = float(inv)
+            except (TypeError, ValueError):
+                pass
+        if alert.get("vp_formal") is False or "观察" in type_label:
+            rec["observation_only"] = True
+        if alert.get("vp_exit_plan"):
+            rec["vp_exit_plan"] = alert.get("vp_exit_plan")
+        from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms
+
+        rec["verifyAt"] = signal_at + resolve_verify_delay_ms(rec)
         _save([rec, *items])
         logger.info(
             "形态信号胜率入库 %s %s %s @%s",
@@ -987,6 +1069,18 @@ def apply_settle_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "entry",
         "side",
         "dir",
+        "settleProfileId",
+        "settleRulesVersion",
+        "slPrice",
+        "tp1Price",
+        "tp2Price",
+        "invalid_level",
+        "invalidLevel",
+        "observation_only",
+        "vp_formal",
+        "pnlPct",
+        "batchWeights",
+        "tpLevels",
     }
     with _LOCK:
         items = _load()
@@ -1013,8 +1107,19 @@ def apply_settle_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return _save(merged)
 
 
-def summarize(items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def summarize(items: list[dict[str, Any]] | None = None, *, exclude_observation: bool = True) -> dict[str, Any]:
     rows = items if items is not None else _load()
+    obs_excluded = 0
+    if exclude_observation:
+        from oi_mornitor.pattern_settle_profile import is_observation_record
+
+        kept: list[dict[str, Any]] = []
+        for r in rows:
+            if is_observation_record(r):
+                obs_excluded += 1
+            else:
+                kept.append(r)
+        rows = kept
     pending = wins = losses = flats = errors = 0
     total_pnl = 0.0
     pnl_n = 0
@@ -1044,7 +1149,8 @@ def summarize(items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         "errors": errors,
         "winRate": (wins / settled) if settled else None,
         "totalPnlPct": round(total_pnl, 2) if pnl_n else None,
+        "observationExcluded": obs_excluded,
         "leverageHint": (
-            "BTC/ETH/SOL 100x · 山寨 20x · TP 3%/7% 分批 · Runner 跟踪 · 止损 ±5%"
+            "BTC/ETH/SOL 100x · 山寨 20x · V2：invalid/ATR SL · R 倍数 TP · 观察档默认不计胜率"
         ),
     }

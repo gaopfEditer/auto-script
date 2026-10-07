@@ -5,6 +5,7 @@ import asyncio
 import logging
 import random
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -647,8 +648,8 @@ class PatternMonitorEngine:
         self._last_watchlist_refresh_ts: float = 0.0
         # symbol:close_ts → 已推过的形态+OI 短线推荐
         self._combo_seen: set[str] = set()
-        # symbol:interval:kind:close_ts → 已推过的蜡烛卡片
-        self._card_seen: set[str] = set()
+        # symbol:interval:kind:close_ts → 已推过的蜡烛/结构卡片（LRU，避免无序 set 截断丢键）
+        self._card_seen: OrderedDict[str, None] = OrderedDict()
         # symbol:interval:side → 最近一次实际推送的收盘时间戳（秒），用于同向节流
         self._card_last_emit: dict[str, int] = {}
         # (symbol, interval) → (fetched_at, klines)
@@ -1346,7 +1347,7 @@ class PatternMonitorEngine:
 
         try:
             from oi_mornitor.config import MAIN_CARD_INTERVALS
-            from oi_mornitor.notify_telegram import send_main_volume_price_telegram_async
+            from oi_mornitor.notify_telegram import send_volume_price_card_telegram_async
             from oi_mornitor.pattern_alert_ticker import record_ticker_from_alerts
             from oi_mornitor.volume_price.ticker_bridge import scan_volume_price_ticker_alerts
 
@@ -1382,12 +1383,38 @@ class PatternMonitorEngine:
                         ),
                         timeout=45,
                     )
+                oi_maps: dict[tuple[str, str], dict[int, float]] = {}
+                oi_syms = [s for s in symbols if s in (klines_map or {})][:80]
+                oi_sem = asyncio.Semaphore(6)
+
+                async def _oi_one(sym: str, iv: str) -> None:
+                    async with oi_sem:
+                        mp = await fetch_open_interest_hist(
+                            session,
+                            base_url=base_url,
+                            symbol=sym,
+                            interval=iv,
+                            limit=120,
+                        )
+                        if mp:
+                            oi_maps[(str(sym).upper(), iv)] = mp
+
+                oi_tasks = [
+                    _oi_one(sym, iv)
+                    for sym in oi_syms
+                    for iv in vp_tfs
+                    if iv in ("15m", "1h", "4h")
+                ]
+                if oi_tasks:
+                    await asyncio.gather(*oi_tasks, return_exceptions=True)
+
                 vp_alerts = scan_volume_price_ticker_alerts(
                     klines_map,
                     klines_map_1h=klines_1h_map,
                     klines_map_4h=klines_4h_map or None,
                     signal_tfs=vp_tfs,
                     scan_ts=self._last_scan_ts,
+                    oi_maps=oi_maps or None,
                 )
             except asyncio.TimeoutError:
                 logger.warning("量价 ticker HTF K 线拉取超时，跳过")
@@ -1401,14 +1428,16 @@ class PatternMonitorEngine:
                     self._main_vp_pushed_keys = pushed_main
                 n_main_vp = 0
                 for va in vp_alerts:
+                    if va.get("observation_only") or not va.get("vp_formal"):
+                        continue
                     vk = (
-                        f"{va.get('type')}:{va.get('symbol')}:"
+                        f"{va.get('vp_type') or va.get('type')}:{va.get('symbol')}:"
                         f"{va.get('kline_close_time')}:{va.get('type_label')}"
                     )
                     if vk in pushed_main:
                         continue
                     try:
-                        if await send_main_volume_price_telegram_async(va):
+                        if await send_volume_price_card_telegram_async(va):
                             pushed_main.add(vk)
                             n_main_vp += 1
                     except Exception as exc:  # noqa: BLE001
@@ -1416,7 +1445,7 @@ class PatternMonitorEngine:
                 if len(pushed_main) > 5000:
                     self._main_vp_pushed_keys = set(list(pushed_main)[-2000:])
                 if n_main_vp:
-                    logger.info("MAIN 群量价推送 %d 条", n_main_vp)
+                    logger.info("形态群量价推送 %d 条（不进 MAIN 群）", n_main_vp)
 
             n_vp = record_ticker_from_alerts(vp_alerts)
             n_vp_stats = 0
@@ -1454,6 +1483,19 @@ class PatternMonitorEngine:
         """形态∩柱级 OI 短线已停推（假反转灌水）；保留接口兼容。"""
         del session, base_url, klines_map, watchlist, scan_ts
         return []
+
+    def _card_push_claimed(self, dedupe_key: str) -> bool:
+        """本进程内 LRU 去重；True 表示已推过应跳过。"""
+        key = str(dedupe_key or "").strip()
+        if not key:
+            return True
+        if key in self._card_seen:
+            self._card_seen.move_to_end(key)
+            return True
+        self._card_seen[key] = None
+        while len(self._card_seen) > 2500:
+            self._card_seen.popitem(last=False)
+        return False
 
     def _card_emit_throttled(self, sym: str, iv: str, side: str, close_ts: int) -> bool:
         """同币同周期同方向在 CARD_PUSH_COOLDOWN_BARS 根 K 内只推一次。"""
@@ -1619,10 +1661,9 @@ class PatternMonitorEngine:
             for hit in hits:
                 close_ts = int(hit["time"])
                 kind = str(hit.get("kind") or "")
-                dedupe = f"{sym}:{iv}:{kind}:{close_ts}"
-                if dedupe in self._card_seen:
+                dedupe = f"{sym.upper()}:{iv}:{kind}:{close_ts}"
+                if self._card_push_claimed(dedupe):
                     continue
-                self._card_seen.add(dedupe)
                 side = "bull" if kind == "inverted_hammer" else "bear"
                 if self._card_emit_throttled(sym, iv, side, close_ts):
                     continue
@@ -1644,6 +1685,7 @@ class PatternMonitorEngine:
                     "prior_low": hit.get("prior_low"),
                     "near_vegas": bool(hit.get("near_vegas")),
                     "trend_pct": hit.get("trend_pct"),
+                    "vol_ratio": hit.get("vol_ratio"),
                     "price": float(hit.get("close") or hit.get("price") or 0),
                     "close": float(hit.get("close") or 0),
                     "high": float(hit.get("high") or 0),
@@ -1657,6 +1699,12 @@ class PatternMonitorEngine:
                 }
                 out.append(alert)
                 logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
+                try:
+                    from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+                    record_alert_from_push(alert)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("形态卡片胜率入库 %s: %s", sym, exc)
                 try:
                     ok = await send_candle_card_telegram_async(alert)
                 except Exception as exc:  # noqa: BLE001
@@ -1694,15 +1742,17 @@ class PatternMonitorEngine:
                 return []
             hits = filter_structure_card_hits(hits, interval=iv, now_ms=now_ms)
             hits = [h for h in hits if str(h.get("kind") or "") != "spring_2b"]
+            from oi_mornitor.candle_card_config import structure_volume_confirmed
+
+            hits = [h for h in hits if structure_volume_confirmed(h)]
 
             out: list[dict[str, Any]] = []
             for hit in hits:
                 close_ts = int(hit["time"])
                 kind = str(hit.get("kind") or "")
-                dedupe = f"{sym}:{iv}:struct:{kind}:{close_ts}"
-                if dedupe in self._card_seen:
+                dedupe = f"{sym.upper()}:{iv}:struct:{kind}:{close_ts}"
+                if self._card_push_claimed(dedupe):
                     continue
-                self._card_seen.add(dedupe)
                 side = str(hit.get("side") or "")
                 if side in ("bull", "bear") and self._structure_emit_throttled(sym, iv, side, close_ts):
                     continue
@@ -1787,8 +1837,6 @@ class PatternMonitorEngine:
                 )
             if is_structure_push_enabled():
                 out.extend(await _emit_structure(sym, iv, df))
-            if len(self._card_seen) > 1200:
-                self._card_seen = set(list(self._card_seen)[-600:])
             return out
 
         results = await asyncio.gather(
@@ -1981,6 +2029,15 @@ class PatternMonitorEngine:
             last = chart["candles"][-1]
             ticker["last_price"] = last["close"]
 
+        from oi_mornitor.mcap_market_quote import attach_live_market_cap
+        from oi_mornitor.mcap_tier import symbol_mcap_tier_for_api
+
+        mcap_tier = symbol_mcap_tier_for_api(sym)
+        try:
+            await attach_live_market_cap(session, mcap_tier, sym)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("chart 市值 %s: %s", sym, exc)
+
         return {
             "symbol": sym,
             "interval": tf,
@@ -1988,6 +2045,7 @@ class PatternMonitorEngine:
             "has_more": page_has_more,
             "kline_source": kline_src,
             "ticker": ticker,
+            "mcapTier": mcap_tier,
             "state": state_dict,
             **chart,
         }

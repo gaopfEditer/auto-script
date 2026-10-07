@@ -129,6 +129,13 @@ async def handle_matrix(_request: web.Request) -> web.Response:
     return _json_response(matrix)
 
 
+async def handle_dormant_funnel(_request: web.Request) -> web.Response:
+    """顶栏「沉寂拉盘」：三阶段漏斗候选 + 近期点火。"""
+    from oi_mornitor.dormant_funnel_store import get_funnel_payload
+
+    return _json_response(get_funnel_payload())
+
+
 async def handle_binance_leaderboards(request: web.Request) -> web.Response:
     """顶栏榜单：币安 U 本位永续 24h 涨跌幅 / 成交 / 持仓 / 热门。"""
     from oi_mornitor.binance_leaderboards import get_binance_leaderboards
@@ -253,11 +260,11 @@ async def handle_patterns_watch_pin(request: web.Request) -> web.Response:
 
 async def handle_focus_symbols_get(_request: web.Request) -> web.Response:
     from oi_mornitor.config import MAIN_CARD_TELEGRAM_CHAT_ID
-    from oi_mornitor.focus_symbols import list_focus_symbols
+    from oi_mornitor.focus_symbols import focus_payload_for_api
 
     return _json_response({
         "ok": True,
-        "symbols": list_focus_symbols(),
+        **focus_payload_for_api(),
         "main_chat_id": MAIN_CARD_TELEGRAM_CHAT_ID or "",
     })
 
@@ -280,6 +287,8 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
     asset_class = str(q.get("assetClass") or q.get("asset_class") or "all").strip() or "all"
     mtf_raw = str(q.get("mtfResonance") or q.get("mtf") or "0").strip().lower()
     mtf_resonance_only = mtf_raw in ("1", "true", "yes", "on")
+    conf_tier = str(q.get("confluenceTier") or q.get("confluenceMinTier") or "all").strip() or "all"
+    mcap_tier = str(q.get("mcapTier") or q.get("mcapTierFilter") or "all").strip() or "all"
     payload = list_alert_stats_page(
         page=page,
         page_size=page_size,
@@ -291,6 +300,8 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
         symbol=symbol or None,
         asset_class=asset_class,
         mtf_resonance_only=mtf_resonance_only,
+        confluence_min_tier=conf_tier,
+        mcap_tier_filter=mcap_tier,
     )
     return _json_response({"ok": True, **payload})
 
@@ -312,6 +323,26 @@ async def handle_pattern_alert_stats_record_card(request: web.Request) -> web.Re
     if rec is None:
         return _json_response({"ok": False, "error": "card not eligible for stats"}, status=400)
     return _json_response({"ok": True, "record": rec})
+
+
+async def handle_pattern_alert_stats_recalculate_v2(request: web.Request) -> web.Response:
+    """全库按 V2 规则重算 outcome（operator 用；可能较慢）。"""
+    from oi_mornitor.pattern_settle_recalc import recalculate_all_settlements_v2
+
+    limit: int | None = None
+    try:
+        if request.body_exists:
+            body = await request.json()
+            if isinstance(body, dict) and body.get("limit") is not None:
+                limit = int(body["limit"])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        payload = await recalculate_all_settlements_v2(limit=limit)
+    except Exception as exc:
+        logger.exception("recalculate-v2 failed")
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response(payload)
 
 
 async def handle_pattern_alert_stats_post(request: web.Request) -> web.Response:
@@ -338,6 +369,7 @@ async def handle_backtest_structure_options(_request: web.Request) -> web.Respon
     """结构回测：可选形态 / 周期 / 核算说明。"""
     from oi_mornitor.backtest_kline_store import storage_stats
     from oi_mornitor.backtest_universe import load_latest_universe
+    from oi_mornitor.mcap_tier import tier_catalog_for_api
     from oi_mornitor.structure_backtest import DEFAULT_KINDS, list_kind_options
     from oi_mornitor.strategy.structure_signals import STRUCTURE_CARD_INTERVALS
 
@@ -360,8 +392,23 @@ async def handle_backtest_structure_options(_request: web.Request) -> web.Respon
             "defaultMaxSymbols": 200,
             "defaultMaxDays": 730,
             "settleRules": (
-                "BTC/ETH/SOL 100x · 山寨 20x · TP 3%/7% 分批 30%+30% · "
-                "Runner 40% 跟踪 · 止损 ±5% · 每 15m 核实 · 最长 3h"
+                "BTC/ETH/SOL 100x · 山寨 20x · V2：invalid/ATR SL · R 倍数 TP · "
+                "核实窗按周期×市值梯队 · 观察档默认不计胜率"
+            ),
+            "confluenceTiers": [
+                {"id": "all", "label": "全部信号（未筛综合分）"},
+                {"id": "A", "label": "A 档（≥78 分）"},
+                {"id": "B", "label": "B 档及以上（≥58）"},
+                {"id": "C", "label": "C 档及以上（≥40）"},
+            ],
+            "confluenceNote": (
+                "综合分与形态信号列表同源：形态族 + 周期 + 多周期共振 + TG 来源 + MAIN 白名单；"
+                "回测完成后对全历史信号做 MTF 共振再算分。"
+            ),
+            "mcapTiers": tier_catalog_for_api(),
+            "mcapTierNote": (
+                "市值梯队与胜率弹窗同源；未在白名单的币默认为第三梯队（其他山寨）。"
+                "回测默认 Live 漏斗，与实时形态卡片一致。"
             ),
             "klineSource": "bybit_v5_parquet",
             "klineSourceNote": (
@@ -420,6 +467,13 @@ async def handle_backtest_structure_get(request: web.Request) -> web.Response:
     kind_filter = str(q.get("kind") or q.get("kindFilter") or "all").strip() or "all"
     type_filter = str(q.get("type") or q.get("typeLabel") or "all").strip() or "all"
     interval_filter = str(q.get("interval") or q.get("intervalFilter") or "all").strip() or "all"
+    conf_tier = str(q.get("confluenceTier") or q.get("confluenceMinTier") or "all").strip() or "all"
+    mtf_only = str(q.get("mtfResonance") or q.get("mtf") or "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    mcap_tier = str(q.get("mcapTier") or q.get("mcapTierFilter") or "all").strip() or "all"
     return _json_response(
         {
             "ok": True,
@@ -430,6 +484,9 @@ async def handle_backtest_structure_get(request: web.Request) -> web.Response:
                 kind_filter=kind_filter,
                 interval_filter=interval_filter,
                 type_label_filter=type_filter,
+                confluence_min_tier=conf_tier,
+                mtf_resonance_only=mtf_only,
+                mcap_tier_filter=mcap_tier,
             ),
         }
     )
@@ -796,12 +853,22 @@ async def handle_patterns_chart_meta(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.debug("chart-meta 衍生品 %s: %s", symbol, exc)
 
+    from oi_mornitor.mcap_market_quote import attach_live_market_cap
+    from oi_mornitor.mcap_tier import symbol_mcap_tier_for_api
+
+    mcap_tier = symbol_mcap_tier_for_api(symbol)
+    try:
+        await attach_live_market_cap(session, mcap_tier, symbol)
+    except Exception as exc:
+        logger.debug("chart-meta 市值 %s: %s", symbol, exc)
+
     return _json_response({
         "ok": True,
         "symbol": symbol,
         "interval": interval,
         "state": state,
         "ticker": ticker,
+        "mcapTier": mcap_tier,
         "price_lines": [],
         "derivatives": derivatives,
         "analysis": {"derivatives": derivatives} if derivatives else {},
@@ -1098,6 +1165,7 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/matrix", handle_matrix)
 
+    app.router.add_get("/api/dormant-funnel", handle_dormant_funnel)
     app.router.add_get("/api/binance/leaderboards", handle_binance_leaderboards)
 
     app.router.add_get("/api/patterns", handle_patterns)
@@ -1116,6 +1184,7 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/pattern-alert-stats", handle_pattern_alert_stats_get)
     app.router.add_post("/api/pattern-alert-stats/record-card", handle_pattern_alert_stats_record_card)
+    app.router.add_post("/api/pattern-alert-stats/recalculate-v2", handle_pattern_alert_stats_recalculate_v2)
     app.router.add_post("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
     app.router.add_put("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
 

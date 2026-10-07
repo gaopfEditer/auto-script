@@ -44,12 +44,12 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   {
     label: "射击之星",
     side: "空",
-    summary: "上影长、实体小的看跌蜡烛；需在上轨区/Vegas 附近，且前有上涨趋势。",
+    summary: "上影长、实体小的看跌蜡烛；形态 + 放量 ≥ MA20×倍数 即进形态信号列表。",
     impl: "candle_signals + indicators.detect_shooting_star",
     conditions: [
       "① 形态：上影 ∈ [1.5×实体, max]；下影很短或下影×2 < 上影；近下轨时必须收阴",
-      "② 位置：收盘 ≥ BB 中轨 + 0.85×带宽，或贴近 Vegas A/B 通道",
-      "③ 趋势：信号前 20 根累计涨幅 ≥ 3%",
+      "② 量能：Vol ≥ MA20 × OI_CANDLE_CARD_VOL_MULT（默认 1.2）",
+      "③ 可选严模式：OI_CANDLE_SHOOT_REQUIRE_POSITION=1 或 OI_CANDLE_SHOOT_TREND_MIN_PCT>0",
       "④ 入场价=信号柱收盘；上方防守≈前20高，下方参考=BB中轨",
     ],
   },
@@ -67,12 +67,12 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   {
     label: "倒锤子",
     side: "多",
-    summary: "下影长的看涨蜡烛；仅柱级 OI 异动时推送，且前有下跌。",
-    impl: "candle_signals inverted_hammer + oi_anomaly",
+    summary: "下影长的看涨蜡烛；形态 + 放量 ≥ MA20×倍数（不要求 OI 异动）。",
+    impl: "candle_signals inverted_hammer",
     conditions: [
-      "① 形态：下影 ≥ 1.5×实体，上影 < 下影/3；须在布林中轨之下",
-      "② 推送门控：当根须带柱级 OI 异动标记",
-      "③ 趋势：信号前 20 根累计跌幅 ≥ 3%",
+      "① 形态：下影 ≥ 1.5×实体，上影 < 下影/3；检测时在布林中轨之下",
+      "② 量能：Vol ≥ MA20 × OI_CANDLE_CARD_VOL_MULT",
+      "③ 可选严模式：位置/趋势 env 与射击之星对称",
       "④ 入场价=信号柱收盘；下方防守≈前20低，上方参考=BB中轨",
     ],
   },

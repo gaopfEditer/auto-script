@@ -9,6 +9,15 @@ import pandas as pd
 
 from oi_mornitor.volume_price.classify import ClassifyThresholds, classify_bars, fit_classify_thresholds
 from oi_mornitor.volume_price.features import add_volume_price_features
+from oi_mornitor.volume_price.gates import (
+    VpGateResult,
+    gate_confirm_long,
+    gate_confirm_short,
+    gate_reversal_long,
+    gate_reversal_short,
+    gate_thrust,
+)
+from oi_mornitor.volume_price.regime import add_regime_columns
 
 DEFAULT_SIGNAL_TFS = ("15m", "1h")
 DEFAULT_FILTER_TFS = ("1h", "4h")
@@ -31,6 +40,10 @@ class VolumePriceSignal:
     observation_only: bool
     bar_class: str
     signal_bar_index: int
+    formal: bool = False
+    vp_series: str = ""
+    vp_exit_plan: dict[str, Any] | None = None
+    vp_gate_layers: dict[str, bool] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -117,6 +130,42 @@ def prepare_htf_context(
     return pd.concat(parts, ignore_index=True).sort_values(["symbol", "tf", "ts"]).reset_index(drop=True)
 
 
+def _apply_gate(
+    sig: VolumePriceSignal,
+    gate: VpGateResult,
+    *,
+    base_reason: str,
+) -> VolumePriceSignal | None:
+    if not gate.emit:
+        return None
+    reason = base_reason
+    if gate.reasons:
+        reason = f"{base_reason} · {'; '.join(gate.reasons)}"
+    obs = gate.observation_only or sig.observation_only
+    score = sig.score
+    if not gate.formal:
+        score = min(score, 0.74)
+        obs = True
+    return VolumePriceSignal(
+        ts=sig.ts,
+        symbol=sig.symbol,
+        tf=sig.tf,
+        side=sig.side,
+        kind=sig.kind,
+        entry_hint=sig.entry_hint,
+        invalid_level=float(gate.exit_plan.get("invalid") or sig.invalid_level),
+        reason=reason,
+        score=score,
+        observation_only=obs,
+        bar_class=sig.bar_class,
+        signal_bar_index=sig.signal_bar_index,
+        formal=gate.formal and not obs,
+        vp_series=sig.vp_series,
+        vp_exit_plan=gate.exit_plan,
+        vp_gate_layers=gate.layers,
+    )
+
+
 def _score_signal(base: float, vol_z: float) -> tuple[float, bool]:
     score = base
     observation = False
@@ -173,6 +222,8 @@ def generate_signals(
             enriched = ctx.copy()
             enriched["bar_class"] = "other"
 
+    enriched = add_regime_columns(enriched)
+
     signals: list[VolumePriceSignal] = []
     for (sym, tf), chunk in enriched.groupby(["symbol", "tf"], sort=False):
         rows = chunk.reset_index(drop=True)
@@ -197,40 +248,66 @@ def generate_signals(
             # —— 延续 ——
             if pos == "bull" and bar_class in ("thrust", "confirm") and body > 0:
                 score, obs = _score_signal(0.75 if bar_class == "thrust" else 0.85, vol_z)
-                signals.append(
-                    VolumePriceSignal(
-                        ts=ts,
-                        symbol=str(sym),
-                        tf=str(tf),
-                        side="long",
-                        kind="continuation",
-                        entry_hint=close,
-                        invalid_level=low,
-                        reason=f"1h偏多 + {bar_class} 向上",
-                        score=score,
-                        observation_only=obs,
-                        bar_class=bar_class,
-                        signal_bar_index=i,
-                    )
+                base = VolumePriceSignal(
+                    ts=ts,
+                    symbol=str(sym),
+                    tf=str(tf),
+                    side="long",
+                    kind="continuation",
+                    entry_hint=close,
+                    invalid_level=low,
+                    reason=f"1h偏多 + {bar_class} 向上",
+                    score=score,
+                    observation_only=obs,
+                    bar_class=bar_class,
+                    signal_bar_index=i,
+                    vp_series="thrust" if bar_class == "thrust" else "confirm",
                 )
+                if bar_class == "confirm":
+                    gated = _apply_gate(
+                        base,
+                        gate_confirm_long(row, rows, i),
+                        base_reason=base.reason,
+                    )
+                else:
+                    gated = _apply_gate(
+                        base,
+                        gate_thrust(row, side="long"),
+                        base_reason=base.reason,
+                    )
+                if gated:
+                    signals.append(gated)
             elif pos == "bear" and bar_class in ("thrust", "confirm") and body < 0:
                 score, obs = _score_signal(0.75 if bar_class == "thrust" else 0.85, vol_z)
-                signals.append(
-                    VolumePriceSignal(
-                        ts=ts,
-                        symbol=str(sym),
-                        tf=str(tf),
-                        side="short",
-                        kind="continuation",
-                        entry_hint=close,
-                        invalid_level=high,
-                        reason=f"1h偏空 + {bar_class} 向下",
-                        score=score,
-                        observation_only=obs,
-                        bar_class=bar_class,
-                        signal_bar_index=i,
-                    )
+                base = VolumePriceSignal(
+                    ts=ts,
+                    symbol=str(sym),
+                    tf=str(tf),
+                    side="short",
+                    kind="continuation",
+                    entry_hint=close,
+                    invalid_level=high,
+                    reason=f"1h偏空 + {bar_class} 向下",
+                    score=score,
+                    observation_only=obs,
+                    bar_class=bar_class,
+                    signal_bar_index=i,
+                    vp_series="thrust" if bar_class == "thrust" else "confirm",
                 )
+                if bar_class == "confirm":
+                    gated = _apply_gate(
+                        base,
+                        gate_confirm_short(row, rows, i),
+                        base_reason=base.reason,
+                    )
+                else:
+                    gated = _apply_gate(
+                        base,
+                        gate_thrust(row, side="short"),
+                        base_reason=base.reason,
+                    )
+                if gated:
+                    signals.append(gated)
 
             # —— 反转 setup ——
             if bar_class in ("climax", "effort_no_result") and body < 0:
@@ -260,22 +337,29 @@ def generate_signals(
                 vol_fail = float(row["volume"]) > float(setup["setup_vol"]) * 1.02
                 if close > float(setup["zone_high"]) and not vol_fail:
                     score, obs = _score_signal(0.8, vol_z)
-                    signals.append(
-                        VolumePriceSignal(
-                            ts=ts,
-                            symbol=str(sym),
-                            tf=str(tf),
-                            side="long",
-                            kind="reversal",
-                            entry_hint=close,
-                            invalid_level=float(setup["zone_low"]),
-                            reason=f"反转多：{setup['setup_class']} 后站上区高",
-                            score=score,
-                            observation_only=obs,
-                            bar_class=bar_class,
-                            signal_bar_index=i,
-                        )
+                    series = str(setup["setup_class"])
+                    base = VolumePriceSignal(
+                        ts=ts,
+                        symbol=str(sym),
+                        tf=str(tf),
+                        side="long",
+                        kind="reversal",
+                        entry_hint=close,
+                        invalid_level=float(setup["zone_low"]),
+                        reason=f"反转多：{setup['setup_class']} 后站上区高",
+                        score=score,
+                        observation_only=obs,
+                        bar_class=bar_class,
+                        signal_bar_index=i,
+                        vp_series=series,
                     )
+                    gated = _apply_gate(
+                        base,
+                        gate_reversal_long(row),
+                        base_reason=base.reason,
+                    )
+                    if gated:
+                        signals.append(gated)
                     pending_rev_long = None
                 elif vol_fail:
                     pending_rev_long = None
@@ -285,22 +369,29 @@ def generate_signals(
                 vol_fail = float(row["volume"]) > float(setup["setup_vol"]) * 1.02
                 if close < float(setup["zone_low"]) and not vol_fail:
                     score, obs = _score_signal(0.8, vol_z)
-                    signals.append(
-                        VolumePriceSignal(
-                            ts=ts,
-                            symbol=str(sym),
-                            tf=str(tf),
-                            side="short",
-                            kind="reversal",
-                            entry_hint=close,
-                            invalid_level=float(setup["zone_high"]),
-                            reason=f"反转空：{setup['setup_class']} 后跌破区低",
-                            score=score,
-                            observation_only=obs,
-                            bar_class=bar_class,
-                            signal_bar_index=i,
-                        )
+                    series = str(setup["setup_class"])
+                    base = VolumePriceSignal(
+                        ts=ts,
+                        symbol=str(sym),
+                        tf=str(tf),
+                        side="short",
+                        kind="reversal",
+                        entry_hint=close,
+                        invalid_level=float(setup["zone_high"]),
+                        reason=f"反转空：{setup['setup_class']} 后跌破区低",
+                        score=score,
+                        observation_only=obs,
+                        bar_class=bar_class,
+                        signal_bar_index=i,
+                        vp_series=series,
                     )
+                    gated = _apply_gate(
+                        base,
+                        gate_reversal_short(row),
+                        base_reason=base.reason,
+                    )
+                    if gated:
+                        signals.append(gated)
                     pending_rev_short = None
                 elif vol_fail:
                     pending_rev_short = None

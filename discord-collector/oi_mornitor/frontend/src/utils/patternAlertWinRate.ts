@@ -1,12 +1,14 @@
 /**
- * 形态 ticker 信号胜率：三档分批 + Runner 跟踪止盈。
- * - TP1 3%（30%）· TP2 7%（30%）· Runner 40% 跟踪（5% 回撤，多上移/空下移）
- * - 止损 ±5% · 每 15m 步进核实 · 最长 3h
+ * 形态 ticker 信号胜率：V2 三档分批 + Runner（对齐 pattern_settle_profile.py）。
+ * - SL：invalid 与 ATR×k、cap% 取更紧 · TP：R 倍数分 Preset
+ * - 核实窗按周期×市值梯队 · 15m 步进
  * - 杠杆：BTC/ETH/SOL 100x，其余山寨 20x
  */
 import type { ChartAlertEntryFocus, PatternAlert, PatternChartMarker } from "../types";
 import { fetchBinanceFuturesKlines } from "./binanceKlines";
 import { displaySymbol, humanBaseAsset, isStablecoinSymbol, toUsdtSymbol, priceScaleAlignFactor, alignPriceToReference } from "./symbol";
+import type { McapTierOption } from "./mcapTier";
+import { buildSettlePlanV2, SETTLE_RULES_SUMMARY_V2 } from "./settleProfileV2";
 
 export type { ChartAlertEntryFocus };
 
@@ -23,6 +25,8 @@ export type AlertStatsRecord = {
   signalAt: number;
   entry: number;
   tier: "major" | "altcoin" | "equity" | string;
+  /** 市值梯队 t1/t2/t3（结算 tier 独立） */
+  mcapTier?: string;
   /** 默认止盈止损幅度 %（卡片方向单默认 5） */
   stepPct: number;
   verifyAt: number;
@@ -52,7 +56,41 @@ export type AlertStatsRecord = {
   channelId?: string;
   /** 15m/1h/4h 多周期共振（服务端 list 页计算） */
   mtfResonance?: AlertMtfResonance;
+  /** 综合共振分（服务端 signal_confluence） */
+  confluence?: AlertConfluence;
+  invalid_level?: number;
+  observation_only?: boolean;
+  settleProfileId?: string;
+  settleRulesVersion?: number;
+  slPrice?: number;
+  tp1Price?: number;
+  tp2Price?: number;
 };
+
+export type AlertConfluence = {
+  score: number;
+  tier: "A" | "B" | "C" | "D";
+  family?: string | null;
+  combos?: string[];
+  actionHint?: string;
+  reasons?: string[];
+};
+
+export function formatConfluenceBadge(c?: AlertConfluence | null): string {
+  if (!c || !Number.isFinite(c.score)) return "—";
+  return `${c.tier}·${c.score}`;
+}
+
+export function confluenceTitle(c?: AlertConfluence | null): string {
+  if (!c) return "";
+  const lines = [
+    `综合分 ${c.score}（${c.tier} 档）`,
+    c.actionHint || "",
+    c.combos?.length ? `组合：${c.combos.join(" · ")}` : "",
+    c.reasons?.length ? c.reasons.join("\n") : "",
+  ].filter(Boolean);
+  return lines.join("\n");
+}
 
 export type AlertMtfResonance = {
   /** 共振周期数 2 或 3 */
@@ -72,6 +110,7 @@ export type AlertWinRateSummary = {
   winRate: number | null;
   /** 已核信号杠杆保证金盈亏合计 %（胜正负负，对齐单笔 alertStatsPnlPct） */
   totalPnlPct: number | null;
+  observationExcluded?: number;
 };
 
 const STATS_CACHE_KEY = "oi_pattern_alert_stats_v1";
@@ -98,7 +137,13 @@ export const EQUITY_STATS_LEVERAGE = 5;
 
 /** 弹窗头部展示用：核算规则摘要 */
 export const ALERT_SETTLE_RULES_SUMMARY =
-  "核算规则：BTC/ETH/SOL 100x · 山寨 20x · TP 3%/7% 分批 30%+30% · Runner 40% 跟踪止盈 · 止损 ±5% · 信号后每 15m 核实 · 最长 3h · 未平则按窗口末价结算";
+  `核算规则：BTC/ETH/SOL 100x · 山寨 20x · ${SETTLE_RULES_SUMMARY_V2} · 15m 步进核实 · 未平则按窗口末价结算`;
+
+export function isObservationStatsRecord(rec: AlertStatsRecord): boolean {
+  const lab = String(rec.typeLabel || "");
+  if (lab.includes("观察")) return true;
+  return Boolean(rec.observation_only);
+}
 
 let memoryStats: AlertStatsRecord[] = [];
 /** 串行核实队列：避免 busy 时重拉被静默丢弃 */
@@ -411,6 +456,7 @@ export type AlertStatsPageResult = {
   intervalOptions: AlertStatsIntervalOption[];
   sessionOptions: AlertStatsSessionOption[];
   daytypeOptions: AlertStatsDaytypeOption[];
+  mcapTierOptions?: McapTierOption[];
   /** @deprecated 用 typeOptions */
   typeLabels: string[];
 };
@@ -505,6 +551,9 @@ export async function fetchAlertStatsPage(opts: {
   symbol?: string;
   assetClassFilter?: AlertStatsAssetFilter;
   mtfResonanceOnly?: boolean;
+  /** 与结构回测同源：A / B（及以上）/ C / D（仅 D）/ all */
+  confluenceMinTier?: string;
+  mcapTierFilter?: string;
 }): Promise<AlertStatsPageResult> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? ALERT_STATS_PAGE_SIZE));
@@ -527,6 +576,10 @@ export async function fetchAlertStatsPage(opts: {
   });
   if (symbol) params.set("symbol", symbol);
   if (opts.mtfResonanceOnly) params.set("mtfResonance", "1");
+  const confTier = String(opts.confluenceMinTier || "all").trim() || "all";
+  if (confTier !== "all") params.set("confluenceTier", confTier);
+  const mcapF = String(opts.mcapTierFilter || "all").trim() || "all";
+  if (mcapF !== "all") params.set("mcapTier", mcapF);
   const empty: AlertStatsPageResult = {
     items: [],
     total: 0,
@@ -538,6 +591,7 @@ export async function fetchAlertStatsPage(opts: {
     intervalOptions: [],
     sessionOptions: mergeSessionOptions([]),
     daytypeOptions: mergeDaytypeOptions([]),
+    mcapTierOptions: [],
     typeLabels: [],
   };
   try {
@@ -557,6 +611,7 @@ export async function fetchAlertStatsPage(opts: {
       intervalOptions?: AlertStatsIntervalOption[];
       sessionOptions?: AlertStatsSessionOption[];
       daytypeOptions?: AlertStatsDaytypeOption[];
+      mcapTierOptions?: McapTierOption[];
       typeLabels?: string[];
     };
     if (!body?.ok || !Array.isArray(body.items)) return empty;
@@ -587,6 +642,7 @@ export async function fetchAlertStatsPage(opts: {
       intervalOptions,
       sessionOptions,
       daytypeOptions,
+      mcapTierOptions: Array.isArray(body.mcapTierOptions) ? body.mcapTierOptions : [],
       typeLabels: typeOptions.map((t) => t.label),
     };
   } catch {
@@ -831,6 +887,56 @@ export async function syncAlertStatsFromServer(): Promise<AlertStatsRecord[]> {
   }
 }
 
+/** 服务端全库 V2 重算（operator；可能耗时数分钟） */
+export async function recalculateAllSettlementsV2(limit?: number): Promise<{
+  ok: boolean;
+  updated?: number;
+  processed?: number;
+  summary?: AlertWinRateSummary;
+  error?: string;
+}> {
+  try {
+    const res = await fetch("/api/pattern-alert-stats/recalculate-v2", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(limit != null ? { limit } : {}),
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    if (!res.ok || !body.ok) {
+      return { ok: false, error: String(body.error || res.statusText) };
+    }
+    const s = body.summary as Record<string, unknown> | undefined;
+    const summary: AlertWinRateSummary | undefined = s
+      ? {
+          total: Number(s.total) || 0,
+          pending: Number(s.pending) || 0,
+          wins: Number(s.wins) || 0,
+          losses: Number(s.losses) || 0,
+          flats: Number(s.flats) || 0,
+          errors: Number(s.errors) || 0,
+          winRate:
+            s.winRate == null || !Number.isFinite(Number(s.winRate))
+              ? null
+              : Number(s.winRate),
+          totalPnlPct:
+            s.totalPnlPct == null || !Number.isFinite(Number(s.totalPnlPct))
+              ? null
+              : Number(s.totalPnlPct),
+          observationExcluded:
+            s.observationExcluded != null ? Number(s.observationExcluded) : undefined,
+        }
+      : undefined;
+    return {
+      ok: true,
+      updated: Number(body.updated) || 0,
+      processed: Number(body.processed) || 0,
+      summary,
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** 结算结果回写后台 */
 export async function pushAlertStatsToServer(
   updates: AlertStatsRecord[],
@@ -901,6 +1007,14 @@ export function loadAlertStats(): AlertStatsRecord[] {
 }
 
 export function summarizeAlertWinRate(records: AlertStatsRecord[]): AlertWinRateSummary {
+  let obsExcluded = 0;
+  const rows = records.filter((r) => {
+    if (isObservationStatsRecord(r)) {
+      obsExcluded++;
+      return false;
+    }
+    return true;
+  });
   let pending = 0;
   let wins = 0;
   let losses = 0;
@@ -908,7 +1022,7 @@ export function summarizeAlertWinRate(records: AlertStatsRecord[]): AlertWinRate
   let errors = 0;
   let totalPnl = 0;
   let pnlN = 0;
-  for (const r of records) {
+  for (const r of rows) {
     if (r.outcome === "pending") pending++;
     else if (r.outcome === "take_profit") wins++;
     else if (r.outcome === "stop_loss") losses++;
@@ -938,7 +1052,7 @@ export function summarizeAlertWinRate(records: AlertStatsRecord[]): AlertWinRate
   }
   const settled = wins + losses;
   return {
-    total: records.length,
+    total: rows.length,
     pending,
     wins,
     losses,
@@ -946,6 +1060,7 @@ export function summarizeAlertWinRate(records: AlertStatsRecord[]): AlertWinRate
     errors,
     winRate: settled > 0 ? wins / settled : null,
     totalPnlPct: pnlN > 0 ? Math.round(totalPnl * 100) / 100 : null,
+    observationExcluded: obsExcluded > 0 ? obsExcluded : undefined,
   };
 }
 
@@ -1129,24 +1244,32 @@ export function settleAlertByKlines(
     return retireDisabledIntervalRecord(rec);
   }
   const isShort = rec.side === "short";
-  const stepPct = rec.stepPct > 0 ? rec.stepPct : ALERT_TP1_PCT;
   const entry = rec.entry;
-  const tp1 = tpPrice(entry, ALERT_TP1_PCT, isShort);
-  const tp2 = tpPrice(entry, ALERT_TP2_PCT, isShort);
-  const sl = slPrice(entry, ALERT_SL_PCT, isShort);
-  const windowEnd = Math.min(now, rec.verifyAt);
+  const plan = buildSettlePlanV2(rec);
+  const verifyAt = rec.verifyAt > 0 ? rec.verifyAt : rec.signalAt + plan.verifyDelayMs;
+  const tp1 = rec.tp1Price ?? plan.tp1Price;
+  const tp2 = rec.tp2Price ?? plan.tp2Price;
+  const sl = rec.slPrice ?? plan.slPrice;
+  const stepPct =
+    entry > 0
+      ? Math.round(plan.tp1R * (plan.riskR / entry) * 10000) / 100
+      : rec.stepPct > 0
+        ? rec.stepPct
+        : ALERT_TP1_PCT;
+  const windowEnd = Math.min(now, verifyAt);
   const aligned = aggregateTo15m(alignBarsToEntry(bars, entry));
   const sorted = [...aligned]
     .filter((b) => b.ts >= rec.signalAt - 1 && b.ts <= windowEnd + 60_000)
     .sort((a, b) => a.ts - b.ts);
 
-  const rem = [...ALERT_BATCH_WEIGHTS];
+  const rem = [...plan.batchWeights];
   let weightedMove = 0;
   let runnerActive = false;
   let extreme = entry;
   let runnerStop: number | null = null;
   let exitPrice = entry;
   let hitAt: number | undefined;
+  const runnerTrailPct = plan.runnerTrailPct;
 
   const finish = (
     partial: Partial<AlertStatsRecord> & { hitAt?: number },
@@ -1157,6 +1280,12 @@ export function settleAlertByKlines(
       ...rec,
       tier: detectTier(rec.symbol),
       stepPct,
+      verifyAt,
+      settleProfileId: plan.profileId,
+      settleRulesVersion: 2,
+      slPrice: sl,
+      tp1Price: tp1,
+      tp2Price: tp2,
       ...partial,
       ...max,
       verifiedAt: now,
@@ -1202,7 +1331,7 @@ export function settleAlertByKlines(
       if (runnerActive) {
         if (isShort) {
           extreme = Math.min(extreme, bar.low);
-          const newStop = extreme * (1 + ALERT_RUNNER_TRAIL_PCT / 100);
+          const newStop = extreme * (1 + runnerTrailPct / 100);
           runnerStop = runnerStop == null ? newStop : Math.min(runnerStop, newStop);
           if (bar.high >= runnerStop) {
             weightedMove += priceMovePct(entry, runnerStop, isShort) * rem[2]!;
@@ -1212,7 +1341,7 @@ export function settleAlertByKlines(
           }
         } else {
           extreme = Math.max(extreme, bar.high);
-          const newStop = extreme * (1 - ALERT_RUNNER_TRAIL_PCT / 100);
+          const newStop = extreme * (1 - runnerTrailPct / 100);
           runnerStop = runnerStop == null ? newStop : Math.max(runnerStop, newStop);
           if (bar.low <= runnerStop) {
             weightedMove += priceMovePct(entry, runnerStop, isShort) * rem[2]!;
@@ -1226,7 +1355,7 @@ export function settleAlertByKlines(
   }
 
   const remaining = rem[0]! + rem[1]! + rem[2]!;
-  if (remaining > 1e-9 && now < rec.verifyAt) return rec;
+  if (remaining > 1e-9 && now < verifyAt) return { ...rec, verifyAt };
 
   if (remaining > 1e-9) {
     const last = sorted[sorted.length - 1];

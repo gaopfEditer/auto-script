@@ -15,13 +15,15 @@ import { buildChartFromCandles } from "../../utils/chartIndicators";
 import { VOLUME_MA_COLOR, buildVolumeMaData } from "../../utils/chartMaSeries";
 import { chartLocalization, chartTimeScaleOptions } from "../../utils/chartLocale";
 import {
+  CHART_EMA_LINES,
   COMPACT_MARKER_KINDS,
   STRUCTURE_LINE_KINDS,
   STRUCTURE_MARKER_KINDS,
+  type ChartEmaKey,
   type ChartLayers,
 } from "../../utils/chartLayers";
 import { buildMacdCrossMarkers } from "../../utils/chartMacdMarkers";
-import type { VegasKey } from "../../utils/chartTimeframe";
+import { type VegasKey, vegasSeriesLineWidth } from "../../utils/chartTimeframe";
 import { chartPriceFormat } from "../../utils/format";
 import {
   assertVisiblePriceWindow,
@@ -183,6 +185,7 @@ export const TrainBlindChart = memo(function TrainBlindChart({
   const midRef = useRef<ISeriesApi<"Line"> | null>(null);
   const lowerRef = useRef<ISeriesApi<"Line"> | null>(null);
   const vegasRefs = useRef<Partial<Record<VegasKey, ISeriesApi<"Line">>>>({});
+  const emaRefs = useRef<Partial<Record<ChartEmaKey, ISeriesApi<"Line">>>>({});
   const volRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const volMaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -270,10 +273,22 @@ export const TrainBlindChart = memo(function TrainBlindChart({
     for (const { key, color } of VEGAS_SERIES) {
       vegasRefs.current[key] = chart.addLineSeries({
         color,
-        lineWidth: key === "filter" ? 2 : 1,
+        lineWidth: vegasSeriesLineWidth(key),
         priceLineVisible: false,
         lastValueVisible: false,
         priceScaleId: "right",
+        visible: layersRef.current.vegas,
+      });
+    }
+
+    for (const { key, color, period } of CHART_EMA_LINES) {
+      emaRefs.current[key] = chart.addLineSeries({
+        color,
+        lineWidth: period === 13 ? 2 : 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        priceScaleId: "right",
+        visible: layersRef.current.ema,
       });
     }
 
@@ -385,6 +400,7 @@ export const TrainBlindChart = memo(function TrainBlindChart({
       candleRef.current = null;
       volRef.current = null;
       vegasRefs.current = {};
+      emaRefs.current = {};
       priceLinesRef.current = [];
     };
   }, []);
@@ -398,6 +414,12 @@ export const TrainBlindChart = memo(function TrainBlindChart({
     macdHistRef.current?.applyOptions({ visible: next.macd });
     macdLineRef.current?.applyOptions({ visible: next.macd });
     macdSignalRef.current?.applyOptions({ visible: next.macd });
+    for (const { key } of VEGAS_SERIES) {
+      vegasRefs.current[key]?.applyOptions({ visible: next.vegas });
+    }
+    for (const { key } of CHART_EMA_LINES) {
+      emaRefs.current[key]?.applyOptions({ visible: next.ema });
+    }
     if (macdLineRef.current && builtRef.current) {
       macdLineRef.current.setMarkers(
         next.macd
@@ -448,6 +470,9 @@ export const TrainBlindChart = memo(function TrainBlindChart({
     lowerRef.current?.setData(toMainScaleLine(built.bb.lower, timeSet));
     for (const { key } of VEGAS_SERIES) {
       vegasRefs.current[key]?.setData(toMainScaleLine(built.vegas[key] ?? [], timeSet));
+    }
+    for (const { key } of CHART_EMA_LINES) {
+      emaRefs.current[key]?.setData(toMainScaleLine(built.ema[key] ?? [], timeSet));
     }
 
     if (layersRef.current.volume) {

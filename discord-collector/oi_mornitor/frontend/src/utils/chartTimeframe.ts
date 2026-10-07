@@ -1,6 +1,7 @@
 import type { PatternCandle, PatternChartData, PatternState } from "../types";
 import { fetchBinanceFuturesKlines } from "./binanceKlines";
 import { buildChartFromCandles } from "./chartIndicators";
+import { type ChartEmaKey } from "./chartLayers";
 
 export const CHART_TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h", "1d"] as const;
 export type ChartTimeframe = (typeof CHART_TIMEFRAMES)[number];
@@ -21,9 +22,10 @@ export function coerceChartTimeframe(raw?: string | null): ChartTimeframe | null
   return null;
 }
 
-export const CHART_DEFAULT_LIMIT = 500;
-export const CHART_LOAD_CHUNK = 300;
-export const CHART_REFRESH_TAIL = 80;
+/** 首屏 K 线数（Vegas 676 / EMA144 需足够预热；对齐币安单页上限 1500） */
+export const CHART_DEFAULT_LIMIT = 900;
+export const CHART_LOAD_CHUNK = 500;
+export const CHART_REFRESH_TAIL = 120;
 export const CHART_VISIBLE_BARS = 160;
 
 export function chartBarDurationMs(tf: ChartTimeframe): number {
@@ -102,12 +104,31 @@ export function mergeBbSeries(
 
 export type VegasKey = "filter" | "a1" | "a2" | "b1" | "b2";
 
+/** 维加斯主图线宽（a1=蓝色 EMA144，为默认 1 的 2 倍） */
+export function vegasSeriesLineWidth(key: VegasKey): number {
+  if (key === "filter") return 2;
+  if (key === "a1") return 2;
+  return 1;
+}
+
 export function mergeVegasMap(
   existing: Partial<Record<VegasKey, { time: number; value: number }[]>> | undefined,
   incoming: Partial<Record<VegasKey, { time: number; value: number }[]>> | undefined,
 ): Record<VegasKey, { time: number; value: number }[]> {
   const keys: VegasKey[] = ["filter", "a1", "a2", "b1", "b2"];
   const out = {} as Record<VegasKey, { time: number; value: number }[]>;
+  for (const k of keys) {
+    out[k] = mergeBbSeries(existing?.[k] ?? [], incoming?.[k] ?? []);
+  }
+  return out;
+}
+
+export function mergeEmaMap(
+  existing: Partial<Record<ChartEmaKey, { time: number; value: number }[]>> | undefined,
+  incoming: Partial<Record<ChartEmaKey, { time: number; value: number }[]>> | undefined,
+): Record<ChartEmaKey, { time: number; value: number }[]> {
+  const keys: ChartEmaKey[] = ["e13", "e33", "e99", "e144"];
+  const out = {} as Record<ChartEmaKey, { time: number; value: number }[]>;
   for (const k of keys) {
     out[k] = mergeBbSeries(existing?.[k] ?? [], incoming?.[k] ?? []);
   }
@@ -192,6 +213,7 @@ type ChartMetaPayload = {
   error?: string;
   state?: PatternState;
   ticker?: PatternChartData["ticker"];
+  mcapTier?: PatternChartData["mcapTier"];
   price_lines?: PatternChartData["price_lines"];
   derivatives?: PatternChartData["analysis"]["derivatives"];
   analysis?: PatternChartData["analysis"];
@@ -280,6 +302,7 @@ async function fetchPatternChartFromClient(
     price_lines,
     bb: built.bb,
     vegas: built.vegas,
+    ema: built.ema,
     macd: built.macd,
     oi: [],
     analysis: {
@@ -295,6 +318,7 @@ async function fetchPatternChartFromClient(
     },
     state: (meta.state || {}) as PatternState,
     ticker,
+    mcapTier: meta.mcapTier,
   };
 }
 

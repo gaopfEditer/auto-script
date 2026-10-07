@@ -99,9 +99,8 @@ def get_telegram_push_toggles() -> dict[str, Any]:
         },
         "hint": (
             "形态卡片推送由 oi_mornitor 扫描触发（collect:ui 自动守护 / pnpm run oi:start）。"
-            " candle → OI_CANDLE_CARD_TELEGRAM_CHAT_ID；"
-            " main → 热门/特别关注币（默认 BTC/ETH）另推 MAIN："
-            "15m/1h/4h 射击之星、倒锤子、量价确认、量价推进。"
+            " candle → OI_CANDLE_CARD_TELEGRAM_CHAT_ID（形态需放量确认）；"
+            " main → 仅镜像蜡烛/结构形态卡片（白名单币+周期），不推量价确认/推进。"
         ),
     }
 

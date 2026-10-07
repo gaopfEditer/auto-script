@@ -10,6 +10,13 @@ from oi_mornitor.breakout_detector import klines_to_df
 from oi_mornitor.pattern_detector import enrich_indicators
 from oi_mornitor.signal_policy import is_blocked_ticker_alert
 from oi_mornitor.strategy.candle_signals import closed_bar_index
+from oi_mornitor.volume_price.cooldown import (
+    is_cooldown_active,
+    refresh_all_from_market,
+    register_formal_signal,
+    series_key,
+)
+from oi_mornitor.volume_price.oi_attach import attach_oi_maps
 from oi_mornitor.volume_price.signals import VolumePriceSignal, generate_signals
 
 MIN_SCORE = 0.75
@@ -64,6 +71,7 @@ def klines_map_to_vp_df(
     *,
     klines_map_1h: dict[str, list[list[Any]]] | None = None,
     klines_map_4h: dict[str, list[list[Any]]] | None = None,
+    oi_maps: dict[tuple[str, str], dict[int, float]] | None = None,
 ) -> pd.DataFrame:
     """Binance K 线 batch → 量价模块 DataFrame（多周期信号 + HTF 过滤）。"""
     rows: list[dict[str, Any]] = []
@@ -76,7 +84,8 @@ def klines_map_to_vp_df(
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
-    return df.sort_values(["symbol", "tf", "ts"]).reset_index(drop=True)
+    df = df.sort_values(["symbol", "tf", "ts"]).reset_index(drop=True)
+    return attach_oi_maps(df, oi_maps)
 
 
 def _resolve_vp_type(sig: VolumePriceSignal) -> tuple[str, str] | None:
@@ -111,15 +120,20 @@ def volume_price_signal_to_alert(
     if sig.observation_only:
         type_label = f"{type_label}（观察）"
     side = "long" if str(sig.side).lower() == "long" else "short"
+    plan = sig.vp_exit_plan if isinstance(sig.vp_exit_plan, dict) else {}
     return {
         "symbol": sig.symbol,
-        "type": typ,
+        "type": "volume_price_card",
+        "vp_type": typ,
         "type_label": type_label,
         "side": side,
         "interval": sig.tf,
         "kind": sig.bar_class,
         "score": float(sig.score),
         "observation_only": bool(sig.observation_only),
+        "vp_formal": bool(sig.formal and not sig.observation_only),
+        "vp_exit_plan": plan,
+        "vp_gate_layers": sig.vp_gate_layers,
         "entry_hint": float(sig.entry_hint),
         "invalid_level": float(sig.invalid_level),
         "price": float(sig.entry_hint),
@@ -162,6 +176,7 @@ def scan_volume_price_ticker_alerts(
     signal_tfs: tuple[str, ...] | None = None,
     scan_ts: float | None = None,
     now_ms: int | None = None,
+    oi_maps: dict[tuple[str, str], dict[int, float]] | None = None,
 ) -> list[dict[str, Any]]:
     """watchlist 多周期 K 线扫描量价信号，仅最后一根已收盘柱、score≥0.75。"""
     tfs = signal_tfs or (SIGNAL_TF,)
@@ -172,11 +187,12 @@ def scan_volume_price_ticker_alerts(
         klines_map_15m,
         klines_map_1h=klines_map_1h,
         klines_map_4h=klines_map_4h,
+        oi_maps=oi_maps,
     )
     if df.empty:
         return []
 
-    signals, _enriched = generate_signals(df, signal_tfs=tfs)
+    signals, enriched = generate_signals(df, signal_tfs=tfs)
     if not signals:
         return []
 
@@ -200,7 +216,11 @@ def scan_volume_price_ticker_alerts(
 
     picked: dict[tuple[str, str], VolumePriceSignal] = {}
     for sig in signals:
-        if sig.tf not in tfs or float(sig.score) < MIN_SCORE:
+        if sig.tf not in tfs:
+            continue
+        if sig.formal and float(sig.score) < MIN_SCORE:
+            continue
+        if not sig.formal and float(sig.score) < 0.45:
             continue
         sym = str(sig.symbol)
         tf_s = str(sig.tf)
@@ -212,9 +232,21 @@ def scan_volume_price_ticker_alerts(
         if prev is None or float(sig.score) > float(prev.score):
             picked[key] = sig
 
+    enriched_by_key: dict[tuple[str, str], pd.DataFrame] = {}
+    for (sym, tf), chunk in enriched.groupby(["symbol", "tf"], sort=False):
+        enriched_by_key[(str(sym), str(tf))] = chunk.reset_index(drop=True)
+    refresh_all_from_market(enriched_by_key, closed_index_by_sym_tf)
+
     alerts: list[dict[str, Any]] = []
     for (sym, tf_s), sig in picked.items():
         closed_idx = closed_index_by_sym_tf.get((sym, tf_s), -1)
+        chunk = enriched_by_key.get((sym, tf_s))
+        chunk = enriched_by_key.get((sym, tf_s))
+        series = str(sig.vp_series or "confirm")
+        cd_key = series_key(sym, tf_s, str(sig.side), series)
+        if is_cooldown_active(cd_key, bar_index=closed_idx):
+            continue
+
         kline_close_time = close_time_by_index.get((sym, tf_s, closed_idx), int(sig.ts))
         alert = volume_price_signal_to_alert(
             sig,
@@ -228,5 +260,16 @@ def scan_volume_price_ticker_alerts(
             sym_1h = (klines_map_1h or {}).get(sym)
             if not _vegas_down_on_1h(sym_1h):
                 continue
+        if sig.formal and chunk is not None and 0 <= closed_idx < len(chunk):
+            row = chunk.iloc[closed_idx]
+            register_formal_signal(
+                cd_key,
+                bar_index=closed_idx,
+                signal_low=float(row.get("low") or sig.invalid_level),
+                signal_high=float(row.get("high") or sig.entry_hint),
+                entry=float(sig.entry_hint),
+                ema20=float(row.get("ema20") or 0),
+                side=str(sig.side),
+            )
         alerts.append(alert)
     return alerts

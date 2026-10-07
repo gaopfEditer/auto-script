@@ -35,6 +35,7 @@ from oi_mornitor.breakout_detector import klines_to_df
 from oi_mornitor.pattern_detector import enrich_indicators
 from oi_mornitor.pattern_monitor import fetch_open_interest_hist
 from oi_mornitor.pattern_settle import settle_rules_summary, settle_signal_by_5m_bars
+from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms
 from oi_mornitor.pattern_alert_stats import summarize
 from oi_mornitor.strategy.candle_signals import iter_candle_card_hits_in_range
 from oi_mornitor.strategy.structure_signals import (
@@ -80,8 +81,11 @@ class BacktestJob:
     params: dict[str, Any] = field(default_factory=dict)
     progress: dict[str, Any] = field(default_factory=dict)
     summary: dict[str, Any] | None = None
+    confluence_summary: dict[str, Any] | None = None
     by_kind: list[dict[str, Any]] = field(default_factory=list)
     by_interval: list[dict[str, Any]] = field(default_factory=list)
+    by_tier: list[dict[str, Any]] = field(default_factory=list)
+    by_mcap_tier: list[dict[str, Any]] = field(default_factory=list)
     items: list[dict[str, Any]] = field(default_factory=list)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -289,16 +293,59 @@ def _load_job_from_disk(job_id: str) -> BacktestJob | None:
 
 
 def _refresh_live_stats(job: BacktestJob) -> None:
+    from oi_mornitor.mcap_tier import MCAP_TIER_ORDER, attach_mcap_tier, mcap_tier_label
+    from oi_mornitor.signal_confluence import (
+        attach_confluence_to_backtest_items,
+        filter_items_by_confluence,
+        summarize_by_confluence_tier,
+    )
+
     items = job.items
     if items:
+        attach_mcap_tier(items)
+        attach_confluence_to_backtest_items(items)
         items.sort(key=lambda x: int(x.get("signalAt") or 0), reverse=True)
         job.summary = summarize(_pseudo_alerts(items))
         job.by_kind = _summarize_by_kind(items)
         job.by_interval = _summarize_by_interval(items)
+        tier_counts = summarize_by_confluence_tier(items)
+        job.by_tier = []
+        for row in tier_counts:
+            tier = str(row.get("tier") or "D")
+            bucket = [
+                it
+                for it in items
+                if str((it.get("confluence") or {}).get("tier") or "D").upper() == tier
+            ]
+            s = summarize(_pseudo_alerts(bucket)) if bucket else {}
+            job.by_tier.append({"tier": tier, "count": len(bucket), **s})
+        job.by_mcap_tier = []
+        for tid in MCAP_TIER_ORDER:
+            bucket = [it for it in items if str(it.get("mcapTier") or "t3").lower() == tid]
+            s = summarize(_pseudo_alerts(bucket)) if bucket else {}
+            job.by_mcap_tier.append(
+                {
+                    "id": tid,
+                    "label": mcap_tier_label(tid),
+                    "count": len(bucket),
+                    **s,
+                }
+            )
+        min_tier = str(job.params.get("confluenceMinTier") or "all")
+        mtf_only = bool(job.params.get("mtfResonanceOnly"))
+        conf_items = filter_items_by_confluence(
+            items, min_tier=min_tier, mtf_resonance_only=mtf_only
+        )
+        job.confluence_summary = (
+            summarize(_pseudo_alerts(conf_items)) if conf_items else None
+        )
     else:
         job.summary = None
+        job.confluence_summary = None
         job.by_kind = []
         job.by_interval = []
+        job.by_tier = []
+        job.by_mcap_tier = []
 
 
 def _bar_close_ms(row: Any) -> int:
@@ -473,7 +520,22 @@ def _scan_symbol_interval(
             struct_last[ck] = bar_close_sec
 
         signal_at_ms = _align_signal_at_ms(close_time_ms)
-        settle_end = signal_at_ms + _VERIFY_DELAY_MS + 5 * 60_000
+        settle_stub: dict[str, Any] = {
+            "side": side,
+            "entry": entry,
+            "tradeSymbol": symbol,
+            "symbol": symbol,
+            "signalAt": signal_at_ms,
+            "interval": interval,
+            "typeLabel": type_label,
+        }
+        if defense is not None:
+            try:
+                settle_stub["invalid_level"] = float(defense)
+            except (TypeError, ValueError):
+                pass
+        verify_ms = resolve_verify_delay_ms(settle_stub)
+        settle_end = signal_at_ms + verify_ms + 5 * 60_000
         bars_settle = store.load_5m_bars(symbol, signal_at_ms, settle_end)
         settled = settle_signal_by_5m_bars(
             side=side,
@@ -482,6 +544,7 @@ def _scan_symbol_interval(
             signal_at_ms=signal_at_ms,
             bars_5m=bars_settle,
             now_ms=settle_end,
+            alert_rec=settle_stub,
         )
         row: dict[str, Any] = {
             "symbol": symbol,
@@ -490,6 +553,7 @@ def _scan_symbol_interval(
             "typeLabel": type_label,
             "patternLabel": pattern_label,
             "side": side,
+            "emit": emit,
             "signalAt": signal_at_ms,
             "entry": entry,
             "defense": defense,
@@ -881,6 +945,8 @@ async def start_structure_backtest(
             "maxSymbols": params.get("maxSymbols") or 200,
             "skipFetch": bool(params.get("skipFetch", True)),
             "liveFunnel": bool(params.get("liveFunnel", True)),
+            "confluenceMinTier": str(params.get("confluenceMinTier") or "all"),
+            "mtfResonanceOnly": bool(params.get("mtfResonanceOnly", False)),
         },
     )
 
@@ -969,7 +1035,13 @@ def _filter_items(
     kind_filter: str | None = None,
     interval_filter: str | None = None,
     type_label_filter: str | None = None,
+    confluence_min_tier: str | None = None,
+    mtf_resonance_only: bool = False,
+    mcap_tier_filter: str | None = None,
 ) -> list[dict[str, Any]]:
+    from oi_mornitor.mcap_tier import attach_mcap_tier, filter_by_mcap_tier
+    from oi_mornitor.signal_confluence import filter_items_by_confluence
+
     out = items
     if kind_filter and kind_filter != "all":
         out = [it for it in out if str(it.get("kind") or "") == kind_filter]
@@ -977,7 +1049,13 @@ def _filter_items(
         out = [it for it in out if str(it.get("typeLabel") or "") == type_label_filter]
     if interval_filter and interval_filter != "all":
         out = [it for it in out if str(it.get("interval") or "") == interval_filter]
-    return out
+    attach_mcap_tier(out)
+    out = filter_items_by_confluence(
+        out,
+        min_tier=confluence_min_tier,
+        mtf_resonance_only=mtf_resonance_only,
+    )
+    return filter_by_mcap_tier(out, mcap_tier=mcap_tier_filter)
 
 
 def _settle_rules_text(job: BacktestJob) -> str:
@@ -998,19 +1076,30 @@ def job_to_dict(
     kind_filter: str | None = None,
     interval_filter: str | None = None,
     type_label_filter: str | None = None,
+    confluence_min_tier: str | None = None,
+    mtf_resonance_only: bool = False,
+    mcap_tier_filter: str | None = None,
 ) -> dict[str, Any]:
     page = max(1, int(page or 1))
     page_size = min(200, max(1, int(page_size or 100)))
+    if job.items and not any(isinstance(it.get("confluence"), dict) for it in job.items[: min(20, len(job.items))]):
+        _refresh_live_stats(job)
     filtered = _filter_items(
         job.items,
         kind_filter=kind_filter,
         interval_filter=interval_filter,
         type_label_filter=type_label_filter,
+        confluence_min_tier=confluence_min_tier,
+        mtf_resonance_only=mtf_resonance_only,
+        mcap_tier_filter=mcap_tier_filter,
     )
     interval_only = _filter_items(
         job.items,
         kind_filter=kind_filter,
         interval_filter=interval_filter,
+        confluence_min_tier=confluence_min_tier,
+        mtf_resonance_only=mtf_resonance_only,
+        mcap_tier_filter=mcap_tier_filter,
     )
     total = len(filtered)
     pages = max(1, (total + page_size - 1) // page_size) if total else 1
@@ -1027,9 +1116,12 @@ def job_to_dict(
         "params": job.params,
         "progress": job.progress,
         "summary": job.summary,
+        "confluenceSummary": job.confluence_summary,
         "filteredSummary": filtered_summary,
         "intervalSummary": interval_summary,
         "byKind": job.by_kind,
+        "byTier": job.by_tier,
+        "byMcapTier": job.by_mcap_tier,
         "byType": _summarize_by_type_label(interval_only),
         "byInterval": job.by_interval,
         "items": chunk,

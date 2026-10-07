@@ -1,9 +1,12 @@
-"""形态信号分批纸面结算：TP 3/7/12/17% · 15m 步进核实 · 三档仓位 + Runner 跟踪止盈。"""
+"""形态信号分批纸面结算：V2 为 R 倍数 TP + invalid/ATR SL；仍兼容旧固定 % 兜底。"""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from oi_mornitor.pattern_alert_stats import _rec_pnl_pct
+
+if TYPE_CHECKING:
+    from oi_mornitor.pattern_settle_profile import SettlePlan
 
 # 核实：每 15m 一步，最长 3h（12 根 15m）
 _VERIFY_INTERVAL_MS = 15 * 60 * 1000
@@ -21,9 +24,11 @@ _DEFAULT_TP_SL_PCT = TP1_PCT
 
 
 def settle_rules_summary() -> str:
+    from oi_mornitor.pattern_settle_profile import settle_rules_summary_v2
+
     return (
-        "BTC/ETH/SOL 100x · 山寨 20x · TP 3%/7% 分批 30%+30% · Runner 40% 跟踪止盈 · "
-        "止损 ±5% · 信号后每 15m 核实 · 最长 3h · 未平则按窗口末价"
+        f"BTC/ETH/SOL 100x · 山寨 20x · {settle_rules_summary_v2()} · "
+        "15m 步进核实 · 未平则按窗口末价"
     )
 
 
@@ -103,15 +108,31 @@ def settle_signal_batch(
     sl_pct: float = DEFAULT_SL_PCT,
     verify_delay_ms: int = _VERIFY_DELAY_MS,
     now_ms: int | None = None,
+    plan: "SettlePlan | None" = None,
 ) -> dict[str, Any]:
     """
     三档分批 + Runner 跟踪止盈。
     返回 outcome / movePct（加权价格变动%）/ exitPrice / pnlPct 等。
     """
     is_short = side in ("short", "bear")
-    tp1 = _tp_price(entry, TP1_PCT, is_short=is_short)
-    tp2 = _tp_price(entry, TP2_PCT, is_short=is_short)
-    sl = _sl_price(entry, sl_pct, is_short=is_short)
+    if plan is not None:
+        tp1 = plan.tp1_price
+        tp2 = plan.tp2_price
+        sl = plan.sl_price
+        verify_delay_ms = plan.verify_delay_ms
+        batch_weights = plan.batch_weights
+        runner_trail_pct = plan.runner_trail_pct
+        step_pct = round(plan.tp1_r * (plan.risk_r / entry * 100.0), 4) if entry > 0 else TP1_PCT
+        tp_levels = [step_pct, round(plan.tp2_r * (plan.risk_r / entry * 100.0), 4)]
+    else:
+        tp1 = _tp_price(entry, TP1_PCT, is_short=is_short)
+        tp2 = _tp_price(entry, TP2_PCT, is_short=is_short)
+        sl = _sl_price(entry, sl_pct, is_short=is_short)
+        batch_weights = BATCH_WEIGHTS
+        runner_trail_pct = RUNNER_TRAIL_PCT
+        step_pct = TP1_PCT
+        tp_levels = list(TP_LEVELS_PCT[:2])
+
     verify_at = signal_at_ms + verify_delay_ms
     now = verify_at if now_ms is None else min(now_ms, verify_at)
 
@@ -120,7 +141,7 @@ def settle_signal_batch(
         b for b in sorted(aligned, key=lambda x: x["ts"]) if signal_at_ms - 1 <= b["ts"] <= now + 60_000
     ]
 
-    rem = list(BATCH_WEIGHTS)
+    rem = list(batch_weights)
     weighted_move = 0.0
     runner_active = False
     extreme = entry
@@ -135,14 +156,21 @@ def settle_signal_batch(
             "movePct": move,
             "hitAt": at,
             "verifiedAt": now,
-            "stepPct": TP1_PCT,
-            "tpLevels": list(TP_LEVELS_PCT),
-            "batchWeights": list(BATCH_WEIGHTS),
+            "stepPct": step_pct,
+            "tpLevels": tp_levels,
+            "batchWeights": list(batch_weights),
             "side": "short" if is_short else "long",
             "entry": entry,
             "symbol": symbol,
             "tradeSymbol": symbol,
+            "settleRulesVersion": 2 if plan else 1,
         }
+        if plan is not None:
+            rec["settleProfileId"] = plan.profile_id
+            rec["slPrice"] = sl
+            rec["tp1Price"] = tp1
+            rec["tp2Price"] = tp2
+            rec["verifyAt"] = verify_at
         rec["pnlPct"] = _rec_pnl_pct(rec)
         return rec
 
@@ -187,7 +215,7 @@ def settle_signal_batch(
             if runner_active:
                 if is_short:
                     extreme = min(extreme, bar["low"])
-                    new_stop = extreme * (1 + RUNNER_TRAIL_PCT / 100.0)
+                    new_stop = extreme * (1 + runner_trail_pct / 100.0)
                     runner_stop = new_stop if runner_stop is None else min(runner_stop, new_stop)
                     if bar["high"] >= runner_stop:
                         move = price_move_pct(entry, runner_stop, is_short=True)
@@ -197,7 +225,7 @@ def settle_signal_batch(
                         hit_at = int(bar["ts"])
                 else:
                     extreme = max(extreme, bar["high"])
-                    new_stop = extreme * (1 - RUNNER_TRAIL_PCT / 100.0)
+                    new_stop = extreme * (1 - runner_trail_pct / 100.0)
                     runner_stop = new_stop if runner_stop is None else max(runner_stop, new_stop)
                     if bar["low"] <= runner_stop:
                         move = price_move_pct(entry, runner_stop, is_short=False)
@@ -235,9 +263,16 @@ def settle_signal_by_5m_bars(
     step_pct: float = TP1_PCT,
     verify_delay_ms: int = _VERIFY_DELAY_MS,
     now_ms: int | None = None,
+    plan: "SettlePlan | None" = None,
+    alert_rec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """兼容旧名：内部聚合 15m 后走分批结算。"""
+    """兼容旧名：内部聚合 15m 后走分批结算；可传 alert_rec 自动 build V2 plan。"""
     del step_pct  # 旧 ±5% 单档已废弃
+    if plan is None and alert_rec is not None:
+        from oi_mornitor.pattern_settle_profile import build_settle_plan
+
+        plan = build_settle_plan(alert_rec)
+        verify_delay_ms = plan.verify_delay_ms
     return settle_signal_batch(
         side=side,
         entry=entry,
@@ -246,4 +281,21 @@ def settle_signal_by_5m_bars(
         bars=bars_5m,
         verify_delay_ms=verify_delay_ms,
         now_ms=now_ms,
+        plan=plan,
     )
+
+
+def klines_rows_to_bars(rows: list[list[Any]]) -> list[dict[str, float]]:
+    out: list[dict[str, float]] = []
+    for row in rows:
+        if not row or len(row) < 5:
+            continue
+        out.append(
+            {
+                "ts": int(row[0]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+            }
+        )
+    return out
