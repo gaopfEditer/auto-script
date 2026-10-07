@@ -30,7 +30,7 @@ import {
   formatMcapTierBadge,
   mcapTierTitle,
 } from "../utils/mcapTier";
-import { alignPriceToReference, displaySymbol } from "../utils/symbol";
+import { alignPriceToReference, displaySymbol, toUsdtSymbol } from "../utils/symbol";
 import { CoinAvatar } from "./CoinAvatar";
 import type { TickerRow } from "../types";
 import { useBinanceChartLive } from "../hooks/useBinanceChartLive";
@@ -132,6 +132,18 @@ function restoreLogicalRange(
       }
     });
   });
+}
+
+function chartSymbolKey(symbol: string): string {
+  return toUsdtSymbol(symbol) || String(symbol || "").trim().toUpperCase();
+}
+
+function chartDataMatchesSymbol(data: PatternChartData | null | undefined, symbol: string): boolean {
+  if (!data?.candles?.length) return false;
+  const payloadSym = chartSymbolKey(String(data.symbol || ""));
+  const want = chartSymbolKey(symbol);
+  if (!payloadSym || !want) return false;
+  return payloadSym === want;
 }
 
 function visibleRangeAroundIndex(len: number, idx: number, bars = CHART_VISIBLE_BARS): LogicalRange {
@@ -989,11 +1001,13 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
   const refreshLatest = useCallback(async () => {
     if (loadingMoreRef.current || loading) return;
+    const symKey = chartSymbolKey(symbol);
     try {
       const json = await fetchPatternChart(symbol, timeframeRef.current, {
         limit: CHART_REFRESH_TAIL,
       });
       if (!json.ok || !json.candles?.length) return;
+      if (chartSymbolKey(String(json.symbol || symbol)) !== symKey) return;
 
       const merged = mergeCandlesByTime(candlesRef.current, json.candles);
 
@@ -1253,18 +1267,22 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const symKey = chartSymbolKey(symbol);
     timeframeRef.current = timeframe;
     candlesRef.current = [];
     hasMoreRef.current = true;
     loadingMoreRef.current = false;
     metaRef.current = null;
     analysisRef.current = null;
+    skipNextDataApplyRef.current = false;
     setHasMore(true);
+    setData(null);
     setLoading(true);
     setAnalysisLoading(true);
     setErr("");
     setLoadingMore(false);
     setLastCandleTime(null);
+    setCandleCount(0);
 
     // 阶段 1：拉轻量 K 线端点 → 立刻渲染图表，不等待形态分析
     const loadCandles = async () => {
@@ -1277,6 +1295,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: PatternChartData = await res.json();
         if (cancelled) return;
+        if (chartSymbolKey(String(json.symbol || symbol)) !== symKey) return;
         if (!json.ok || !json.candles?.length) {
           setErr(json.error || "K线数据为空");
           setData(null);
@@ -1288,7 +1307,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         setData(json);
         setLoading(false);
       } catch {
-        if (!cancelled) setErr("网络错误");
+        if (!cancelled) {
+          setErr("网络错误");
+          setLoading(false);
+        }
       }
     };
 
@@ -1297,19 +1319,23 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       try {
         const json = await fetchPatternChart(symbol, timeframe, { limit: CHART_DEFAULT_LIMIT });
         if (cancelled) return;
+        if (chartSymbolKey(String(json.symbol || symbol)) !== symKey) return;
         if (json.ok) {
           analysisRef.current = json;
           // 同时更新 data（仅形态分析字段，candles 保持已有）
-          setData((prev) =>
-            prev
+          setData((prev) => {
+            if (prev && !chartDataMatchesSymbol(prev, symbol)) return prev;
+            return prev
               ? {
                   ...prev,
+                  symbol: json.symbol ?? prev.symbol,
                   analysis: json.analysis ?? {},
                   state: json.state ?? {},
                   markers: json.markers ?? prev.markers,
                   price_lines: json.price_lines ?? prev.price_lines,
                   ticker: json.ticker ?? prev.ticker,
                   oi: json.oi ?? prev.oi,
+                  mcapTier: json.mcapTier ?? prev.mcapTier,
                   // 若 K 线条数一致，顺带刷新 meta；指标仍由 applyChartSeries 全量重算
                   ...(prev.candles.length === json.candles.length
                     ? {
@@ -1317,8 +1343,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                       }
                     : {}),
                 }
-              : json,
-          );
+              : json;
+          });
         }
       } catch {
         /* 分析加载失败不影响 chart 显示 */
@@ -1669,6 +1695,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
   useEffect(() => {
     if (!data?.candles?.length || !seriesRef.current) return;
+    if (!chartDataMatchesSymbol(data, symbol)) return;
     if (skipNextDataApplyRef.current) {
       skipNextDataApplyRef.current = false;
       applyLayerVisibility(layersRef.current);
@@ -1679,14 +1706,15 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     const dataLen = data.candles.length;
     if (
       refLen > dataLen &&
-      candlesRef.current.at(-1)?.time === data.candles.at(-1)?.time
+      candlesRef.current.at(-1)?.time === data.candles.at(-1)?.time &&
+      chartDataMatchesSymbol(metaRef.current, symbol)
     ) {
       applyLayerVisibility(layersRef.current);
       return;
     }
     applyChartSeries(data, data.candles);
     applyLayerVisibility(layersRef.current);
-  }, [data, applyChartSeries, applyLayerVisibility]);
+  }, [data, symbol, applyChartSeries, applyLayerVisibility]);
 
   const analysis = data?.analysis;
   const deriv = analysis?.derivatives;

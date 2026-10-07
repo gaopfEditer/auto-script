@@ -588,6 +588,35 @@ def list_type_options(items: list[dict[str, Any]] | None = None) -> list[dict[st
     return out
 
 
+def _apply_tier_filters(
+    rows: list[dict[str, Any]],
+    *,
+    confluence_min_tier: str,
+    mtf_resonance_only: bool,
+    mcap_tier_filter: str,
+    skip_mcap: bool = False,
+) -> list[dict[str, Any]]:
+    """MTF + 综合分 + 市值梯队（下拉计数与列表同口径）。"""
+    from oi_mornitor.mcap_tier import attach_mcap_tier, filter_by_mcap_tier
+    from oi_mornitor.pattern_mtf_resonance import attach_mtf_resonance
+    from oi_mornitor.signal_confluence import attach_signal_confluence, filter_items_by_confluence
+
+    out = list(rows)
+    attach_mtf_resonance(out)
+    attach_signal_confluence(out)
+    attach_mcap_tier(out)
+    conf = str(confluence_min_tier or "all").strip() or "all"
+    mcap_f = str(mcap_tier_filter or "all").strip() or "all"
+    out = filter_items_by_confluence(
+        out,
+        min_tier=conf,
+        mtf_resonance_only=mtf_resonance_only,
+    )
+    if not skip_mcap:
+        out = filter_by_mcap_tier(out, mcap_tier=mcap_f)
+    return out
+
+
 def list_alert_stats_page(
     *,
     page: int = 1,
@@ -606,6 +635,25 @@ def list_alert_stats_page(
     """分页列表；type/interval/session/daytype Options 互相联动。"""
     page = max(1, int(page or 1))
     size = min(100, max(1, int(page_size or _PAGE_SIZE_DEFAULT)))
+    conf_tier = str(confluence_min_tier or "all").strip() or "all"
+    mcap_f = str(mcap_tier_filter or "all").strip() or "all"
+    tier_active = (
+        mtf_resonance_only
+        or conf_tier.lower() != "all"
+        or mcap_f.lower() != "all"
+    )
+
+    def _tier_rows(base: list[dict[str, Any]], *, skip_mcap: bool = False) -> list[dict[str, Any]]:
+        if not tier_active:
+            return base
+        return _apply_tier_filters(
+            base,
+            confluence_min_tier=conf_tier,
+            mtf_resonance_only=mtf_resonance_only,
+            mcap_tier_filter=mcap_f,
+            skip_mcap=skip_mcap,
+        )
+
     # 基础时间窗（不含时段/日期类型，供下拉联动）
     time_base = filter_alert_stats(
         time_filter=time_filter,
@@ -624,76 +672,72 @@ def list_alert_stats_page(
         type_label=None,
         interval=None,
     )
-    cross_kw = dict(
-        time_filter=None,
-        type_label=type_label,
-        interval=interval,
-    )
-    # sessionOpts 叠加 daytype + type + interval
+
+    tl = (type_label or "").strip()
+    iv = (interval or "").strip()
+    if tl == "all":
+        tl = ""
+    if iv == "all":
+        iv = ""
+
     session_opts = list_session_options(
-        filter_alert_stats(
-            time_base,
-            session_filter=None,
-            daytype_filter=daytype_filter,
-            **cross_kw,
+        _tier_rows(
+            filter_alert_stats(
+                time_base,
+                session_filter=None,
+                daytype_filter=daytype_filter,
+                type_label=tl or None,
+                interval=iv or None,
+            )
         )
     )
-    # daytypeOpts 叠加 session + type + interval
     daytype_opts = list_daytype_options(
-        filter_alert_stats(
-            time_base,
-            daytype_filter=None,
-            session_filter=session_filter,
-            **cross_kw,
+        _tier_rows(
+            filter_alert_stats(
+                time_base,
+                daytype_filter=None,
+                session_filter=session_filter,
+                type_label=tl or None,
+                interval=iv or None,
+            )
         )
     )
-    # intervalOpts 叠加 type + session + daytype
     interval_opts = list_interval_options(
-        filter_alert_stats(
-            scoped,
-            type_label=type_label,
-            interval=None,
+        _tier_rows(
+            filter_alert_stats(
+                scoped,
+                type_label=tl or None,
+                interval=None,
+            )
         )
     )
-    # typeOpts 叠加 interval + session + daytype
     type_opts = list_type_options(
-        filter_alert_stats(
-            scoped,
-            type_label=None,
-            interval=interval,
+        _tier_rows(
+            filter_alert_stats(
+                scoped,
+                type_label=None,
+                interval=iv or None,
+            )
         )
     )
-    # 列表用全部过滤
-    filtered = filter_alert_stats(
-        scoped,
-        type_label=type_label,
-        interval=interval,
-    )
-    total = len(filtered)
-    pages = max(1, (total + size - 1) // size) if total else 1
-    if page > pages:
-        page = pages
-    attach_mtf_resonance(filtered)
-    from oi_mornitor.signal_confluence import attach_signal_confluence
 
-    attach_signal_confluence(filtered)
-    from oi_mornitor.mcap_tier import attach_mcap_tier, filter_by_mcap_tier
-    from oi_mornitor.signal_confluence import filter_items_by_confluence
-
-    attach_mcap_tier(filtered)
-    conf_tier = str(confluence_min_tier or "all").strip() or "all"
-    mcap_f = str(mcap_tier_filter or "all").strip() or "all"
-    filtered = filter_items_by_confluence(
-        filtered,
-        min_tier=conf_tier,
-        mtf_resonance_only=mtf_resonance_only,
+    filtered = _tier_rows(
+        filter_alert_stats(
+            scoped,
+            type_label=tl or None,
+            interval=iv or None,
+        )
     )
-    pre_mcap = filtered
-    filtered = filter_by_mcap_tier(filtered, mcap_tier=mcap_f)
-    if mtf_resonance_only or conf_tier.lower() != "all" or mcap_f.lower() != "all":
-        type_opts = list_type_options(filtered)
-        interval_opts = list_interval_options(filtered)
-    mcap_opts = list_mcap_tier_options(pre_mcap)
+    mcap_opts = list_mcap_tier_options(
+        _tier_rows(
+            filter_alert_stats(
+                scoped,
+                type_label=tl or None,
+                interval=iv or None,
+            ),
+            skip_mcap=True,
+        )
+    )
     total = len(filtered)
     pages = max(1, (total + size - 1) // size) if total else 1
     if page > pages:

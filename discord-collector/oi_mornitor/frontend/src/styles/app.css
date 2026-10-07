@@ -2036,6 +2036,13 @@ button {
   font-size: 0.85rem;
 }
 
+.pattern-wr-empty-hint {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
 .pattern-wr-table {
   width: 100%;
   border-collapse: collapse;

@@ -187,7 +187,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [intervalFilter, setIntervalFilter] = useState<string>("all");
   const [mtfOnly, setMtfOnly] = useState(false);
-  const [confluenceTier, setConfluenceTier] = useState("B");
+  const [confluenceTier, setConfluenceTier] = useState("all");
   const [mcapTierFilter, setMcapTierFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<AlertStatsRecord[]>([]);
@@ -307,6 +307,30 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     if (typeFilter === "all") return;
     if (!typeOptions.some((o) => o.label === typeFilter)) setTypeFilter("all");
   }, [typeOptions, typeFilter]);
+
+  useEffect(() => {
+    if (intervalFilter === "all") return;
+    if (!intervalOptions.some((o) => o.label === intervalFilter)) setIntervalFilter("all");
+  }, [intervalOptions, intervalFilter]);
+
+  useEffect(() => {
+    if (mcapTierFilter === "all") return;
+    if (!mcapTierOptions.some((o) => o.id === mcapTierFilter)) setMcapTierFilter("all");
+  }, [mcapTierOptions, mcapTierFilter]);
+
+  const activeExtraFilters = useMemo(() => {
+    const parts: string[] = [];
+    if (confluenceTier !== "all") {
+      parts.push(
+        confluenceTier === "D"
+          ? "综合分=仅 D"
+          : `综合分≥${confluenceTier}`,
+      );
+    }
+    if (mcapTierFilter !== "all") parts.push(`梯队=${mcapTierFilter.toUpperCase()}`);
+    if (mtfOnly) parts.push("仅 MTF 共振");
+    return parts;
+  }, [confluenceTier, mcapTierFilter, mtfOnly]);
 
   const failCount = summary.errors;
   const selectedCount = selected.size;
@@ -713,7 +737,17 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
           {loadingList && rows.length === 0 ? (
             <p className="pattern-wr-empty">加载中…</p>
           ) : rows.length === 0 ? (
-            <p className="pattern-wr-empty">该筛选下暂无信号</p>
+            <p className="pattern-wr-empty">
+              该筛选下暂无信号
+              {activeExtraFilters.length ? (
+                <>
+                  <br />
+                  <span className="pattern-wr-empty-hint">
+                    已启用：{activeExtraFilters.join(" · ")}（下拉笔数已与列表同口径；可改「综合分」为全部档位）
+                  </span>
+                </>
+              ) : null}
+            </p>
           ) : (
             <table className="pattern-wr-table">
               <thead>

@@ -159,7 +159,11 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
           return false;
         }
         if (!symbolOverride) setInput("");
-        setSelectedSymbol(sym);
+        const resolved =
+          String(data.symbol || sym)
+            .trim()
+            .toUpperCase() || sym;
+        setSelectedSymbol(resolved);
         if (Array.isArray(data.watchlist)) {
           patchPattern({
             watchlist: data.watchlist,
@@ -588,6 +592,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
 
           {selectedSymbol ? (
             <PatternChartPanel
+              key={selectedSymbol}
               symbol={selectedSymbol}
               preferredTimeframe={chartPreferredTf}
               preferredTimeframeNonce={chartTfNonce}
