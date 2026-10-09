@@ -458,6 +458,36 @@ function countBrowserPages(br) {
   return n;
 }
 
+/**
+ * 统计浏览器里已有 discord.com 标签数（含 CDP Target 可见但 Playwright 未映射的页）。
+ * @param {import('playwright').Browser} br
+ * @param {{ page?: import('playwright').Page }[]} [mounted]
+ */
+function countDiscordPagesInBrowser(br, mounted = []) {
+  const seen = new Set();
+  let n = 0;
+  const consider = (/** @type {import('playwright').Page} */ page) => {
+    if (!page || seen.has(page) || page.isClosed()) return;
+    seen.add(page);
+    try {
+      if (isDiscordPageUrl(page.url())) n += 1;
+    } catch {
+      /* ignore */
+    }
+  };
+  for (const entry of mounted) {
+    if (entry?.page) consider(entry.page);
+  }
+  try {
+    for (const ctx of br.contexts()) {
+      for (const page of ctx.pages()) consider(page);
+    }
+  } catch {
+    /* disconnected */
+  }
+  return n;
+}
+
 /** Document / API / WS 升级请求，便于判断页面是否真的在拉接口 */
 const NET_TRACE_RESOURCE_TYPES = new Set([
   "Document",
@@ -1168,7 +1198,8 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *
  * - **无头模式**（未设置 `cdpConnectUrl`）：Playwright 自启 Chromium，`goto(startUrl)`，可选定时 reload。
  * - **附加模式**（设置 `CDP_CONNECT_URL`）：`connectOverCDP` 连接你已打开的 Chrome（需带 `--remote-debugging-port`），
- *   对已有标签页 + 之后新开的标签页挂载 Network 监听；保活/切频道只复用已有 discord.com 标签，绝不 newPage。
+ *   对已有标签页 + 之后新开的标签页挂载 Network 监听；保活/切频道优先复用 discord.com 标签，
+ *   若尚无任何 discord.com 页且 COLLECTOR_CDP_AUTO_GOTO≠0，则在同一 Context 内 newPage 打开 1 个。
  *
  * @param {{
  *   startUrl: string,
@@ -1254,8 +1285,40 @@ export async function startCdpWebSocketMonitor(opts, log) {
   }
 
   /**
-   * 附加模式下在**已有** Discord 标签上打开/刷新频道。
-   * 找不到现成 discord.com 页时拒绝 newPage / newContext，避免标签堆积把系统打崩。
+   * 调试 Chrome 里尚无任何 discord.com 标签时，新建 1 个并挂载 CDP（不 newContext）。
+   * @param {import('playwright').Browser} br
+   * @param {string} targetUrl
+   */
+  async function openNewDiscordTab(br, targetUrl) {
+    const url = String(targetUrl || "").trim();
+    if (!url || !/discord\.com/i.test(url)) {
+      throw new Error("targetUrl 须为 discord.com 频道链接");
+    }
+    const contexts = br.contexts();
+    if (!contexts.length) {
+      throw new Error("CDP 浏览器无可用 Context，无法新建 Discord 标签");
+    }
+    const ctx = contexts[0];
+    const page = await ctx.newPage();
+    log.info(`CDP 未找到 Discord 标签，新建 1 个 → ${shortenUrl(url, 200)}`);
+    opts.diagnosticSink?.({
+      kind: "cdp_discord_tab_created",
+      targetUrl: url,
+      tabCount: countBrowserPages(br),
+    });
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
+    } catch (e) {
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      log.warn(`CDP 新建 Discord 标签 goto 异常（可能仍可用）: ${msg}`);
+      await page.waitForLoadState("domcontentloaded", { timeout: 90_000 }).catch(() => {});
+    }
+    await attachToPage(page);
+    return page;
+  }
+
+  /**
+   * 附加模式下在**已有** Discord 标签上打开/刷新频道；若无 discord.com 页且允许 autoGoto 则新建 1 个。
    * @param {import('playwright').Browser} br
    * @param {string} targetUrl
    * @param {{ forceReload?: boolean }} [navOpts]
@@ -1270,16 +1333,32 @@ export async function startCdpWebSocketMonitor(opts, log) {
       if (!picked) {
         picked = await pickExistingDiscordPageAsync(br, url, { mounted, log });
       }
+
+      /** @type {import('playwright').Page} */
+      let page;
+      let reusedTab = true;
+
       if (!picked) {
         const tabCount = countBrowserPages(br);
         const tabs = summarizeBrowserTabsForLog(br, mounted);
-        const msg = `未找到已打开的 Discord 标签（Chrome ${tabCount} 个标签；${tabs}），拒绝新建以免堆积崩溃。请在 **同一调试 Chrome（CDP 9222）** 中保留 discord.com 网页。`;
-        log.warn(`CDP ${msg}`);
-        throw new Error(msg);
+        const autoGoto = opts.cdpAutoGoto !== false;
+        const discordTabCount = countDiscordPagesInBrowser(br, mounted);
+        if (!autoGoto) {
+          const msg = `未找到已打开的 Discord 标签（Chrome ${tabCount} 个标签；${tabs}）。COLLECTOR_CDP_AUTO_GOTO=0 时不自动新建。`;
+          log.warn(`CDP ${msg}`);
+          throw new Error(msg);
+        }
+        if (discordTabCount > 0) {
+          const msg = `未找到可操作的 Discord 标签，但 CDP 可见 ${discordTabCount} 个 discord.com 页（Chrome ${tabCount} 个标签；${tabs}）。请手动刷新 Discord 标签或关闭多余页后重试。`;
+          log.warn(`CDP ${msg}`);
+          throw new Error(msg);
+        }
+        page = await openNewDiscordTab(br, url);
+        reusedTab = false;
+      } else {
+        page = picked.page;
+        await attachToPage(page);
       }
-
-      const page = picked.page;
-      await attachToPage(page);
 
       const cur = (() => {
         try {
@@ -1294,7 +1373,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
         phase: navOpts.forceReload ? "reload" : already ? "already_on_channel" : "goto",
         targetUrl: url,
         currentUrl: cur,
-        reusedTab: true,
+        reusedTab,
         tabCount: countBrowserPages(br),
       });
 
@@ -1687,28 +1766,26 @@ export async function startCdpWebSocketMonitor(opts, log) {
       }
       if (!picked) {
         const tabs = summarizeBrowserTabsForLog(browser, mounted);
-        log.warn(`[discord-channel] 未找到 Discord 标签；${tabs}`);
-        return {
-          ok: false,
-          error: `未找到已打开的 Discord 标签（拒绝新建）。调试 Chrome 须与 CDP_CONNECT_URL 同一实例。当前可见: ${tabs.slice(0, 280)}`,
-        };
+        log.warn(`[discord-channel] 未找到 Discord 标签，尝试新建或打开；${tabs}`);
       }
-      const pickedPageUrl = picked.url;
-      log.info(
-        `[discord-channel] 复用已有标签 score=${picked.score} tabs=${countBrowserPages(browser)} page=${shortenUrl(pickedPageUrl, 200)} → ${shortenUrl(targetUrl, 200)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`
-      );
-      opts.diagnosticSink?.({
-        kind: "discord_channel_pick_page",
-        guildId: g,
-        channelId: c,
-        targetUrl,
-        pickedPageUrl,
-        pickScore: picked.score,
-        mountedCount: mounted.length,
-        reusedTab: true,
-        ...trace,
-      });
-      if (isAlreadyOnDiscordChannel(pickedPageUrl, targetUrl)) {
+      const pickedPageUrl = picked?.url ?? "";
+      if (picked) {
+        log.info(
+          `[discord-channel] 复用已有标签 score=${picked.score} tabs=${countBrowserPages(browser)} page=${shortenUrl(pickedPageUrl, 200)} → ${shortenUrl(targetUrl, 200)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`
+        );
+        opts.diagnosticSink?.({
+          kind: "discord_channel_pick_page",
+          guildId: g,
+          channelId: c,
+          targetUrl,
+          pickedPageUrl,
+          pickScore: picked.score,
+          mountedCount: mounted.length,
+          reusedTab: true,
+          ...trace,
+        });
+      }
+      if (picked && isAlreadyOnDiscordChannel(pickedPageUrl, targetUrl)) {
         log.info(
           `[discord-channel] 已在目标频道，跳过跳转${clientTraceId ? ` trace=${clientTraceId}` : ""}`
         );

@@ -1,5 +1,5 @@
 /**
- * 持仓浮盈达阶梯（默认 5/10/15/20%）→ 提醒上移止损。
+ * 持仓价格变动达阶梯（默认 5/10/15/20% **标的涨跌幅，不含杠杆**）→ 提醒上移止损。
  * 仅对已确认入场的持仓生效（未触达入场区不算浮盈）。
  * 每次轮询每卡最多 1 条提醒（最高新触达阶梯），低档位合并标记已提醒。
  */
@@ -71,6 +71,8 @@ export function resolveUnrealizedPnl(card, price) {
   if (!pnl) return null;
   return {
     ...pnl,
+    /** 阶梯判定用：价格涨跌幅 %（movePct），非保证金盈亏 */
+    trailPct: pnl.movePct,
     isShort,
     entry,
     price,
@@ -122,7 +124,8 @@ function isProfitTrailCooldownActive(proximity, nowMs) {
 export function collectProfitTrailAlerts(card, price, proximity, nowMs) {
   const levels = getProfitTrailLevels();
   const snap = resolveUnrealizedPnl(card, price);
-  if (!snap || snap.pnlPctOnMargin <= 0) {
+  const trailPct = Number(snap.trailPct ?? snap.movePct);
+  if (!Number.isFinite(trailPct) || trailPct <= 0) {
     return { alerts: [], proximity };
   }
 
@@ -136,7 +139,7 @@ export function collectProfitTrailAlerts(card, price, proximity, nowMs) {
   let targetLevel = null;
   for (let i = levels.length - 1; i >= 0; i--) {
     const level = levels[i];
-    if (snap.pnlPctOnMargin < level) continue;
+    if (trailPct < level) continue;
     if (trail[String(level)]?.alertedAt) continue;
     targetLevel = level;
     break;
@@ -152,7 +155,8 @@ export function collectProfitTrailAlerts(card, price, proximity, nowMs) {
       trail[String(level)] = {
         alertedAt,
         price: snap.price,
-        pnlPct: snap.pnlPctOnMargin,
+        trailPct,
+        pnlPctOnMargin: snap.pnlPctOnMargin,
       };
     }
   }
@@ -162,9 +166,12 @@ export function collectProfitTrailAlerts(card, price, proximity, nowMs) {
       ? /** @type {Record<string, unknown>} */ ({ ...proximity._meta })
       : {};
 
+  const moveLabel = `${trailPct >= 0 ? "+" : ""}${trailPct.toFixed(2)}%`;
   const alert = {
     level: targetLevel,
-    pnlPct: snap.pnlPctOnMargin,
+    trailPct,
+    moveLabel,
+    pnlPctOnMargin: snap.pnlPctOnMargin,
     pnlLabel: snap.pnlLabel,
     price: snap.price,
     entry: snap.entry,
@@ -199,8 +206,11 @@ export function formatProfitTrailTelegram(card, sym, alert) {
     `📈 盈利提醒 · 上移止损`,
     "",
     `卡片 #${card.id} · ${sym} ${alert.directionLabel ?? ""}`.trim(),
-    `浮盈已达 ${alert.level}% 阶梯（当前 ${alert.pnlLabel ?? `+${Number(alert.pnlPct).toFixed(2)}%`}）`,
-    `入场 ${alert.entry} · 现价 ${alert.price}（${alert.leverage}x）`,
+    `价格变动已达 ${alert.level}% 阶梯（当前 ${alert.moveLabel ?? `+${Number(alert.trailPct).toFixed(2)}%`}，不含杠杆）`,
+    `入场 ${alert.entry} · 现价 ${alert.price}`,
+    alert.pnlLabel && alert.leverage
+      ? `（${alert.leverage}x 时保证金盈亏 ${alert.pnlLabel}，仅供参考）`
+      : "",
     "",
     `👉 ${alert.suggestion}`,
   ];

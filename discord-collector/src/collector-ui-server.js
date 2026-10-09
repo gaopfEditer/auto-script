@@ -321,22 +321,46 @@ async function main() {
   /** @type {Awaited<ReturnType<typeof startCdpWebSocketMonitor>> | null} */
   let session = null;
 
+  function countDiscordMountedTabs() {
+    const mounted = session?.mounted;
+    if (!Array.isArray(mounted)) return 0;
+    let n = 0;
+    for (const entry of mounted) {
+      try {
+        const u = String(entry?.page?.url?.() ?? "");
+        if (/discord\.com/i.test(u)) n += 1;
+      } catch {
+        /* page disposed */
+      }
+    }
+    return n;
+  }
+
   function cdpStatusSnapshot() {
     const ready = typeof navigateDiscordImpl === "function" && Boolean(session);
+    const mountedTabs = Array.isArray(session?.mounted)
+      ? session.mounted.length
+      : Number(session?.mounted) || 0;
+    const discordTabs = ready ? countDiscordMountedTabs() : 0;
+    let hint = null;
+    if (!config.cdpConnectUrl) {
+      hint = "未配置 CDP_CONNECT_URL，Gateway 不会采集";
+    } else if (!ready) {
+      hint =
+        "CDP 未就绪：请确认 Chrome 已 --remote-debugging-port=9222 且已登录 Discord；collect:ui 会自动重试";
+    } else if (discordTabs <= 0) {
+      hint =
+        "CDP 已连接但未检测到 discord.com 标签：下次保活/轮询会尝试自动新建 1 个 Discord 标签（需 COLLECTOR_CDP_AUTO_GOTO≠0 且已配置 START_URL）。请确保 Chrome 已登录 Discord。";
+    }
     return {
       state: cdpBoot.state,
       ready,
       connectUrl: config.cdpConnectUrl || null,
-      mountedTabs: Array.isArray(session?.mounted)
-        ? session.mounted.length
-        : Number(session?.mounted) || 0,
+      mountedTabs,
+      discordTabs,
       bootAttempt: cdpBoot.attempt,
       bootError: cdpBoot.error || null,
-      hint: !config.cdpConnectUrl
-        ? "未配置 CDP_CONNECT_URL，Gateway 不会采集"
-        : !ready
-          ? "CDP 未就绪：请确认 Chrome 已 --remote-debugging-port=9222 且已登录 Discord；collect:ui 会自动重试"
-          : null,
+      hint,
     };
   }
 

@@ -256,7 +256,7 @@ export const config = {
   cardProximityTelegram: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_PROXIMITY_TELEGRAM ?? "0").toLowerCase()
   ),
-  /** 浮盈达阶梯提醒上移止损（默认 5/10/15/20%） */
+  /** 价格涨跌幅达阶梯提醒上移止损（默认 5/10/15/20%，不含杠杆） */
   cardProfitTrailEnabled: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_PROFIT_TRAIL_ENABLED ?? "1").toLowerCase()
   ),

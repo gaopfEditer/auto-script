@@ -223,7 +223,7 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
             await systemTelegram.notify(text, { kind: `card_profit_trail_${ta.level}` });
           }
           log.info(
-            `盈利移损提醒 #${card.id} ${sym} 阶梯${ta.level}% 浮盈=${ta.pnlLabel ?? ta.pnlPct}`
+            `盈利移损提醒 #${card.id} ${sym} 阶梯${ta.level}% 涨跌=${ta.moveLabel ?? ta.trailPct}%`
           );
         }
       }
