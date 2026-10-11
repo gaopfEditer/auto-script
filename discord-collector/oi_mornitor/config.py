@@ -201,18 +201,38 @@ MAIN_CARD_DEFAULT_SYMBOLS = tuple(
 
 from oi_mornitor.signal_policy import filter_active_intervals
 
-MAIN_CARD_INTERVALS = filter_active_intervals(
+MAIN_CARD_MAJOR_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_MAIN_CARD_MAJORS", os.getenv("OI_CANDLE_CARD_MAJORS", "BTCUSDT,ETHUSDT,SOLUSDT")).split(",")
+    if s.strip()
+)
+MAIN_CARD_MAJOR_INTERVALS = filter_active_intervals(
     tuple(
         x.strip().lower()
-        for x in os.getenv("OI_MAIN_CARD_INTERVALS", "15m,1h,4h").split(",")
+        for x in os.getenv("OI_MAIN_CARD_MAJOR_INTERVALS", "15m,1h,4h,8h,1d").split(",")
         if x.strip()
     )
 )
+MAIN_CARD_EQUITY_INTERVALS = filter_active_intervals(
+    tuple(
+        x.strip().lower()
+        for x in os.getenv("OI_MAIN_CARD_EQUITY_INTERVALS", "1h,4h,1d,1w").split(",")
+        if x.strip()
+    )
+)
+_union_iv = tuple(dict.fromkeys((*MAIN_CARD_MAJOR_INTERVALS, *MAIN_CARD_EQUITY_INTERVALS)))
+MAIN_CARD_INTERVALS = filter_active_intervals(
+    tuple(
+        x.strip().lower()
+        for x in os.getenv("OI_MAIN_CARD_INTERVALS", ",".join(_union_iv)).split(",")
+        if x.strip()
+    )
+) or _union_iv
 MAIN_CARD_TYPE_PREFIXES = tuple(
     x.strip()
     for x in os.getenv(
         "OI_MAIN_CARD_TYPE_PREFIXES",
-        "射击之星,倒锤子,量价确认,量价推进",
+        "射击之星,倒锤子",
     ).split(",")
     if x.strip()
 )
@@ -232,7 +252,7 @@ CANDLE_CARD_MAJOR_SYMBOLS = tuple(
 )
 CANDLE_CARD_MAJOR_INTERVALS = tuple(
     x.strip()
-    for x in os.getenv("OI_CANDLE_CARD_MAJOR_INTERVALS", "15m,1h,4h").split(",")
+    for x in os.getenv("OI_CANDLE_CARD_MAJOR_INTERVALS", "15m,1h,4h,8h,1d").split(",")
     if x.strip()
 )
 CANDLE_CARD_ALT_INTERVALS = tuple(
@@ -249,7 +269,7 @@ CANDLE_CARD_ALT_INTERVALS = filter_active_intervals(CANDLE_CARD_ALT_INTERVALS)
 CANDLE_CARD_ALT_TOP_N = int(os.getenv("OI_CANDLE_CARD_ALT_TOP_N", "7"))
 CANDLE_CARD_ALT_RANK_TF = os.getenv("OI_CANDLE_CARD_ALT_RANK_TF", "15m").strip() or "15m"
 # 各周期 K 线刷新间隔（秒），避免每轮雷达都打满高周期接口
-_CANDLE_CARD_REFRESH_DEFAULTS = {"15m": 45, "1h": 180, "4h": 600}
+_CANDLE_CARD_REFRESH_DEFAULTS = {"15m": 45, "1h": 180, "4h": 600, "8h": 900, "1d": 1800, "1w": 3600}
 CANDLE_CARD_REFRESH_SEC: dict[str, int] = {}
 for _iv, _sec in _CANDLE_CARD_REFRESH_DEFAULTS.items():
     CANDLE_CARD_REFRESH_SEC[_iv] = int(

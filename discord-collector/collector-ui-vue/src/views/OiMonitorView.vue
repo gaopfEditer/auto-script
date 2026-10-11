@@ -135,9 +135,9 @@ onUnmounted(() => {
         <p v-else class="warn">未激活{{ error ? `：${error}` : "" }}</p>
         <p v-if="hint" class="hint">{{ hint }}</p>
         <ol>
-          <li>终端 A：<code>pnpm run collect:ui</code></li>
-          <li>终端 B：<code>pnpm run dev:ui-vue</code></li>
-          <li>终端 C：<code>pnpm run oi:dev</code> 或 <code>pnpm run oi:start</code></li>
+          <li>终端 A：<code>pnpm run collect:ui</code>（会自动守护 OI :8765，重启 collect:ui 即重启 OI）</li>
+          <li>终端 B（可选）：<code>pnpm run dev:ui-vue</code></li>
+          <li>仅调试 OI 前端时：<code>pnpm run oi:dev</code>（Vite :5173）</li>
         </ol>
         <p class="muted">
           嵌入地址：<code>{{ iframeSrc || embedUrl || "—" }}</code>

@@ -12,13 +12,15 @@ from oi_mornitor.config import (
     STRATEGY_SHOOT_WICK_RATIO,
 )
 from oi_mornitor.candle_card_config import (
+    CANDLE_CARD_VOL_LOOKBACK,
     CANDLE_HAMMER_TREND_LOOKBACK,
     CANDLE_HAMMER_TREND_MIN_PCT,
     CANDLE_SHOOT_REQUIRE_POSITION,
     CANDLE_SHOOT_TREND_LOOKBACK,
     CANDLE_SHOOT_TREND_MIN_PCT,
     CANDLE_VOL_BYPASS_CONTEXT,
-    candle_volume_confirmed,
+    candle_volume_confirmed_in_lookback,
+    main_card_volume_confirmed,
     volume_ratio_from_row,
 )
 from oi_mornitor.signal_policy import is_blocked_marker_text
@@ -483,6 +485,7 @@ def _candle_card_hits_at_index(
     allow_inverted_hammer: bool = True,
     allow_inverted_hammer_oi: bool | None = None,
     filter_kinds: set[str] | None = None,
+    allow_main_only_volume: bool = False,
 ) -> list[dict[str, Any]]:
     """单根 K 上的蜡烛卡片命中（与 Telegram 卡片推送同口径）。"""
     if allow_inverted_hammer_oi is not None:
@@ -510,9 +513,17 @@ def _candle_card_hits_at_index(
         trend: float | None = None
 
         vol_ratio = volume_ratio_from_row(row)
-        if not candle_volume_confirmed(vol_ratio):
+        card_vol_ok = candle_volume_confirmed_in_lookback(
+            df,
+            idx,
+            lookback=CANDLE_CARD_VOL_LOOKBACK,
+        )
+        main_vol_ok = main_card_volume_confirmed(df, idx)
+        if not card_vol_ok and not (allow_main_only_volume and main_vol_ok):
             continue
-        bypass_ctx = CANDLE_VOL_BYPASS_CONTEXT and vol_ratio is not None
+        bypass_ctx = CANDLE_VOL_BYPASS_CONTEXT and (
+            vol_ratio is not None and float(vol_ratio) >= 1.0
+        )
 
         if kind == "shooting_star":
             is_consec = "射击之星（2）" in text or "（2）" in text
@@ -585,6 +596,8 @@ def _candle_card_hits_at_index(
             "near_vegas": bool(near_v),
             "trend_pct": trend,
             "vol_ratio": vol_ratio,
+            "card_vol_ok": card_vol_ok,
+            "main_mirror_vol_ok": main_vol_ok,
         })
     return hits
 
@@ -640,6 +653,7 @@ def find_last_closed_candle_card_hits(
     allow_consecutive_shoot: bool = False,
     allow_inverted_hammer: bool = True,
     allow_inverted_hammer_oi: bool | None = None,
+    allow_main_only_volume: bool = False,
 ) -> list[dict[str, Any]]:
     """最近收盘柱上的 Telegram 卡片信号。
 
@@ -663,4 +677,5 @@ def find_last_closed_candle_card_hits(
         allow_consecutive_shoot=allow_consecutive_shoot,
         allow_inverted_hammer=allow_inverted_hammer,
         allow_inverted_hammer_oi=allow_inverted_hammer_oi,
+        allow_main_only_volume=allow_main_only_volume,
     )

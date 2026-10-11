@@ -5,26 +5,22 @@ from typing import Any
 
 from oi_mornitor.config import (
     MAIN_CARD_DEFAULT_SYMBOLS,
-    MAIN_CARD_INTERVALS,
+    MAIN_CARD_EQUITY_INTERVALS,
+    MAIN_CARD_MAJOR_INTERVALS,
+    MAIN_CARD_MAJOR_SYMBOLS,
     MAIN_CARD_TYPE_PREFIXES,
 )
 from oi_mornitor.focus_symbols import normalize_focus_symbol
 from oi_mornitor.signal_policy import is_blocked_ticker_alert, normalize_type_label
 
-# 结构形态默认也进 MAIN（与 env 前缀合并；未配 env 时仍可推顶部/底部结构）
-_STRUCTURE_MAIN_TYPE_PREFIXES: tuple[str, ...] = (
-    "顶部结构",
-    "底部结构",
-    "二次探底",
-    "Spring",
-    "spring",
-    "流动性掠夺",
-    "圆弧",
-    "M顶",
-    "头肩",
+# MAIN 群 TG 镜像：仅射击之星 / 倒锤子（不含结构、量价）
+_MAIN_CANDLE_TYPE_PREFIXES: tuple[str, ...] = (
+    "射击之星",
+    "倒锤子",
 )
 
 _MAIN_SYMBOLS: frozenset[str] | None = None
+_MAIN_MAJORS: frozenset[str] | None = None
 
 
 def _main_card_symbols() -> frozenset[str]:
@@ -38,10 +34,40 @@ def _main_card_symbols() -> frozenset[str]:
     return _MAIN_SYMBOLS
 
 
+def _main_major_symbols() -> frozenset[str]:
+    global _MAIN_MAJORS
+    if _MAIN_MAJORS is None:
+        _MAIN_MAJORS = frozenset(
+            s
+            for s in (normalize_focus_symbol(x) for x in MAIN_CARD_MAJOR_SYMBOLS)
+            if s
+        )
+    return _MAIN_MAJORS
+
+
+def main_card_equity_symbols() -> frozenset[str]:
+    """MAIN 白名单内、非 BTC/ETH/SOL 的美股代币等。"""
+    return _main_card_symbols() - _main_major_symbols()
+
+
 def is_main_card_symbol(symbol: str) -> bool:
     """MAIN 群仅推送 env `OI_MAIN_CARD_DEFAULT_SYMBOLS` 中的币种（不含 focus 文件扩展）。"""
     n = normalize_focus_symbol(symbol)
     return bool(n) and n in _main_card_symbols()
+
+
+def is_main_major_symbol(symbol: str) -> bool:
+    n = normalize_focus_symbol(symbol)
+    return bool(n) and n in _main_major_symbols()
+
+
+def main_card_intervals_for_symbol(symbol: str) -> frozenset[str]:
+    """主流 BTC/ETH/SOL 与美股代币使用不同周期集合。"""
+    if not is_main_card_symbol(symbol):
+        return frozenset()
+    if is_main_major_symbol(symbol):
+        return frozenset(x.strip().lower() for x in MAIN_CARD_MAJOR_INTERVALS if x)
+    return frozenset(x.strip().lower() for x in MAIN_CARD_EQUITY_INTERVALS if x)
 
 
 def _type_label_of(alert: dict[str, Any]) -> str:
@@ -59,12 +85,23 @@ def _type_label_of(alert: dict[str, Any]) -> str:
 def _main_type_prefixes() -> tuple[str, ...]:
     seen: set[str] = set()
     out: list[str] = []
-    for p in (*MAIN_CARD_TYPE_PREFIXES, *_STRUCTURE_MAIN_TYPE_PREFIXES):
+    for p in (*MAIN_CARD_TYPE_PREFIXES, *_MAIN_CANDLE_TYPE_PREFIXES):
         s = str(p or "").strip()
         if s and s not in seen:
             seen.add(s)
             out.append(s)
     return tuple(out)
+
+
+def _is_main_candle_type_label(label: str) -> bool:
+    if not label or label in ("射击之星（2）",):
+        return False
+    if "（2）" in label:
+        return False
+    for prefix in _MAIN_CANDLE_TYPE_PREFIXES:
+        if label == prefix or label.startswith(prefix):
+            return True
+    return False
 
 
 def _matches_main_type(label: str) -> bool:
@@ -95,16 +132,23 @@ def is_volume_price_card(alert: dict[str, Any]) -> bool:
 
 
 def is_main_card_mirror_eligible(alert: dict[str, Any]) -> bool:
-    """MAIN 镜像：白名单币 + 周期；仅蜡烛/结构形态，不含量价 ticker。"""
+    """MAIN 镜像：白名单币 + 分档周期；仅射击之星/倒锤子蜡烛卡片。"""
     if not isinstance(alert, dict):
         return False
     if is_volume_price_card(alert):
+        return False
+    if str(alert.get("type") or "") != "candle_pattern_card":
         return False
     sym = str(alert.get("symbol") or "")
     if not is_main_card_symbol(sym):
         return False
     iv = str(alert.get("interval") or "").strip().lower()
-    if iv not in MAIN_CARD_INTERVALS:
+    if iv not in main_card_intervals_for_symbol(sym):
+        return False
+    lab = _type_label_of(alert)
+    if not _is_main_candle_type_label(lab):
+        return False
+    if alert.get("main_mirror_vol_ok") is False:
         return False
     if is_blocked_ticker_alert(alert):
         return False

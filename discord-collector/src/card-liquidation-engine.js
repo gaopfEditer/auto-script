@@ -406,9 +406,20 @@ export function evaluateLiquidation(card, klines, opts) {
   let tps = (execution.planned?.takeProfitPrices ?? [])
     .map((p) => parsePrice(p))
     .filter((x) => x != null);
-  const sanitized = sanitizeLiquidationLevels(entryPriceUsed, isShort, tps, sl);
-  tps = sanitized.tps;
-  sl = sanitized.sl;
+  const fixedLevels = opts.fixedLevels;
+  if (
+    fixedLevels &&
+    typeof fixedLevels === "object" &&
+    Array.isArray(fixedLevels.tps) &&
+    fixedLevels.sl != null
+  ) {
+    tps = fixedLevels.tps.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0);
+    sl = Number(fixedLevels.sl);
+  } else {
+    const sanitized = sanitizeLiquidationLevels(entryPriceUsed, isShort, tps, sl);
+    tps = sanitized.tps;
+    sl = sanitized.sl;
+  }
 
   const exitPlan = resolveCardExitPlan(card, execution);
   const tpSizePcts = tpSizePctsForPlan(exitPlan, tps.length);
@@ -454,8 +465,10 @@ export function evaluateLiquidation(card, klines, opts) {
     }
   }
 
+  const maxEndMs = Number(opts.maxEndMs);
   for (const k of sorted) {
     if ((k.ts ?? 0) < entryMs - 1) continue;
+    if (Number.isFinite(maxEndMs) && (k.ts ?? 0) > maxEndMs) break;
     const hitAt = k.ts ? new Date(k.ts).toISOString() : nowIso;
     const high = Number(k.high);
     const low = Number(k.low);

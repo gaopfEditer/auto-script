@@ -76,8 +76,10 @@ from oi_mornitor.telegram_push_toggles import (
     is_candle_push_enabled,
     is_structure_push_enabled,
 )
+from oi_mornitor.main_card_policy import main_card_equity_symbols, main_card_intervals_for_symbol
 from oi_mornitor.notify_telegram import (
     send_candle_card_telegram_async,
+    send_main_card_telegram_async,
     send_pattern_oi_telegram_async,
     send_structure_card_telegram_async,
 )
@@ -97,7 +99,15 @@ _LONG_PATTERN_KINDS = frozenset({
     "continuous_lower_wick",
     "continuous_non_lower_wick",
 })
-_INTERVAL_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+_INTERVAL_SECONDS = {
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "4h": 14400,
+    "8h": 28800,
+    "1d": 86400,
+    "1w": 604800,
+}
 
 
 def _combo_side_hint(kind: str) -> str:
@@ -1535,7 +1545,8 @@ class PatternMonitorEngine:
     ) -> list[dict[str, Any]]:
         """多周期蜡烛形态 + 顶部/底部结构 → Telegram 卡片。
 
-        主流 BTC/ETH/SOL：15m/1h/4h。
+        主流 BTC/ETH/SOL：CANDLE_CARD_MAJOR_INTERVALS（默认含 15m/1h/4h/8h/1d）。
+        MAIN 美股代币：main_card_equity_symbols × MAIN 分档周期。
         山寨：流入 Top7 + 涨幅 Top7（dip）→ 15m/1h。
         """
         if not is_candle_push_enabled() and not is_structure_push_enabled():
@@ -1558,6 +1569,10 @@ class PatternMonitorEngine:
         for sym in sorted(majors):
             for iv in CANDLE_CARD_MAJOR_INTERVALS:
                 jobs.append((sym, iv, True, "all"))
+        equity_main = main_card_equity_symbols()
+        for sym in sorted(equity_main):
+            for iv in sorted(main_card_intervals_for_symbol(sym)):
+                jobs.append((sym, iv, False, "main_equity"))
         for sym in sorted(set(alt_flow)):
             for iv in CANDLE_CARD_ALT_INTERVALS:
                 jobs.append((sym, iv, False, "flow"))
@@ -1630,8 +1645,8 @@ class PatternMonitorEngine:
                 return []
             if is_disabled_pattern_interval(iv):
                 return []
-            allow_shoot = pool_role in ("all", "flow")
-            allow_hammer = pool_role in ("all", "flow", "dip")
+            allow_shoot = pool_role in ("all", "flow", "main_equity")
+            allow_hammer = pool_role in ("all", "flow", "dip", "main_equity")
             try:
                 preview = collect_candle_signal_markers(df)
             except Exception:  # noqa: BLE001
@@ -1653,6 +1668,7 @@ class PatternMonitorEngine:
                     allow_shooting_star=need_shoot,
                     allow_consecutive_shoot=False,
                     allow_inverted_hammer=need_hammer,
+                    allow_main_only_volume=True,
                 )
             except Exception:  # noqa: BLE001
                 return []
@@ -1686,6 +1702,8 @@ class PatternMonitorEngine:
                     "near_vegas": bool(hit.get("near_vegas")),
                     "trend_pct": hit.get("trend_pct"),
                     "vol_ratio": hit.get("vol_ratio"),
+                    "card_vol_ok": bool(hit.get("card_vol_ok", True)),
+                    "main_mirror_vol_ok": bool(hit.get("main_mirror_vol_ok", False)),
                     "price": float(hit.get("close") or hit.get("price") or 0),
                     "close": float(hit.get("close") or 0),
                     "high": float(hit.get("high") or 0),
@@ -1705,11 +1723,24 @@ class PatternMonitorEngine:
                     record_alert_from_push(alert)
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("形态卡片胜率入库 %s: %s", sym, exc)
-                try:
-                    ok = await send_candle_card_telegram_async(alert)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
-                    ok = False
+                card_vol_ok = bool(alert.get("card_vol_ok", True))
+                ok = False
+                if card_vol_ok:
+                    try:
+                        ok = await send_candle_card_telegram_async(alert)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
+                        ok = False
+                else:
+                    try:
+                        ok = await send_main_card_telegram_async(alert)
+                        if ok:
+                            from oi_mornitor.notify_telegram import _after_candle_card_pushed
+
+                            _after_candle_card_pushed(alert)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Telegram MAIN 形态卡片失败 %s: %s", sym, exc)
+                        ok = False
                 if ok:
                     self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
             return out
@@ -1835,7 +1866,7 @@ class PatternMonitorEngine:
                 out.extend(
                     await _emit_candle(sym, iv, is_major, pool_role, df, closed_ts)
                 )
-            if is_structure_push_enabled():
+            if is_structure_push_enabled() and pool_role != "main_equity":
                 out.extend(await _emit_structure(sym, iv, df))
             return out
 

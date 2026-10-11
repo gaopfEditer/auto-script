@@ -115,6 +115,7 @@ function samePath(a, b) {
  *   enabled?: boolean;
  *   checkIntervalMs?: number;
  *   pythonBin?: string;
+ *   restartWithUi?: boolean;
  * }} [opts]
  */
 export function startOiSupervisor(opts = {}) {
@@ -140,6 +141,13 @@ export function startOiSupervisor(opts = {}) {
     !["0", "false", "no", "off"].includes(
       String(process.env.OI_TAKEOVER_PORT ?? "1").toLowerCase()
     );
+  /** collect:ui 每次启动时重启本仓库 oi（加载最新 Python）；巡检周期内不重复杀进程 */
+  const restartWithUi =
+    opts.restartWithUi !== undefined
+      ? opts.restartWithUi !== false
+      : !["0", "false", "no", "off"].includes(
+          String(process.env.OI_RESTART_WITH_UI ?? "1").toLowerCase()
+        );
 
   /** @type {import("node:child_process").ChildProcess | null} */
   let child = null;
@@ -147,6 +155,7 @@ export function startOiSupervisor(opts = {}) {
   let timer = null;
   let starting = false;
   let lastStartAt = 0;
+  let bootstrapPending = true;
 
   const logDir = resolve(OI_DIR, "data");
   if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
@@ -238,12 +247,49 @@ export function startOiSupervisor(opts = {}) {
     return false;
   }
 
+  async function finishBootstrap() {
+    bootstrapPending = false;
+  }
+
+  async function restartOiOnPort(reason) {
+    log.info?.(`[oi-supervisor] ${reason}`);
+    const port = Number(new URL(apiBase).port || 8765);
+    if (child && !child.killed) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
+      child = null;
+    }
+    killListenerOnPort(port, log);
+    await new Promise((r) => setTimeout(r, 1200));
+    spawnOi();
+    await new Promise((r) => setTimeout(r, 3500));
+    const ok = (await probeOi(apiBase, 4000)) && (await isOurInstance());
+    if (ok) {
+      log.info?.(`[oi-supervisor] 本仓库 oi_mornitor 已在线 ${apiBase}`);
+    } else {
+      log.warn?.(
+        `[oi-supervisor] 拉起后仍未确认为本仓库实例；请检查 ${logPath} 与 python=${pythonBin}`
+      );
+    }
+    return ok;
+  }
+
   async function ensureOnce() {
     if (stopping) return false;
     const up = await probeOi(apiBase, Number(process.env.OI_HEALTH_TIMEOUT_MS ?? 3000));
     if (up) {
       const ours = await isOurInstance();
-      if (ours) return true;
+      if (ours) {
+        if (bootstrapPending && restartWithUi) {
+          await finishBootstrap();
+          return restartOiOnPort("collect:ui 已启动，正在重启 oi_mornitor（随主进程加载最新代码）…");
+        }
+        await finishBootstrap();
+        return true;
+      }
       if (!takeover) {
         log.warn?.(
           `[oi-supervisor] 检测到非本仓库 oi（${EXPECTED_PACKAGE_ROOT}），已设 OI_TAKEOVER_PORT=0，跳过接管`
@@ -259,17 +305,8 @@ export function startOiSupervisor(opts = {}) {
     } else {
       log.warn?.(`[oi-supervisor] ${apiBase} 未响应，正在拉起…`);
     }
-    spawnOi();
-    await new Promise((r) => setTimeout(r, 3500));
-    const ok = (await probeOi(apiBase, 4000)) && (await isOurInstance());
-    if (ok) {
-      log.info?.(`[oi-supervisor] 本仓库 oi_mornitor 已在线 ${apiBase}`);
-    } else {
-      log.warn?.(
-        `[oi-supervisor] 拉起后仍未确认为本仓库实例；请检查 ${logPath} 与 python=${pythonBin}`
-      );
-    }
-    return ok;
+    await finishBootstrap();
+    return restartOiOnPort("正在拉起 oi_mornitor…");
   }
 
   void ensureOnce().then((ok) => {

@@ -15,6 +15,7 @@ import { CoinAvatar } from "../components/CoinAvatar";
 import { MercuHeader } from "../components/MercuHeader";
 import { PatternChartPanel } from "../components/PatternChartPanel";
 import { PatternAlertTicker } from "../components/PatternAlertTicker";
+import { PotentialDiscoveryPanel } from "../components/PotentialDiscoveryPanel";
 import { CardLifecyclePanel } from "../components/CardLifecyclePanel";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useSpecialFocus } from "../hooks/useSpecialFocus";
@@ -53,6 +54,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const [chartTfNonce, setChartTfNonce] = useState(0);
   /** 形态信号列表点开时，在 K 线上标出入场点 */
   const [chartAlertFocus, setChartAlertFocus] = useState<ChartAlertEntryFocus | null>(null);
+  const [mainTab, setMainTab] = useState<"potential" | "alerts">("potential");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; symbol: string } | null>(null);
   /** 本页是否已做过「进入默认选中」；用户手动关掉图表后不再强选 */
   const didAutoSelectRef = useRef(false);
@@ -560,10 +562,28 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         <main className="pattern-main panel" data-onboard="oi-main">
           <div className="pattern-main-head">
             <div className="pattern-main-tabs" role="tablist">
-              <span className="pattern-main-tab active" role="tab" aria-selected={!selectedSymbol}>
+              <button
+                type="button"
+                className={`pattern-main-tab${mainTab === "potential" && !selectedSymbol ? " active" : ""}`}
+                role="tab"
+                aria-selected={mainTab === "potential" && !selectedSymbol}
+                onClick={() => {
+                  setMainTab("potential");
+                  setSelectedSymbol(null);
+                }}
+              >
+                潜力发现
+              </button>
+              <button
+                type="button"
+                className={`pattern-main-tab${mainTab === "alerts" && !selectedSymbol ? " active" : ""}`}
+                role="tab"
+                aria-selected={mainTab === "alerts" && !selectedSymbol}
+                onClick={() => setMainTab("alerts")}
+              >
                 形态预警流
                 {alerts.length > 0 && <em>{alerts.length}</em>}
-              </span>
+              </button>
               <button
                 type="button"
                 className="pattern-random-btn"
@@ -610,36 +630,43 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               addWatchBusy={busy}
               onAddToWatchlist={(sym) => void addSymbol(sym)}
             />
+          ) : mainTab === "potential" ? (
+            <PotentialDiscoveryPanel
+              onOpenSymbol={(sym) => {
+                setMainTab("alerts");
+                setSelectedSymbol(sym);
+              }}
+            />
           ) : (
-                <div className="pattern-flow pattern-tab-panel">
-                  <p className="pattern-hint-main">
-                    ← 点击左侧币种查看 15m K 线与蜡烛/结构标注；新信号见顶栏滚动条（形态卡片、结构、量价等）。
-                  </p>
-                  {alerts.length > 0 && (
-                    <section className="pattern-section">
-                      <h3>本轮扫描告警</h3>
-                      <div className="pattern-card-grid">
-                        {alerts.map((a) => (
-                          <button
-                            key={`${a.symbol}-${a.kline_close_time}-${a.type}`}
-                            type="button"
-                            className="pattern-alert-card watch"
-                            onClick={() => setSelectedSymbol(a.symbol)}
-                          >
-                            <div className="pattern-alert-card-head">
-                              <CoinAvatar symbol={a.symbol} size="sm" />
-                              <strong>${displaySymbol(a.symbol)}</strong>
-                              <span className="pattern-alert-badge">
-                                {a.type_label || a.status_label || a.type}
-                              </span>
-                            </div>
-                            {a.message && <p className="pattern-alert-card-msg">{a.message}</p>}
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-                  )}
-                </div>
+            <div className="pattern-flow pattern-tab-panel">
+              <p className="pattern-hint-main">
+                ← 点击左侧币种查看 15m K 线与蜡烛/结构标注；新信号见顶栏滚动条（形态卡片、结构、量价等）。
+              </p>
+              {alerts.length > 0 && (
+                <section className="pattern-section">
+                  <h3>本轮扫描告警</h3>
+                  <div className="pattern-card-grid">
+                    {alerts.map((a) => (
+                      <button
+                        key={`${a.symbol}-${a.kline_close_time}-${a.type}`}
+                        type="button"
+                        className="pattern-alert-card watch"
+                        onClick={() => setSelectedSymbol(a.symbol)}
+                      >
+                        <div className="pattern-alert-card-head">
+                          <CoinAvatar symbol={a.symbol} size="sm" />
+                          <strong>${displaySymbol(a.symbol)}</strong>
+                          <span className="pattern-alert-badge">
+                            {a.type_label || a.status_label || a.type}
+                          </span>
+                        </div>
+                        {a.message && <p className="pattern-alert-card-msg">{a.message}</p>}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
           )}
         </main>
       </div>

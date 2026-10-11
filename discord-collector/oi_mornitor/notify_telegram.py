@@ -300,6 +300,19 @@ def _send_card_text_to_chat(alert: dict[str, Any], text: str, chat_id: str) -> b
     return ok
 
 
+def send_main_card_telegram(alert: dict[str, Any]) -> bool:
+    """仅推 MAIN 群（形态群未发或只满足 MAIN 量能口径时）。"""
+    from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
+    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
+        return False
+    if not is_main_card_mirror_eligible(alert):
+        return False
+    text = format_candle_card_message(alert)
+    return _send_card_text_to_chat(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
+
+
 def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
     """形态群已发送的正文，原样复制到 MAIN（仅白名单币）。"""
     from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
@@ -330,23 +343,27 @@ def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
         _mirror_to_main_card(alert, text)
     pushed = ok
     if pushed:
-        try:
-            from oi_mornitor.pattern_alert_stats import record_alert_from_push
-
-            record_alert_from_push(alert)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("形态信号胜率入库失败: %s", exc)
-        try:
-            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
-
-            record_ticker_from_alert(alert)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("形态 ticker 入库失败: %s", exc)
+        _after_candle_card_pushed(alert)
     return pushed
 
 
+def _after_candle_card_pushed(alert: dict[str, Any]) -> None:
+    try:
+        from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+        record_alert_from_push(alert)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("形态信号胜率入库失败: %s", exc)
+    try:
+        from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
+
+        record_ticker_from_alert(alert)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("形态 ticker 入库失败: %s", exc)
+
+
 def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
-    """顶部/底部结构 → OI_CANDLE_CARD 形态群（MAIN 由 pattern_monitor 另推）。"""
+    """顶部/底部结构 → OI_CANDLE_CARD 形态群（不进 MAIN 群）。"""
     from oi_mornitor.telegram_push_toggles import is_structure_push_enabled
 
     if not is_structure_push_enabled():
@@ -354,8 +371,6 @@ def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     text = format_structure_card_message(alert)
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
     ok = _send_card_text_to_chat(alert, text, primary) if primary else False
-    if ok:
-        _mirror_to_main_card(alert, text)
     pushed = ok
     if pushed:
         try:
@@ -444,6 +459,10 @@ async def send_pattern_oi_telegram_async(alert: dict[str, Any]) -> bool:
 
 async def send_candle_card_telegram_async(alert: dict[str, Any]) -> bool:
     return await asyncio.to_thread(send_candle_card_telegram, alert)
+
+
+async def send_main_card_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_main_card_telegram, alert)
 
 
 async def send_structure_card_telegram_async(alert: dict[str, Any]) -> bool:

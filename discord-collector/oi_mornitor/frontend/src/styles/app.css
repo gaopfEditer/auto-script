@@ -2422,6 +2422,404 @@ button {
   min-height: 120px;
 }
 
+.potential-discovery {
+  padding: 12px 16px 24px;
+  overflow: auto;
+  max-height: calc(100vh - var(--header-h) - 120px);
+}
+
+.potential-discovery-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.potential-discovery-head h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.potential-discovery-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.potential-discovery-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.potential-filter-chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--muted);
+  font-size: 0.72rem;
+  padding: 5px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.potential-filter-chip.active {
+  color: #e3f2fd;
+  border-color: rgba(100, 181, 246, 0.45);
+  background: rgba(100, 181, 246, 0.12);
+}
+
+.potential-filter-chip em {
+  font-style: normal;
+  font-size: 0.65rem;
+  opacity: 0.85;
+}
+
+.potential-discovery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.potential-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.potential-card-main {
+  width: 100%;
+  text-align: left;
+  padding: 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.potential-card-main:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.potential-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.potential-card-head strong {
+  font-size: 0.9rem;
+}
+
+.potential-tier {
+  font-size: 0.62rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+.potential-score {
+  margin-left: auto;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.potential-stage {
+  display: inline-block;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #aaa;
+}
+
+.potential-stage.stage-triggered,
+.potential-stage.stage-primed {
+  color: #b8ff3c;
+  background: rgba(184, 255, 60, 0.12);
+}
+
+.potential-stage.stage-exiting {
+  color: #ffab91;
+}
+
+.potential-entry {
+  font-size: 0.72rem;
+  color: #ccc;
+  line-height: 1.4;
+  margin: 6px 0;
+}
+
+.potential-exit {
+  font-size: 0.68rem;
+  color: #ff8a65;
+  margin-bottom: 6px;
+}
+
+.potential-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.potential-model-chip {
+  font-size: 0.65rem;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #ccc;
+}
+
+.potential-model-chip em {
+  font-style: normal;
+  margin-left: 4px;
+  color: var(--accent);
+}
+
+.potential-reasons {
+  list-style: disc;
+  padding-left: 1.1rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.potential-end-toggle {
+  width: 100%;
+  font-size: 0.68rem;
+  padding: 6px 12px;
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  background: rgba(0, 0, 0, 0.2);
+  color: #888;
+  cursor: pointer;
+}
+
+.potential-end-list {
+  padding: 8px 12px 12px;
+  font-size: 0.68rem;
+  color: #999;
+  list-style: none;
+}
+
+.potential-end-list li {
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.potential-end-tag {
+  display: inline-block;
+  margin-right: 6px;
+  color: #ffab91;
+  font-size: 0.62rem;
+}
+
+.potential-catalog-ref {
+  margin-bottom: 20px;
+}
+
+.potential-catalog-ref h3 {
+  font-size: 0.85rem;
+  margin-bottom: 10px;
+  color: #bbb;
+}
+
+.potential-list-heading {
+  font-size: 0.85rem;
+  margin: 0 0 10px;
+  color: #bbb;
+  font-weight: 600;
+}
+
+.potential-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.potential-catalog-card {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.potential-catalog-card h4 {
+  font-size: 0.78rem;
+  color: #ddd;
+  margin-bottom: 6px;
+}
+
+.potential-catalog-card ul {
+  margin-top: 8px;
+  list-style: none;
+}
+
+.potential-catalog-card li {
+  margin-top: 4px;
+  line-height: 1.35;
+}
+
+.potential-catalog-card li strong {
+  color: #ff8a65;
+  margin-right: 4px;
+}
+
+.potential-catalog-hint {
+  margin: -4px 0 12px;
+  font-size: 0.72rem;
+}
+
+.potential-filter-tip,
+.potential-catalog-tip {
+  display: inline-flex;
+  vertical-align: top;
+}
+
+.potential-catalog-tip {
+  display: block;
+  min-width: 0;
+}
+
+.potential-signal-tip-wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.potential-card:has(.potential-signal-tip-wrap:hover),
+.potential-card:has(.potential-signal-tip-wrap:focus-within) {
+  overflow: visible;
+  z-index: 3;
+}
+
+.potential-signal-tip-wrap:hover .potential-signal-popover,
+.potential-signal-tip-wrap:focus-within .potential-signal-popover {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.potential-model-chip {
+  cursor: help;
+}
+
+.potential-catalog-card {
+  cursor: help;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.potential-signal-tip-wrap:hover .potential-catalog-card,
+.potential-signal-tip-wrap:focus-within .potential-catalog-card {
+  border-color: rgba(100, 181, 246, 0.45);
+  background: rgba(100, 181, 246, 0.06);
+}
+
+.potential-signal-popover {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(420px, 70vh);
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(100, 181, 246, 0.35);
+  background: rgba(22, 24, 32, 0.98);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: #ccc;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 80;
+}
+
+.potential-catalog-tip .potential-signal-popover {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+
+.potential-filter-tip .potential-signal-popover {
+  left: 0;
+  transform: none;
+}
+
+.potential-signal-popover-title {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #e8e8e8;
+  margin-bottom: 8px;
+}
+
+.potential-signal-popover-stage {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(184, 255, 60, 0.08);
+  color: #c5e1a5;
+  font-size: 0.68rem;
+}
+
+.potential-signal-popover-stage strong {
+  display: block;
+  color: #b8ff3c;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+}
+
+.potential-signal-popover-kicker {
+  margin: 10px 0 4px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64b5f6;
+}
+
+.potential-signal-popover-kicker:first-of-type {
+  margin-top: 0;
+}
+
+.potential-signal-popover-text {
+  margin: 0;
+  color: #bbb;
+}
+
+.potential-signal-popover-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #aaa;
+}
+
+.potential-signal-popover-list li {
+  margin-top: 4px;
+}
+
+.potential-signal-popover-end li {
+  color: #ffab91;
+}
+
 .pattern-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 240px));

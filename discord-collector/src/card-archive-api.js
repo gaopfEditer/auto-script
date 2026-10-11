@@ -12,6 +12,7 @@ import { detectAssetClass } from "./card-verify-policy.js";
 import { isShortDirection } from "./card-direction.js";
 import { config } from "./config.js";
 import { createLogger } from "./logger.js";
+import { runBatchBacktest, BATCH_PROFILES } from "./card-batch-backtest-engine.js";
 import { runBatchLiquidation, runBatchClearLiquidation } from "./card-liquidation-engine.js";
 import { signalCardToClient } from "./discord-signal-card-service.js";
 import { createCardArchiveListCache } from "./card-archive-list-cache.js";
@@ -364,6 +365,54 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
     }
   }
 
+  /** @param {Record<string, unknown>} body */
+  function resolveBatchBacktestProfiles(body) {
+    const raw = body.profiles ?? body.profileIds;
+    if (Array.isArray(raw) && raw.length) {
+      return raw.map((x) => String(x).trim()).filter(Boolean);
+    }
+    const mode = String(body.profileMode ?? body.profile ?? "both").trim().toLowerCase();
+    if (mode === "fixed" || mode === "fixed_5_7_10_20") return [BATCH_PROFILES.FIXED];
+    if (mode === "card") return [BATCH_PROFILES.CARD];
+    return [BATCH_PROFILES.FIXED, BATCH_PROFILES.CARD];
+  }
+
+  async function batchBacktestHandler(req, res) {
+    try {
+      const body = req.body ?? {};
+      const { fromMs, toMs } = parseLiquidateRangeMs(body);
+      const channelId = String(body.channelId ?? body.channel_id ?? "").trim();
+      const sourceTypes = resolveArchiveBodySourceTypes(body);
+      const symbol = String(body.symbol ?? "").trim();
+      const limit = Number(body.limit) || 300;
+      const cardIds = Array.isArray(body.cardIds)
+        ? body.cardIds.map((/** @type {unknown} */ id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
+        : undefined;
+      const profiles = resolveBatchBacktestProfiles(body);
+      const force = body.force === true || body.force === 1;
+      const backtestLog = createLogger("card-batch-backtest");
+      const result = await runBatchBacktest(
+        store,
+        backtestLog,
+        {
+          fromMs,
+          toMs,
+          channelId: channelId || undefined,
+          sourceTypes: sourceTypes.length ? sourceTypes : undefined,
+          symbol: symbol || undefined,
+          limit,
+          cardIds,
+          profiles,
+          force,
+        },
+        liquidationHooks
+      );
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  }
+
   async function liquidateHandler(req, res) {
     try {
       const body = req.body ?? {};
@@ -630,6 +679,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
   app.get("/api/v1/cards/sources", requireOpenApiKey, sourcesHandler);
   app.get("/api/v1/cards/channels", requireOpenApiKey, channelsHandler);
   app.post("/api/v1/cards/liquidate", requireOpenApiKey, liquidateHandler);
+  app.post("/api/v1/cards/batch-backtest", requireOpenApiKey, batchBacktestHandler);
   app.get("/api/v1/cards/:id", requireOpenApiKey, getCardByIdHandler);
 
   app.delete("/api/v1/cards/:id", requireOpenApiKey, async (req, res) => {
@@ -748,6 +798,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
   });
 
   app.post("/api/cards/liquidate", requireLocalRequest, liquidateHandler);
+  app.post("/api/cards/batch-backtest", requireLocalRequest, batchBacktestHandler);
 
   app.post("/api/cards/clear-liquidation", requireLocalRequest, async (req, res) => {
     try {

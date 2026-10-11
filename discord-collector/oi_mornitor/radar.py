@@ -1342,6 +1342,7 @@ class RadarService:
         self._settle_report_task: asyncio.Task[None] | None = None
         self._moonshot_task: asyncio.Task[None] | None = None
         self._dormant_ignition_task: asyncio.Task[None] | None = None
+        self._potential_discovery_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
         self._equity_task: asyncio.Task[None] | None = None
         self._equity_pool: list[dict[str, Any]] = []
@@ -1605,8 +1606,19 @@ class RadarService:
             ),
             name="oi-dormant-ignition",
         )
+        from oi_mornitor.potential_discovery_runner import run_potential_discovery_loop
+
+        self._potential_discovery_task = asyncio.create_task(
+            run_potential_discovery_loop(
+                lambda: self._running,
+                get_pool_rows=lambda: self.radar.last_all_rows,
+                get_session=lambda: self._session,
+                base_url=self.radar.base_url,
+            ),
+            name="oi-potential-discovery",
+        )
         logger.info(
-            "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A + 第三梯队沉寂爆发",
+            "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A + 沉寂爆发 + 潜力发现",
             interval_sec,
             max(5.0, float(OPEN_TRADE_SCAN_SEC or 15)),
             max(60.0, float(CARD_PRICE_REFRESH_SEC or 300)),
@@ -1673,6 +1685,7 @@ class RadarService:
             "_settle_report_task",
             "_moonshot_task",
             "_dormant_ignition_task",
+            "_potential_discovery_task",
         ):
             task = getattr(self, attr, None)
             if task:

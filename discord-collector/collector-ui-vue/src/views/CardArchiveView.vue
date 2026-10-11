@@ -8,6 +8,7 @@ import {
   fetchArchiveCards,
   fetchCardChannels,
   liquidateArchiveCards,
+  batchBacktestArchiveCards,
   clearArchiveCardLiquidation,
   deleteArchiveCard,
   deleteArchiveCards,
@@ -102,6 +103,7 @@ const actualTpText = ref("");
 const evalSaving = ref(false);
 const evalError = ref("");
 const liquidating = ref(false);
+const backtesting = ref(false);
 const liquidateMsg = ref("");
 const deleting = ref(false);
 const deleteError = ref("");
@@ -382,6 +384,32 @@ async function runClearLiquidation() {
   }
 }
 
+async function runBatchBacktestSelected() {
+  if (!canManageCards) return;
+  const ids = [...selectedCardIds.value];
+  if (!ids.length) {
+    error.value = "请先勾选要回溯的卡片";
+    return;
+  }
+  backtesting.value = true;
+  liquidateMsg.value = "";
+  error.value = "";
+  try {
+    const j = await batchBacktestArchiveCards({ cardIds: ids, profileMode: "both", force: true });
+    liquidateMsg.value = [
+      `批量回溯：处理 ${j.processed ?? 0}`,
+      `跳过 ${j.skipped ?? 0}`,
+      `失败 ${j.failed ?? 0}`,
+      "（固定 5% 止损 + 7/10/20% 止盈 · 卡片策略 · 4h 标记 · 3 天截止）",
+    ].join(" · ");
+    await reload();
+  } catch (e) {
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    backtesting.value = false;
+  }
+}
+
 async function runLiquidationSelected() {
   if (!canManageCards) return;
   const ids = [...selectedCardIds.value];
@@ -578,7 +606,7 @@ onUnmounted(() => {
             <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
           </span>
           <span class="grid-count-rules" data-onboard="cards-rules">
-            结算规则：BTC / ETH / SOL 按 100x，其余山寨 20x；卡片未设止盈止损（仅有方向）时，默认 ±5% 止盈止损价清算
+            清算：100x/20x 杠杆 · 缺 TP/SL 时默认 ±5%。批量回溯：双策略（5% 止损+7/10/20% 止盈 vs 卡片 TP/SL）· 未写入场=信号时市价，限价=触价入场 · 未触 TP/SL 每 4h 标记盈亏 · 超 3 天取消任务
           </span>
         </span>
         <div v-if="canManageCards" class="grid-head-actions">
@@ -608,6 +636,15 @@ onUnmounted(() => {
             @click="runLiquidationSelected"
           >
             {{ liquidating ? "清算中…" : "清算选中" }}
+          </button>
+          <button
+            type="button"
+            class="btn tiny-btn"
+            :disabled="!selectedCount || backtesting || liquidating"
+            title="固定止损止盈 + 卡片策略；4 小时周期标记；3 天自动截止"
+            @click="runBatchBacktestSelected"
+          >
+            {{ backtesting ? "回溯中…" : "批量回溯" }}
           </button>
           <button
             type="button"

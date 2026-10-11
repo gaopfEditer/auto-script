@@ -2,6 +2,11 @@
  * 卡片价格接近推送 + TP1/2/3 自动评价 + Bitget/WEEX TP1 保本移损。
  */
 import { archiveCardToClient, resolveCardChannelName } from "./card-archive-service.js";
+import {
+  isBatchBacktestDue,
+  runCardBatchBacktest,
+  buildBatchBacktestPatch,
+} from "./card-batch-backtest-engine.js";
 import { runCardTpSettlement, isBacktestDue } from "./card-backtest-engine.js";
 import {
   cardSignalStartMs,
@@ -495,9 +500,32 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
     }
   }
 
+  async function runBatchBacktestCheck() {
+    if (!config.cardBatchBacktestEnabled) return;
+    if (!store.listCardsForProgressCheck) return;
+    const rows = await store.listCardsForProgressCheck({ limit: 80 });
+    const now = Date.now();
+    for (const row of rows) {
+      const card = archiveCardToClient(row);
+      if (!isBatchBacktestDue(card, now)) continue;
+      try {
+        const result = await runCardBatchBacktest(card, {});
+        if (result.skipped || result.error) continue;
+        const patch = buildBatchBacktestPatch(card, result);
+        await store.updateSignalCard(card.id, patch);
+        log.info(
+          `批量回溯续跑 #${card.id} ${card.symbol} outcome=${result.outcome} pnl=${result.pnlPct ?? "-"}`
+        );
+      } catch (e) {
+        log.debug(`批量回溯续跑失败 #${card.id}: ${/** @type {Error} */ (e).message}`);
+      }
+    }
+  }
+
   async function tick() {
     await runProximityCheck();
     await runLevelProgressCheck();
+    await runBatchBacktestCheck();
     await runAutoEval();
   }
 

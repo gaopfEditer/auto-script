@@ -9,6 +9,6 @@ Cursor 规则在仓库根 `.cursor/rules/`：
 
 OI 文档：[oi_mornitor/docs/README.md](oi_mornitor/docs/README.md)（[信号](oi_mornitor/docs/signal-logic.md) · [币种捕获](oi_mornitor/docs/coin-capture.md)）
 
-- 入口：`pnpm run collect:ui` + `pnpm run dev:ui-vue`；OI：`pnpm run oi:start`
+- 入口：`pnpm run collect:ui` + `pnpm run dev:ui-vue`；OI 由 collect:ui 自动守护（勿另开 oi:start，除非调试）
 - 配置：只读本目录 `.env`（`src/load-env.js`）
 - 对用户用中文；不主动 commit；不改 `.cursor/plans/`

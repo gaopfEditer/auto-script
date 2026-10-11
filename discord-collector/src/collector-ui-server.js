@@ -1220,6 +1220,7 @@ async function main() {
     apiBase: config.oiWebBaseUrl,
     enabled: config.oiAutoStart,
     checkIntervalMs: config.oiSupervisorIntervalMs,
+    restartWithUi: config.oiRestartWithUi,
   });
   const newsSupervisor = startNewsSupervisor({
     log: createLogger("news-supervisor"),

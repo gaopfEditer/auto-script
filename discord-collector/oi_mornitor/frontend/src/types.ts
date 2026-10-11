@@ -417,6 +417,73 @@ export interface SandboxCardOrder {
   reject_reason?: string;
 }
 
+/** 潜力发现 · 单模型命中 */
+export interface PotentialModelHit {
+  id: string;
+  label: string;
+  stage?: string;
+  score: number;
+  reasons?: string[];
+  entry?: string;
+  exit?: string;
+  end_signals?: string[];
+  tf?: string;
+  metrics?: Record<string, unknown>;
+}
+
+export interface PotentialDiscoveryItem {
+  symbol: string;
+  mcap_usd?: number | null;
+  mcap_tier?: string;
+  score: number;
+  top_model?: string;
+  stage?: string;
+  entry?: string;
+  exit?: string;
+  tf?: string;
+  notes?: string;
+  metrics?: Record<string, unknown>;
+  models: PotentialModelHit[];
+}
+
+export interface PotentialDiscoveryCatalogEntry {
+  id: string;
+  label: string;
+  summary?: string;
+  end_signals?: string[];
+  /** 触发后常见价格路径（形态页悬浮） */
+  typical_outlook?: string;
+  cautions?: string[];
+  stage_hints?: Record<string, string>;
+}
+
+export interface PotentialScanDiagSlice {
+  evaluated?: number;
+  model_hits?: number;
+  soft_merged?: number;
+  merge_rows?: number;
+  exported?: number;
+  skip?: Record<string, number>;
+}
+
+export interface PotentialDiscoveryPayload {
+  ok: boolean;
+  updated_at?: number | null;
+  updated_utc8?: string | null;
+  fast_scan_at_utc8?: string | null;
+  slow_scan_at_utc8?: string | null;
+  scan_count?: number;
+  score_list_min?: number;
+  /** 未 hit 但单模型 score ≥ 此值仍合并（0=仅 spec 命中） */
+  soft_export_min?: number;
+  scan_diagnostics?: {
+    fast?: PotentialScanDiagSlice;
+    slow?: PotentialScanDiagSlice;
+  };
+  catalog?: PotentialDiscoveryCatalogEntry[];
+  items?: PotentialDiscoveryItem[];
+}
+
 /** 潜力暴涨漏斗条目（并行于 LH→HL） */
 export interface MoonshotItem {
   symbol: string;

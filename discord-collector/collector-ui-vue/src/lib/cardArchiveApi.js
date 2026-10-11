@@ -155,6 +155,20 @@ export async function liquidateArchiveCards(opts = {}) {
   return j;
 }
 
+/**
+ * 批量回溯（双策略：固定 5% 止损 + 7/10/20% 止盈 vs 卡片 TP/SL；4h 标记、3 天截止）
+ * @param {{ cardIds?: number[], profileMode?: 'both'|'fixed'|'card', force?: boolean, limit?: number, channelId?: string, symbol?: string, days?: number, from?: string, to?: string, sources?: string[] }} [opts]
+ */
+export async function batchBacktestArchiveCards(opts = {}) {
+  const res = await fetch("/api/cards/batch-backtest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  const j = await readOkJson(res, "批量回溯失败");
+  return j;
+}
+
 /** @param {number[]} cardIds */
 export async function clearArchiveCardLiquidation(cardIds) {
   const res = await fetch("/api/cards/clear-liquidation", {

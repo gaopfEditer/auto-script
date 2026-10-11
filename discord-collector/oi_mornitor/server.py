@@ -136,6 +136,22 @@ async def handle_dormant_funnel(_request: web.Request) -> web.Response:
     return _json_response(get_funnel_payload())
 
 
+async def handle_potential_discovery(_request: web.Request) -> web.Response:
+    """形态页「潜力发现」：多模型共振列表。"""
+    from oi_mornitor.potential_discovery_runner import get_potential_scan_diagnostics
+    from oi_mornitor.potential_discovery_store import get_discovery_payload
+    from oi_mornitor.potential_models_config import load_potential_config
+
+    from oi_mornitor.potential_discovery_config import POTENTIAL_SOFT_EXPORT_MIN
+
+    payload = get_discovery_payload()
+    exp = load_potential_config().get("export") or {}
+    payload["score_list_min"] = exp.get("score_list_min")
+    payload["soft_export_min"] = POTENTIAL_SOFT_EXPORT_MIN
+    payload["scan_diagnostics"] = get_potential_scan_diagnostics()
+    return _json_response(payload)
+
+
 async def handle_binance_leaderboards(request: web.Request) -> web.Response:
     """顶栏榜单：币安 U 本位永续 24h 涨跌幅 / 成交 / 持仓 / 热门。"""
     from oi_mornitor.binance_leaderboards import get_binance_leaderboards
@@ -1166,6 +1182,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/matrix", handle_matrix)
 
     app.router.add_get("/api/dormant-funnel", handle_dormant_funnel)
+    app.router.add_get("/api/potential-discovery", handle_potential_discovery)
     app.router.add_get("/api/binance/leaderboards", handle_binance_leaderboards)
 
     app.router.add_get("/api/patterns", handle_patterns)
