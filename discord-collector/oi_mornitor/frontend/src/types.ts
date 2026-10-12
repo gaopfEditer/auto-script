@@ -434,7 +434,25 @@ export interface PotentialModelHit {
   signal_time_ms?: number | null;
   /** 北京时间 YYYY-MM-DD HH:mm */
   signal_time_utc8?: string | null;
+  direction?: "long" | "short" | "neutral" | string;
+  direction_label?: string;
+  score_reasons?: string[];
+  outcome?: PotentialSignalOutcome;
   metrics?: Record<string, unknown>;
+}
+
+/** 信号后 12h 或衰竭/离池时的最大盈/回撤评判 */
+export interface PotentialSignalOutcome {
+  status?: string;
+  pending?: boolean;
+  settle_reason?: string | null;
+  settle_label?: string | null;
+  window_end_ms?: number;
+  hours_left?: number;
+  max_profit_pct?: number | null;
+  max_drawdown_pct?: number | null;
+  end_pnl_pct?: number | null;
+  entry_price?: number | null;
 }
 
 export interface PotentialDiscoveryItem {
@@ -452,6 +470,15 @@ export interface PotentialDiscoveryItem {
   signal_time_utc8?: string | null;
   /** 列表合并/扫描时间（非 K 线产生时刻） */
   scan_at_utc8?: string | null;
+  direction?: "long" | "short" | "neutral" | string;
+  direction_label?: string;
+  /** 综合分公式一行说明 */
+  score_summary?: string;
+  score_reasons?: string[];
+  max_model_score?: number;
+  resonance_bonus?: number;
+  model_count?: number;
+  outcome?: PotentialSignalOutcome;
   notes?: string;
   metrics?: Record<string, unknown>;
   models: PotentialModelHit[];

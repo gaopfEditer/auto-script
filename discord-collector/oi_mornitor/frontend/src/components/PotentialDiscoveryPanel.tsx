@@ -7,9 +7,58 @@ import type {
   PotentialDiscoveryCatalogEntry,
   PotentialDiscoveryItem,
   PotentialDiscoveryPayload,
+  PotentialSignalOutcome,
 } from "../types";
 
 const FETCH_MS = 5 * 60 * 1000;
+
+function modelSignalTime(m: {
+  signal_time_utc8?: string | null;
+  signal_tf?: string;
+  tf?: string;
+}): string {
+  return m.signal_time_utc8?.trim() || "";
+}
+
+function modelSignalTf(m: { signal_tf?: string; tf?: string }): string {
+  return (m.signal_tf || m.tf || "").trim();
+}
+
+function OutcomeBlock({ outcome }: { outcome?: PotentialSignalOutcome }) {
+  if (!outcome) return null;
+  if (outcome.pending) {
+    const left =
+      outcome.hours_left != null && Number.isFinite(outcome.hours_left)
+        ? ` · 约 ${outcome.hours_left.toFixed(1)}h 后或衰竭/离池时结算`
+        : "";
+    return (
+      <p className="potential-outcome pending">
+        观察窗进行中（默认 12h）{left}
+      </p>
+    );
+  }
+  const mp = outcome.max_profit_pct;
+  const md = outcome.max_drawdown_pct;
+  const end = outcome.end_pnl_pct;
+  const label = outcome.settle_label || "已评判";
+  return (
+    <p className="potential-outcome settled">
+      <strong>{label}</strong>
+      {mp != null ? ` · 最大盈利 +${mp}%` : ""}
+      {md != null ? ` · 最大回撤 ${md}%` : ""}
+      {end != null ? (
+        <>
+          {" "}
+          · 窗末{" "}
+          <span className={end >= 0 ? "pnl-up" : "pnl-down"}>
+            {end >= 0 ? "+" : ""}
+            {end}%
+          </span>
+        </>
+      ) : null}
+    </p>
+  );
+}
 
 type Props = {
   onOpenSymbol: (symbol: string) => void;
@@ -71,7 +120,9 @@ export const PotentialDiscoveryPanel = memo(function PotentialDiscoveryPanel({
           <h2>潜力发现</h2>
           <p className="pattern-hint-main">
             快扫约 15 分钟（M2 费率/OI、M5 打靶、M3 短线相对强弱）；慢扫约 1 小时（M1 OI 趋势、M4 箱体
-            Spring）。二/三梯队偏小市值，请交叉验证并关注失效征兆。
+            Spring）。二/三梯队偏小市值，请交叉验证并关注失效征兆。每条信号默认{" "}
+            <strong>12h</strong> 观察窗（或阶段 <code>exiting</code> / 离池时提前结算），按方向统计{" "}
+            <strong>最大盈利</strong>与<strong>最大回撤</strong>（15m K，入场=信号 K 收盘价）。
           </p>
         </div>
         <span className="potential-discovery-meta">
@@ -214,6 +265,12 @@ function PotentialCard({
 }) {
   const sym = item.symbol;
   const showEnd = expandedEnd === sym;
+  const cardTf = (item.signal_tf || item.tf || "").trim();
+  const cardTime = item.signal_time_utc8?.trim() || "";
+  const dir = item.direction || "neutral";
+  const dirLabel =
+    item.direction_label ||
+    (dir === "long" ? "看多" : dir === "short" ? "看空" : "观望");
   return (
     <article className="potential-card">
       <button type="button" className="potential-card-main" onClick={onOpen}>
@@ -223,40 +280,88 @@ function PotentialCard({
           <span className={`potential-tier tier-${item.mcap_tier || "t3"}`}>
             {item.mcap_tier?.toUpperCase() || "T3"}
           </span>
-          <span className="potential-score">{item.score}</span>
+          <span className={`potential-direction dir-${dir}`}>{dirLabel}</span>
+          <span className="potential-score" title="综合评分">
+            {item.score}
+          </span>
         </div>
         {item.stage ? (
           <span className={`potential-stage stage-${item.stage}`}>{item.stage}</span>
         ) : null}
-        {item.signal_tf || item.signal_time_utc8 ? (
-          <p className="potential-signal-meta" title="判定依据：该周期最近一根已收盘 K 的开盘时刻">
-            <span className="potential-signal-meta-label">信号</span>
-            {item.signal_tf ? <strong>{item.signal_tf}</strong> : null}
-            {item.signal_time_utc8 ? (
-              <time dateTime={String(item.signal_time_ms ?? "")}>
-                {item.signal_tf ? " · " : ""}
-                {item.signal_time_utc8}
-              </time>
+        {item.score_summary || (item.score_reasons?.length ?? 0) > 0 ? (
+          <div className="potential-score-block">
+            {item.score_summary ? (
+              <p className="potential-score-summary">{item.score_summary}</p>
             ) : null}
-          </p>
+            {(item.score_reasons?.length ?? 0) > 0 ? (
+              <ul className="potential-score-reasons">
+                {(item.score_reasons ?? []).slice(0, 8).map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         ) : null}
+        {cardTf || cardTime ? (
+          <dl
+            className="potential-signal-dl"
+            title="出现时间 = 该周期最近一根已收盘 K 的开盘时刻（北京时间）"
+          >
+            <div>
+              <dt>周期</dt>
+              <dd>{cardTf || "—"}</dd>
+            </div>
+            <div>
+              <dt>出现</dt>
+              <dd>
+                {cardTime ? (
+                  <time dateTime={String(item.signal_time_ms ?? "")}>{cardTime}</time>
+                ) : (
+                  <span className="potential-signal-pending">待下轮扫描补全</span>
+                )}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
+        <OutcomeBlock outcome={item.outcome} />
         <div className="potential-model-chips">
           {(item.models ?? []).map((m) => (
             <ModelPlaybookTooltip
               key={m.id}
               catalog={catalogById.get(m.id)}
               stage={m.stage}
-              signalTf={m.signal_tf || m.tf}
-              signalTimeUtc8={m.signal_time_utc8}
+              signalTf={modelSignalTf(m)}
+              signalTimeUtc8={modelSignalTime(m) || null}
             >
               <span className={`potential-model-chip model-${m.id}`}>
+                {m.direction_label ? (
+                  <span className={`potential-chip-dir dir-${m.direction || "neutral"}`}>
+                    {m.direction_label}
+                  </span>
+                ) : null}
                 {m.label}
                 <em>{m.score}</em>
-                {m.signal_tf || m.signal_time_utc8 ? (
+                {modelSignalTf(m) || modelSignalTime(m) ? (
                   <small className="potential-chip-signal">
-                    {[m.signal_tf || m.tf, m.signal_time_utc8?.slice(5, 16)]
-                      .filter(Boolean)
-                      .join(" ")}
+                    {modelSignalTf(m) ? (
+                      <span className="potential-chip-tf">{modelSignalTf(m)}</span>
+                    ) : null}
+                    {modelSignalTime(m) ? (
+                      <span className="potential-chip-at">{modelSignalTime(m)}</span>
+                    ) : (
+                      <span className="potential-signal-pending">时间待补</span>
+                    )}
+                  </small>
+                ) : null}
+                {m.outcome && !m.outcome.pending ? (
+                  <small className="potential-chip-outcome">
+                    {m.outcome.settle_label ? `${m.outcome.settle_label} ` : ""}
+                    {m.outcome.max_profit_pct != null
+                      ? `盈+${m.outcome.max_profit_pct}%`
+                      : ""}
+                    {m.outcome.max_drawdown_pct != null
+                      ? ` 回撤${m.outcome.max_drawdown_pct}%`
+                      : ""}
                   </small>
                 ) : null}
               </span>

@@ -83,16 +83,20 @@ class ModelResult:
     label: str = ""
     end_signals: list[str] = field(default_factory=list)
     signal_time_ms: int | None = None
+    direction: str = "neutral"
+    score_reasons: list[str] = field(default_factory=list)
 
     def to_hit_dict(self) -> dict[str, Any]:
         from oi_mornitor.potential_features import ms_to_utc8_str
+        from oi_mornitor.potential_score_explain import direction_label
 
+        d = str(self.direction or "neutral")
         return {
             "id": self.model_id,
             "label": self.label or MODEL_LABELS.get(self.model_id, self.model_id),
             "stage": self.stage,
             "score": int(round(self.score)),
-            "reasons": [self.entry] if self.entry else [],
+            "reasons": list(self.score_reasons) if self.score_reasons else ([self.entry] if self.entry else []),
             "entry": self.entry,
             "exit": self.exit,
             "end_signals": self.end_signals,
@@ -101,6 +105,9 @@ class ModelResult:
             "signal_tf": self.tf,
             "signal_time_ms": self.signal_time_ms,
             "signal_time_utc8": ms_to_utc8_str(self.signal_time_ms),
+            "direction": d,
+            "direction_label": direction_label(d),
+            "score_reasons": list(self.score_reasons),
             "hard_fail": self.hard_fail,
         }
 
@@ -695,7 +702,9 @@ def evaluate_models(feed: SymbolFeed, model_ids: list[str] | None = None) -> lis
         if not fn:
             continue
         try:
-            out.append(fn(feed, cfg))
+            from oi_mornitor.potential_score_explain import finalize_model_result
+
+            out.append(finalize_model_result(fn(feed, cfg)))
         except Exception:  # noqa: BLE001
             out.append(_miss(mid))
     return out

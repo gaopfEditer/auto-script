@@ -7,6 +7,7 @@ from typing import Any
 from oi_mornitor.potential_features import ms_to_utc8_str
 from oi_mornitor.potential_model_eval import ModelResult
 from oi_mornitor.potential_models_config import load_potential_config
+from oi_mornitor.potential_score_explain import composite_score_breakdown
 
 STAGE_ORDER = {"exiting": 0, "triggered": 1, "primed": 2, "watch": 3}
 TZ_CN = timezone(timedelta(hours=8))
@@ -60,6 +61,7 @@ def aggregate_candidate(
             metrics[key] = v
 
     model_hits = [r.to_hit_dict() for r in valid]
+    explain = composite_score_breakdown(valid, score)
 
     return {
         "symbol": symbol.upper(),
@@ -76,6 +78,13 @@ def aggregate_candidate(
         "signal_tf": best.tf,
         "signal_time_ms": best.signal_time_ms,
         "signal_time_utc8": ms_to_utc8_str(best.signal_time_ms),
+        "direction": explain.get("direction"),
+        "direction_label": explain.get("direction_label"),
+        "score_summary": explain.get("score_summary"),
+        "score_reasons": explain.get("score_reasons"),
+        "max_model_score": explain.get("max_model_score"),
+        "resonance_bonus": explain.get("resonance_bonus"),
+        "model_count": explain.get("model_count"),
         "ts_utc8": now_utc8_str(),
         "scan_at_utc8": now_utc8_str(),
         "notes": notes,

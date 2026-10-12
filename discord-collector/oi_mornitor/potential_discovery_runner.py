@@ -392,6 +392,12 @@ async def run_potential_discovery_loop(
             elif due_fast:
                 await run_potential_fast_scan(session, pool_rows=rows, base_url=base_url)
                 _last_fast = time.time()
+            try:
+                from oi_mornitor.potential_outcome_runner import run_potential_outcome_pass
+
+                await run_potential_outcome_pass(session, base_url=base_url)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("潜力信号评判 pass 失败: %s", exc)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

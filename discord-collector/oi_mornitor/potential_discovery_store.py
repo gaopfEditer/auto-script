@@ -36,19 +36,27 @@ def _model_result_from_hit(hit: dict[str, Any]) -> ModelResult | None:
         signal_time_ms = int(st_ms) if st_ms is not None else None
     except (TypeError, ValueError):
         signal_time_ms = None
-    return ModelResult(
-        model_id=mid,
-        hit=True,
-        score=float(hit.get("score") or 0),
-        stage=str(hit.get("stage") or "watch"),
-        entry=entry,
-        exit=str(hit.get("exit") or ""),
-        metrics=dict(hit.get("metrics") or {}) if isinstance(hit.get("metrics"), dict) else {},
-        tf=str(hit.get("signal_tf") or hit.get("tf") or "1h"),
-        signal_time_ms=signal_time_ms,
-        hard_fail=bool(hit.get("hard_fail")),
-        label=str(hit.get("label") or MODEL_LABELS.get(mid, mid)),
-        end_signals=[str(x) for x in (hit.get("end_signals") or []) if x],
+    from oi_mornitor.potential_score_explain import finalize_model_result
+
+    return finalize_model_result(
+        ModelResult(
+            model_id=mid,
+            hit=True,
+            score=float(hit.get("score") or 0),
+            stage=str(hit.get("stage") or "watch"),
+            entry=entry,
+            exit=str(hit.get("exit") or ""),
+            metrics=dict(hit.get("metrics") or {}) if isinstance(hit.get("metrics"), dict) else {},
+            tf=str(hit.get("signal_tf") or hit.get("tf") or "1h"),
+            signal_time_ms=signal_time_ms,
+            hard_fail=bool(hit.get("hard_fail")),
+            label=str(hit.get("label") or MODEL_LABELS.get(mid, mid)),
+            end_signals=[str(x) for x in (hit.get("end_signals") or []) if x],
+            direction=str(hit.get("direction") or "neutral"),
+            score_reasons=[
+                str(x) for x in (hit.get("score_reasons") or hit.get("reasons") or []) if x
+            ],
+        )
     )
 
 
@@ -151,7 +159,32 @@ def merge_scan_results(
             _fast_at = now
         if slow_scan:
             _slow_at = now
+        _sync_potential_outcome_tracks(rows)
         _flush_locked()
+
+
+def _sync_potential_outcome_tracks(
+    rows: list[tuple[str, dict[str, Any], list[ModelResult]]],
+) -> None:
+    from oi_mornitor.potential_discovery_config import POTENTIAL_SOFT_EXPORT_MIN
+    from oi_mornitor.potential_outcome_tracker import register_model_signal, sync_symbol_slot
+
+    touched: set[str] = set()
+    for sym, _meta, _results in rows:
+        touched.add(sym.upper())
+    for sym in touched:
+        slot = _symbol_models.get(sym)
+        sync_symbol_slot(sym, slot)
+        if not slot:
+            continue
+        for r in slot.values():
+            if r.hard_fail:
+                continue
+            soft_ok = POTENTIAL_SOFT_EXPORT_MIN > 0 and float(r.score) >= float(
+                POTENTIAL_SOFT_EXPORT_MIN
+            )
+            if r.hit or soft_ok:
+                register_model_signal(sym, r)
 
 
 def _flush_locked() -> None:
@@ -234,6 +267,79 @@ def update_discovery_snapshot(export_doc: dict[str, Any]) -> None:
         _updated_at = time.time()
 
 
+def _enrich_hit_signal(h: dict[str, Any]) -> dict[str, Any]:
+    from oi_mornitor.potential_features import ms_to_utc8_str
+
+    out = dict(h)
+    if not out.get("signal_tf") and out.get("tf"):
+        out["signal_tf"] = out["tf"]
+    ms = out.get("signal_time_ms")
+    if ms is not None and not out.get("signal_time_utc8"):
+        try:
+            out["signal_time_utc8"] = ms_to_utc8_str(int(ms))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _attach_outcome(sym: str, hit: dict[str, Any]) -> dict[str, Any]:
+    from oi_mornitor.potential_outcome_tracker import outcome_for_model_hit
+
+    out = dict(hit)
+    oc = outcome_for_model_hit({**out, "symbol": sym})
+    if oc:
+        out["outcome"] = oc
+    return out
+
+
+def _model_hits_for_candidate(c: dict[str, Any]) -> list[dict[str, Any]]:
+    """优先内存中的 ModelResult（含 K 线时刻），否则用快照 model_hits。"""
+    sym = str(c.get("symbol") or "").upper()
+    slot = _symbol_models.get(sym)
+    if slot:
+        hits = [_enrich_hit_signal(r.to_hit_dict()) for r in slot.values()]
+    else:
+        raw = c.get("model_hits")
+        if not isinstance(raw, list):
+            hits = []
+        else:
+            hits = [_enrich_hit_signal(h) for h in raw if isinstance(h, dict)]
+    return [_attach_outcome(sym, h) for h in hits]
+
+
+def _resolve_item_signal_fields(
+    c: dict[str, Any], models: list[dict[str, Any]]
+) -> tuple[str | None, int | None, str | None]:
+    from oi_mornitor.potential_features import ms_to_utc8_str
+
+    tf = c.get("signal_tf") or c.get("tf")
+    ms = c.get("signal_time_ms")
+    utc8 = c.get("signal_time_utc8")
+    top_id = str(c.get("top_model") or "")
+    best: dict[str, Any] | None = None
+    if models:
+        if top_id:
+            for m in models:
+                if str(m.get("id") or "") == top_id:
+                    best = m
+                    break
+        if best is None:
+            best = max(models, key=lambda x: int(x.get("score") or 0))
+    if best:
+        tf = tf or best.get("signal_tf") or best.get("tf")
+        if ms is None:
+            ms = best.get("signal_time_ms")
+        if not utc8:
+            utc8 = best.get("signal_time_utc8")
+    if ms is not None and not utc8:
+        utc8 = ms_to_utc8_str(int(ms))
+    try:
+        ms_i = int(ms) if ms is not None else None
+    except (TypeError, ValueError):
+        ms_i = None
+    return (str(tf) if tf else None, ms_i, str(utc8) if utc8 else None)
+
+
 def get_discovery_payload() -> dict[str, Any]:
     if _updated_at <= 0:
         hydrate_discovery_from_disk()
@@ -256,9 +362,37 @@ def get_discovery_payload() -> dict[str, Any]:
 
 
 def _candidate_to_item(c: dict[str, Any]) -> dict[str, Any]:
-    hits = c.get("model_hits")
-    if not isinstance(hits, list):
-        hits = []
+    models = _model_hits_for_candidate(c)
+    signal_tf, signal_ms, signal_utc8 = _resolve_item_signal_fields(c, models)
+    sym = str(c.get("symbol") or "").upper()
+    top_id = str(c.get("top_model") or "")
+    card_outcome = None
+    for m in models:
+        if top_id and str(m.get("id") or "") == top_id and m.get("outcome"):
+            card_outcome = m.get("outcome")
+            break
+    if card_outcome is None:
+        for m in sorted(models, key=lambda x: -int(x.get("score") or 0)):
+            if m.get("outcome"):
+                card_outcome = m.get("outcome")
+                break
+    score_f = float(c.get("score") or 0)
+    explain_extra: dict[str, Any] = {}
+    if not c.get("score_summary"):
+        slot = _symbol_models.get(sym)
+        if slot:
+            from oi_mornitor.potential_discovery_config import POTENTIAL_SOFT_EXPORT_MIN
+            from oi_mornitor.potential_score_explain import composite_score_breakdown
+
+            soft_min = float(POTENTIAL_SOFT_EXPORT_MIN or 0)
+            valid = [
+                r
+                for r in slot.values()
+                if not r.hard_fail
+                and (r.hit or (soft_min > 0 and float(r.score) >= soft_min))
+            ]
+            if valid:
+                explain_extra = composite_score_breakdown(valid, score_f)
     return {
         "symbol": c.get("symbol"),
         "mcap_usd": c.get("mcap_usd"),
@@ -267,12 +401,20 @@ def _candidate_to_item(c: dict[str, Any]) -> dict[str, Any]:
         "stage": c.get("stage"),
         "entry": c.get("entry"),
         "exit": c.get("exit"),
-        "tf": c.get("tf"),
-        "signal_tf": c.get("signal_tf") or c.get("tf"),
-        "signal_time_ms": c.get("signal_time_ms"),
-        "signal_time_utc8": c.get("signal_time_utc8"),
+        "tf": c.get("tf") or signal_tf,
+        "signal_tf": signal_tf,
+        "signal_time_ms": signal_ms,
+        "signal_time_utc8": signal_utc8,
         "scan_at_utc8": c.get("scan_at_utc8") or c.get("ts_utc8"),
-        "models": hits,
+        "direction": c.get("direction") or explain_extra.get("direction"),
+        "direction_label": c.get("direction_label") or explain_extra.get("direction_label"),
+        "score_summary": c.get("score_summary") or explain_extra.get("score_summary"),
+        "score_reasons": c.get("score_reasons") or explain_extra.get("score_reasons") or [],
+        "max_model_score": c.get("max_model_score") or explain_extra.get("max_model_score"),
+        "resonance_bonus": c.get("resonance_bonus") if c.get("resonance_bonus") is not None else explain_extra.get("resonance_bonus"),
+        "model_count": c.get("model_count") or explain_extra.get("model_count"),
+        "outcome": card_outcome,
+        "models": models,
         "top_model": c.get("top_model"),
         "metrics": c.get("metrics"),
         "notes": c.get("notes"),

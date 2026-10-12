@@ -87,6 +87,41 @@ class PotentialDiscoverySpecTests(unittest.TestCase):
             )
         self.assertIsNone(cand)
 
+    def test_short_squeeze_direction_long(self) -> None:
+        from oi_mornitor.potential_score_explain import finalize_model_result, infer_direction
+
+        r = finalize_model_result(
+            ModelResult(
+                "short_squeeze",
+                True,
+                72,
+                "primed",
+                "负费率轧空",
+                "",
+                {"funding_mean_3": -0.02, "oi_change_1d_pct": 0.05},
+                "1h",
+            )
+        )
+        self.assertEqual(infer_direction(r), "long")
+        self.assertEqual(r.direction, "long")
+        self.assertTrue(any("费率" in x for x in r.score_reasons))
+
+    def test_aggregate_score_explain(self) -> None:
+        from oi_mornitor.potential_score_explain import finalize_model_result
+
+        r1 = finalize_model_result(
+            ModelResult("short_squeeze", True, 70, "primed", "轧空", "", {}, "1h")
+        )
+        r2 = finalize_model_result(
+            ModelResult("relative_strength", True, 55, "watch", "RS", "", {}, "15m")
+        )
+        cand = aggregate_candidate("X", [r1, r2], mcap_usd=4e7, mcap_tier="t3")
+        assert cand is not None
+        self.assertEqual(cand["direction"], "long")
+        self.assertEqual(cand["direction_label"], "看多")
+        self.assertIn("综合", cand.get("score_summary") or "")
+        self.assertTrue(cand.get("score_reasons"))
+
     def test_aggregate_signal_time_fields(self) -> None:
         ms = 1_700_000_000_000
         cand = aggregate_candidate(

@@ -32,6 +32,13 @@ async def main() -> None:
             pool_rows=rows,
             base_url=radar.base_url,
         )
+        from oi_mornitor.potential_outcome_runner import run_potential_outcome_pass
+
+        n_settled = await run_potential_outcome_pass(
+            session, base_url=radar.base_url or FAPI_BASE_URL
+        )
+        if n_settled:
+            print(f"潜力评判结算: {n_settled} 条")
     payload = get_discovery_payload()
     print(
         f"完成：candidates={len(cands)} · "
