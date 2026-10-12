@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
+import PageLoadingBlock from "../components/PageLoadingBlock.vue";
 import SignalChannelOverviewSection from "../components/SignalChannelOverviewSection.vue";
 import { emptyEvalMetrics, fetchEvalSummary } from "../lib/cardEvalApi.js";
 import { fetchCardChannels, fetchCardSources } from "../lib/cardArchiveApi.js";
@@ -16,6 +17,7 @@ const channelId = ref("");
 const symbol = ref("");
 const period = ref(/** @type {string | number} */ ("today"));
 const loading = ref(false);
+const hasLoadedOnce = ref(false);
 const error = ref("");
 const note = ref("");
 const overall = ref(/** @type {import("../lib/cardEvalApi.js").EvalMetrics | null} */ (null));
@@ -94,6 +96,7 @@ async function loadSummary() {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {
     loading.value = false;
+    if (!error.value) hasLoadedOnce.value = true;
   }
 }
 
@@ -146,6 +149,11 @@ onMounted(() => void reload());
     </aside>
 
     <main class="eval-main" data-onboard="eval-summary">
+      <PageLoadingBlock
+        v-if="loading && !hasLoadedOnce"
+        message="加载频道评估…"
+        hint="首次打开会汇总卡片样本与各 Discord 频道盈利明细，数据量大时可能需十数秒"
+      />
       <header class="eval-head">
         <div>
           <h1>评估汇总</h1>
@@ -163,7 +171,7 @@ onMounted(() => void reload());
       </header>
 
       <p v-if="note" class="eval-note">{{ note }}</p>
-      <p v-if="loading" class="eval-wait">加载中…</p>
+      <p v-if="loading && hasLoadedOnce" class="eval-wait">刷新中…</p>
 
       <section v-if="overall" class="eval-overall">
         <div class="eval-stat">
@@ -232,6 +240,7 @@ onMounted(() => void reload());
         :list-query="listQuery"
         :channel-id="channelId"
         :eval-channels="channels"
+        :parent-loading="loading"
       />
       <p v-else class="eval-wait">当前来源筛选非 Discord，下方 Discord 信号频道明细已隐藏。</p>
     </main>
@@ -253,6 +262,7 @@ onMounted(() => void reload());
   border-right: 1px solid #2b2d31;
 }
 .eval-main {
+  position: relative;
   padding: 1.25rem 1.5rem 2rem;
   overflow-y: auto;
   min-width: 0;

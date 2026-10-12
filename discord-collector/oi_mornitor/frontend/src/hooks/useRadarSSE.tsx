@@ -22,6 +22,8 @@ const SILENT_REFRESH_EVERY_MS = 5 * 60_000;
 type RadarSSEValue = {
   snapshot: RadarSnapshot;
   online: boolean;
+  /** 首次 /api/snapshot 请求结束前为 true */
+  bootstrapping: boolean;
   patchPattern: (partial: Partial<PatternPayload>) => void;
 };
 
@@ -34,6 +36,7 @@ function initialSnapshot(): RadarSnapshot {
 function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
   const [snapshot, setSnapshot] = useState<RadarSnapshot>(initialSnapshot);
   const [online, setOnline] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(true);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downSinceRef = useRef(0);
   const didFirstSilentRef = useRef(false);
@@ -99,6 +102,8 @@ function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
         markUp();
       } catch {
         markDown();
+      } finally {
+        if (!cancelled) setBootstrapping(false);
       }
     };
 
@@ -157,8 +162,8 @@ function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
   }, [apply, intervalMs, reconnectEpoch]);
 
   return useMemo(
-    () => ({ snapshot, online, patchPattern }),
-    [snapshot, online, patchPattern],
+    () => ({ snapshot, online, bootstrapping, patchPattern }),
+    [snapshot, online, bootstrapping, patchPattern],
   );
 }
 

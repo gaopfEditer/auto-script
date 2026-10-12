@@ -172,6 +172,14 @@ export function msgAttachments(m) {
   return [];
 }
 
+/** 展示用 URL：优先 proxy（部分环境直连 cdn 会 403） */
+export function attachmentDisplayUrl(att) {
+  if (!att || typeof att !== "object") return "";
+  const proxy = String(att.proxyUrl ?? "").trim();
+  const direct = String(att.url ?? "").trim();
+  return proxy || direct;
+}
+
 /** @param {{ contentType?: string, filename?: string }} att */
 export function isImageAttachment(att) {
   const ct = String(att.contentType ?? "").toLowerCase();

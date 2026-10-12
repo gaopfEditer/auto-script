@@ -550,6 +550,20 @@
   display: inline-block;
   max-width: min(420px, 100%);
 }
+.msg-scroll-loadable {
+  position: relative;
+  min-height: 10rem;
+}
+
+.msg-image-placeholder {
+  display: inline-block;
+  font-size: 0.75rem;
+  color: #949ba4;
+  padding: 0.35rem 0.5rem;
+  border: 1px dashed #3f4147;
+  border-radius: 6px;
+}
+
 .msg-image {
   display: block;
   max-width: 100%;

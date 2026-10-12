@@ -730,6 +730,11 @@ export async function openStore(cfg, log) {
       where.push("guild_id = ?");
       params.push(gid);
     }
+    const fromMs = Number(filters.fromMs);
+    if (Number.isFinite(fromMs) && fromMs > 0) {
+      where.push("created_at_ms >= ?");
+      params.push(fromMs);
+    }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
     const [rows] = await pool.query(

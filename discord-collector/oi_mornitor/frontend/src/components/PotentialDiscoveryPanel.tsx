@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { CoinAvatar } from "./CoinAvatar";
 import { displaySymbol } from "../utils/symbol";
 import { ModelPlaybookTooltip } from "./ModelPlaybookTooltip";
+import { PageBootLoading } from "./PageBootLoading";
 import type {
   PotentialDiscoveryCatalogEntry,
   PotentialDiscoveryItem,
@@ -129,7 +130,11 @@ export const PotentialDiscoveryPanel = memo(function PotentialDiscoveryPanel({
       </div>
 
       {loading && !payload ? (
-        <p className="pattern-hint-main">加载扫描结果…</p>
+        <PageBootLoading
+          inset={false}
+          message="加载潜力发现…"
+          hint="正在读取扫描快照与模型说明"
+        />
       ) : filtered.length === 0 ? (
         <p className="pattern-hint-main">
           暂无满足阈值的标的（后台约 15 分钟快扫、1 小时慢扫）。列表门槛{" "}

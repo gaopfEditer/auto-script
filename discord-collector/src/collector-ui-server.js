@@ -999,6 +999,29 @@ async function main() {
     }
   });
 
+  /** @param {Record<string, unknown>[]} rows */
+  function discordMessageRowsForClient(rows) {
+    return rows.map((row) => {
+      const enriched = discordIngest.enrichForApi(row);
+      enriched.rawJson = undefined;
+      return enriched;
+    });
+  }
+
+  /** @param {import("express").Request} req */
+  function parseMessageDaysFromMs(req) {
+    const daysRaw = Number(req.query.days);
+    if (Number.isFinite(daysRaw) && daysRaw > 0) {
+      return Date.now() - Math.min(14, daysRaw) * 86400000;
+    }
+    const fromRaw = String(req.query.from_ms ?? req.query.fromMs ?? "").trim();
+    if (fromRaw) {
+      const n = Number(fromRaw);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return undefined;
+  }
+
   app.get("/api/discord/messages", async (req, res) => {
     try {
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
@@ -1006,20 +1029,65 @@ async function main() {
       const guildId = String(req.query.guild_id ?? req.query.guildId ?? "").trim();
       const orderParam = String(req.query.order ?? "asc").toLowerCase();
       const wantChronological = orderParam !== "desc";
+      const fromMs = parseMessageDaysFromMs(req);
       const rows = await store.listRecentMessages(
         limit,
-        { channelId, guildId, order: "desc" },
-        { includeRaw: isDebugMode() }
+        { channelId, guildId, order: "desc", fromMs },
+        { includeRaw: true }
       );
-      let clientRows = rows.map((row) => {
-        const enriched = discordIngest.enrichForApi(row);
-        if (!isDebugMode()) {
-          enriched.rawJson = undefined;
-        }
-        return enriched;
-      });
+      let clientRows = discordMessageRowsForClient(rows);
       if (wantChronological) clientRows = clientRows.reverse();
-      res.json({ ok: true, debugMode: isDebugMode(), rows: clientRows });
+      res.json({ ok: true, debugMode: isDebugMode(), rows: clientRows, fromMs: fromMs ?? null });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
+  app.get("/api/discord/guilds/:guildId/messages-snapshot", async (req, res) => {
+    try {
+      const guildId = String(req.params.guildId ?? "").trim();
+      if (!guildId) {
+        res.status(400).json({ ok: false, error: "guildId required" });
+        return;
+      }
+      const days = Math.min(
+        14,
+        Math.max(1, Number(req.query.days) || config.discordShowSnapshotDays || 7)
+      );
+      const perChannel = Math.min(
+        300,
+        Math.max(20, Number(req.query.per_channel) || config.discordShowSnapshotPerChannel || 120)
+      );
+      const fromMs = Date.now() - days * 86400000;
+      const channels = await store.listDiscordChannelsByGuild(guildId);
+      const channelIds = channels
+        .map((c) => String(c.channel_id ?? c.channelId ?? "").trim())
+        .filter(Boolean);
+      /** @type {Record<string, Record<string, unknown>[]>} */
+      const byChannel = {};
+      const concurrency = 6;
+      for (let i = 0; i < channelIds.length; i += concurrency) {
+        const batch = channelIds.slice(i, i + concurrency);
+        await Promise.all(
+          batch.map(async (channelId) => {
+            const rows = await store.listRecentMessages(
+              perChannel,
+              { channelId, guildId, order: "desc", fromMs },
+              { includeRaw: true }
+            );
+            byChannel[channelId] = discordMessageRowsForClient(rows).reverse();
+          })
+        );
+      }
+      res.json({
+        ok: true,
+        guildId,
+        fromMs,
+        days,
+        perChannel,
+        channelCount: channelIds.length,
+        byChannel,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }

@@ -79,6 +79,7 @@ from oi_mornitor.telegram_push_toggles import (
 from oi_mornitor.main_card_policy import main_card_equity_symbols, main_card_intervals_for_symbol
 from oi_mornitor.notify_telegram import (
     send_candle_card_telegram_async,
+    send_ma144_main_card_telegram_async,
     send_main_card_telegram_async,
     send_pattern_oi_telegram_async,
     send_structure_card_telegram_async,
@@ -1356,6 +1357,26 @@ class PatternMonitorEngine:
                 logger.warning("形态/结构卡片扫描失败: %s", exc)
 
         try:
+            ma144_alerts = await asyncio.wait_for(
+                self._scan_ma144_main_cards(
+                    session,
+                    base_url=base_url,
+                    klines_map=klines_map,
+                    watchlist=watchlist,
+                    pool_rows=self._last_pool_rows,
+                    scan_ts=self._last_scan_ts,
+                ),
+                timeout=90,
+            )
+            if ma144_alerts:
+                self._last_alerts = ma144_alerts + self._last_alerts
+                alerts = self._last_alerts
+        except asyncio.TimeoutError:
+            logger.warning("144均线形态 MAIN 扫描超时（90s），跳过")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("144均线形态 MAIN 扫描失败: %s", exc)
+
+        try:
             from oi_mornitor.config import MAIN_CARD_INTERVALS
             from oi_mornitor.notify_telegram import send_volume_price_card_telegram_async
             from oi_mornitor.pattern_alert_ticker import record_ticker_from_alerts
@@ -1878,6 +1899,158 @@ class PatternMonitorEngine:
         for item in results:
             if isinstance(item, Exception):
                 logger.debug("形态/结构卡片单任务异常: %s", item)
+                continue
+            if item:
+                alerts.extend(item)
+        return alerts
+
+    async def _scan_ma144_main_cards(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        base_url: str,
+        klines_map: dict[str, list],
+        watchlist: list[Any],
+        pool_rows: list[dict[str, Any]] | None = None,
+        scan_ts: float,
+    ) -> list[dict[str, Any]]:
+        """144 均线附近射击之星/倒锤子 → MAIN_CARD_TELEGRAM_CHAT_ID。"""
+        from oi_mornitor.ma144_main_policy import ma144_intervals_for_symbol
+        from oi_mornitor.ma144_reversal_config import is_ma144_main_enabled
+        from oi_mornitor.ma144_reversal_signals import find_last_closed_ma144_reversal_hits
+
+        if not is_ma144_main_enabled():
+            return []
+
+        majors = {s.upper() for s in CANDLE_CARD_MAJOR_SYMBOLS}
+        rows = pool_rows if pool_rows is not None else self._last_pool_rows
+        alt_flow = pick_candle_card_alt_flow_symbols(rows or [], majors=majors)
+        alt_gainers = pick_candle_card_alt_gainer_symbols(rows or [], majors=majors)
+        if not alt_flow and watchlist:
+            alt_flow = [
+                str(w.symbol).upper()
+                for w in watchlist
+                if str(w.symbol).upper() not in majors
+            ][: CANDLE_CARD_ALT_TOP_N * 2]
+
+        symbols = sorted(
+            set(majors)
+            | set(alt_flow)
+            | set(alt_gainers)
+            | set(main_card_equity_symbols())
+        )
+        jobs: list[tuple[str, str]] = []
+        seen_jobs: set[tuple[str, str]] = set()
+        for sym in symbols:
+            for iv in ma144_intervals_for_symbol(sym):
+                key = (sym, iv)
+                if key in seen_jobs:
+                    continue
+                seen_jobs.add(key)
+                jobs.append(key)
+
+        if not jobs:
+            return []
+
+        now = time.time()
+        now_ms = int(now * 1000)
+        sem = asyncio.Semaphore(max(4, min(OI_OI_BATCH_CONCURRENCY, 10)))
+        fetch_limit = min(max(180, PATTERN_KLINE_LIMIT), PATTERN_CHART_MAX_LIMIT)
+
+        async def _klines_for(sym: str, iv: str) -> list:
+            key = (sym, iv)
+            cached = self._card_kline_cache.get(key)
+            refresh = CANDLE_CARD_REFRESH_SEC.get(iv, 180)
+            if cached and (now - cached[0]) < refresh and cached[1]:
+                return cached[1]
+            async with sem:
+                rows_k = await fetch_pattern_klines(
+                    session,
+                    base_url=base_url,
+                    symbol=sym,
+                    interval=iv,
+                    limit=fetch_limit,
+                )
+            if rows_k:
+                self._card_kline_cache[key] = (now, rows_k)
+            return rows_k or []
+
+        async def _one(sym: str, iv: str) -> list[dict[str, Any]]:
+            if is_disabled_pattern_interval(iv):
+                return []
+            klines = await _klines_for(sym, iv)
+            if not klines or len(klines) < 160:
+                return []
+            try:
+                df = enrich_indicators(klines_to_df(klines))
+            except Exception:  # noqa: BLE001
+                return []
+            if df.empty:
+                return []
+
+            try:
+                hits = find_last_closed_ma144_reversal_hits(df, now_ms=now_ms)
+            except Exception:  # noqa: BLE001
+                return []
+
+            out: list[dict[str, Any]] = []
+            for hit in hits:
+                close_ts = int(hit["time"])
+                kind = str(hit.get("kind") or "")
+                dedupe = f"{sym.upper()}:{iv}:ma144:{kind}:{close_ts}"
+                if self._card_push_claimed(dedupe):
+                    continue
+                side = str(hit.get("side") or "")
+                if self._card_emit_throttled(sym, iv, side, close_ts):
+                    continue
+                type_label = str(hit.get("type_label") or kind)
+                alert = {
+                    "symbol": sym,
+                    "type": "ma144_candle_card",
+                    "interval": iv,
+                    "status": "MA144_CANDLE",
+                    "status_label": f"144均线 · {type_label}",
+                    "signal_kind": kind,
+                    "kind": kind,
+                    "side": side,
+                    "type_label": type_label,
+                    "signal_text": type_label,
+                    "ema144": hit.get("ema144"),
+                    "ma144_vol_bars": hit.get("ma144_vol_bars"),
+                    "bb_mid": hit.get("bb_mid"),
+                    "prior_high": hit.get("prior_high"),
+                    "prior_low": hit.get("prior_low"),
+                    "vol_ratio": hit.get("vol_ratio"),
+                    "price": float(hit.get("close") or hit.get("price") or 0),
+                    "close": float(hit.get("close") or 0),
+                    "high": float(hit.get("high") or 0),
+                    "low": float(hit.get("low") or 0),
+                    "open": float(hit.get("open") or 0),
+                    "kline_open_time": close_ts,
+                    "time": close_ts,
+                    "message": f"144均线 · {type_label} · {iv}",
+                    "scan_ts": scan_ts,
+                    "kline_close_time": close_ts * 1000,
+                }
+                out.append(alert)
+                logger.info("📐 144均线 MAIN %s %s %s @%s", sym, type_label, iv, close_ts)
+                try:
+                    ok = await send_ma144_main_card_telegram_async(alert)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Telegram 144均线 MAIN 失败 %s: %s", sym, exc)
+                    ok = False
+                if ok:
+                    self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
+            return out
+
+        results = await asyncio.gather(
+            *[_one(s, iv) for s, iv in jobs],
+            return_exceptions=True,
+        )
+        alerts: list[dict[str, Any]] = []
+        for item in results:
+            if isinstance(item, Exception):
+                logger.debug("144均线 MAIN 单任务异常: %s", item)
                 continue
             if item:
                 alerts.extend(item)

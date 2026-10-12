@@ -15,6 +15,7 @@ import { CoinAvatar } from "../components/CoinAvatar";
 import { MercuHeader } from "../components/MercuHeader";
 import { PatternChartPanel } from "../components/PatternChartPanel";
 import { PatternAlertTicker } from "../components/PatternAlertTicker";
+import { PageBootLoading } from "../components/PageBootLoading";
 import { PotentialDiscoveryPanel } from "../components/PotentialDiscoveryPanel";
 import { CardLifecyclePanel } from "../components/CardLifecyclePanel";
 import { useRadarSSE } from "../hooks/useRadarSSE";
@@ -42,7 +43,7 @@ const MOONSHOT_CLASS: Record<string, string> = {
 };
 
 export const PatternMonitorPage = memo(function PatternMonitorPage() {
-  const { snapshot, online, patchPattern } = useRadarSSE();
+  const { snapshot, online, bootstrapping, patchPattern } = useRadarSSE();
   const [searchParams, setSearchParams] = useSearchParams();
   const pattern = snapshot.pattern;
   const [input, setInput] = useState("");
@@ -353,6 +354,13 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
         onRemoveFocus={(sym) => void removeFocus(sym)}
       />
 
+      <div className="pattern-app-body">
+        {bootstrapping ? (
+          <PageBootLoading
+            message="连接 OI 信号…"
+            hint="首次打开需拉取雷达快照与形态列表，可能需十数秒"
+          />
+        ) : (
       <div className="pattern-layout">
         <aside className="pattern-sidebar panel" data-onboard="oi-sidebar">
           <h2>形态追踪</h2>
@@ -669,6 +677,8 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
             </div>
           )}
         </main>
+      </div>
+        )}
       </div>
 
       <CardLifecyclePanel

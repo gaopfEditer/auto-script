@@ -4,6 +4,7 @@ import { BreakoutToastStack } from "../components/BreakoutToastStack";
 import { GlobalTrendPanel } from "../components/GlobalTrendPanel";
 import { MarketMatrixGrid } from "../components/MarketMatrixGrid";
 import { MercuHeader } from "../components/MercuHeader";
+import { PageBootLoading } from "../components/PageBootLoading";
 import { ToastStack } from "../components/ToastStack";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useSpecialFocus } from "../hooks/useSpecialFocus";
@@ -11,7 +12,7 @@ import type { OiTimeframe } from "../types";
 import { deriveAllLists } from "../utils/deriveLists";
 
 export function RadarPage() {
-  const { snapshot, online } = useRadarSSE();
+  const { snapshot, online, bootstrapping } = useRadarSSE();
   const { symbols: focusSymbols, entries: focusEntries, remove: removeFocus } = useSpecialFocus();
   const [timeframe, setTimeframe] = useState<OiTimeframe>("5m");
   const {
@@ -37,6 +38,13 @@ export function RadarPage() {
         focusEntries={focusEntries}
         onRemoveFocus={(sym) => void removeFocus(sym)}
       />
+      {bootstrapping ? (
+        <PageBootLoading
+          inset={false}
+          message="加载 OI 雷达…"
+          hint="首次打开需连接 SSE 并拉取全池快照，可能需十数秒"
+        />
+      ) : (
       <div className="mercu-body">
         <AlertFeed rows={all} scanTs={scanTs} poolSize={poolSize} thresholds={thresholds} />
         <MarketMatrixGrid
@@ -55,6 +63,7 @@ export function RadarPage() {
           biasTf={timeframe}
         />
       </div>
+      )}
       <ToastStack hot={hot} scanTs={scanTs} />
       <BreakoutToastStack alerts={breakoutAlerts} scanTs={scanTs} />
     </div>

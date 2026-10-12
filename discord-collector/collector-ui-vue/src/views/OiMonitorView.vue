@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import PageLoadingBlock from "../components/PageLoadingBlock.vue";
 
 defineOptions({ name: "OiMonitorView" });
 
@@ -17,6 +18,7 @@ const iframeReady = ref(false);
 let pollTimer = null;
 
 const iframeKey = ref(0);
+const iframeLoading = ref(true);
 
 const iframeSrc = embedUrl;
 
@@ -103,8 +105,17 @@ async function refreshStatus() {
 function forceReloadOiFrame() {
   iframeKey.value++;
   iframeReady.value = false;
+  iframeLoading.value = true;
   void refreshStatus();
 }
+
+function onIframeLoad() {
+  iframeLoading.value = false;
+}
+
+watch(iframeKey, () => {
+  iframeLoading.value = true;
+});
 
 watch(
   () => String(route.query.symbol ?? "").trim().toUpperCase(),
@@ -131,7 +142,12 @@ onUnmounted(() => {
       <div class="oi-card">
         <h2>OI Monitor</h2>
         <p class="lead">模块已切换；等待 OI 后端就绪后自动嵌入。</p>
-        <p v-if="loading" class="muted">探测中…</p>
+        <PageLoadingBlock
+          v-if="loading"
+          :overlay="false"
+          message="连接 OI 服务…"
+          hint="正在探测 collect:ui 与 OI 后端（8765）"
+        />
         <p v-else class="warn">未激活{{ error ? `：${error}` : "" }}</p>
         <p v-if="hint" class="hint">{{ hint }}</p>
         <ol>
@@ -147,6 +163,11 @@ onUnmounted(() => {
       </div>
     </div>
     <div v-else class="oi-frame-wrap">
+      <PageLoadingBlock
+        v-if="iframeLoading"
+        message="加载 OI 信号页…"
+        hint="首次打开需下载脚本并连接雷达快照，可能需十数秒"
+      />
       <button
         type="button"
         class="oi-reload"
@@ -161,6 +182,7 @@ onUnmounted(() => {
         :src="iframeSrc"
         title="OI Monitor"
         allow="clipboard-read; clipboard-write"
+        @load="onIframeLoad"
       />
     </div>
   </div>
@@ -177,6 +199,10 @@ onUnmounted(() => {
   position: relative;
   height: 100%;
   min-height: 0;
+}
+.oi-gate .oi-card {
+  position: relative;
+  min-height: 12rem;
 }
 .oi-frame {
   display: block;

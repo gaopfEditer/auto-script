@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
+import PageLoadingBlock from "./PageLoadingBlock.vue";
 import {
   fetchSignalConfig,
   fetchSignalOverview,
@@ -61,6 +62,11 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  /** 父级评估汇总仍在加载 */
+  parentLoading: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 const loading = ref(false);
@@ -71,6 +77,10 @@ const overview = ref(
 const selectedChannelId = ref("");
 const historyLoading = ref(false);
 const history = ref(/** @type {import("../lib/discordSignalApi.js").SignalCard[]} */ ([]));
+
+const sectionBooting = computed(
+  () => props.parentLoading || loading.value,
+);
 
 const overviewQuery = computed(() => {
   const q = { ...props.listQuery, status: "all" };
@@ -275,6 +285,11 @@ onMounted(async () => {
 
 <template>
   <section class="sov-section">
+    <PageLoadingBlock
+      v-if="sectionBooting"
+      message="加载 Discord 信号频道…"
+      hint="正在拉取各频道发单记录与盈利统计"
+    />
     <header class="sov-section-head">
       <div>
         <h2 class="sov-section-title">{{ useEvalChannels ? "频道盈利明细" : "Discord 信号频道" }}</h2>
@@ -294,7 +309,6 @@ onMounted(async () => {
     </header>
 
     <p v-if="error" class="sov-err">{{ error }}</p>
-    <p v-if="loading" class="sov-wait">加载频道…</p>
 
     <div v-if="channels.length" class="sov-channel-grid">
       <button
@@ -312,6 +326,11 @@ onMounted(async () => {
     <p v-else-if="!loading" class="sov-wait">当前筛选下暂无 Discord 信号频道数据</p>
 
     <div v-if="selectedChannel" class="sov-history">
+      <PageLoadingBlock
+        v-if="historyLoading"
+        message="加载频道信号明细…"
+        hint="历史卡片较多时首次打开会稍慢"
+      />
       <header class="sov-history-head">
         <h3>
           {{ maskChannelName(String(selectedChannel.name ?? "")) }} · 盈利明细
@@ -326,8 +345,9 @@ onMounted(async () => {
         <span class="sov-history-stats">{{ statLine(filteredStats) }}</span>
       </header>
 
-      <p v-if="historyLoading" class="sov-wait">加载历史…</p>
-      <p v-else-if="!enteredHistory.length" class="sov-wait">该筛选条件下暂无已入场信号记录</p>
+      <p v-if="!historyLoading && !enteredHistory.length" class="sov-wait">
+        该筛选条件下暂无已入场信号记录
+      </p>
 
       <div v-else class="sov-table-wrap">
         <table class="sov-table">
@@ -399,9 +419,15 @@ onMounted(async () => {
 
 <style scoped>
 .sov-section {
+  position: relative;
   margin-top: 1.5rem;
   padding-top: 1.25rem;
   border-top: 1px solid #2d3136;
+  min-height: 10rem;
+}
+.sov-history {
+  position: relative;
+  min-height: 6rem;
 }
 .sov-section-head {
   display: flex;

@@ -20,7 +20,7 @@ export async function fetchChannels(guildId) {
 }
 
 /**
- * @param {{ guildId?: string, channelId: string, limit?: number }} q
+ * @param {{ guildId?: string, channelId: string, limit?: number, days?: number }} q
  */
 export async function fetchChannelMessages(q) {
   const params = new URLSearchParams({
@@ -29,9 +29,29 @@ export async function fetchChannelMessages(q) {
     order: "asc",
   });
   if (q.guildId) params.set("guild_id", q.guildId);
+  if (q.days) params.set("days", String(q.days));
   const res = await fetch(`/api/discord/messages?${params}`);
   const data = await readOkJson(res, "加载消息失败");
   return /** @type {Array<Record<string, unknown>>} */ (data.rows ?? []);
+}
+
+/**
+ * 服务器 MySQL 内近 N 天各频道消息（Show 首屏预热，不依赖 CDP 当前频道）。
+ * @param {string} guildId
+ * @param {{ days?: number, perChannel?: number }} [opts]
+ */
+export async function fetchGuildMessagesSnapshot(guildId, opts = {}) {
+  const params = new URLSearchParams();
+  if (opts.days) params.set("days", String(opts.days));
+  if (opts.perChannel) params.set("per_channel", String(opts.perChannel));
+  const q = params.toString();
+  const res = await fetch(
+    `/api/discord/guilds/${encodeURIComponent(guildId)}/messages-snapshot${q ? `?${q}` : ""}`
+  );
+  const data = await readOkJson(res, "加载频道消息快照失败");
+  return /** @type {{ fromMs?: number, byChannel?: Record<string, Record<string, unknown>[]> }} */ (
+    data
+  );
 }
 
 /** @param {string} guildId @param {string} channelId */

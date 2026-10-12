@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { RouterLink } from "vue-router";
+import PageLoadingBlock from "../components/PageLoadingBlock.vue";
 import SignalCardRail from "../components/SignalCardRail.vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
 import {
@@ -9,6 +10,7 @@ import {
   fetchChannelMessages,
   fetchCdpActiveChannel,
   fetchDiscordContext,
+  fetchGuildMessagesSnapshot,
 } from "../lib/discordApi.js";
 import { fetchSignalConfig, isSignalChannelId } from "../lib/discordSignalApi.js";
 import { fetchChannelStripStats } from "../lib/cardEvalApi.js";
@@ -30,6 +32,7 @@ import {
   guildRowToClient,
   hasChannelAlias,
   isChannelPinned,
+  attachmentDisplayUrl,
   isImageAttachment,
   isPlaceholderChannelName,
   mergeChannelMessages,
@@ -49,7 +52,10 @@ defineOptions({ name: "ShowView" });
 const SHOW_CACHE_KEY = "discord-collector.show.v1";
 const SHOW_LAYOUT_KEY = "discord-collector.show.layout.v1";
 const SHOW_CACHE_VERSION = 5;
-const MAX_MSGS_PER_CHANNEL = 300;
+const MAX_MSGS_PER_CHANNEL = 400;
+const SHOW_RETENTION_DAYS = 7;
+const SHOW_RETENTION_MS = SHOW_RETENTION_DAYS * 86400000;
+const SHOW_SNAPSHOT_DAYS = 7;
 /** 默认固定服务器（…504831）；guild-rail 隐藏时不可切换 */
 const DEFAULT_SHOW_GUILD_ID = "1444959079209504831";
 const SHOW_GUILD_RAIL = false;
@@ -88,10 +94,13 @@ const renameInputEl = ref(/** @type {HTMLInputElement | null} */ (null));
 
 const loadingGuilds = ref(true);
 const loadingChannels = ref(false);
+const channelMessagesLoading = ref(false);
+const snapshotWarming = ref(false);
 const navPending = ref(false);
 const navError = ref("");
 const cacheBanner = ref("");
 const avatarFailed = reactive(/** @type {Record<string, true>} */ ({}));
+const attachmentImgFailed = reactive(/** @type {Record<string, true>} */ ({}));
 
 const msgsScrollEl = ref(/** @type {HTMLElement | null} */ (null));
 const signalCardRailRef = ref(/** @type {InstanceType<typeof SignalCardRail> | null} */ (null));
@@ -667,13 +676,23 @@ function loadLayoutCache() {
   }
 }
 
+/** @param {Record<string, unknown>[]} arr */
+function pruneMessagesForRetention(arr) {
+  const cut = Date.now() - SHOW_RETENTION_MS;
+  return arr.filter((m) => {
+    const t = Number(m.createdAtMs ?? m.created_at_ms ?? 0);
+    return Number.isFinite(t) && t >= cut;
+  });
+}
+
 function saveCache() {
   try {
     /** @type {Record<string, Record<string, unknown>[]>} */
     const msgs = {};
     for (const [k, arr] of Object.entries(messagesByChannelId)) {
       if (Array.isArray(arr) && arr.length) {
-        msgs[k] = arr.slice(-MAX_MSGS_PER_CHANNEL);
+        const pruned = pruneMessagesForRetention(arr);
+        msgs[k] = pruned.slice(-MAX_MSGS_PER_CHANNEL);
       }
     }
     localStorage.setItem(
@@ -722,7 +741,7 @@ function loadCache() {
     }
     if (o.messagesByChannelId && typeof o.messagesByChannelId === "object") {
       for (const [k, v] of Object.entries(o.messagesByChannelId)) {
-        if (Array.isArray(v)) messagesByChannelId[k] = v;
+        if (Array.isArray(v)) messagesByChannelId[k] = pruneMessagesForRetention(v);
       }
     }
     if (o.unreadCountByChannelId && typeof o.unreadCountByChannelId === "object") {
@@ -818,18 +837,78 @@ async function loadChannelsForGuild(guildId, { force = false } = {}) {
   }
 }
 
-/** @param {ChannelItem} ch */
-async function loadMessagesForChannel(ch) {
-  const rows = await fetchChannelMessages({
-    channelId: ch.channelId,
-    guildId: ch.guildId || selectedGuildId.value,
-    limit: 200,
-  });
-  const prev = messagesByChannelId[ch.channelId] ?? [];
-  messagesByChannelId[ch.channelId] = mergeChannelMessages(prev, rows);
-  scheduleSave();
-  await nextTick();
-  scrollMsgsBottom();
+/** @type {Promise<void> | null} */
+let warmSnapshotInflight = null;
+
+/** @param {string} guildId */
+async function warmGuildMessageSnapshot(guildId) {
+  const gid = String(guildId ?? "").trim();
+  if (!gid) return;
+  if (warmSnapshotInflight) return warmSnapshotInflight;
+  snapshotWarming.value = true;
+  warmSnapshotInflight = (async () => {
+    try {
+      const snap = await fetchGuildMessagesSnapshot(gid, { days: SHOW_SNAPSHOT_DAYS });
+      const byChannel = snap.byChannel ?? {};
+      for (const [cid, rows] of Object.entries(byChannel)) {
+        if (!Array.isArray(rows) || !rows.length) continue;
+        const prev = messagesByChannelId[cid] ?? [];
+        messagesByChannelId[cid] = mergeChannelMessages(prev, rows);
+      }
+      scheduleSave();
+    } catch {
+      /* MySQL 无数据或网络失败时仍可用 WS / 单频道拉取 */
+    } finally {
+      snapshotWarming.value = false;
+      warmSnapshotInflight = null;
+    }
+  })();
+  return warmSnapshotInflight;
+}
+
+/** @param {ChannelItem} ch @param {{ silent?: boolean }} [opts] */
+async function loadMessagesForChannel(ch, opts = {}) {
+  const silent = opts.silent === true;
+  const hadLocal = (messagesByChannelId[ch.channelId] ?? []).length > 0;
+  if (!silent && !hadLocal) channelMessagesLoading.value = true;
+  try {
+    const rows = await fetchChannelMessages({
+      channelId: ch.channelId,
+      guildId: ch.guildId || selectedGuildId.value,
+      limit: 250,
+      days: SHOW_SNAPSHOT_DAYS,
+    });
+    const prev = messagesByChannelId[ch.channelId] ?? [];
+    messagesByChannelId[ch.channelId] = mergeChannelMessages(prev, rows);
+    scheduleSave();
+    await nextTick();
+    scrollMsgsBottom();
+  } finally {
+    if (!silent) channelMessagesLoading.value = false;
+  }
+}
+
+/** @param {Record<string, unknown>} att @param {string} key @param {Event} e */
+function onAttachmentImgError(att, key, e) {
+  const img = /** @type {HTMLImageElement | null} */ (e.target);
+  if (!img) return;
+  const direct = String(att.url ?? "").trim();
+  const proxy = String(att.proxyUrl ?? "").trim();
+  if (proxy && img.src !== direct && direct) {
+    img.src = direct;
+    return;
+  }
+  if (direct && img.src !== proxy && proxy) {
+    img.src = proxy;
+    return;
+  }
+  attachmentImgFailed[key] = true;
+}
+
+/** @param {Record<string, unknown>} att @param {number} i @param {Record<string, unknown>} msg */
+function attachmentImgKey(att, i, msg) {
+  const mid = String(msg.messageId ?? msg.message_id ?? i);
+  return `${mid}-${i}-${attachmentDisplayUrl(att)}`;
 }
 
 /** @param {string} channelId @param {string} [guildId] */
@@ -940,7 +1019,10 @@ async function selectChannel(ch) {
   const now = Date.now();
   const skipDb =
     sameChannel && cached.length > 0 && now - lastDbReloadAt < DB_RELOAD_SAME_CHANNEL_MS;
-  if (skipDb) return;
+  if (skipDb) {
+    void loadMessagesForChannel(ch, { silent: true });
+    return;
+  }
   try {
     await loadMessagesForChannel(ch);
     lastDbReloadAt = Date.now();
@@ -1319,7 +1401,10 @@ watch(
   saveLayoutNow
 );
 watch(selectedGuildId, (gid) => {
-  if (gid) void loadChannelsForGuild(gid);
+  if (gid) {
+    void loadChannelsForGuild(gid);
+    void warmGuildMessageSnapshot(gid);
+  }
 });
 
 watch(selectedChannel, (ch) => {
@@ -1340,6 +1425,7 @@ onMounted(async () => {
   await reloadGuilds();
   if (selectedGuildId.value) {
     await loadChannelsForGuild(selectedGuildId.value, { force: !hadCache });
+    void warmGuildMessageSnapshot(selectedGuildId.value);
   }
   try {
     const cdp = await fetchCdpActiveChannel();
@@ -1611,7 +1697,16 @@ onUnmounted(() => {
 
       <div v-if="navError" class="kook-nav-alert err">{{ navError }}</div>
 
-      <div ref="msgsScrollEl" class="msg-scroll">
+      <div ref="msgsScrollEl" class="msg-scroll msg-scroll-loadable">
+        <PageLoadingBlock
+          v-if="
+            selectedChannel &&
+            (channelMessagesLoading || snapshotWarming) &&
+            !selectedMessages.length
+          "
+          message="加载频道消息…"
+          hint="从本地库读取近 7 天已采集消息，无需先让 Discord 页签切到该频道"
+        />
         <template v-if="selectedChannel">
           <article
             v-for="g in groupedMessages"
@@ -1646,23 +1741,29 @@ onUnmounted(() => {
                 <div v-if="msgAttachments(g.head).length" class="msg-attachments">
                   <template v-for="(att, i) in msgAttachments(g.head)" :key="`${g.head.messageId ?? g.head.message_id}-${i}`">
                     <a
-                      v-if="isImageAttachment(att)"
-                      :href="att.url"
+                      v-if="isImageAttachment(att) && !attachmentImgFailed[attachmentImgKey(att, i, g.head)]"
+                      :href="attachmentDisplayUrl(att)"
                       target="_blank"
                       rel="noopener noreferrer"
                       class="msg-image-link"
                     >
                       <img
-                        :src="att.url"
+                        :src="attachmentDisplayUrl(att)"
                         :alt="att.filename || '图片'"
                         class="msg-image"
-                        loading="lazy"
+                        loading="eager"
+                        decoding="async"
                         referrerpolicy="no-referrer"
+                        @error="onAttachmentImgError(att, attachmentImgKey(att, i, g.head), $event)"
                       />
                     </a>
+                    <span
+                      v-else-if="isImageAttachment(att)"
+                      class="msg-image-placeholder"
+                    >图片加载失败</span>
                     <a
                       v-else
-                      :href="att.url"
+                      :href="attachmentDisplayUrl(att)"
                       target="_blank"
                       rel="noopener noreferrer"
                       class="msg-file-link"
@@ -1688,23 +1789,29 @@ onUnmounted(() => {
                 <div v-if="msgAttachments(m).length" class="msg-attachments">
                   <template v-for="(att, i) in msgAttachments(m)" :key="`${m.messageId ?? m.message_id}-${i}`">
                     <a
-                      v-if="isImageAttachment(att)"
-                      :href="att.url"
+                      v-if="isImageAttachment(att) && !attachmentImgFailed[attachmentImgKey(att, i, m)]"
+                      :href="attachmentDisplayUrl(att)"
                       target="_blank"
                       rel="noopener noreferrer"
                       class="msg-image-link"
                     >
                       <img
-                        :src="att.url"
+                        :src="attachmentDisplayUrl(att)"
                         :alt="att.filename || '图片'"
                         class="msg-image"
-                        loading="lazy"
+                        loading="eager"
+                        decoding="async"
                         referrerpolicy="no-referrer"
+                        @error="onAttachmentImgError(att, attachmentImgKey(att, i, m), $event)"
                       />
                     </a>
+                    <span
+                      v-else-if="isImageAttachment(att)"
+                      class="msg-image-placeholder"
+                    >图片加载失败</span>
                     <a
                       v-else
-                      :href="att.url"
+                      :href="attachmentDisplayUrl(att)"
                       target="_blank"
                       rel="noopener noreferrer"
                       class="msg-file-link"
@@ -1718,7 +1825,12 @@ onUnmounted(() => {
               </div>
             </div>
           </article>
-          <p v-if="!selectedMessages.length" class="kook-wait">该频道暂无已采集消息。</p>
+          <p
+            v-if="!selectedMessages.length && !channelMessagesLoading && !snapshotWarming"
+            class="kook-wait"
+          >
+            该频道近 7 天暂无已入库消息；Gateway/CDP 采集到新消息后会自动出现。
+          </p>
         </template>
         <p v-else class="kook-wait">选择左侧频道查看消息（含头像、昵称、时间）。</p>
       </div>

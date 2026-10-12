@@ -300,6 +300,38 @@ def _send_card_text_to_chat(alert: dict[str, Any], text: str, chat_id: str) -> b
     return ok
 
 
+def format_ma144_candle_message(alert: dict[str, Any]) -> str:
+    """144 均线附近射击之星 / 倒锤子（MAIN 专属文案）。"""
+    body = format_candle_card_message(alert)
+    ema = alert.get("ema144")
+    vol_bars = alert.get("ma144_vol_bars")
+    extra: list[str] = ["📐 144均线附近反转"]
+    if ema is not None:
+        extra.append(f"📏 EMA144: {_fmt_price(ema)}")
+    if vol_bars is not None:
+        from oi_mornitor.ma144_reversal_config import MA144_VOL_LOOKBACK
+
+        extra.append(
+            f"📊 前{MA144_VOL_LOOKBACK}根均线上放量: {int(vol_bars)} 根"
+        )
+    return "\n".join(extra) + "\n" + body
+
+
+def send_ma144_main_card_telegram(alert: dict[str, Any]) -> bool:
+    """144 均线形态 → MAIN 群（不受 MAIN 白名单限制）。"""
+    from oi_mornitor.ma144_reversal_config import is_ma144_main_enabled
+    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    if not is_ma144_main_enabled():
+        return False
+    if str(alert.get("type") or "") != "ma144_candle_card":
+        return False
+    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
+        return False
+    text = format_ma144_candle_message(alert)
+    return _send_card_text_to_chat(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
+
+
 def send_main_card_telegram(alert: dict[str, Any]) -> bool:
     """仅推 MAIN 群（形态群未发或只满足 MAIN 量能口径时）。"""
     from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
@@ -463,6 +495,10 @@ async def send_candle_card_telegram_async(alert: dict[str, Any]) -> bool:
 
 async def send_main_card_telegram_async(alert: dict[str, Any]) -> bool:
     return await asyncio.to_thread(send_main_card_telegram, alert)
+
+
+async def send_ma144_main_card_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_ma144_main_card_telegram, alert)
 
 
 async def send_structure_card_telegram_async(alert: dict[str, Any]) -> bool:

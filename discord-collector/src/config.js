@@ -92,6 +92,15 @@ export const config = {
     60_000,
     Number(process.env.COLLECTOR_CDP_CHANNEL_ROTATE_INTERVAL_MS) || 900_000
   ),
+  /** Show 页从 MySQL 批量拉取各频道近 N 天消息（无需先 CDP 点进频道） */
+  discordShowSnapshotDays: Math.min(
+    14,
+    Math.max(1, Number(process.env.DISCORD_SHOW_SNAPSHOT_DAYS) || 7)
+  ),
+  discordShowSnapshotPerChannel: Math.min(
+    300,
+    Math.max(20, Number(process.env.DISCORD_SHOW_SNAPSHOT_PER_CHANNEL) || 120)
+  ),
   /** @deprecated 已改为每次只切 1 频道，dwell 不再使用；保留以免旧配置报错 */
   cdpChannelRotateDwellMs: Math.max(
     3_000,

@@ -1177,6 +1177,63 @@ button {
 /* ── Pattern Monitor ── */
 .pattern-app .mercu-body { display: none; }
 
+.pattern-app-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-boot-loading {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 2rem 1.5rem;
+  text-align: center;
+  background: var(--bg);
+}
+
+.page-boot-loading-inset {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: rgba(10, 10, 10, 0.92);
+  backdrop-filter: blur(4px);
+}
+
+.page-boot-loading-spinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid rgba(184, 255, 60, 0.2);
+  border-top-color: var(--accent);
+  animation: page-boot-spin 0.75s linear infinite;
+}
+
+.page-boot-loading-msg {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.page-boot-loading-hint {
+  margin: 0;
+  max-width: 22rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+@keyframes page-boot-spin {
+  to { transform: rotate(360deg); }
+}
+
 .pattern-layout {
   flex: 1;
   min-height: 0;

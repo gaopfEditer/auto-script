@@ -38,6 +38,8 @@ def alert_push_dedupe_key(alert: dict[str, Any]) -> str:
         return f"{sym}:{iv}:struct:{kind}:{ts}"
     if card_type == "candle_pattern_card":
         return f"{sym}:{iv}:{kind}:{ts}"
+    if card_type == "ma144_candle_card":
+        return f"{sym}:{iv}:ma144:{kind}:{ts}"
     if card_type == "volume_price_card":
         vp_kind = str(alert.get("vp_type") or kind or "vp")
         return f"{sym}:{iv}:vp:{vp_kind}:{label}:{ts}"
