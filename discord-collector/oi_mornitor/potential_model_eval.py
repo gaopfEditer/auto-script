@@ -82,8 +82,11 @@ class ModelResult:
     hard_fail: bool = False
     label: str = ""
     end_signals: list[str] = field(default_factory=list)
+    signal_time_ms: int | None = None
 
     def to_hit_dict(self) -> dict[str, Any]:
+        from oi_mornitor.potential_features import ms_to_utc8_str
+
         return {
             "id": self.model_id,
             "label": self.label or MODEL_LABELS.get(self.model_id, self.model_id),
@@ -95,6 +98,9 @@ class ModelResult:
             "end_signals": self.end_signals,
             "metrics": self.metrics,
             "tf": self.tf,
+            "signal_tf": self.tf,
+            "signal_time_ms": self.signal_time_ms,
+            "signal_time_utc8": ms_to_utc8_str(self.signal_time_ms),
             "hard_fail": self.hard_fail,
         }
 
@@ -112,6 +118,12 @@ def _miss(model_id: str, tf: str = "1h") -> ModelResult:
         label=MODEL_LABELS.get(model_id, model_id),
         end_signals=END_SIGNALS.get(model_id, []),
     )
+
+
+def _signal_ms(df: pd.DataFrame) -> int | None:
+    from oi_mornitor.potential_features import last_closed_bar_open_ms
+
+    return last_closed_bar_open_ms(df)
 
 
 def _bars_for_days(tf: str, days: float) -> int:
@@ -263,6 +275,7 @@ def eval_m1_quiet_oi(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelResult:
             "range_width_60": round(rw60, 4) if rw60 is not None else None,
         },
         tf=tf,
+        signal_time_ms=_signal_ms(df),
         label=MODEL_LABELS[mid],
         end_signals=END_SIGNALS[mid],
     )
@@ -369,6 +382,7 @@ def eval_m2_short_squeeze(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelRe
             "spot_premium": feed.spot_premium,
         },
         tf=tf,
+        signal_time_ms=_signal_ms(df),
         label=MODEL_LABELS[mid],
         end_signals=END_SIGNALS[mid],
     )
@@ -463,6 +477,7 @@ def eval_m3_relative_strength(feed: SymbolFeed, cfg_root: dict[str, Any]) -> Mod
             "volume_ratio": vr,
         },
         tf=tf,
+        signal_time_ms=_signal_ms(df),
         label=MODEL_LABELS[mid],
         end_signals=END_SIGNALS[mid],
     )
@@ -569,6 +584,7 @@ def eval_m4_wyckoff_spring(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelR
             "spring_reclaim_bars": reclaim_bars,
         },
         tf=tf,
+        signal_time_ms=_signal_ms(df),
         hard_fail=hard_fail,
         label=MODEL_LABELS[mid],
         end_signals=END_SIGNALS[mid],
@@ -654,6 +670,7 @@ def eval_m5_liquidity_sweep(feed: SymbolFeed, cfg_root: dict[str, Any]) -> Model
             "reclaim": C_sfp,
         },
         tf=tf,
+        signal_time_ms=_signal_ms(df),
         hard_fail=hard_fail,
         label=MODEL_LABELS[mid],
         end_signals=END_SIGNALS[mid],

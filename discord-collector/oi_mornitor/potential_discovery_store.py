@@ -31,6 +31,11 @@ def _model_result_from_hit(hit: dict[str, Any]) -> ModelResult | None:
     entry = str(hit.get("entry") or "")
     if not entry and isinstance(reasons, list) and reasons:
         entry = str(reasons[0] or "")
+    st_ms = hit.get("signal_time_ms")
+    try:
+        signal_time_ms = int(st_ms) if st_ms is not None else None
+    except (TypeError, ValueError):
+        signal_time_ms = None
     return ModelResult(
         model_id=mid,
         hit=True,
@@ -39,7 +44,8 @@ def _model_result_from_hit(hit: dict[str, Any]) -> ModelResult | None:
         entry=entry,
         exit=str(hit.get("exit") or ""),
         metrics=dict(hit.get("metrics") or {}) if isinstance(hit.get("metrics"), dict) else {},
-        tf=str(hit.get("tf") or "1h"),
+        tf=str(hit.get("signal_tf") or hit.get("tf") or "1h"),
+        signal_time_ms=signal_time_ms,
         hard_fail=bool(hit.get("hard_fail")),
         label=str(hit.get("label") or MODEL_LABELS.get(mid, mid)),
         end_signals=[str(x) for x in (hit.get("end_signals") or []) if x],
@@ -262,6 +268,10 @@ def _candidate_to_item(c: dict[str, Any]) -> dict[str, Any]:
         "entry": c.get("entry"),
         "exit": c.get("exit"),
         "tf": c.get("tf"),
+        "signal_tf": c.get("signal_tf") or c.get("tf"),
+        "signal_time_ms": c.get("signal_time_ms"),
+        "signal_time_utc8": c.get("signal_time_utc8"),
+        "scan_at_utc8": c.get("scan_at_utc8") or c.get("ts_utc8"),
         "models": hits,
         "top_model": c.get("top_model"),
         "metrics": c.get("metrics"),

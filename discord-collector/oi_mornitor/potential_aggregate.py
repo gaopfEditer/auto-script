@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from oi_mornitor.potential_features import ms_to_utc8_str
 from oi_mornitor.potential_model_eval import ModelResult
 from oi_mornitor.potential_models_config import load_potential_config
 
@@ -72,7 +73,11 @@ def aggregate_candidate(
         "exit": exit_txt,
         "metrics": metrics,
         "tf": best.tf,
+        "signal_tf": best.tf,
+        "signal_time_ms": best.signal_time_ms,
+        "signal_time_utc8": ms_to_utc8_str(best.signal_time_ms),
         "ts_utc8": now_utc8_str(),
+        "scan_at_utc8": now_utc8_str(),
         "notes": notes,
         "top_model": best.model_id,
     }

@@ -87,6 +87,34 @@ class PotentialDiscoverySpecTests(unittest.TestCase):
             )
         self.assertIsNone(cand)
 
+    def test_aggregate_signal_time_fields(self) -> None:
+        ms = 1_700_000_000_000
+        cand = aggregate_candidate(
+            "Z",
+            [
+                ModelResult(
+                    "short_squeeze",
+                    True,
+                    60,
+                    "primed",
+                    "test",
+                    "",
+                    {},
+                    "1h",
+                    signal_time_ms=ms,
+                )
+            ],
+            mcap_usd=4e7,
+            mcap_tier="t2",
+        )
+        self.assertIsNotNone(cand)
+        assert cand is not None
+        self.assertEqual(cand["signal_tf"], "1h")
+        self.assertEqual(cand["signal_time_ms"], ms)
+        self.assertIsNotNone(cand.get("signal_time_utc8"))
+        hits = cand.get("model_hits") or []
+        self.assertEqual(hits[0].get("signal_tf"), "1h")
+
     def test_soft_export_merges_sub_hit(self) -> None:
         env = {
             "OI_POTENTIAL_SOFT_EXPORT_MIN": "22",

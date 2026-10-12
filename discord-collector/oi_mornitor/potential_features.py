@@ -17,6 +17,28 @@ def closed_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.iloc[:-1].copy()
 
 
+def last_closed_bar_open_ms(df: pd.DataFrame) -> int | None:
+    """最近一根已收盘 K 的 open_time（毫秒）。"""
+    if df is None or df.empty or "open_time" not in df.columns:
+        return None
+    try:
+        return int(df.iloc[-1]["open_time"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def ms_to_utc8_str(ms: int | None) -> str | None:
+    if ms is None:
+        return None
+    from datetime import datetime, timedelta, timezone
+
+    tz = timezone(timedelta(hours=8))
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000.0, tz=tz).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return None
+
+
 def _col(df: pd.DataFrame, name: str) -> pd.Series:
     if name not in df.columns:
         return pd.Series(dtype=float)

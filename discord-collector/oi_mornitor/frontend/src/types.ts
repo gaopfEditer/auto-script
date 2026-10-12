@@ -428,6 +428,12 @@ export interface PotentialModelHit {
   exit?: string;
   end_signals?: string[];
   tf?: string;
+  /** 判定所依据 K 线周期 */
+  signal_tf?: string;
+  /** 最近一根已收盘 K 的 open_time（毫秒） */
+  signal_time_ms?: number | null;
+  /** 北京时间 YYYY-MM-DD HH:mm */
+  signal_time_utc8?: string | null;
   metrics?: Record<string, unknown>;
 }
 
@@ -441,6 +447,11 @@ export interface PotentialDiscoveryItem {
   entry?: string;
   exit?: string;
   tf?: string;
+  signal_tf?: string;
+  signal_time_ms?: number | null;
+  signal_time_utc8?: string | null;
+  /** 列表合并/扫描时间（非 K 线产生时刻） */
+  scan_at_utc8?: string | null;
   notes?: string;
   metrics?: Record<string, unknown>;
   models: PotentialModelHit[];

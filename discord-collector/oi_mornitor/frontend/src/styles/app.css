@@ -2626,6 +2626,48 @@ button {
   margin-bottom: 6px;
 }
 
+.potential-signal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: #9ecbff;
+  margin: 4px 0 8px;
+}
+
+.potential-signal-meta-label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.potential-signal-meta time {
+  font-variant-numeric: tabular-nums;
+  color: #c8daf0;
+}
+
+.potential-chip-signal {
+  display: block;
+  font-size: 0.58rem;
+  color: var(--muted);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.potential-signal-popover-meta {
+  font-size: 0.72rem;
+  color: #9ecbff;
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+
+.potential-signal-popover-meta strong {
+  color: #fff;
+  font-weight: 600;
+}
+
 .potential-model-chips {
   display: flex;
   flex-wrap: wrap;

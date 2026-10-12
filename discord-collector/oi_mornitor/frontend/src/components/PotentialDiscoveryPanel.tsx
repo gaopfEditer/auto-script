@@ -228,16 +228,37 @@ function PotentialCard({
         {item.stage ? (
           <span className={`potential-stage stage-${item.stage}`}>{item.stage}</span>
         ) : null}
+        {item.signal_tf || item.signal_time_utc8 ? (
+          <p className="potential-signal-meta" title="判定依据：该周期最近一根已收盘 K 的开盘时刻">
+            <span className="potential-signal-meta-label">信号</span>
+            {item.signal_tf ? <strong>{item.signal_tf}</strong> : null}
+            {item.signal_time_utc8 ? (
+              <time dateTime={String(item.signal_time_ms ?? "")}>
+                {item.signal_tf ? " · " : ""}
+                {item.signal_time_utc8}
+              </time>
+            ) : null}
+          </p>
+        ) : null}
         <div className="potential-model-chips">
           {(item.models ?? []).map((m) => (
             <ModelPlaybookTooltip
               key={m.id}
               catalog={catalogById.get(m.id)}
               stage={m.stage}
+              signalTf={m.signal_tf || m.tf}
+              signalTimeUtc8={m.signal_time_utc8}
             >
               <span className={`potential-model-chip model-${m.id}`}>
                 {m.label}
                 <em>{m.score}</em>
+                {m.signal_tf || m.signal_time_utc8 ? (
+                  <small className="potential-chip-signal">
+                    {[m.signal_tf || m.tf, m.signal_time_utc8?.slice(5, 16)]
+                      .filter(Boolean)
+                      .join(" ")}
+                  </small>
+                ) : null}
               </span>
             </ModelPlaybookTooltip>
           ))}
