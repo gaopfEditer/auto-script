@@ -488,6 +488,22 @@ function countDiscordPagesInBrowser(br, mounted = []) {
   return n;
 }
 
+/**
+ * @param {{ page?: import('playwright').Page }[]} mounted
+ */
+function hasLiveDiscordMountedPage(mounted) {
+  for (const entry of mounted) {
+    const page = entry?.page;
+    if (!page) continue;
+    try {
+      if (!page.isClosed() && isDiscordPageUrl(page.url())) return true;
+    } catch {
+      /* disposed */
+    }
+  }
+  return false;
+}
+
 /** Document / API / WS 升级请求，便于判断页面是否真的在拉接口 */
 const NET_TRACE_RESOURCE_TYPES = new Set([
   "Document",
@@ -983,6 +999,15 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
     const rawUtf8 = typeof parsedJson === "object" && parsedJson != null ? "" : String(parsedJson ?? "");
     if (isBlockedWsPayload(parsedJson, rawUtf8)) return;
 
+    const wsUrl = wsMeta.urlByRequestId.get(ctx.requestId) ?? "";
+    const pageUrl = getPageUrl() || "";
+    const isGatewayFrame =
+      isDiscordGatewayPayload(parsedJson) ||
+      wsMeta.gatewayRequestIds.has(ctx.requestId) ||
+      isDiscordGatewayUrl(wsUrl) ||
+      isDiscordGatewayZlibStreamUrl(wsUrl);
+    if (!isGatewayFrame) return;
+
     const gatewayLine = formatGatewayRealtimeLog(parsedJson);
     if (gatewayLine && config.gatewayMessageLog) {
       log.info(gatewayLine);
@@ -1203,6 +1228,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *
  * @param {{
  *   startUrl: string,
+ *   cdpDiscordUrl?: string,
  *   cdpConnectUrl?: string,
  *   pageReloadIntervalMs?: number,
  *   cdpAutoGoto?: boolean,
@@ -1280,6 +1306,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
       wsMeta.zlibProbeFrames.clear();
       void cdp.detach().catch(() => {});
       log.info("页面关闭，已释放 CDP/zlib 会话");
+      if (connectUrl) scheduleEnsureDiscordTab("page_closed");
     });
     log.info(`已挂载 Network.webSocketFrameReceived: ${page.url() || "(about:blank)"}`);
   }
@@ -1349,9 +1376,9 @@ export async function startCdpWebSocketMonitor(opts, log) {
           throw new Error(msg);
         }
         if (discordTabCount > 0) {
-          const msg = `未找到可操作的 Discord 标签，但 CDP 可见 ${discordTabCount} 个 discord.com 页（Chrome ${tabCount} 个标签；${tabs}）。请手动刷新 Discord 标签或关闭多余页后重试。`;
-          log.warn(`CDP ${msg}`);
-          throw new Error(msg);
+          log.warn(
+            `CDP 未找到可操作的 Discord 标签，但可见 ${discordTabCount} 个 discord.com 页（可能已关或 Playwright 未映射；Chrome ${tabCount} 个标签；${tabs}）— 将新建 1 个标签恢复采集`
+          );
         }
         page = await openNewDiscordTab(br, url);
         reusedTab = false;
@@ -1449,8 +1476,15 @@ export async function startCdpWebSocketMonitor(opts, log) {
   let attachRescanTimer = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let reconnectTimer = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let ensureDiscordTimer = null;
   let reconnectAttempt = 0;
   let reconnectInFlight = false;
+
+  function cdpKeepDiscordUrl() {
+    const u = String(opts.cdpDiscordUrl ?? opts.startUrl ?? "").trim();
+    return u;
+  }
 
   function clearAttachTimers() {
     if (reloadTimer) {
@@ -1461,6 +1495,40 @@ export async function startCdpWebSocketMonitor(opts, log) {
       clearInterval(attachRescanTimer);
       attachRescanTimer = null;
     }
+    if (ensureDiscordTimer) {
+      clearTimeout(ensureDiscordTimer);
+      ensureDiscordTimer = null;
+    }
+  }
+
+  /** Discord 标签被关或 CDP 无可用页时，debounce 后自动 newPage + goto 保活频道 */
+  function scheduleEnsureDiscordTab(reason = "missing_tab") {
+    if (sessionClosed || !connectUrl || opts.cdpAutoGoto === false) return;
+    const keepUrl = cdpKeepDiscordUrl();
+    if (!keepUrl || !/discord\.com\//i.test(keepUrl)) return;
+    if (ensureDiscordTimer) clearTimeout(ensureDiscordTimer);
+    ensureDiscordTimer = setTimeout(() => {
+      ensureDiscordTimer = null;
+      void (async () => {
+        try {
+          if (sessionClosed || !browser?.isConnected?.()) return;
+          if (hasLiveDiscordMountedPage(mounted)) return;
+          log.info(
+            `CDP 检测到无可用 Discord 标签（${reason}），自动打开 ${shortenUrl(keepUrl, 200)}`
+          );
+          opts.diagnosticSink?.({
+            kind: "cdp_discord_tab_recovery",
+            reason,
+            targetUrl: keepUrl,
+          });
+          await openOrRefreshDiscordUrl(browser, keepUrl, { forceReload: false });
+        } catch (e) {
+          log.warn(
+            `CDP 自动恢复 Discord 标签失败: ${/** @type {Error} */ (e).message}`
+          );
+        }
+      })();
+    }, 2000);
   }
 
   async function detachMountedSessions() {
@@ -1512,25 +1580,29 @@ export async function startCdpWebSocketMonitor(opts, log) {
             );
           }
         }
+        if (!hasLiveDiscordMountedPage(mounted)) {
+          scheduleEnsureDiscordTab("rescan_no_discord");
+        }
       } catch {
         /* ignore */
       }
     }, 15_000);
 
+    const keepUrlForLog = cdpKeepDiscordUrl();
     log.info(
-      `已在 ${mounted.length} 个标签页上启用监听${isReconnect ? "（重连）" : ""}。保活频道: ${opts.startUrl || "（未配置）"}`
+      `已在 ${mounted.length} 个标签页上启用监听${isReconnect ? "（重连）" : ""}。保活频道: ${keepUrlForLog || "（未配置）"}`
     );
     opts.diagnosticSink?.({
       kind: isReconnect ? "cdp_reconnected" : "cdp_attached",
       mode: "connectOverCDP",
       connectUrl,
       tabCount: mounted.length,
-      hintStartUrl: opts.startUrl,
+      hintStartUrl: keepUrlForLog,
       attempt: isReconnect ? attempt : 0,
     });
 
     const autoGoto = opts.cdpAutoGoto !== false;
-    const keepUrl = String(opts.startUrl || "").trim();
+    const keepUrl = keepUrlForLog;
     if (autoGoto && keepUrl && /discord\.com\//i.test(keepUrl)) {
       try {
         // 重连时强制刷新，重建 Discord Gateway；首次仅确保在目标频道
@@ -1828,6 +1900,106 @@ export async function startCdpWebSocketMonitor(opts, log) {
         });
         return { ok: false, error: err.message };
       }
+    },
+    /**
+     * Show 向上翻页：确保在目标频道后，滚动 Discord 消息列表以触发历史 REST 请求。
+     * @param {string} guildId
+     * @param {string} channelId
+     * @param {{ beforeMessageId?: string, clientTraceId?: string }} [traceCtx]
+     */
+    async scrollDiscordChannelHistory(guildId, channelId, traceCtx) {
+      const tc = traceCtx && typeof traceCtx === "object" ? traceCtx : {};
+      const clientTraceId =
+        typeof tc.clientTraceId === "string" && tc.clientTraceId.trim() ? tc.clientTraceId.trim() : undefined;
+      const beforeMessageId =
+        typeof tc.beforeMessageId === "string" && tc.beforeMessageId.trim()
+          ? tc.beforeMessageId.trim()
+          : undefined;
+
+      const nav = await this.navigateDiscordChannel(guildId, channelId, { clientTraceId });
+      if (!nav.ok && !nav.skipped) {
+        return nav;
+      }
+      if (!browser?.isConnected?.()) {
+        return { ok: false, error: "CDP 浏览器未连接" };
+      }
+
+      const g = String(guildId ?? "").trim();
+      const c = String(channelId ?? "").trim();
+      const targetUrl = discordChannelUrl(g, c);
+      let picked = pickExistingDiscordPage(browser, targetUrl, { mounted });
+      if (!picked) {
+        picked = await pickExistingDiscordPageAsync(browser, targetUrl, { mounted, log });
+      }
+      if (!picked?.page) {
+        return { ok: false, error: "未找到可滚动的 Discord 标签" };
+      }
+
+      const page = picked.page;
+      await page.bringToFront().catch(() => {});
+
+      if (beforeMessageId) {
+        await page
+          .evaluate((mid) => {
+            const suffix = `-${mid}`;
+            const nodes = document.querySelectorAll('[id^="chat-messages-"]');
+            for (const node of nodes) {
+              if (node.id.endsWith(suffix) && typeof node.scrollIntoView === "function") {
+                node.scrollIntoView({ block: "start" });
+                break;
+              }
+            }
+          }, beforeMessageId)
+          .catch(() => {});
+        await page.waitForTimeout(350).catch(() => {});
+      }
+
+      /** @type {{ ok?: boolean, reason?: string, before?: number, after?: number } | null} */
+      let lastScroll = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        lastScroll = await page.evaluate(() => {
+          /** @type {HTMLElement | null} */
+          let scroller = null;
+          const list = document.querySelector('[data-list-id="chat-messages"]');
+          if (list?.parentElement instanceof HTMLElement) {
+            scroller = list.parentElement;
+          }
+          if (!scroller) {
+            const main = document.querySelector("main");
+            if (main) {
+              scroller = main.querySelector('div[class*="scroller"][class*="auto"]');
+            }
+          }
+          if (!scroller) {
+            return { ok: false, reason: "no_scroller" };
+          }
+          const prevTop = scroller.scrollTop;
+          const step = Math.max(480, Math.floor(scroller.clientHeight * 0.9));
+          scroller.scrollTop = Math.max(0, prevTop - step);
+          if (scroller.scrollTop === prevTop && prevTop <= 2) {
+            scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -900, bubbles: true, cancelable: true }));
+          }
+          return { ok: true, before: prevTop, after: scroller.scrollTop };
+        });
+        if (lastScroll?.ok && Number(lastScroll.after) < Number(lastScroll.before)) {
+          break;
+        }
+        await page.waitForTimeout(320).catch(() => {});
+      }
+
+      await page.mouse.wheel(0, -720).catch(() => {});
+      log.info(
+        `[discord-scroll-up] guild=${g} channel=${c}${beforeMessageId ? ` before=${beforeMessageId}` : ""} scroll=${JSON.stringify(lastScroll)}${clientTraceId ? ` trace=${clientTraceId}` : ""}`
+      );
+      opts.diagnosticSink?.({
+        kind: "discord_channel_scroll_up",
+        guildId: g,
+        channelId: c,
+        beforeMessageId,
+        scroll: lastScroll,
+        ...(clientTraceId ? { clientTraceId } : {}),
+      });
+      return { ok: true, scroll: lastScroll, navigated: nav };
     },
     /**
      * 经 Playwright APIRequest 发 Webhook（非页面 fetch，避免 Discord 50067 Invalid request origin）。

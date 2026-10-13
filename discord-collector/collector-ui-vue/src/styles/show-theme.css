@@ -465,6 +465,7 @@
 .msg-group {
   border-radius: 6px;
   margin-bottom: 0.35rem;
+  contain: layout style;
 }
 .msg-group:hover {
   background: rgba(0, 0, 0, 0.2);
@@ -554,6 +555,13 @@
   position: relative;
   min-height: 10rem;
 }
+.msg-older-hint {
+  margin: 0 0 0.5rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+  color: #949ba4;
+  text-align: center;
+}
 
 .msg-image-placeholder {
   display: inline-block;
@@ -605,4 +613,8 @@
 .kook-nav-alert.pending {
   background: rgba(88, 101, 242, 0.15);
   color: #aeb4ff;
+}
+.kook-nav-alert.info {
+  background: rgba(88, 101, 242, 0.1);
+  color: #b5bac1;
 }

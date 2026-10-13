@@ -735,13 +735,18 @@ export async function openStore(cfg, log) {
       where.push("created_at_ms >= ?");
       params.push(fromMs);
     }
+    const beforeMessageId = String(filters.beforeMessageId ?? filters.before ?? "").trim();
+    if (beforeMessageId) {
+      where.push("CAST(message_id AS UNSIGNED) < CAST(? AS UNSIGNED)");
+      params.push(beforeMessageId);
+    }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
     const [rows] = await pool.query(
       `SELECT message_id, guild_id, guild_name, channel_id, channel_name, author_id, created_at_ms, content,
               author_username, author_global_name, author_avatar, event_type, source, received_at${rawCol}
        FROM discord_messages ${whereSql}
-       ORDER BY created_at_ms ${orderSql}
+       ORDER BY created_at_ms ${orderSql}, CAST(message_id AS UNSIGNED) ${orderSql}
        LIMIT ${lim}`,
       params
     );

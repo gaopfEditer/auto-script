@@ -1,7 +1,7 @@
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
+import { ref, reactive, computed, shallowRef, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { RouterLink } from "vue-router";
-import PageLoadingBlock from "../components/PageLoadingBlock.vue";
+import ShowMessagePane from "../components/ShowMessagePane.vue";
 import SignalCardRail from "../components/SignalCardRail.vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
 import {
@@ -11,6 +11,7 @@ import {
   fetchCdpActiveChannel,
   fetchDiscordContext,
   fetchGuildMessagesSnapshot,
+  scrollDiscordChannelHistory,
 } from "../lib/discordApi.js";
 import { fetchSignalConfig, isSignalChannelId } from "../lib/discordSignalApi.js";
 import { fetchChannelStripStats } from "../lib/cardEvalApi.js";
@@ -27,20 +28,12 @@ import {
   channelIdLabel,
   channelIdShort,
   countNewIncomingMessages,
-  fmtMsgTime,
-  groupChannelMessages,
   guildRowToClient,
   hasChannelAlias,
   isChannelPinned,
-  attachmentDisplayUrl,
-  isImageAttachment,
   isPlaceholderChannelName,
   mergeChannelMessages,
   messageContentPreview,
-  messageTextContent,
-  msgAttachments,
-  msgAvatarUrl,
-  msgDisplayName,
   upsertChannelItem,
   buildChannelListSections,
   normalizeChannelGroups,
@@ -56,6 +49,10 @@ const MAX_MSGS_PER_CHANNEL = 400;
 const SHOW_RETENTION_DAYS = 7;
 const SHOW_RETENTION_MS = SHOW_RETENTION_DAYS * 86400000;
 const SHOW_SNAPSHOT_DAYS = 7;
+/** WS 消息批次合并后再刷 UI，避免 msg-row 高频重绘 */
+const SHOW_WS_BATCH_DEBOUNCE_MS = 3000;
+const SHOW_WS_BATCH_MAX_WAIT_MS = 8000;
+const SHOW_CACHE_DEBOUNCE_MS = 2500;
 /** 默认固定服务器（…504831）；guild-rail 隐藏时不可切换 */
 const DEFAULT_SHOW_GUILD_ID = "1444959079209504831";
 const SHOW_GUILD_RAIL = false;
@@ -95,12 +92,20 @@ const renameInputEl = ref(/** @type {HTMLInputElement | null} */ (null));
 const loadingGuilds = ref(true);
 const loadingChannels = ref(false);
 const channelMessagesLoading = ref(false);
+const channelOlderLoading = ref(false);
+/** @type {Record<string, boolean>} */
+const channelHasMoreOlder = reactive({});
+/** @type {Record<string, number>} */
+const channelOlderLoadAt = reactive({});
+const LOAD_OLDER_COOLDOWN_MS = 1_800;
+const LOAD_OLDER_PAGE_SIZE = 50;
 const snapshotWarming = ref(false);
 const navPending = ref(false);
 const navError = ref("");
 const cacheBanner = ref("");
-const avatarFailed = reactive(/** @type {Record<string, true>} */ ({}));
-const attachmentImgFailed = reactive(/** @type {Record<string, true>} */ ({}));
+const channelMessagesHint = ref("");
+/** 与侧栏更新隔离：仅消息数组引用变化时更新子组件 */
+const paneMessages = shallowRef(/** @type {Record<string, unknown>[]} */ ([]));
 
 const msgsScrollEl = ref(/** @type {HTMLElement | null} */ (null));
 const signalCardRailRef = ref(/** @type {InstanceType<typeof SignalCardRail> | null} */ (null));
@@ -113,6 +118,15 @@ const channelStripById = ref({});
 /** @type {ReturnType<typeof setInterval> | null} */
 let channelStripTimer = null;
 let saveTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+/** @type {ReturnType<typeof setTimeout> | null} */
+let discordBatchFlushTimer = null;
+let discordBatchFlushFirstAt = 0;
+/** @type {Array<Record<string, unknown>>} */
+let pendingWsBatchRows = [];
+/** @type {Map<string, Record<string, unknown>>} */
+const pendingWsChannelUpdates = new Map();
+/** @type {Record<string, unknown> | null} */
+let pendingWsBatchMeta = null;
 
 const selectedGuild = computed(() => guilds.value.find((g) => g.guildId === selectedGuildId.value) ?? null);
 const currentGuildChannels = computed(() => channelsByGuild[selectedGuildId.value] ?? []);
@@ -131,8 +145,6 @@ const selectedMessages = computed(() => {
   if (!ch) return [];
   return messagesByChannelId[ch] ?? [];
 });
-
-const groupedMessages = computed(() => groupChannelMessages(selectedMessages.value));
 
 const showSignalCards = computed(() => {
   const cid = selectedChannel.value?.channelId;
@@ -724,7 +736,7 @@ function scheduleSave() {
   saveTimer = setTimeout(() => {
     saveTimer = null;
     saveCache();
-  }, 400);
+  }, SHOW_CACHE_DEBOUNCE_MS);
 }
 
 function loadCache() {
@@ -853,7 +865,7 @@ async function warmGuildMessageSnapshot(guildId) {
       for (const [cid, rows] of Object.entries(byChannel)) {
         if (!Array.isArray(rows) || !rows.length) continue;
         const prev = messagesByChannelId[cid] ?? [];
-        messagesByChannelId[cid] = mergeChannelMessages(prev, rows);
+        commitChannelMessages(cid, prev, rows);
       }
       scheduleSave();
     } catch {
@@ -866,49 +878,49 @@ async function warmGuildMessageSnapshot(guildId) {
   return warmSnapshotInflight;
 }
 
+/** @type {Map<string, Promise<void>>} */
+const loadMessagesInflight = new Map();
+
 /** @param {ChannelItem} ch @param {{ silent?: boolean }} [opts] */
 async function loadMessagesForChannel(ch, opts = {}) {
+  const cid = String(ch.channelId ?? "").trim();
+  if (!cid) return;
+  const pending = loadMessagesInflight.get(cid);
+  if (pending) return pending;
+
   const silent = opts.silent === true;
-  const hadLocal = (messagesByChannelId[ch.channelId] ?? []).length > 0;
+  const hadLocal = (messagesByChannelId[cid] ?? []).length > 0;
   if (!silent && !hadLocal) channelMessagesLoading.value = true;
+
+  const task = (async () => {
+    try {
+      const { rows, fallbackOlder } = await fetchChannelMessages({
+        channelId: cid,
+        guildId: ch.guildId || selectedGuildId.value,
+        limit: 250,
+        days: SHOW_SNAPSHOT_DAYS,
+      });
+      channelMessagesHint.value = fallbackOlder
+        ? "近 7 天无新消息，已展示该频道最近入库的历史记录（可能早于 7 天）。"
+        : "";
+      const prev = messagesByChannelId[cid] ?? [];
+      if (rows.length || !prev.length) {
+        commitChannelMessages(cid, prev, rows);
+      }
+      scheduleSave();
+      await nextTick();
+      scrollMsgsBottomIfNear();
+    } finally {
+      if (!silent) channelMessagesLoading.value = false;
+    }
+  })();
+
+  loadMessagesInflight.set(cid, task);
   try {
-    const rows = await fetchChannelMessages({
-      channelId: ch.channelId,
-      guildId: ch.guildId || selectedGuildId.value,
-      limit: 250,
-      days: SHOW_SNAPSHOT_DAYS,
-    });
-    const prev = messagesByChannelId[ch.channelId] ?? [];
-    messagesByChannelId[ch.channelId] = mergeChannelMessages(prev, rows);
-    scheduleSave();
-    await nextTick();
-    scrollMsgsBottom();
+    await task;
   } finally {
-    if (!silent) channelMessagesLoading.value = false;
+    loadMessagesInflight.delete(cid);
   }
-}
-
-/** @param {Record<string, unknown>} att @param {string} key @param {Event} e */
-function onAttachmentImgError(att, key, e) {
-  const img = /** @type {HTMLImageElement | null} */ (e.target);
-  if (!img) return;
-  const direct = String(att.url ?? "").trim();
-  const proxy = String(att.proxyUrl ?? "").trim();
-  if (proxy && img.src !== direct && direct) {
-    img.src = direct;
-    return;
-  }
-  if (direct && img.src !== proxy && proxy) {
-    img.src = proxy;
-    return;
-  }
-  attachmentImgFailed[key] = true;
-}
-
-/** @param {Record<string, unknown>} att @param {number} i @param {Record<string, unknown>} msg */
-function attachmentImgKey(att, i, msg) {
-  const mid = String(msg.messageId ?? msg.message_id ?? i);
-  return `${mid}-${i}-${attachmentDisplayUrl(att)}`;
 }
 
 /** @param {string} channelId @param {string} [guildId] */
@@ -996,8 +1008,8 @@ let lastSelectChannelId = "";
 let lastDbReloadAt = 0;
 
 /**
- * 切换前端查看频道：只切本地视图 + 必要时从库拉历史。
- * 不触发 CDP——实时消息靠 WS；CDP 由服务端每 15 分钟轮询信号频道。
+ * 切换前端查看频道：切本地视图 + 必要时从库拉历史。
+ * 向上翻页时另见 onMsgsScroll → scrollDiscordChannelHistory 驱动 CDP 网页同步上滚。
  * @param {ChannelItem} ch
  */
 async function selectChannel(ch) {
@@ -1007,7 +1019,13 @@ async function selectChannel(ch) {
   const seq = ++selectChannelSeq;
   const sameChannel = lastSelectChannelId === ch.channelId;
   lastSelectChannelId = ch.channelId;
-  selectedChannel.value = ch;
+  if (selectedChannel.value?.channelId !== ch.channelId) {
+    selectedChannel.value = ch;
+  }
+  channelMessagesHint.value = "";
+  if (channelHasMoreOlder[ch.channelId] === undefined) {
+    channelHasMoreOlder[ch.channelId] = true;
+  }
   clearChannelUnread(ch.channelId);
   navError.value = "";
   navPending.value = false;
@@ -1019,10 +1037,7 @@ async function selectChannel(ch) {
   const now = Date.now();
   const skipDb =
     sameChannel && cached.length > 0 && now - lastDbReloadAt < DB_RELOAD_SAME_CHANNEL_MS;
-  if (skipDb) {
-    void loadMessagesForChannel(ch, { silent: true });
-    return;
-  }
+  if (skipDb) return;
   try {
     await loadMessagesForChannel(ch);
     lastDbReloadAt = Date.now();
@@ -1079,9 +1094,19 @@ function resetChannelAlias(ch, e) {
   saveLayoutNow();
 }
 
+function msgsNearBottom(thresholdPx = 120) {
+  const el = msgsScrollEl.value;
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= thresholdPx;
+}
+
 function scrollMsgsBottom() {
   const el = msgsScrollEl.value;
   if (el) el.scrollTop = el.scrollHeight;
+}
+
+function scrollMsgsBottomIfNear() {
+  if (msgsNearBottom()) scrollMsgsBottom();
 }
 
 /** @param {string} messageId */
@@ -1123,12 +1148,6 @@ function messageDomId(m) {
   return String(m.messageId ?? m.message_id ?? "");
 }
 
-/** @param {Record<string, unknown>} m */
-function isHighlightedMessage(m) {
-  const mid = messageDomId(m);
-  return mid && highlightMessageId.value === mid;
-}
-
 /** 向上翻页插入旧消息后保持视口位置 */
 function preserveScrollAfterPrepend(prevHeight, prevTop) {
   const el = msgsScrollEl.value;
@@ -1136,14 +1155,66 @@ function preserveScrollAfterPrepend(prevHeight, prevTop) {
   el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
 }
 
-/** @param {string} id */
-function onAvatarError(id) {
-  if (id) avatarFailed[id] = true;
+/** @param {Array<Record<string, unknown>>} msgs */
+function oldestMessageId(msgs) {
+  if (!msgs.length) return "";
+  const first = msgs[0];
+  return messageDomId(first);
 }
 
-/** @param {Record<string, unknown>} m */
-function avatarErrorKey(m) {
-  return String(m.authorId ?? m.author_id ?? m.messageId ?? m.message_id ?? "");
+/** @param {ChannelItem} ch */
+async function loadOlderMessagesForChannel(ch) {
+  const cid = String(ch.channelId ?? "").trim();
+  if (!cid || channelOlderLoading.value) return;
+  if (channelHasMoreOlder[cid] === false) return;
+  const now = Date.now();
+  if (now - (channelOlderLoadAt[cid] ?? 0) < LOAD_OLDER_COOLDOWN_MS) return;
+
+  const current = messagesByChannelId[cid] ?? paneMessages.value ?? [];
+  const beforeId = oldestMessageId(current);
+  if (!beforeId) return;
+
+  const scrollEl = msgsScrollEl.value;
+  const prevScrollHeight = scrollEl?.scrollHeight ?? 0;
+  const prevScrollTop = scrollEl?.scrollTop ?? 0;
+
+  channelOlderLoading.value = true;
+  channelOlderLoadAt[cid] = now;
+  const gid = String(ch.guildId || selectedGuildId.value || "").trim();
+
+  try {
+    const cdpTask = scrollDiscordChannelHistory(gid, cid, { beforeMessageId: beforeId }).catch(() => {});
+    const { rows } = await fetchChannelMessages({
+      channelId: cid,
+      guildId: gid,
+      limit: LOAD_OLDER_PAGE_SIZE,
+      before: beforeId,
+    });
+    await cdpTask;
+
+    if (rows.length > 0 && rows.length < LOAD_OLDER_PAGE_SIZE) {
+      channelHasMoreOlder[cid] = false;
+    }
+    if (rows.length) {
+      const prev = messagesByChannelId[cid] ?? [];
+      commitChannelMessages(cid, prev, rows);
+      scheduleSave();
+      await nextTick();
+      preserveScrollAfterPrepend(prevScrollHeight, prevScrollTop);
+    }
+  } catch (e) {
+    navError.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    channelOlderLoading.value = false;
+  }
+}
+
+function onMsgsScroll() {
+  const ch = selectedChannel.value;
+  const el = msgsScrollEl.value;
+  if (!ch || !el || channelMessagesLoading.value || channelOlderLoading.value) return;
+  if (el.scrollTop > 72) return;
+  void loadOlderMessagesForChannel(ch);
 }
 
 /** @param {string} guildId */
@@ -1197,45 +1268,105 @@ function applyChannelUpdate(row) {
   upsertChannelItem(channelsByGuild[bucket], item);
 }
 
-/** @param {Array<Record<string, unknown>>} rows */
-function sortMessagesByTime(rows) {
-  return [...rows].sort(
-    (a, b) => Number(a.createdAtMs ?? a.created_at_ms ?? 0) - Number(b.createdAtMs ?? b.created_at_ms ?? 0)
-  );
+/**
+ * @param {string} cid
+ * @param {Array<Record<string, unknown>>} prev
+ * @param {Array<Record<string, unknown>>} rows
+ */
+function syncPaneMessagesFromStore() {
+  const ch = selectedChannel.value?.channelId;
+  if (!ch) {
+    paneMessages.value = [];
+    return;
+  }
+  paneMessages.value = messagesByChannelId[ch] ?? [];
+}
+
+function commitChannelMessages(cid, prev, rows) {
+  if (!rows.length) return prev;
+  let next = mergeChannelMessages(prev, rows);
+  if (next.length > MAX_MSGS_PER_CHANNEL) {
+    next = next.slice(-MAX_MSGS_PER_CHANNEL);
+  }
+  if (next !== prev) {
+    messagesByChannelId[cid] = next;
+    if (selectedChannel.value?.channelId === cid) {
+      paneMessages.value = next;
+    }
+  }
+  return next;
+}
+
+/** @param {Record<string, unknown>} row */
+function mergePendingWsChannelUpdate(row) {
+  const cid = String(row.channelId ?? row.channel_id ?? "").trim();
+  if (!cid) return;
+  const prev = pendingWsChannelUpdates.get(cid);
+  const nextMs = Number(row.lastMessageAtMs ?? row.last_message_at_ms ?? 0);
+  const prevMs = Number(prev?.lastMessageAtMs ?? prev?.last_message_at_ms ?? 0);
+  if (prev && nextMs <= prevMs && String(row.lastMessagePreview ?? "") === String(prev.lastMessagePreview ?? "")) {
+    return;
+  }
+  pendingWsChannelUpdates.set(cid, row);
 }
 
 /** @param {Record<string, unknown>} msg */
-function onSocketMsg(msg) {
-  if (msg.channel === "meta") {
-    if (msg.kind === "guilds_updated") void reloadGuilds();
-    if (msg.kind === "channels_updated" && msg.guildId) {
-      void loadChannelsForGuild(String(msg.guildId), { force: true });
-    }
-    if (msg.kind === "cdp_active_channel") {
-      updateCdpActive(String(msg.channelId ?? ""), String(msg.guildId ?? ""));
-    }
-    if (
-      (msg.kind === "signal_card_created" || msg.kind === "card_archived") &&
-      msg.card &&
-      typeof msg.card === "object"
-    ) {
-      const card = /** @type {Record<string, unknown>} */ (msg.card);
-      const cid = String(card.channelId ?? "");
-      if (selectedChannel.value?.channelId === cid) {
-        signalCardRailRef.value?.upsertCard(/** @type {import("../lib/discordSignalApi.js").SignalCard} */ (card));
-      }
-    }
-    if (msg.kind === "signal_card_deleted") {
-      const cardId = Number(msg.cardId);
-      const cid = String(msg.channelId ?? "");
-      if (selectedChannel.value?.channelId === cid && Number.isFinite(cardId)) {
-        signalCardRailRef.value?.removeCardById(cardId);
-      }
-    }
-    return;
+function enqueueDiscordMessageBatch(msg) {
+  if (msg.cdpChannelId) {
+    updateCdpActive(String(msg.cdpChannelId ?? ""), String(msg.cdpGuildId ?? ""));
   }
-  if (msg.channel !== "message" || msg.kind !== "discord_message_batch") return;
+  const batch = Array.isArray(msg.rows) ? msg.rows : [];
+  const channelUpdates = Array.isArray(msg.channels) ? msg.channels : [];
+  for (const ch of channelUpdates) mergePendingWsChannelUpdate(ch);
+  if (batch.length) pendingWsBatchRows.push(...batch);
+  pendingWsBatchMeta = {
+    ...(pendingWsBatchMeta ?? {}),
+    ...msg,
+    rows: undefined,
+    channels: undefined,
+  };
+  scheduleDiscordBatchFlush();
+}
 
+function scheduleDiscordBatchFlush() {
+  const now = Date.now();
+  if (!discordBatchFlushFirstAt) discordBatchFlushFirstAt = now;
+  const delay =
+    now - discordBatchFlushFirstAt >= SHOW_WS_BATCH_MAX_WAIT_MS ? 0 : SHOW_WS_BATCH_DEBOUNCE_MS;
+  if (discordBatchFlushTimer) clearTimeout(discordBatchFlushTimer);
+  discordBatchFlushTimer = setTimeout(() => {
+    discordBatchFlushTimer = null;
+    discordBatchFlushFirstAt = 0;
+    flushPendingDiscordMessageBatch();
+  }, delay);
+}
+
+function flushPendingDiscordBatchesImmediate() {
+  if (discordBatchFlushTimer) {
+    clearTimeout(discordBatchFlushTimer);
+    discordBatchFlushTimer = null;
+  }
+  discordBatchFlushFirstAt = 0;
+  flushPendingDiscordMessageBatch();
+}
+
+function flushPendingDiscordMessageBatch() {
+  if (!pendingWsBatchRows.length && !pendingWsChannelUpdates.size) return;
+  const msg = {
+    channel: "message",
+    kind: "discord_message_batch",
+    ...(pendingWsBatchMeta ?? {}),
+    rows: pendingWsBatchRows,
+    channels: [...pendingWsChannelUpdates.values()],
+  };
+  pendingWsBatchRows = [];
+  pendingWsChannelUpdates.clear();
+  pendingWsBatchMeta = null;
+  applyDiscordMessageBatch(msg);
+}
+
+/** @param {Record<string, unknown>} msg */
+function applyDiscordMessageBatch(msg) {
   if (msg.cdpChannelId) {
     updateCdpActive(String(msg.cdpChannelId ?? ""), String(msg.cdpGuildId ?? ""));
   }
@@ -1275,21 +1406,18 @@ function onSocketMsg(msg) {
   }
 
   let needReloadGuilds = false;
+  /** @type {Map<string, number>} */
+  const newCountByChannel = new Map();
   for (const [cid, rows] of batchByChannel) {
     const prev = messagesByChannelId[cid] ?? [];
-    if (!isRestBatch) {
-      const newCount = countNewIncomingMessages(prev, rows);
+    const newCount = countNewIncomingMessages(prev, rows);
+    newCountByChannel.set(cid, newCount);
+    if (!isRestBatch && newCount > 0) {
       const isActive = selectedChannel.value?.channelId === cid;
-      if (newCount > 0) {
-        if (isActive) clearChannelUnread(cid);
-        else addChannelUnread(cid, newCount);
-      }
+      if (isActive) clearChannelUnread(cid);
+      else addChannelUnread(cid, newCount);
     }
-    if (isRestBatch && !isBeforePagination) {
-      messagesByChannelId[cid] = sortMessagesByTime(rows);
-    } else {
-      messagesByChannelId[cid] = mergeChannelMessages(prev, rows);
-    }
+    commitChannelMessages(cid, prev, rows);
 
     const latest = rows.reduce((a, b) =>
       Number(a.createdAtMs ?? a.created_at_ms ?? 0) >= Number(b.createdAtMs ?? b.created_at_ms ?? 0)
@@ -1349,8 +1477,9 @@ function onSocketMsg(msg) {
         },
         { adoptSelection: false }
       ).then(() => {
-        if (selectedChannel.value?.channelId === restChannelId) {
-          void nextTick(() => scrollMsgsBottom());
+        const added = newCountByChannel.get(restChannelId) ?? 0;
+        if (added > 0 && selectedChannel.value?.channelId === restChannelId) {
+          void nextTick(() => scrollMsgsBottomIfNear());
         }
       });
     } else if (selectedChannel.value?.channelId === restChannelId) {
@@ -1362,12 +1491,56 @@ function onSocketMsg(msg) {
 
   if (!isRestBatch) {
     const activeCid = selectedChannel.value?.channelId ?? "";
-    if (activeCid && batchByChannel.has(activeCid)) {
-      void nextTick(() => scrollMsgsBottom());
+    if (activeCid && (newCountByChannel.get(activeCid) ?? 0) > 0) {
+      void nextTick(() => scrollMsgsBottomIfNear());
     }
     scheduleSave();
     return;
   }
+}
+
+/** @param {Record<string, unknown>} msg */
+function onSocketMsg(msg) {
+  if (msg.channel === "meta") {
+    if (msg.kind === "guilds_updated") void reloadGuilds();
+    if (msg.kind === "channels_updated" && msg.guildId) {
+      void loadChannelsForGuild(String(msg.guildId), { force: true });
+    }
+    if (msg.kind === "cdp_active_channel") {
+      updateCdpActive(String(msg.channelId ?? ""), String(msg.guildId ?? ""));
+    }
+    if (
+      (msg.kind === "signal_card_created" || msg.kind === "card_archived") &&
+      msg.card &&
+      typeof msg.card === "object"
+    ) {
+      const card = /** @type {Record<string, unknown>} */ (msg.card);
+      const cid = String(card.channelId ?? "");
+      if (selectedChannel.value?.channelId === cid) {
+        signalCardRailRef.value?.upsertCard(/** @type {import("../lib/discordSignalApi.js").SignalCard} */ (card));
+      }
+    }
+    if (msg.kind === "signal_card_deleted") {
+      const cardId = Number(msg.cardId);
+      const cid = String(msg.channelId ?? "");
+      if (selectedChannel.value?.channelId === cid && Number.isFinite(cardId)) {
+        signalCardRailRef.value?.removeCardById(cardId);
+      }
+    }
+    return;
+  }
+  if (msg.channel !== "message" || msg.kind !== "discord_message_batch") return;
+
+  const restQuery = msg.restQuery && typeof msg.restQuery === "object"
+    ? /** @type {{ channelId?: string, before?: string, after?: string, limit?: number }} */ (msg.restQuery)
+    : null;
+  const isBeforePagination = Boolean(restQuery?.before);
+  if (isBeforePagination) {
+    flushPendingDiscordBatchesImmediate();
+    applyDiscordMessageBatch(msg);
+    return;
+  }
+  enqueueDiscordMessageBatch(msg);
 }
 
 useCollectorSocket(onSocketMsg);
@@ -1382,11 +1555,6 @@ watch(
   () => JSON.stringify(pinnedChannelsByGuild),
   saveLayoutNow
 );
-watch(
-  () => JSON.stringify(messagesByChannelId),
-  () => scheduleSave()
-);
-
 watch(
   () => JSON.stringify(unreadCountByChannelId),
   () => scheduleSave()
@@ -1408,6 +1576,7 @@ watch(selectedGuildId, (gid) => {
 });
 
 watch(selectedChannel, (ch) => {
+  syncPaneMessagesFromStore();
   if (ch && showSignalCards.value) {
     void nextTick(() => signalCardRailRef.value?.reload());
   }
@@ -1454,9 +1623,11 @@ onMounted(async () => {
   }
   void loadChannelStripStats();
   channelStripTimer = setInterval(() => void loadChannelStripStats(), 60_000);
+  syncPaneMessagesFromStore();
 });
 
 onUnmounted(() => {
+  flushPendingDiscordBatchesImmediate();
   if (channelStripTimer) {
     clearInterval(channelStripTimer);
     channelStripTimer = null;
@@ -1696,142 +1867,19 @@ onUnmounted(() => {
       </header>
 
       <div v-if="navError" class="kook-nav-alert err">{{ navError }}</div>
+      <p v-if="channelMessagesHint" class="kook-nav-alert info">{{ channelMessagesHint }}</p>
 
-      <div ref="msgsScrollEl" class="msg-scroll msg-scroll-loadable">
-        <PageLoadingBlock
-          v-if="
-            selectedChannel &&
-            (channelMessagesLoading || snapshotWarming) &&
-            !selectedMessages.length
-          "
-          message="加载频道消息…"
-          hint="从本地库读取近 7 天已采集消息，无需先让 Discord 页签切到该频道"
+      <div ref="msgsScrollEl" class="msg-scroll msg-scroll-loadable" @scroll="onMsgsScroll">
+        <ShowMessagePane
+          v-if="selectedChannel"
+          :key="selectedChannel.channelId"
+          :messages="paneMessages"
+          :loading="channelMessagesLoading"
+          :loading-older="channelOlderLoading"
+          :snapshot-warming="snapshotWarming"
+          :highlight-message-id="highlightMessageId"
+          empty-hint="该频道近 7 天暂无已入库消息，且库中无更早记录；Gateway/CDP 采集到新消息后会自动出现。"
         />
-        <template v-if="selectedChannel">
-          <article
-            v-for="g in groupedMessages"
-            :key="String(g.head.messageId ?? g.head.message_id)"
-            class="msg-group"
-            :class="{ 'msg-highlight': isHighlightedMessage(g.head) }"
-            :data-message-id="messageDomId(g.head)"
-          >
-            <div class="msg-row msg-row-head">
-              <img
-                v-if="msgAvatarUrl(g.head) && !avatarFailed[avatarErrorKey(g.head)]"
-                :src="msgAvatarUrl(g.head)"
-                class="msg-av"
-                width="40"
-                height="40"
-                alt=""
-                referrerpolicy="no-referrer"
-                loading="lazy"
-                @error="onAvatarError(avatarErrorKey(g.head))"
-              />
-              <div v-else class="msg-av ph" aria-hidden="true" />
-              <div class="msg-body">
-                <div class="msg-meta">
-                  <span class="msg-name">{{ msgDisplayName(g.head) }}</span>
-                  <span
-                    v-if="(g.head.authorUsername ?? g.head.author_username) && (g.head.authorUsername ?? g.head.author_username) !== msgDisplayName(g.head)"
-                    class="msg-user"
-                  >@{{ g.head.authorUsername ?? g.head.author_username }}</span>
-                  <span class="msg-time">{{ fmtMsgTime(g.head.createdAtMs ?? g.head.created_at_ms) }}</span>
-                </div>
-                <div v-if="messageTextContent(g.head)" class="msg-content">{{ messageTextContent(g.head) }}</div>
-                <div v-if="msgAttachments(g.head).length" class="msg-attachments">
-                  <template v-for="(att, i) in msgAttachments(g.head)" :key="`${g.head.messageId ?? g.head.message_id}-${i}`">
-                    <a
-                      v-if="isImageAttachment(att) && !attachmentImgFailed[attachmentImgKey(att, i, g.head)]"
-                      :href="attachmentDisplayUrl(att)"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="msg-image-link"
-                    >
-                      <img
-                        :src="attachmentDisplayUrl(att)"
-                        :alt="att.filename || '图片'"
-                        class="msg-image"
-                        loading="eager"
-                        decoding="async"
-                        referrerpolicy="no-referrer"
-                        @error="onAttachmentImgError(att, attachmentImgKey(att, i, g.head), $event)"
-                      />
-                    </a>
-                    <span
-                      v-else-if="isImageAttachment(att)"
-                      class="msg-image-placeholder"
-                    >图片加载失败</span>
-                    <a
-                      v-else
-                      :href="attachmentDisplayUrl(att)"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="msg-file-link"
-                    >{{ att.filename || "下载附件" }}</a>
-                  </template>
-                </div>
-                <div
-                  v-if="!messageTextContent(g.head) && !msgAttachments(g.head).length"
-                  class="msg-content muted"
-                >（无文本）</div>
-              </div>
-            </div>
-            <div
-              v-for="m in g.tail"
-              :key="String(m.messageId ?? m.message_id)"
-              class="msg-row msg-row-continued"
-              :class="{ 'msg-highlight-row': isHighlightedMessage(m) }"
-              :data-message-id="messageDomId(m)"
-            >
-              <div class="msg-av-gap" aria-hidden="true" />
-              <div class="msg-body">
-                <div v-if="messageTextContent(m)" class="msg-content">{{ messageTextContent(m) }}</div>
-                <div v-if="msgAttachments(m).length" class="msg-attachments">
-                  <template v-for="(att, i) in msgAttachments(m)" :key="`${m.messageId ?? m.message_id}-${i}`">
-                    <a
-                      v-if="isImageAttachment(att) && !attachmentImgFailed[attachmentImgKey(att, i, m)]"
-                      :href="attachmentDisplayUrl(att)"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="msg-image-link"
-                    >
-                      <img
-                        :src="attachmentDisplayUrl(att)"
-                        :alt="att.filename || '图片'"
-                        class="msg-image"
-                        loading="eager"
-                        decoding="async"
-                        referrerpolicy="no-referrer"
-                        @error="onAttachmentImgError(att, attachmentImgKey(att, i, m), $event)"
-                      />
-                    </a>
-                    <span
-                      v-else-if="isImageAttachment(att)"
-                      class="msg-image-placeholder"
-                    >图片加载失败</span>
-                    <a
-                      v-else
-                      :href="attachmentDisplayUrl(att)"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="msg-file-link"
-                    >{{ att.filename || "下载附件" }}</a>
-                  </template>
-                </div>
-                <div
-                  v-if="!messageTextContent(m) && !msgAttachments(m).length"
-                  class="msg-content muted"
-                >（无文本）</div>
-              </div>
-            </div>
-          </article>
-          <p
-            v-if="!selectedMessages.length && !channelMessagesLoading && !snapshotWarming"
-            class="kook-wait"
-          >
-            该频道近 7 天暂无已入库消息；Gateway/CDP 采集到新消息后会自动出现。
-          </p>
-        </template>
         <p v-else class="kook-wait">选择左侧频道查看消息（含头像、昵称、时间）。</p>
       </div>
     </section>

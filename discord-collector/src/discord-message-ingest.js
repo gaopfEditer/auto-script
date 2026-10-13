@@ -31,7 +31,8 @@ import { createChannelMessageDedup, messageDedupKey } from "./discord-message-de
 import { normalizeSignalText } from "./discord-signal-dedup.js";
 import { isSignalChannel, getSignalChannelConfig } from "./discord-signal-config.js";
 import { shouldTelegramPushSignalChannelComment } from "./discord-telegram-push-config.js";
-import { isBlockedWsPayload } from "./ws-noise-filter.js";
+import { isBlockedWsPayload, isDiscordGatewayPayload } from "./ws-noise-filter.js";
+import { createDebouncedDiscordMessageBroadcast } from "./discord-ui-message-broadcast.js";
 
 /**
  * @typedef {ReturnType<import("./store.js").openStore>} Store
@@ -48,6 +49,15 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
   const { signalCards, telegramPush, webhookForward } = opts;
   const guildFilter = new Set(config.monitoredGuildIds);
   const context = createDiscordContextCache();
+  const uiMessageBroadcast = createDebouncedDiscordMessageBroadcast(
+    broadcast,
+    config.uiMessageBroadcastDebounceMs
+  );
+
+  /** @param {Record<string, unknown>} payload */
+  function pushDiscordMessageBatch(payload) {
+    uiMessageBroadcast.push(payload);
+  }
   const messageDedup = createChannelMessageDedup(store);
   const messageDedupReady = messageDedup.hydrate().catch((e) => {
     log.warn(`消息去重缓存加载失败: ${/** @type {Error} */ (e).message}`);
@@ -165,7 +175,7 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
         lastMessageAtMs: 0,
       });
     }
-    broadcast?.("message", {
+    pushDiscordMessageBatch({
       kind: "discord_message_batch",
       debugMode: isDebugMode(),
       count: meta.inserted ?? 0,
@@ -351,13 +361,6 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
     await resolveGuildIds(valid);
     const enriched = valid.map((r) => context.enrichMessage(r)).filter(passesGuildFilter);
     if (!enriched.length) {
-      if (restChannelMessages && restQuery?.channelId) {
-        broadcastRestChannelBatch(
-          `https://discord.com/api/v9/channels/${restQuery.channelId}/messages`,
-          [],
-          { ...restMeta, inserted: 0, restQuery }
-        );
-      }
       return { inserted: 0, duplicate: 0 };
     }
 
@@ -365,13 +368,6 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
 
     const toPersist = await filterContentDuplicates(enriched);
     if (!toPersist.length) {
-      if (restChannelMessages && restQuery?.channelId) {
-        broadcastRestChannelBatch(
-          `https://discord.com/api/v9/channels/${restQuery.channelId}/messages`,
-          [],
-          { ...restMeta, inserted: 0, restQuery }
-        );
-      }
       return { inserted: 0, duplicate: enriched.length };
     }
 
@@ -460,12 +456,14 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
     }
 
     const limit = isRestBatch ? toPersist.length : broadcastLimit;
-    const isGatewayRealtime =
-      !isRestBatch && pushRows.some((r) => String(r.source ?? "") === "gateway_ws");
-    // Gateway 实时：即使 message_id 已存在（REST 先拉过）也要推前端 WS
-    const shouldPushUi = isRestBatch || result.inserted > 0 || isGatewayRealtime;
+    const pushCardApi = pushRows.some((r) => String(r.source ?? "") === "card_api");
+    // 仅新入库（或 card_api）推 Show；Gateway 重复帧不再刷 UI
+    const shouldPushUi =
+      result.inserted > 0 ||
+      pushCardApi ||
+      (isRestBatch && restQuery?.before && toPersist.length > 0);
     if (pushRows.length && shouldPushUi) {
-      broadcast?.("message", {
+      pushDiscordMessageBatch({
         kind: "discord_message_batch",
         debugMode: isDebugMode(),
         count: result.inserted,
@@ -636,7 +634,6 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
 
     if (!rows.length) {
       log.info(`[discord-api←] 频道 ${authoritativeChannelId || "?"} 消息 0 条`);
-      broadcastRestChannelBatch(url, [], { ...meta, inserted: 0, restQuery });
       return;
     }
 
@@ -725,6 +722,7 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
 
     if (kind === "ws_frame_parsed" && evt.parsedJson != null) {
       if (isBlockedWsPayload(evt.parsedJson, String(evt.rawPreview ?? ""))) return;
+      if (!isDiscordGatewayPayload(evt.parsedJson)) return;
       void ingestGatewayJson(evt.parsedJson).catch((e) => {
         log.warn(`Gateway 上下文同步失败: ${/** @type {Error} */ (e).message}`);
       });

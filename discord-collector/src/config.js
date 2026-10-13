@@ -34,7 +34,35 @@ function resolveCollectStartUrl() {
   return { url: "https://discord.com/login", usedTargetFallback: false };
 }
 
+/** @param {string} url */
+function isDiscordChannelUrl(url) {
+  return /discord\.com\/channels\/[^/?#]+\/[^/?#]+/i.test(String(url || "").trim());
+}
+
+/**
+ * CDP 保活 / 断页恢复用的频道直链（须含 guild + channel）。
+ * 未配置 START_URL 为频道时，默认打开 Show 同源 guild + 大镖客频道。
+ */
+function resolveCdpDiscordUrl(collectStartUrl) {
+  const explicit = (process.env.COLLECTOR_DISCORD_RECOVERY_URL ?? "").trim();
+  if (isDiscordChannelUrl(explicit)) return explicit;
+  if (isDiscordChannelUrl(collectStartUrl)) return collectStartUrl.trim();
+  const target = (process.env.TARGET_PAGE_URL ?? "").trim();
+  if (isDiscordChannelUrl(target)) return target;
+  const g = (
+    process.env.COLLECTOR_DISCORD_DEFAULT_GUILD_ID ?? "1444959079209504831"
+  ).trim();
+  const c = (
+    process.env.COLLECTOR_DISCORD_DEFAULT_CHANNEL_ID ?? "1444962339743989843"
+  ).trim();
+  if (g && c) {
+    return `https://discord.com/channels/${encodeURIComponent(g)}/${encodeURIComponent(c)}`;
+  }
+  return collectStartUrl;
+}
+
 const collectStart = resolveCollectStartUrl();
+const cdpDiscordUrl = resolveCdpDiscordUrl(collectStart.url);
 
 function parseIdList(raw) {
   if (!raw?.trim()) return [];
@@ -64,6 +92,8 @@ export const config = {
   mysql,
   logLevel: process.env.LOG_LEVEL ?? "info",
   startUrl: collectStart.url,
+  /** CDP 附加：保活刷新、断页恢复、轮询切频道时的默认 URL */
+  cdpDiscordUrl,
   collectStartUsedTargetFallback: collectStart.usedTargetFallback,
   cdpConnectUrl: (process.env.CDP_CONNECT_URL ?? "").trim(),
   /**
@@ -93,6 +123,11 @@ export const config = {
     Number(process.env.COLLECTOR_CDP_CHANNEL_ROTATE_INTERVAL_MS) || 900_000
   ),
   /** Show 页从 MySQL 批量拉取各频道近 N 天消息（无需先 CDP 点进频道） */
+  /** Show WS：discord_message_batch 合并推送间隔（毫秒），减轻消息列表抖动 */
+  uiMessageBroadcastDebounceMs: Math.max(
+    200,
+    Number(process.env.COLLECTOR_UI_MESSAGE_DEBOUNCE_MS) || 3000
+  ),
   discordShowSnapshotDays: Math.min(
     14,
     Math.max(1, Number(process.env.DISCORD_SHOW_SNAPSHOT_DAYS) || 7)

@@ -44,7 +44,10 @@ function isWsOpen() {
 
 /** @param {Record<string, unknown>} msg */
 function dispatch(msg) {
-  lastMessageAt.value = Date.now();
+  const ch = String(msg.channel ?? "");
+  if (ch !== "frame" && ch !== "diag") {
+    lastMessageAt.value = Date.now();
+  }
   const kind = String(msg.kind ?? "");
   if (kind === "card_validate_started") {
     const total = Number(msg.total);

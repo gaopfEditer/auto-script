@@ -71,6 +71,16 @@ function isBlockedRpcEnvelope(o) {
 }
 
 /** @param {Record<string, unknown>} o */
+function isBlockedOkxStyleEnvelope(o) {
+  const arg = o.arg;
+  if (arg == null || typeof arg !== "object" || Array.isArray(arg)) return false;
+  if (typeof o.op === "number") return false;
+  const channel = String(/** @type {Record<string, unknown>} */ (arg).channel ?? "").trim();
+  if (!channel) return false;
+  return Array.isArray(o.data);
+}
+
+/** @param {Record<string, unknown>} o */
 function isBlockedBinanceEnvelope(o) {
   const stream = typeof o.stream === "string" ? o.stream.trim() : "";
   if (stream && o.data !== undefined && o.data !== null) return true;
@@ -89,8 +99,10 @@ export function isForwardableWsFrameMessage(msg) {
   if (msg?.kind !== "ws_frame") return true;
   const body = msg.body;
   if (!body || typeof body !== "object") return false;
-  if (/** @type {{ json?: unknown }} */ (body).json == null) return false;
-  return !isBlockedWsFrame(/** @type {{ json?: unknown }} */ (body).json);
+  const j = /** @type {{ json?: unknown }} */ (body).json;
+  if (j == null) return false;
+  if (!isDiscordGatewayPayload(j)) return false;
+  return !isBlockedWsFrame(j);
 }
 
 /** @param {unknown} parsedJson */
@@ -112,6 +124,7 @@ export function isBlockedWsFrame(parsedJson) {
   if (isBlockedPushEnvelope(o)) return true;
   if (isBlockedRpcEnvelope(o)) return true;
   if (isBlockedBinanceEnvelope(o)) return true;
+  if (isBlockedOkxStyleEnvelope(o)) return true;
 
   if (typeof o.e === "string" && BLOCKED_WS_EVENT_TYPES.has(o.e)) return true;
 

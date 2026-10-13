@@ -68,6 +68,38 @@ function isBlockedDataArray(data) {
 }
 
 /**
+ * OKX 等公共 WS：{ arg: { channel, instId? }, data: [...] }
+ * @param {Record<string, unknown>} o
+ */
+function isBlockedOkxStyleEnvelope(o) {
+  const arg = o.arg;
+  if (arg == null || typeof arg !== "object" || Array.isArray(arg)) return false;
+  if (typeof o.op === "number") return false;
+  const channel = String(/** @type {Record<string, unknown>} */ (arg).channel ?? "").trim();
+  if (!channel) return false;
+  return Array.isArray(o.data);
+}
+
+/** @param {string} url */
+export function isDiscordGatewayWsUrl(url) {
+  const u = String(url ?? "").toLowerCase();
+  if (!u) return false;
+  return u.includes("gateway.discord.gg") || (u.includes("discord") && u.includes("gateway"));
+}
+
+/** @param {string} pageUrl */
+export function isDiscordCollectorPageUrl(pageUrl) {
+  const s = String(pageUrl ?? "").trim();
+  if (!s) return false;
+  try {
+    const h = new URL(s).hostname.toLowerCase();
+    return h === "discord.com" || h.endsWith(".discord.com");
+  } catch {
+    return /discord\.com/i.test(s);
+  }
+}
+
+/**
  * Binance 组合流 envelope：{ stream, data }。
  * Discord Gateway 不使用此结构，页面内嵌行情 WS 一律丢弃。
  * @param {Record<string, unknown>} o
@@ -167,6 +199,10 @@ function isBlockedObject(parsedJson) {
     return true;
   }
 
+  if (isBlockedOkxStyleEnvelope(o)) {
+    return true;
+  }
+
   const et = eventTypeOf(parsedJson);
   if (et && BLOCKED_WS_EVENT_TYPES.has(et)) return true;
 
@@ -196,6 +232,9 @@ function rawTextLooksBlocked(text) {
   }
   // Binance 组合流：{"stream":"xxx@yyy","data":...}
   if (/"stream"\s*:\s*"[^"]*@[^"]*"/.test(t) && /"data"\s*:/.test(t)) {
+    return true;
+  }
+  if (/"arg"\s*:\s*\{[^}]*"channel"\s*:/.test(t) && /"instId"\s*:/.test(t)) {
     return true;
   }
   for (const evt of BLOCKED_WS_EVENT_TYPES) {
@@ -234,6 +273,7 @@ export function isForwardableFramePayload(payload) {
   if (!body || typeof body !== "object") return false;
   const j = /** @type {{ json?: unknown }} */ (body).json;
   if (j == null) return false;
+  if (!isDiscordGatewayPayload(j)) return false;
   return !isBlockedWsPayload(j);
 }
 

@@ -46,23 +46,76 @@ export function fmtMsgTime(ms) {
   }
 }
 
+/** @param {Record<string, unknown>} m */
+function messageRowId(m) {
+  return String(m.messageId ?? m.message_id ?? "");
+}
+
+/** @param {Record<string, unknown>} m */
+function messageRowMergeSignature(m) {
+  const att = msgAttachments(m);
+  const attSig = att.length
+    ? att.map((a) => `${a.url}|${a.filename}|${a.contentType}`).join(";")
+    : "";
+  return [
+    messageRowId(m),
+    String(m.content ?? ""),
+    String(m.authorId ?? m.author_id ?? ""),
+    String(m.authorAvatar ?? m.author_avatar ?? ""),
+    String(m.authorUsername ?? m.author_username ?? ""),
+    String(m.authorGlobalName ?? m.author_global_name ?? ""),
+    String(m.eventType ?? m.event_type ?? ""),
+    Number(m.createdAtMs ?? m.created_at_ms ?? 0),
+    attSig,
+  ].join("\u001f");
+}
+
+/** @param {Record<string, unknown>} a @param {Record<string, unknown>} b */
+function sameMessageForMerge(a, b) {
+  return messageRowMergeSignature(a) === messageRowMergeSignature(b);
+}
+
+/** @param {Array<Record<string, unknown>>} messages */
+function isSortedByTimeAsc(messages) {
+  for (let i = 1; i < messages.length; i += 1) {
+    if (msgTimeMs(messages[i]) < msgTimeMs(messages[i - 1])) return false;
+  }
+  return true;
+}
+
 /**
  * @param {Array<Record<string, unknown>>} prev
  * @param {Array<Record<string, unknown>>} incoming
+ * @returns {Array<Record<string, unknown>>} 无实质变化时返回 prev 同一引用，避免消息列表整表重绘
  */
 export function mergeChannelMessages(prev, incoming) {
+  if (!incoming.length) return prev;
   const map = new Map();
   for (const m of prev) {
-    const id = String(m.messageId ?? m.message_id ?? "");
+    const id = messageRowId(m);
     if (id) map.set(id, m);
   }
+  let changed = false;
   for (const m of incoming) {
-    const id = String(m.messageId ?? m.message_id ?? "");
-    if (id) map.set(id, m);
+    const id = messageRowId(m);
+    if (!id) continue;
+    const existing = map.get(id);
+    if (!existing) {
+      map.set(id, m);
+      changed = true;
+      continue;
+    }
+    if (!sameMessageForMerge(existing, m)) {
+      map.set(id, m);
+      changed = true;
+    }
   }
-  return [...map.values()].sort(
-    (a, b) => Number(a.createdAtMs ?? a.created_at_ms ?? 0) - Number(b.createdAtMs ?? b.created_at_ms ?? 0)
-  );
+  if (!changed) return prev;
+  const next = [...map.values()].sort((a, b) => msgTimeMs(a) - msgTimeMs(b));
+  if (prev.length === next.length && prev.every((p, i) => next[i] === p)) {
+    return prev;
+  }
+  return next;
 }
 
 /** @param {Record<string, unknown>} row */
@@ -214,7 +267,9 @@ export const MESSAGE_GROUP_GAP_MS = 10 * 60 * 1000;
  * @returns {Array<{ head: Record<string, unknown>, tail: Record<string, unknown>[] }>}
  */
 export function groupChannelMessages(messages, gapMs = MESSAGE_GROUP_GAP_MS) {
-  const sorted = [...messages].sort((a, b) => msgTimeMs(a) - msgTimeMs(b));
+  const sorted = isSortedByTimeAsc(messages)
+    ? messages
+    : [...messages].sort((a, b) => msgTimeMs(a) - msgTimeMs(b));
   /** @type {Array<{ head: Record<string, unknown>, tail: Record<string, unknown>[] }>} */
   const groups = [];
   for (const m of sorted) {
@@ -272,19 +327,44 @@ export function upsertChannelItem(list, ch) {
   const idx = list.findIndex((c) => c.channelId === ch.channelId);
   if (idx >= 0) {
     const prev = list[idx];
+    const prevMs = Number(prev.lastMessageAtMs ?? 0);
+    const nextMs = Number(ch.lastMessageAtMs ?? prevMs);
+    const nextPreview = String(ch.lastMessagePreview ?? prev.lastMessagePreview ?? "");
+    const prevPreview = String(prev.lastMessagePreview ?? "");
+    const nextName = ch.name || prev.name;
+    const nextGuild = ch.guildId || prev.guildId;
+    const settledMs = Number.isFinite(nextMs) && nextMs > 0 ? nextMs : prevMs;
+    if (
+      nextPreview === prevPreview &&
+      settledMs <= prevMs + 500 &&
+      nextName === prev.name &&
+      nextGuild === prev.guildId
+    ) {
+      return;
+    }
     list[idx] = {
       ...prev,
       ...ch,
-      name: ch.name || prev.name,
-      guildId: ch.guildId || prev.guildId,
+      name: nextName,
+      guildId: nextGuild,
+      lastMessageAtMs: settledMs,
+      lastMessagePreview: nextPreview,
     };
+    // 仅在新消息时间更晚或预览变化明显时再重排，避免 REST/WS 重复推送导致侧栏抖动
+    if (nextMs > prevMs + 500) {
+      list.sort(
+        (a, b) =>
+          Number(b.lastMessageAtMs ?? 0) - Number(a.lastMessageAtMs ?? 0) ||
+          a.name.localeCompare(b.name)
+      );
+    }
   } else {
     list.push(ch);
+    list.sort(
+      (a, b) =>
+        Number(b.lastMessageAtMs ?? 0) - Number(a.lastMessageAtMs ?? 0) || a.name.localeCompare(b.name)
+    );
   }
-  list.sort(
-    (a, b) =>
-      Number(b.lastMessageAtMs ?? 0) - Number(a.lastMessageAtMs ?? 0) || a.name.localeCompare(b.name)
-  );
 }
 
 /** @param {Record<string, unknown>} row */

@@ -20,7 +20,7 @@ export async function fetchChannels(guildId) {
 }
 
 /**
- * @param {{ guildId?: string, channelId: string, limit?: number, days?: number }} q
+ * @param {{ guildId?: string, channelId: string, limit?: number, days?: number, before?: string }} q
  */
 export async function fetchChannelMessages(q) {
   const params = new URLSearchParams({
@@ -29,10 +29,14 @@ export async function fetchChannelMessages(q) {
     order: "asc",
   });
   if (q.guildId) params.set("guild_id", q.guildId);
-  if (q.days) params.set("days", String(q.days));
+  if (q.before) params.set("before", q.before);
+  else if (q.days) params.set("days", String(q.days));
   const res = await fetch(`/api/discord/messages?${params}`);
   const data = await readOkJson(res, "加载消息失败");
-  return /** @type {Array<Record<string, unknown>>} */ (data.rows ?? []);
+  return {
+    rows: /** @type {Array<Record<string, unknown>>} */ (data.rows ?? []),
+    fallbackOlder: Boolean(data.fallbackOlder),
+  };
 }
 
 /**
@@ -62,6 +66,26 @@ export async function navigateDiscordChannel(guildId, channelId) {
     body: JSON.stringify({ guildId, channelId }),
   });
   return readOkJson(res, "CDP 跳转失败");
+}
+
+/**
+ * 驱动 CDP 内 Discord 网页向上滚动，触发历史消息 REST 采集。
+ * @param {string} guildId
+ * @param {string} channelId
+ * @param {{ beforeMessageId?: string }} [opts]
+ */
+export async function scrollDiscordChannelHistory(guildId, channelId, opts = {}) {
+  const beforeMessageId = String(opts.beforeMessageId ?? "").trim();
+  const res = await fetch("/api/cdp/discord-channel-scroll-up", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      guildId,
+      channelId,
+      ...(beforeMessageId ? { beforeMessageId } : {}),
+    }),
+  });
+  return readOkJson(res, "CDP 向上翻页失败");
 }
 
 /** @returns {Promise<{ cdpChannelId: string, cdpGuildId: string }>} */

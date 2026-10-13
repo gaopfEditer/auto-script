@@ -31,7 +31,11 @@ import {
   readTelegramChannelProfiles,
 } from "./telegram-channel-profiles.js";
 import { getDebugConfig, isDebugMode, setDebugMode } from "./discord-debug.js";
-import { isBlockedWsPayload, isForwardableFramePayload } from "./ws-noise-filter.js";
+import {
+  isBlockedWsPayload,
+  isDiscordGatewayPayload,
+  isForwardableFramePayload,
+} from "./ws-noise-filter.js";
 import { createLogger, setLogLevel } from "./logger.js";
 import { hashBuffer, tryOpenStore } from "./store.js";
 import { findFreePortNear, killListenersOnPort } from "../scripts/kill-port.mjs";
@@ -253,6 +257,13 @@ async function main() {
       log.warn(`discord ingest diag: ${/** @type {Error} */ (e).message}`);
     });
     if (!isDebugMode()) return;
+    if (
+      evt.kind === "ws_frame_parsed" &&
+      evt.parsedJson != null &&
+      !isDiscordGatewayPayload(evt.parsedJson)
+    ) {
+      return;
+    }
     broadcast("diag", summarizeDiagForBroadcast(evt));
   };
 
@@ -292,6 +303,8 @@ async function main() {
   let frameSeq = 0;
   /** @type {null | ((guildId: string, channelId: string, trace?: { clientTraceId?: string }) => Promise<unknown>)} */
   let navigateDiscordImpl = null;
+  /** @type {((guildId: string, channelId: string, traceCtx?: { clientTraceId?: string }) => Promise<unknown>) | null} */
+  let scrollDiscordHistoryImpl = null;
   /** @type {{ state: 'disabled' | 'pending' | 'ready' | 'error', attempt: number, error?: string }} */
   let cdpBoot = { state: config.cdpConnectUrl ? "pending" : "disabled", attempt: 0 };
 
@@ -350,7 +363,7 @@ async function main() {
         "CDP 未就绪：请确认 Chrome 已 --remote-debugging-port=9222 且已登录 Discord；collect:ui 会自动重试";
     } else if (discordTabs <= 0) {
       hint =
-        "CDP 已连接但未检测到 discord.com 标签：下次保活/轮询会尝试自动新建 1 个 Discord 标签（需 COLLECTOR_CDP_AUTO_GOTO≠0 且已配置 START_URL）。请确保 Chrome 已登录 Discord。";
+        `CDP 已连接但未检测到 discord.com 标签：将自动打开 ${config.cdpDiscordUrl}（需 COLLECTOR_CDP_AUTO_GOTO≠0）。请确保 Chrome 已登录 Discord。`;
     }
     return {
       state: cdpBoot.state,
@@ -1029,15 +1042,37 @@ async function main() {
       const guildId = String(req.query.guild_id ?? req.query.guildId ?? "").trim();
       const orderParam = String(req.query.order ?? "asc").toLowerCase();
       const wantChronological = orderParam !== "desc";
-      const fromMs = parseMessageDaysFromMs(req);
-      const rows = await store.listRecentMessages(
+      const beforeMessageId = String(req.query.before ?? req.query.before_message_id ?? "").trim();
+      const fromMs = beforeMessageId ? undefined : parseMessageDaysFromMs(req);
+      let rows = await store.listRecentMessages(
         limit,
-        { channelId, guildId, order: "desc", fromMs },
+        {
+          channelId,
+          guildId,
+          order: "desc",
+          fromMs,
+          beforeMessageId: beforeMessageId || undefined,
+        },
         { includeRaw: true }
       );
+      let fallbackOlder = false;
+      if (channelId && !beforeMessageId && fromMs != null && rows.length === 0) {
+        rows = await store.listRecentMessages(
+          limit,
+          { channelId, guildId, order: "desc" },
+          { includeRaw: true }
+        );
+        fallbackOlder = rows.length > 0;
+      }
       let clientRows = discordMessageRowsForClient(rows);
       if (wantChronological) clientRows = clientRows.reverse();
-      res.json({ ok: true, debugMode: isDebugMode(), rows: clientRows, fromMs: fromMs ?? null });
+      res.json({
+        ok: true,
+        debugMode: isDebugMode(),
+        rows: clientRows,
+        fromMs: fallbackOlder ? null : fromMs ?? null,
+        fallbackOlder,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
     }
@@ -1070,11 +1105,18 @@ async function main() {
         const batch = channelIds.slice(i, i + concurrency);
         await Promise.all(
           batch.map(async (channelId) => {
-            const rows = await store.listRecentMessages(
+            let rows = await store.listRecentMessages(
               perChannel,
               { channelId, guildId, order: "desc", fromMs },
               { includeRaw: true }
             );
+            if (!rows.length) {
+              rows = await store.listRecentMessages(
+                perChannel,
+                { channelId, guildId, order: "desc" },
+                { includeRaw: true }
+              );
+            }
             byChannel[channelId] = discordMessageRowsForClient(rows).reverse();
           })
         );
@@ -1172,6 +1214,43 @@ async function main() {
         res.json({ ok: true, ...out, ...tracePayload });
       } else {
         res.status(500).json({ ok: false, error: out?.error ?? "导航失败", ...tracePayload });
+      }
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e), ...tracePayload });
+    }
+  });
+
+  /** Show 向上翻页：驱动 CDP 内 Discord 消息列表上滚，触发 /messages?before= 采集 */
+  app.post("/api/cdp/discord-channel-scroll-up", async (req, res) => {
+    const guildId = String(req.body?.guildId ?? req.query?.guild_id ?? "").trim();
+    const channelId = String(req.body?.channelId ?? req.query?.channel_id ?? "").trim();
+    const beforeMessageId = String(req.body?.beforeMessageId ?? req.body?.before ?? "").trim() || undefined;
+    const clientTraceId = String(req.body?.clientTraceId ?? "").trim() || undefined;
+    const tracePayload = clientTraceId ? { clientTraceId } : {};
+
+    if (!guildId || !channelId) {
+      res.status(400).json({ ok: false, error: "缺少 guildId 或 channelId" });
+      return;
+    }
+    if (typeof scrollDiscordHistoryImpl !== "function") {
+      res.status(503).json({ ok: false, error: "CDP 尚未就绪" });
+      return;
+    }
+
+    log.info(
+      `[discord-scroll-up] POST guild=${guildId} channel=${channelId}${beforeMessageId ? ` before=${beforeMessageId}` : ""}`
+    );
+    try {
+      const out = /** @type {{ ok?: boolean, error?: string }} */ (
+        await scrollDiscordHistoryImpl(guildId, channelId, {
+          beforeMessageId,
+          clientTraceId,
+        })
+      );
+      if (out?.ok) {
+        res.json({ ok: true, ...out, ...tracePayload });
+      } else {
+        res.status(500).json({ ok: false, error: out?.error ?? "CDP 上滚失败", ...tracePayload });
       }
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e), ...tracePayload });
@@ -1327,6 +1406,7 @@ async function main() {
   log.info(`信号卡片监听 ${getSignalChannelIds().size} 个 Discord 频道（DISCORD_SIGNAL_CHANNEL_IDS 非空则覆盖内置列表）`);
   const cdpMonitorOpts = {
     startUrl: config.startUrl,
+    cdpDiscordUrl: config.cdpDiscordUrl,
     cdpConnectUrl: config.cdpConnectUrl,
     pageReloadIntervalMs: config.pageReloadIntervalMs,
     cdpAutoGoto: config.cdpAutoGoto,
@@ -1373,7 +1453,9 @@ async function main() {
       log.warn("未配置 CDP_CONNECT_URL — Discord Gateway 采集未启动（仅 REST/历史消息可用）");
       return;
     }
-    log.info(`CDP 附加: ${config.cdpConnectUrl} — 请在 Chrome 中打开并登录 ${config.startUrl}`);
+    log.info(
+      `CDP 附加: ${config.cdpConnectUrl} — 保活/断页恢复频道 ${config.cdpDiscordUrl}${config.startUrl !== config.cdpDiscordUrl ? `（START_URL=${config.startUrl}）` : ""}`
+    );
     const cdpLog = createLogger("cdp");
     for (;;) {
       cdpBoot = { state: "pending", attempt: cdpBoot.attempt + 1 };
@@ -1383,15 +1465,17 @@ async function main() {
           session = null;
         }
         navigateDiscordImpl = null;
+        scrollDiscordHistoryImpl = null;
         session = await startCdpWebSocketMonitor(cdpMonitorOpts, cdpLog);
         navigateDiscordImpl = (g, c, t) => session.navigateDiscordChannel(g, c, t);
+        scrollDiscordHistoryImpl = (g, c, t) => session.scrollDiscordChannelHistory(g, c, t);
         webhookForward.setBrowserPost((url, payload) => session.postWebhookViaBrowser(url, payload));
         channelRotate?.stop();
         channelRotate = startCdpChannelRotate({
           enabled: config.cdpChannelRotate,
           intervalMs: config.cdpChannelRotateIntervalMs,
           dwellMs: config.cdpChannelRotateDwellMs,
-          startUrl: config.startUrl,
+          startUrl: config.cdpDiscordUrl,
           navigate: (g, c) => session.navigateDiscordChannel(g, c),
           log: createLogger("channel-rotate"),
         });
