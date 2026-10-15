@@ -1,6 +1,7 @@
 """形态信号列表 / 卡片 / 胜率库 共用推送策略（2026-09 优化）。"""
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -36,6 +37,12 @@ _BLOCKED_STRUCTURE_KINDS = frozenset({"curvature_decay"})
 
 # 形态信号列表已停用周期（不入库 / 不扫描 / 不结算）
 PATTERN_DISABLED_INTERVALS = frozenset({"30m", "30min"})
+
+# 形态 ticker / 胜率入库最低综合分档（D=噪声）；结构倾向一档除外
+_TICKER_MIN_CONFLUENCE_TIER = str(
+    os.getenv("OI_PATTERN_TICKER_MIN_CONFLUENCE_TIER", "C")
+).strip().upper() or "C"
+_TIER_RANK = {"A": 4, "B": 3, "C": 2, "D": 1}
 
 
 def is_disabled_pattern_interval(interval: str | None) -> bool:
@@ -99,6 +106,42 @@ def is_blocked_structure_kind(kind: str) -> bool:
     return str(kind or "").strip() in _BLOCKED_STRUCTURE_KINDS
 
 
+def _ticker_confluence_too_low(alert: dict[str, Any]) -> bool:
+    """推送层质量闸：综合分低于 env 门槛不入 ticker（结构倾向卡片豁免）。"""
+    kind = str(alert.get("kind") or alert.get("signal_kind") or "")
+    if kind == "structure_market_bias":
+        return False
+    if alert.get("observation_only"):
+        return True
+    min_t = _TICKER_MIN_CONFLUENCE_TIER
+    if not min_t or min_t == "ALL" or min_t == "D":
+        return False
+    need = _TIER_RANK.get(min_t, 0)
+    if need <= 0:
+        return False
+    try:
+        from oi_mornitor.pattern_mtf_resonance import attach_mtf_resonance
+        from oi_mornitor.signal_confluence import compute_signal_confluence, tier_meets_minimum
+
+        pseudo = {
+            "key": "gate",
+            "symbol": alert.get("symbol"),
+            "tradeSymbol": alert.get("symbol"),
+            "typeLabel": alert.get("type_label") or alert.get("pattern_label"),
+            "interval": alert.get("interval"),
+            "side": alert.get("side"),
+            "source": "telegram_push",
+            "structure_bias": alert.get("structure_bias"),
+            "bias_score": alert.get("bias_score"),
+            "market_structure_bias": alert.get("market_structure_bias"),
+        }
+        attach_mtf_resonance([pseudo])
+        tier = str(compute_signal_confluence(pseudo).get("tier") or "D").upper()
+        return not tier_meets_minimum(tier, min_t)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def is_blocked_ticker_alert(alert: dict[str, Any]) -> bool:
     """形态 ticker / Toast 落盘前过滤。"""
     if not isinstance(alert, dict):
@@ -129,6 +172,8 @@ def is_blocked_ticker_alert(alert: dict[str, Any]) -> bool:
     if is_blocked_card_type_label(lab):
         return True
     if typ == "vp_cont_thrust" and str(alert.get("side") or "").lower() == "short":
+        return True
+    if _ticker_confluence_too_low(alert):
         return True
     return False
 

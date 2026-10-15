@@ -677,7 +677,7 @@ def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
             "vol_ratio": vr,
             "defense": high_i,
             "support_ref": mid,
-            "oi_anomaly": oi_on,
+            "oi_anomaly": bool(row.get("oi_anomaly")),
         })
         used.add(i)
     return out

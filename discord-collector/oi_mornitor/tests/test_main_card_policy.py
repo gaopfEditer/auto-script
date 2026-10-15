@@ -4,6 +4,7 @@ import unittest
 
 from oi_mornitor.main_card_policy import (
     is_main_card_mirror_eligible,
+    is_main_structure_bias_mirror_eligible,
     is_volume_price_card,
     main_card_intervals_for_symbol,
 )
@@ -30,6 +31,31 @@ class MainCardPolicyTests(unittest.TestCase):
             "main_mirror_vol_ok": True,
         }
         self.assertFalse(is_main_card_mirror_eligible(struct))
+
+    def test_structure_bias_main_for_benchmark(self) -> None:
+        bias = {
+            "type": "structure_pattern_card",
+            "symbol": "QQQUSDT",
+            "interval": "15m",
+            "kind": "structure_market_bias",
+            "type_label": "结构走弱",
+            "bias_score": 62,
+            "side": "bear",
+        }
+        self.assertTrue(is_main_structure_bias_mirror_eligible(bias))
+        self.assertTrue(is_main_card_mirror_eligible(bias))
+
+    def test_structure_bias_below_score_not_main(self) -> None:
+        bias = {
+            "type": "structure_pattern_card",
+            "symbol": "BTCUSDT",
+            "interval": "15m",
+            "kind": "structure_market_bias",
+            "type_label": "结构走弱",
+            "bias_score": 40,
+            "side": "bear",
+        }
+        self.assertFalse(is_main_structure_bias_mirror_eligible(bias))
 
     def test_candle_pattern_mirror_by_symbol_interval(self) -> None:
         candle = {

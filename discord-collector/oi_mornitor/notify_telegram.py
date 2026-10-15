@@ -168,9 +168,44 @@ def format_structure_bottom_message(alert: dict[str, Any]) -> str:
     )
 
 
+def format_structure_bias_message(alert: dict[str, Any]) -> str:
+    """摆动 HH/HL 或 LH/LL 软评分结构倾向（非经典形态破位）。"""
+    pair = _pair_label(str(alert.get("symbol") or ""))
+    iv = str(alert.get("interval") or "—")
+    t = _fmt_time(alert.get("kline_open_time") or alert.get("time") or 0)
+    side = str(alert.get("side") or "")
+    bias_label = str(alert.get("type_label") or ("结构走强" if side == "bull" else "结构走弱"))
+    direction = "看涨" if side == "bull" else "看跌"
+    pattern = str(alert.get("pattern_label") or "")
+    price = _fmt_price(alert.get("price") if alert.get("price") is not None else alert.get("close"))
+    try:
+        score = int(alert.get("bias_score") or 0)
+    except (TypeError, ValueError):
+        score = 0
+    bias = alert.get("structure_bias") if isinstance(alert.get("structure_bias"), dict) else {}
+    detail_lines = [str(x) for x in (bias.get("reasons") or []) if x][:4]
+    detail = "\n".join(f"• {ln}" for ln in detail_lines) if detail_lines else "• 摆动高低点序列同向"
+    return (
+        f"📐 信号: {bias_label} ({direction})\n"
+        f"💰 交易对: {pair}\n"
+        f"⏰ 周期: {iv}\n"
+        f"⏰ 时间: {t}\n"
+        f"📊 说明: {pattern}\n"
+        f"💵 现价: {price}\n"
+        f"📈 结构强度: {score}/100\n"
+        f"------------------------\n"
+        f"🔍 摆动结构:\n"
+        f"{detail}\n"
+        f"------------------------\n"
+        f"⚠️ 软评分参考，非自动交易"
+    )
+
+
 def format_structure_card_message(alert: dict[str, Any]) -> str:
     side = str(alert.get("side") or "")
     kind = str(alert.get("kind") or "")
+    if kind == "structure_market_bias":
+        return format_structure_bias_message(alert)
     if side == "bull" or kind in ("spring_2b", "bottom_secondary_test"):
         return format_structure_bottom_message(alert)
     return format_structure_top_message(alert)
@@ -395,7 +430,7 @@ def _after_candle_card_pushed(alert: dict[str, Any]) -> None:
 
 
 def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
-    """顶部/底部结构 → OI_CANDLE_CARD 形态群（不进 MAIN 群）。"""
+    """顶部/底部/结构倾向 → 形态群；基准币一档结构倾向可镜像 MAIN。"""
     from oi_mornitor.telegram_push_toggles import is_structure_push_enabled
 
     if not is_structure_push_enabled():
@@ -403,6 +438,8 @@ def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     text = format_structure_card_message(alert)
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
     ok = _send_card_text_to_chat(alert, text, primary) if primary else False
+    if ok:
+        _mirror_to_main_card(alert, text)
     pushed = ok
     if pushed:
         try:

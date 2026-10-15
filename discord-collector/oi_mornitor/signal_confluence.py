@@ -8,6 +8,10 @@ from typing import Any
 
 from oi_mornitor.main_card_policy import is_main_card_symbol
 from oi_mornitor.pattern_mtf_resonance import mtf_resonance_family
+from oi_mornitor.strategy.structure_market_bias import (
+    is_counter_structure_signal,
+    structure_bias_side_for_signal,
+)
 
 _TIER_ORDER = ("A", "B", "C", "D")
 
@@ -183,6 +187,38 @@ def compute_signal_confluence(rec: dict[str, Any]) -> dict[str, Any]:
 
     if fam == "vp_thrust" and mtf_n < 2:
         score = min(score, 45)
+
+    bias_raw = rec.get("market_structure_bias") or rec.get("structureBias")
+    bias_score = 0
+    if isinstance(rec.get("structure_bias"), dict):
+        bias_raw = bias_raw or rec["structure_bias"].get("bias")
+        try:
+            bias_score = int(rec["structure_bias"].get("score") or rec.get("bias_score") or 0)
+        except (TypeError, ValueError):
+            bias_score = 0
+    elif rec.get("bias_score") is not None:
+        try:
+            bias_score = int(rec.get("bias_score") or 0)
+        except (TypeError, ValueError):
+            bias_score = 0
+    bias_side = str(bias_raw or "").lower() if bias_raw else ""
+    sig_side = side or structure_bias_side_for_signal(str(rec.get("dir") or ""))
+    if bias_side in ("bull", "bear") and bias_score >= 50 and sig_side:
+        if is_counter_structure_signal(sig_side, bias_side, bias_score):
+            score -= 28
+            score = min(score, 36)
+            reasons.append(f"逆摆动结构({bias_side}) -28 封顶C")
+        elif (
+            (bias_side == "bull" and sig_side == "long")
+            or (bias_side == "bear" and sig_side == "short")
+        ):
+            score += 10
+            reasons.append("顺摆动结构 +10")
+
+    # 孤立 15m 蜡烛：无 MTF 时收紧（近期亏损主因）
+    if fam in ("shooting_star", "inverted_hammer") and iv == "15m" and mtf_n < 2:
+        score = min(score, 42)
+        reasons.append("孤立15m蜡烛封顶")
 
     score = max(0, min(100, score))
     tier = _tier_from_score(score)
