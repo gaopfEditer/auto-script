@@ -1,5 +1,13 @@
 {
-  "order": ["vpn", "fileManager", "logs", "chrome", "cursor", "pull_code_script"],
+  "order": [
+    "vpn",
+    "fileManager",
+    "logs",
+    "chrome",
+    "cursor",
+    "pull_code_script",
+    "grokbot"
+  ],
   "apps": {
     "vpn": {
       "enabled": true,
@@ -55,6 +63,13 @@
       "enabled": true,
       "label": "打开日志",
       "path": "C:\\Users\\eason\\Desktop\\---2025年度计划.md.lnk",
+      "args": "",
+      "delay": 300
+    },
+    "grokbot": {
+      "enabled": true,
+      "label": "打开 Grok Bot",
+      "path": "C:\\\\Users\\\\eason\\\\AppData\\\\Local\\\\Programs\\\\Grok Bot\\\\Grok Bot.exe",
       "args": "",
       "delay": 300
     }
