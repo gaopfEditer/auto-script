@@ -14,6 +14,7 @@ from oi_mornitor.config import (
     PATTERN_WATCH_MAX,
     PATTERN_WATCH_MAX_SEC,
 )
+from oi_mornitor.sqlite_util import connect as sqlite_connect
 
 SLOT_MANUAL = "manual"
 SLOT_DEFAULT = ""
@@ -80,9 +81,7 @@ class PatternStateTracker:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return sqlite_connect(self.db_path)
 
     def _init_db(self) -> None:
         with self._connect() as conn:

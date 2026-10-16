@@ -10,7 +10,7 @@ from typing import Any
 import aiohttp
 
 from oi_mornitor import http_backoff
-from oi_mornitor.config import BYBIT_BASE_URL, HTTP_TIMEOUT_SEC, PATTERN_STATE_DB
+from oi_mornitor.config import BACKTEST_KLINES_DIR, BYBIT_BASE_URL, HTTP_TIMEOUT_SEC
 from oi_mornitor.symbol_aliases import is_stablecoin_symbol, normalize_usdt_symbol
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _MAJORS = frozenset({"BTCUSDT", "ETHUSDT", "SOLUSDT"})
 _DEFAULT_TOP_N = 200
 _DEFAULT_MIN_LISTING_DAYS = 14
-_UNIVERSE_DIR = Path(PATTERN_STATE_DB).resolve().parent / "backtest_klines" / "universe"
+_UNIVERSE_DIR = Path(BACKTEST_KLINES_DIR) / "universe"
 
 
 async def _fetch_instruments(session: aiohttp.ClientSession) -> list[dict[str, Any]]:

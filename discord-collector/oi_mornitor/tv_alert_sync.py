@@ -33,6 +33,7 @@ from oi_mornitor.config import (
     TV_ALERT_SCRIPT_TIMEOUT_SEC,
 )
 from oi_mornitor.matrix_breakout import collect_matrix_leaderboard
+from oi_mornitor.sqlite_util import connect as sqlite_connect
 
 logger = logging.getLogger("OI_Radar")
 
@@ -42,9 +43,7 @@ TV_ALERT_LOG_MAX_ROWS = int(os.environ.get("TV_ALERT_LOG_MAX_ROWS", "50000"))
 
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return sqlite_connect(db_path, timeout=30.0)
 
 
 def _init_db(conn: sqlite3.Connection) -> None:

@@ -22,11 +22,11 @@ from oi_mornitor.backtest_card_funnel import (
 )
 from oi_mornitor.backtest_common import kline_window_ms, parse_ms, resolve_backtest_symbols, resolve_local_backtest_symbols
 from oi_mornitor.config import (
+    BACKTEST_KLINES_DIR,
     BYBIT_BASE_URL,
     CARD_PUSH_COOLDOWN_BARS,
     CANDLE_CARD_MAJOR_SYMBOLS,
     FAPI_BASE_URL,
-    PATTERN_STATE_DB,
 )
 from oi_mornitor.http_session import http_session_with_fallback, make_http_session, proxy_url
 from oi_mornitor.backtest_kline_store import BacktestKlineStore, storage_stats
@@ -94,7 +94,7 @@ class BacktestJob:
 _jobs: dict[str, BacktestJob] = {}
 _jobs_lock = asyncio.Lock()
 _MAX_JOBS = 8
-_JOB_DIR = Path(PATTERN_STATE_DB).resolve().parent / "backtest_klines" / "structure_jobs"
+_JOB_DIR = Path(BACKTEST_KLINES_DIR) / "structure_jobs"
 _LAST_JOB_FILE = _JOB_DIR / "latest.json"
 _INDEX_FILE = _JOB_DIR / "index.json"
 _MAX_LIST = 40

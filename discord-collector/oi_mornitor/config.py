@@ -167,6 +167,12 @@ PATTERN_PIN_TTL_SEC = int(os.getenv("OI_PATTERN_PIN_TTL_SEC", "86400"))
 # 卡片接入后置顶时长（默认 7 天，保证占住预留槽）
 PATTERN_CARD_PIN_TTL_SEC = int(os.getenv("OI_PATTERN_CARD_PIN_TTL_SEC", str(7 * 86400)))
 PATTERN_STATE_DB = _PKG_ROOT / "data" / "pattern_state.db"
+BACKTEST_KLINES_DIR = Path(
+    os.getenv(
+        "OI_BACKTEST_KLINES_DIR",
+        str(Path(PATTERN_STATE_DB).resolve().parent / "backtest_klines"),
+    )
+)
 PATTERN_CHART_DEFAULT_LIMIT = int(os.getenv("OI_PATTERN_CHART_LIMIT", "500"))
 PATTERN_CHART_MAX_LIMIT = int(os.getenv("OI_PATTERN_CHART_MAX_LIMIT", "1500"))
 PATTERN_CHART_LOAD_CHUNK = int(os.getenv("OI_PATTERN_CHART_LOAD_CHUNK", "300"))

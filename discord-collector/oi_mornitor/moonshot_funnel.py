@@ -44,6 +44,7 @@ from oi_mornitor.config import (
     PATTERN_PIVOT_WINDOW,
     PATTERN_STATE_DB,
 )
+from oi_mornitor.sqlite_util import connect as sqlite_connect
 from oi_mornitor.market_snapshot import TIER_HEAVY, TIER_MID
 from oi_mornitor.strategy.indicators import enrich_strategy_indicators
 from oi_mornitor.symbol_aliases import is_stablecoin_symbol
@@ -378,9 +379,7 @@ class MoonshotStore:
         self._init()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return sqlite_connect(self.db_path)
 
     def _init(self) -> None:
         with self._connect() as conn:

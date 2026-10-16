@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from oi_mornitor.config import BREAKOUT_STATE_DB, BREAKOUT_WATCH_MAX_SEC
+from oi_mornitor.sqlite_util import connect as sqlite_connect
 
 STATUS_DETECTED = "BREAKOUT_DETECTED"
 STATUS_TRIGGERED = "TRIGGER_SIGNAL"
@@ -36,9 +37,7 @@ class BreakoutStateTracker:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return sqlite_connect(self.db_path)
 
     def _init_db(self) -> None:
         with self._connect() as conn:

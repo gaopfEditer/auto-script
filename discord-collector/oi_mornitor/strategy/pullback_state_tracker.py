@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from oi_mornitor.config import STRATEGY_STATE_DB, STRATEGY_WATCH_MAX_SEC
+from oi_mornitor.sqlite_util import connect as sqlite_connect
 from oi_mornitor.strategy.pullback import (
     STATUS_BREAKOUT,
     STATUS_EXPIRED,
@@ -39,9 +40,7 @@ class PullbackStateTracker:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return sqlite_connect(self.db_path)
 
     def _init_db(self) -> None:
         with self._connect() as conn:

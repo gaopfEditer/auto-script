@@ -15,13 +15,13 @@ import aiohttp
 from oi_mornitor.backtest_common import kline_window_ms, parse_ms, resolve_backtest_symbols, resolve_symbols
 from oi_mornitor.backtest_kline_store import BacktestKlineStore, require_parquet_engine, storage_stats
 from oi_mornitor.backtest_universe import load_latest_universe
-from oi_mornitor.config import BYBIT_BASE_URL, PATTERN_STATE_DB
+from oi_mornitor.config import BACKTEST_KLINES_DIR, BYBIT_BASE_URL
 from oi_mornitor.http_session import http_session_with_fallback
 from oi_mornitor.strategy.structure_signals import STRUCTURE_CARD_INTERVALS
 
 logger = logging.getLogger(__name__)
 
-_ROOT = Path(PATTERN_STATE_DB).resolve().parent / "backtest_klines"
+_ROOT = Path(BACKTEST_KLINES_DIR)
 _PREFETCH_DIR = _ROOT / "prefetch_jobs"
 _LAST_PREFETCH_FILE = _ROOT / "prefetch_last.json"
 

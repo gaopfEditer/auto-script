@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from oi_mornitor.config import SANDBOX_STATE_DB
+from oi_mornitor.sqlite_util import connect as sqlite_connect
 
 
 class CardTracker:
@@ -17,9 +18,7 @@ class CardTracker:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        return conn
+        return sqlite_connect(self.db_path)
 
     def _init_db(self) -> None:
         with self._connect() as conn:

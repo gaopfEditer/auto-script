@@ -10,13 +10,14 @@ from typing import Any
 import aiohttp
 import pandas as pd
 
-from oi_mornitor.config import PATTERN_STATE_DB
+from oi_mornitor.config import BACKTEST_KLINES_DIR
+from oi_mornitor.sqlite_util import connect as sqlite_connect
 from oi_mornitor.exchange_sources import _INTERVAL_MS, fetch_binance_klines_range, fetch_bybit_klines_range
 from oi_mornitor.symbol_aliases import normalize_usdt_symbol
 
 logger = logging.getLogger(__name__)
 
-_ROOT = Path(PATTERN_STATE_DB).resolve().parent / "backtest_klines"
+_ROOT = Path(BACKTEST_KLINES_DIR)
 
 
 def require_parquet_engine() -> None:
@@ -80,9 +81,7 @@ class BacktestKlineStore:
         self._init_meta()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.meta_db), timeout=30)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return sqlite_connect(self.meta_db, timeout=30.0)
 
     def _init_meta(self) -> None:
         with self._connect() as conn:

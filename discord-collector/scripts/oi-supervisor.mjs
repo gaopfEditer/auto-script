@@ -3,7 +3,7 @@
  * 若被旁路/旧实例占用则接管并拉起本目录进程。
  */
 import { spawn, execSync } from "node:child_process";
-import { existsSync, mkdirSync, createWriteStream, renameSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, createWriteStream, renameSync, statSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -160,17 +160,20 @@ export function startOiSupervisor(opts = {}) {
   const logDir = resolve(OI_DIR, "data");
   if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
   const logPath = resolve(logDir, "oi-supervisor.log");
-  const logMaxBytes = Number(process.env.OI_SUPERVISOR_LOG_MAX_MB ?? 80) * 1024 * 1024;
+  const logMaxBytes = Number(process.env.OI_SUPERVISOR_LOG_MAX_MB ?? 50) * 1024 * 1024;
 
   function rotateLogIfNeeded() {
     if (!logMaxBytes || logMaxBytes < 1024 * 1024) return;
     try {
       if (!existsSync(logPath)) return;
       if (statSync(logPath).size < logMaxBytes) return;
-      const bak = `${logPath}.1`;
-      if (existsSync(bak)) renameSync(bak, `${logPath}.2`);
-      renameSync(logPath, bak);
-      log.info?.(`[oi-supervisor] 日志轮转 ${logPath} → ${bak}`);
+      const bak1 = `${logPath}.1`;
+      const bak2 = `${logPath}.2`;
+      // keep 3: current + .1 + .2; drop existing .2 before shift
+      if (existsSync(bak2)) unlinkSync(bak2);
+      if (existsSync(bak1)) renameSync(bak1, bak2);
+      renameSync(logPath, bak1);
+      log.info?.(`[oi-supervisor] 日志轮转 ${logPath} → ${bak1} (max=${Math.round(logMaxBytes / 1024 / 1024)}MB, keep=3)`);
     } catch (e) {
       log.warn?.(`[oi-supervisor] 日志轮转失败: ${/** @type {Error} */ (e).message}`);
     }
@@ -314,6 +317,7 @@ export function startOiSupervisor(opts = {}) {
   });
 
   timer = setInterval(() => {
+    rotateLogIfNeeded();
     void ensureOnce().catch((e) =>
       log.warn?.(`[oi-supervisor] 巡检失败: ${/** @type {Error} */ (e).message}`)
     );
