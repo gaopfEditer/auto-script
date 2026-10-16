@@ -76,7 +76,18 @@ from oi_mornitor.telegram_push_toggles import (
     is_candle_push_enabled,
     is_structure_push_enabled,
 )
-from oi_mornitor.main_card_policy import main_card_equity_symbols, main_card_intervals_for_symbol
+from oi_mornitor.config import MAIN_CARD_BENCHMARK_SYMBOLS
+from oi_mornitor.main_card_policy import (
+    is_main_benchmark_symbol,
+    main_benchmark_intervals,
+    main_card_equity_symbols,
+    main_card_intervals_for_symbol,
+)
+from oi_mornitor.strategy.structure_market_bias import (
+    STRUCTURE_BIAS_INTERVALS,
+    STRUCTURE_BIAS_KIND,
+    find_structure_bias_hit,
+)
 from oi_mornitor.notify_telegram import (
     send_candle_card_telegram_async,
     send_ma144_main_card_telegram_async,
@@ -1600,6 +1611,10 @@ class PatternMonitorEngine:
         for sym in sorted(set(alt_gainers) - set(alt_flow)):
             for iv in CANDLE_CARD_ALT_INTERVALS:
                 jobs.append((sym, iv, False, "dip"))
+        bench_ivs = sorted(main_benchmark_intervals())
+        for sym in sorted({str(s).upper() for s in MAIN_CARD_BENCHMARK_SYMBOLS if s}):
+            for iv in bench_ivs:
+                jobs.append((sym, iv, sym in majors, "benchmark"))
 
         logger.debug(
             "形态卡片任务 majors=%s flow=%s dip=%s jobs=%d",
@@ -1705,6 +1720,7 @@ class PatternMonitorEngine:
                 if self._card_emit_throttled(sym, iv, side, close_ts):
                     continue
                 type_label = str(hit.get("type_label") or kind)
+                bias_ctx = find_structure_bias_hit(df, now_ms=now_ms)
                 alert = {
                     "symbol": sym,
                     "type": "candle_pattern_card",
@@ -1736,6 +1752,12 @@ class PatternMonitorEngine:
                     "scan_ts": scan_ts,
                     "kline_close_time": close_ts * 1000,
                 }
+                if bias_ctx:
+                    alert["structure_bias"] = bias_ctx.get("structure_bias")
+                    alert["bias_score"] = bias_ctx.get("bias_score")
+                    alert["market_structure_bias"] = str(
+                        (bias_ctx.get("structure_bias") or {}).get("bias") or ""
+                    )
                 out.append(alert)
                 logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 try:
@@ -1856,6 +1878,71 @@ class PatternMonitorEngine:
                     self._card_last_emit[f"struct:{sym}:{iv}:{side}"] = close_ts
             return out
 
+        async def _emit_structure_bias(sym: str, iv: str, df: Any) -> list[dict[str, Any]]:
+            if not is_structure_push_enabled():
+                return []
+            if iv not in STRUCTURE_BIAS_INTERVALS:
+                return []
+            if not is_main_benchmark_symbol(sym):
+                return []
+            try:
+                hit = find_structure_bias_hit(df, now_ms=now_ms)
+            except Exception:  # noqa: BLE001
+                return []
+            if not hit:
+                return []
+            close_ts = int(hit["time"])
+            dedupe = f"{sym.upper()}:{iv}:struct_bias:{close_ts}"
+            if self._card_push_claimed(dedupe):
+                return []
+            side = str(hit.get("side") or "")
+            if side in ("bull", "bear") and self._structure_emit_throttled(
+                sym, iv, side, close_ts
+            ):
+                return []
+            type_label = str(hit.get("type_label") or "结构倾向")
+            alert = {
+                "symbol": sym,
+                "type": "structure_pattern_card",
+                "interval": iv,
+                "status": "STRUCTURE_BIAS_CARD",
+                "status_label": f"结构倾向 · {type_label}",
+                "signal_kind": STRUCTURE_BIAS_KIND,
+                "kind": STRUCTURE_BIAS_KIND,
+                "side": side,
+                "type_label": type_label,
+                "pattern_label": str(hit.get("pattern_label") or type_label),
+                "signal_text": str(hit.get("pattern_label") or type_label),
+                "structure_bias": hit.get("structure_bias"),
+                "bias_score": hit.get("bias_score"),
+                "price": float(hit.get("close") or hit.get("price") or 0),
+                "close": float(hit.get("close") or 0),
+                "high": float(hit.get("high") or 0),
+                "low": float(hit.get("low") or 0),
+                "open": float(hit.get("open") or 0),
+                "kline_open_time": close_ts,
+                "time": close_ts,
+                "message": f"{type_label} · {iv}",
+                "scan_ts": scan_ts,
+                "kline_close_time": close_ts * 1000,
+            }
+            out: list[dict[str, Any]] = [alert]
+            logger.info(
+                "📩 结构倾向 %s %s score=%s @%s",
+                sym,
+                type_label,
+                hit.get("bias_score"),
+                close_ts,
+            )
+            try:
+                ok = await send_structure_card_telegram_async(alert)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Telegram 结构倾向卡片失败 %s: %s", sym, exc)
+                ok = False
+            if ok and side in ("bull", "bear"):
+                self._card_last_emit[f"struct:{sym}:{iv}:{side}"] = close_ts
+            return out if ok else []
+
         async def _one(
             sym: str, iv: str, is_major: bool, pool_role: str = "all"
         ) -> list[dict[str, Any]]:
@@ -1887,8 +1974,11 @@ class PatternMonitorEngine:
                 out.extend(
                     await _emit_candle(sym, iv, is_major, pool_role, df, closed_ts)
                 )
-            if is_structure_push_enabled() and pool_role != "main_equity":
-                out.extend(await _emit_structure(sym, iv, df))
+            if is_structure_push_enabled():
+                if pool_role == "benchmark":
+                    out.extend(await _emit_structure_bias(sym, iv, df))
+                elif pool_role != "main_equity":
+                    out.extend(await _emit_structure(sym, iv, df))
             return out
 
         results = await asyncio.gather(

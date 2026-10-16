@@ -238,10 +238,23 @@ MAIN_CARD_TYPE_PREFIXES = tuple(
     x.strip()
     for x in os.getenv(
         "OI_MAIN_CARD_TYPE_PREFIXES",
-        "射击之星,倒锤子",
+        "射击之星,倒锤子,结构走强,结构走弱",
     ).split(",")
     if x.strip()
 )
+# 结构倾向一档推送基准币（始终扫描 15m/1h/4h 结构强弱）
+MAIN_CARD_BENCHMARK_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_MAIN_CARD_BENCHMARK_SYMBOLS", "BTCUSDT,QQQUSDT").split(",")
+    if s.strip()
+)
+MAIN_CARD_BENCHMARK_INTERVALS = filter_active_intervals(
+    tuple(
+        x.strip().lower()
+        for x in os.getenv("OI_MAIN_CARD_BENCHMARK_INTERVALS", "15m,1h,4h").split(",")
+        if x.strip()
+    )
+) or ("15m", "1h", "4h")
 # 形态信号列表结算摘要 → MAIN 群（北京时间 04/08/12/16/20/24 点各发一档）
 STATS_SETTLE_TELEGRAM = os.getenv(
     "OI_STATS_SETTLE_TELEGRAM", "1"
