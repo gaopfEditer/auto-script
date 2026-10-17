@@ -7,6 +7,7 @@ from unittest import mock
 
 from oi_mornitor.capital_flow_config import CF_ENABLED
 from oi_mornitor.capital_flow_features import (
+    _oi_at_bar_close,
     compute_capital_flow,
     confluence_feature_keys,
     format_capital_flow_tg_line,
@@ -46,6 +47,22 @@ class CapitalFlowNoLookaheadTests(unittest.TestCase):
 
             importlib.reload(cfg)
             self.assertTrue(cfg.CF_ENABLED)
+
+
+class OiLookupSecTests(unittest.TestCase):
+    def test_oi_at_bar_close_uses_period_end_sec(self) -> None:
+        t0 = 1_700_000_000_000
+        k = _kline(t0, 100, 101, 99, 100.5)
+        signal_ms = t0 + _15M
+        bar = klines_to_bars([k], signal_at_ms=signal_ms, interval="15m")[0]
+        snap_sec = int(bar["close_time_sec"])
+        self.assertEqual(snap_sec, (t0 + _15M) // 1000)
+        oi = [(snap_sec - 900, 1.0), (snap_sec, 2.0)]
+        self.assertEqual(_oi_at_bar_close(oi, bar), 2.0)
+        # 若误用 close_ms//1000 会落到上一根快照
+        wrong_sec = int(bar["close_time_ms"]) // 1000
+        self.assertLess(wrong_sec, snap_sec)
+        self.assertEqual(_oi_at_bar_close([(wrong_sec, 99.0), (snap_sec, 2.0)], bar), 2.0)
 
 
 class OiFlushTests(unittest.TestCase):

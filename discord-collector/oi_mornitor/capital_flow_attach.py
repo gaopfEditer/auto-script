@@ -7,7 +7,7 @@ from typing import Any
 import aiohttp
 
 from oi_mornitor.capital_flow_config import CF_ENABLED, CF_FETCH_LIMIT
-from oi_mornitor.capital_flow_features import compute_capital_flow
+from oi_mornitor.capital_flow_features import compute_capital_flow, klines_to_bars
 from oi_mornitor.capital_flow_fetch import (
     fetch_funding_at,
     fetch_oi_hist_series,
@@ -43,6 +43,8 @@ async def enrich_alert_capital_flow(
             end_time=signal_at,
             binance_base_url=base_url,
         )
+        if not klines or not klines_to_bars(klines, signal_at_ms=signal_at, interval=iv):
+            return None
         oi = await fetch_oi_hist_series(
             session,
             symbol=sym,

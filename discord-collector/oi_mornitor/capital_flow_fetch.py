@@ -90,22 +90,25 @@ async def fetch_funding_at(
     cached = cache_get(cache_key)
     if isinstance(cached, (list, tuple)) and len(cached) == 2:
         return cached[0], float(cached[1])
-    start_ms = max(0, signal_at_ms - 90 * 24 * 3600_000)
-    params: dict[str, Any] = {
-        "symbol": sym,
-        "startTime": start_ms,
-        "endTime": int(signal_at_ms),
-        "limit": 1000,
-    }
-    status, data, _ = await get_json_fapi_chain(
-        session,
-        "/fapi/v1/fundingRate",
-        params=params,
-        primary_base=primary_base,
-        label=f"funding:{sym}",
-    )
+    min_ms = max(0, signal_at_ms - 90 * 24 * 3600_000)
     rate: float | None = None
-    if status == 200 and isinstance(data, list):
+    end_cursor = int(signal_at_ms)
+    for page in range(12):
+        params: dict[str, Any] = {
+            "symbol": sym,
+            "endTime": end_cursor,
+            "limit": 1000,
+        }
+        status, data, _ = await get_json_fapi_chain(
+            session,
+            "/fapi/v1/fundingRate",
+            params=params,
+            primary_base=primary_base,
+            label=f"funding:{sym}:p{page}",
+        )
+        if status != 200 or not isinstance(data, list) or not data:
+            break
+        earliest_ft: int | None = None
         for row in sorted(data, key=lambda r: int((r or {}).get("fundingTime") or 0)):
             if not isinstance(row, dict):
                 continue
@@ -114,8 +117,17 @@ async def fetch_funding_at(
                 r = float(row.get("fundingRate") or 0)
             except (TypeError, ValueError):
                 continue
+            if earliest_ft is None or ft < earliest_ft:
+                earliest_ft = ft
             if ft <= signal_at_ms:
                 rate = r
+        if len(data) < 1000:
+            break
+        if earliest_ft is None or earliest_ft <= min_ms:
+            break
+        end_cursor = earliest_ft - 1
+        if end_cursor < min_ms:
+            break
     cache_set(cache_key, (rate, interval_h))
     return rate, interval_h
 

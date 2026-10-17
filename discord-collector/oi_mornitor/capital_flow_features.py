@@ -61,14 +61,16 @@ def _bar_from_kline(row: list[Any], *, interval: str) -> Bar | None:
         ot = int(row[0])
         o, h, l, c = float(row[1]), float(row[2]), float(row[3]), float(row[4])
         vol = float(row[5])
-        close_ms = int(row[6]) if len(row) > 6 else ot + _interval_ms(interval)
+        close_ms = int(row[6]) if len(row) > 6 else ot + _interval_ms(interval) - 1
     except (TypeError, ValueError, IndexError):
         return None
+    # OI/多空比快照对齐 period 结束时刻（open+interval），非 close_ms//1000
+    close_lookup_sec = (int(close_ms) + 1) // 1000
     return {
         "open_time_ms": ot,
         "close_time_ms": close_ms,
         "time_sec": ot // 1000,
-        "close_time_sec": close_ms // 1000,
+        "close_time_sec": close_lookup_sec,
         "o": o,
         "h": h,
         "l": l,
@@ -291,17 +293,27 @@ def _whale_retail(
     return out
 
 
+def _normalize_funding_rate(rate: float | None, funding_interval_hours: float) -> float | None:
+    if rate is None:
+        return None
+    scale = 8.0 / max(float(funding_interval_hours), 1.0)
+    return rate * scale
+
+
 def _quiet_accumulation(
     bars: list[Bar],
     oi_series: list[tuple[int, float]],
     funding_rate: float | None,
     taker_series: list[tuple[int, float]],
+    *,
+    funding_interval_hours: float = 8.0,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"active": False}
     atr = _atr_pct(bars)
     if atr is None or atr > CF_QUIET_ATR_PCT_MAX:
         return out
-    if funding_rate is not None and abs(funding_rate) > CF_FUNDING_NEUTRAL_ABS:
+    norm_fund = _normalize_funding_rate(funding_rate, funding_interval_hours)
+    if norm_fund is not None and abs(norm_fund) > CF_FUNDING_NEUTRAL_ABS:
         return out
     if len(bars) < 6 or len(oi_series) < 4:
         return out
@@ -494,7 +506,13 @@ def compute_capital_flow(
     raw["topPosLsRatio"] = whale.get("top")
     bias["whale_retail_divergence"] = whale.get("whaleBias")
 
-    quiet = _quiet_accumulation(bars, oi_series, funding_rate, taker_buy)
+    quiet = _quiet_accumulation(
+        bars,
+        oi_series,
+        funding_rate,
+        taker_buy,
+        funding_interval_hours=funding_interval_hours,
+    )
     flags["quiet_accumulation"] = bool(quiet.get("active"))
     raw["quietAtrPct"] = quiet.get("atrPct")
     raw["quietOiRisePct"] = quiet.get("oiRisePct")
