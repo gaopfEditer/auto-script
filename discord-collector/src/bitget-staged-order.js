@@ -412,6 +412,11 @@ export async function executeStagedMarketOpen(client, input) {
         stopLossStr: String(record.presetStopLossPrice),
         takeProfitStr: String(record.presetStopSurplusPrice),
         cardId: input.cardId,
+        direction,
+        initialSlPct,
+        parsed,
+        executionJson: input.executionJson,
+        fetchMark: () => fetchMarkPrice(client, symbol, productType),
       },
       record
     );

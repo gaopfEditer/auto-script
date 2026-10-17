@@ -28,7 +28,7 @@ def main() -> None:
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=["daemon", "once", "web", "coin-monitor", "backtest"],
+        choices=["daemon", "once", "web", "coin-monitor", "backtest", "confluence-calibrate"],
         default="web",
         help="daemon=终端守护 | once=单次 | web=前端+后端 | coin-monitor=WS本地监控 | backtest=策略回测",
     )
@@ -92,6 +92,12 @@ def main() -> None:
         from oi_mornitor.scripts.run_backtest import main as bt_main
 
         raise SystemExit(bt_main())
+
+    if args.mode == "confluence-calibrate":
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        from oi_mornitor.confluence_calibrate import main as cal_main
+
+        raise SystemExit(cal_main())
 
     if args.mode == "once":
         from oi_mornitor.radar import get_hot_tickers

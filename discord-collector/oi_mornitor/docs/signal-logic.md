@@ -225,6 +225,40 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 - 推送节流：同币同周期同方向在 `OI_CARD_PUSH_COOLDOWN_BARS`(4) 根 K 内只推一次（发送成功才计时）
 - 蜡烛卡片文案补参考位：看跌给「上方防守=前20根高点 / 下方参考=布林中轨」，看涨给「下方防守=前20根低点 / 上方参考=布林中轨」
 
+#### 环境变量默认（PR #3 形态质量 / PR #4–#5 Bitget TP·SL）
+
+未配置 `.env`、或值为空字符串 / 非法时，代码内硬编码默认如下（读取实现：`oi_mornitor/env_parse.py`、`oi_mornitor/config.py`、`discord-collector/src/env-defaults.js`）。
+
+| 变量 | 默认 | 读取位置 |
+|------|------|----------|
+| `OI_CANDLE_SHOOT_REQUIRE_POSITION` | `1`（开） | `config.py` → `candle_card_config` / `candle_signals` |
+| `OI_CANDLE_SHOOT_TREND_LOOKBACK` | `20` | `config.py` |
+| `OI_CANDLE_SHOOT_TREND_MIN_PCT` | `3.0` | `config.py` |
+| `OI_CANDLE_HAMMER_TREND_LOOKBACK` | `20` | `config.py` |
+| `OI_CANDLE_HAMMER_TREND_MIN_PCT` | `3.0` | `config.py` |
+| `OI_CANDLE_VOL_BYPASS_CONTEXT` | `0`（关） | `config.py` |
+| `OI_CANDLE_1H_HTF_TREND_ENABLED` | `1`（开） | `config.py` → `candle_signals.htf_trend_gate_ok` |
+| `OI_CANDLE_1H_HTF_TREND_LOOKBACK` | `20` | `config.py` |
+| `OI_CANDLE_1H_HTF_TREND_MIN_PCT` | `3.0` | `config.py` |
+| `OI_CANDLE_CARD_REQUIRE_VOL` | `1`（开） | `config.py` → `candle_card_config` |
+| `OI_CANDLE_CARD_VOL_MULT` | `1.2` | `config.py` → `candle_card_config` |
+| `OI_CANDLE_CARD_VOL_LOOKBACK` | `3` | `config.py` → `candle_card_config` |
+| `OI_MAIN_CARD_VOL_LOOKBACK` | 同 `OI_CANDLE_CARD_VOL_LOOKBACK` | `config.py` → `candle_card_config` |
+| `OI_MAIN_CARD_VOL_MULT` | `1.0` | `config.py` → `candle_card_config` |
+| `OI_PATTERN_PUSH_MTF_MIN` | `2` | `config.py` → `pattern_push_gate` |
+| `OI_PATTERN_SL_MIN_PCT` | `0.8`（%） | `config.py` → `pattern_settle_profile` |
+| `OI_PATTERN_SL_MIN_PCT_MAJOR` | `0.4`（%） | `config.py` → `pattern_settle_profile` |
+| `OI_PATTERN_15M_VERIFY_H` | `6`（小时） | `config.py` → `pattern_settle_profile.resolve_verify_delay_ms` |
+| `OI_SETTLE_ATR_K_T1` / `T2` / `T3` | `1.5` / `2.0` / `2.5` | `config.py` → `pattern_settle_profile.build_settle_plan` |
+| `OI_SETTLE_CAP_T1` / `T2` / `T3` | `0.02` / `0.03` / `0.04` | `config.py` → `pattern_settle_profile.build_settle_plan` |
+| `BITGET_REQUIRE_TPSL` | `1`（开） | `bitget-tpsl-guard.js` |
+| `BITGET_NAKED_POSITION_ACTION` | `close` | `bitget-tpsl-guard.js` |
+| `BITGET_TPSL_VERIFY_SEC` | `8` | `bitget-tpsl-guard.js` |
+| `BITGET_TPSL_REPAIR_RETRIES` | `3` | `bitget-tpsl-guard.js` |
+| `BITGET_SKIP_TELEGRAM_ALERT` | 未设（会发 TG） | `bitget-tpsl-guard.js` |
+
+WEEX 分阶段开仓默认 TP/SL 与 Bitget 共用 `BITGET_INITIAL_SL_PCT` 等（`config.js` / `weex-staged-order.js`）；TP/SL 成交后校验逻辑在 Bitget 路径，无独立 `WEEX_*` 校验变量。
+
 ### 5.5 入场条件明细（胜率列表 typeLabel）
 
 以下为 Telegram / ticker / 胜率库里常见类型的**达成条件**（实现以代码为准）。
@@ -341,7 +375,23 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 > **用途**：形态页底部 **Ticker / 胜率弹窗** 用的核算口径；与 §9 **卡片生命周期看板** 独立。  
 > 列表回答：「这条 TG 推送的信号，若按统一规则进场，3h 内算胜还是负？」
 
-### 10.0 数据流
+### 10.0 共振分 V2（校准 / 推送 / 列表排序）
+
+- **打分**：`signal_confluence.py` — 加性特征权重（`confluence_features.py`）+ 训练集 raw 分百分位映射 0–100；档位 **A**（Top 20%）、**B**（60–80%）、**C**（其余）。保留 `legacyScore` 供对比。
+- **权重文件**：`data/confluence_weights.json`（与 `pattern_alert_stats.json` 同 data 目录）；缺失时用代码内 `DEFAULT_FEATURE_WEIGHTS`（业主离线拟合 ΔR）。
+- **校准**：`python -m oi_mornitor confluence-calibrate` 或 `python run.py confluence-calibrate` — 读胜率库、按 R 倍（`movePct/SL%`，裁剪 [-3,5]）拟合收缩权重；仅当 **test 顶分位 expR > 底分位** 才覆盖权重文件。
+- **推送门控**：`OI_CONFLUENCE_PUSH_MIN_TIER` 默认 **`B`**（推 A/B）；**C** 档 `confluence_observation_only` 入库（**正常结算**、参与校准）、不推 TG、不计头条胜率。文案追加一行：`共振分 82（A）：结构双周期+空单+量价推进`。
+- **性能**：推送算分使用 `list_alert_stats_cached()`（mtime + 默认 60s TTL）且 MTF peer 仅取 signalAt ±4h 窗；`OI_CONFLUENCE_PEER_CACHE_SEC` 可调。
+- **列表**：`/api/pattern-alert-stats` 默认按新 `confluence.score` 降序。
+- **周更 cron（北京时间周日 03:00，示例）**：
+
+```cron
+0 3 * * 0 cd /path/to/discord-collector/oi_mornitor && /usr/bin/python3 run.py confluence-calibrate >> /var/log/oi_confluence_calibrate.log 2>&1
+```
+
+环境变量（空/非法回退默认，见 `env_parse.py`）：`OI_CONFLUENCE_PUSH_MIN_TIER`、`OI_CONFLUENCE_WEIGHTS_PATH`、`OI_CONFLUENCE_SHRINK_K`（50）、`OI_CONFLUENCE_MIN_N`（30）、`OI_CONFLUENCE_SPLIT_AT`（`2026-10-14 20:44`）。
+
+### 10.0.1 数据流
 
 ```
 信号产生（形态扫描 / TG 推送 / 交易卡片归档）

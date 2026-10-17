@@ -3,6 +3,7 @@
  */
 import { isLongDirection, isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
+import { envBool, envInt, envStr } from "./env-defaults.js";
 
 const LIQUIDATION_DEFAULT_TP_SL_PCT = 5;
 const LIQUIDATION_DEFAULT_TP_PCTS = [0.05, 0.08, 0.12];
@@ -80,18 +81,379 @@ export function isValidTakeProfit(marketPrice, tp, holdSide) {
 }
 
 export function bitgetRequireTpslEnabled() {
-  return !["0", "false", "no", "off"].includes(String(process.env.BITGET_REQUIRE_TPSL ?? "1").toLowerCase());
+  return envBool("BITGET_REQUIRE_TPSL", true);
 }
 
 /** @returns {"close"|"alert"} */
 export function bitgetNakedPositionAction() {
-  const v = String(process.env.BITGET_NAKED_POSITION_ACTION ?? "close").toLowerCase();
+  const v = envStr("BITGET_NAKED_POSITION_ACTION", "close", ["close", "alert"]).toLowerCase();
   return v === "alert" ? "alert" : "close";
 }
 
 export function bitgetTpslVerifyWindowMs() {
-  const sec = Number(process.env.BITGET_TPSL_VERIFY_SEC ?? 8);
-  return Math.max(2, Math.min(60, Number.isFinite(sec) ? sec : 8)) * 1000;
+  const sec = envInt("BITGET_TPSL_VERIFY_SEC", 8, { min: 2, max: 60 });
+  return sec * 1000;
+}
+
+export function bitgetTpslRepairRetries() {
+  return envInt("BITGET_TPSL_REPAIR_RETRIES", 3, { min: 1, max: 10 });
+}
+
+/** @typedef {"sl_breached"|"precision"|"transient"|"hold_side"|"unknown"} TpslRepairErrorCategory */
+
+/**
+ * @param {string} message
+ * @param {"long"|"short"|string} holdSide
+ * @returns {TpslRepairErrorCategory}
+ */
+export function classifyBitgetTpslRepairError(message, holdSide) {
+  const m = String(message ?? "").toLowerCase();
+  const side = String(holdSide ?? "").toLowerCase();
+
+  if (
+    /stop loss price of the long position should be less than/i.test(m) ||
+    /stop loss price of the short position should be greater than/i.test(m) ||
+    /stop loss.*should be less than the current price/i.test(m) ||
+    /stop loss.*should be greater than the current price/i.test(m) ||
+    /sl price.*invalid.*current/i.test(m) ||
+    /already.*trigger/i.test(m)
+  ) {
+    return "sl_breached";
+  }
+  if (side === "long" && /stop loss.*greater than.*current|sl.*above.*mark/i.test(m)) {
+    return "sl_breached";
+  }
+  if (side === "short" && /stop loss.*less than.*current|sl.*below.*mark/i.test(m)) {
+    return "sl_breached";
+  }
+
+  if (/429|rate limit|too many requests|timeout|timed out|etimedout|econnreset|network|temporarily unavailable/i.test(m)) {
+    return "transient";
+  }
+  if (/position.*not exist|no position|position does not exist|order.*not exist|not found position/i.test(m)) {
+    return "transient";
+  }
+
+  if (/holdside|hold side|position side|posside|position mode|unilateral|hedge mode|one-way|two-way/i.test(m)) {
+    return "hold_side";
+  }
+
+  if (
+    /precision|priceplace|priceendstep|price step|tick size|minimum size|volume place|sizemultiplier|decimal|must be a multiple/i.test(
+      m
+    )
+  ) {
+    return "precision";
+  }
+
+  return "unknown";
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} raw
+ * @param {ReturnType<typeof import("./bitget-order-from-signal.js").parseBitgetContractMeta>} [base]
+ */
+export function enrichBitgetContractMeta(raw, base) {
+  const b = base ?? {};
+  const o = raw && typeof raw === "object" ? /** @type {Record<string, unknown>} */ (raw) : {};
+  return {
+    minTradeNum: Number(o.minTradeNum ?? b.minTradeNum ?? 0) || 0,
+    minTradeUsdt: Number(o.minTradeUSDT ?? o.minTradeUsdt ?? b.minTradeUsdt ?? 0) || 0,
+    volumePlace: Number(o.volumePlace ?? b.volumePlace ?? 8) || 8,
+    sizeMultiplier: Number(o.sizeMultiplier ?? b.sizeMultiplier ?? 0) || 0,
+    pricePlace: Number(o.pricePlace ?? 2) || 2,
+    priceEndStep: Number(o.priceEndStep ?? o.priceStep ?? 0) || 0,
+  };
+}
+
+/**
+ * @param {number} price
+ * @param {{ pricePlace?: number; priceEndStep?: number }} meta
+ */
+export function roundBitgetTriggerPrice(price, meta) {
+  if (!Number.isFinite(price) || price <= 0) return "";
+  const place = meta.pricePlace ?? 2;
+  const step = meta.priceEndStep ?? 0;
+  let p = price;
+  if (step > 0) {
+    p = Math.round(p / step) * step;
+  }
+  p = Number(p.toFixed(Math.min(8, Math.max(0, place))));
+  return priceStr(p);
+}
+
+/**
+ * @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client
+ * @param {{
+ *   symbol: string;
+ *   productType: string;
+ *   fetchMark?: () => Promise<number | null>;
+ * }} ctx
+ */
+async function fetchMarkForRepair(client, ctx) {
+  if (ctx.fetchMark) {
+    const m = await ctx.fetchMark();
+    if (m != null && m > 0) return m;
+  }
+  try {
+    const ticker = await client.getMixTicker({ symbol: ctx.symbol, productType: ctx.productType });
+    const p = Number(ticker?.markPrice ?? ticker?.lastPr ?? 0);
+    if (Number.isFinite(p) && p > 0) return p;
+  } catch {
+    /* ignore */
+  }
+  return 0;
+}
+
+/**
+ * @param {{
+ *   mark: number;
+ *   holdSide: "long"|"short";
+ *   direction: string;
+ *   initialSlPct: number;
+ *   parsed?: Record<string, unknown>;
+ *   executionJson?: unknown;
+ *   signalStopLossStr: string;
+ *   signalTakeProfitStr: string;
+ *   contractMeta?: ReturnType<typeof enrichBitgetContractMeta> | null;
+ *   forcePrecisionRound?: boolean;
+ *   sizeStr: string;
+ * }} input
+ */
+export function resolveRepairTpslLevels(input) {
+  const holdSide = input.holdSide;
+  const mark = input.mark;
+
+  let slNum = Number(String(input.signalStopLossStr).replace(/[^\d.]/g, ""));
+  let tpNum = Number(String(input.signalTakeProfitStr).replace(/[^\d.]/g, ""));
+  const useSignalSl = Number.isFinite(slNum) && slNum > 0 && isValidStopLoss(mark, slNum, holdSide);
+  const useSignalTp = Number.isFinite(tpNum) && tpNum > 0 && isValidTakeProfit(mark, tpNum, holdSide);
+
+  const resolved = resolveOpenTpslPrices({
+    parsed: input.parsed ?? {},
+    executionJson: input.executionJson,
+    fillPrice: mark,
+    direction: input.direction,
+    initialSlPct: input.initialSlPct,
+  });
+
+  let stopLossStr = useSignalSl ? priceStr(slNum) : resolved.stopLossStr;
+  let takeProfitStr = useSignalTp ? priceStr(tpNum) : resolved.takeProfitStr;
+
+  if (input.forcePrecisionRound && input.contractMeta) {
+    stopLossStr = roundBitgetTriggerPrice(Number(stopLossStr), input.contractMeta);
+    takeProfitStr = roundBitgetTriggerPrice(Number(takeProfitStr), input.contractMeta);
+  }
+
+  return {
+    stopLossStr,
+    takeProfitStr,
+    usedSignalSl: useSignalSl,
+    usedSignalTp: useSignalTp,
+    mark,
+  };
+}
+
+/**
+ * @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client
+ * @param {{
+ *   symbol: string;
+ *   productType: string;
+ *   marginCoin: string;
+ *   holdSide: string;
+ *   size: string;
+ *   stopLossStr: string;
+ *   takeProfitStr: string;
+ *   cardId: number;
+ *   direction?: string;
+ *   initialSlPct?: number;
+ *   parsed?: Record<string, unknown>;
+ *   executionJson?: unknown;
+ *   fetchMark?: () => Promise<number | null>;
+ * }} ctx
+ * @param {Record<string, unknown>} record
+ */
+export async function repairBitgetPositionTpsl(client, ctx, record) {
+  const maxRetries = bitgetTpslRepairRetries();
+  const backoffMs = [1000, 2000, 4000];
+  /** @type {{ attempts: Array<Record<string, unknown>>; repaired?: boolean }} */
+  const repair = { attempts: [] };
+  record.tpslRepair = repair;
+
+  let forcePrecision = false;
+  let closeImmediately = false;
+  /** @type {TpslRepairErrorCategory} */
+  let lastCategory = "unknown";
+  let lastError = "";
+  let lastMark = 0;
+
+  const holdSide = /** @type {"long"|"short"} */ (
+    ctx.holdSide === "short" || ctx.holdSide === "sell" ? "short" : "long"
+  );
+  const direction =
+    ctx.direction ?? (holdSide === "short" ? "做空" : "做多");
+  const initialSlPct = Number(ctx.initialSlPct) > 0 ? Number(ctx.initialSlPct) : 4.3;
+
+  let sizeStr = ctx.size;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    lastMark = await fetchMarkForRepair(client, ctx);
+    if (!(lastMark > 0)) {
+      lastError = "no_market_price";
+      lastCategory = "transient";
+      repair.attempts.push({
+        attempt,
+        at: new Date().toISOString(),
+        ok: false,
+        category: lastCategory,
+        error: lastError,
+      });
+      if (attempt < maxRetries) await sleep(backoffMs[Math.min(attempt - 1, backoffMs.length - 1)]);
+      continue;
+    }
+
+    /** @type {ReturnType<typeof enrichBitgetContractMeta> | null} */
+    let contractMeta = null;
+    try {
+      if (typeof client.getMixContract === "function") {
+        const raw = await client.getMixContract({ symbol: ctx.symbol, productType: ctx.productType });
+        contractMeta = enrichBitgetContractMeta(raw);
+      } else {
+        contractMeta = enrichBitgetContractMeta(null);
+      }
+    } catch {
+      contractMeta = enrichBitgetContractMeta(null);
+    }
+
+    if (forcePrecision && contractMeta?.sizeMultiplier > 0) {
+      const step = contractMeta.sizeMultiplier;
+      const vp = contractMeta.volumePlace ?? 8;
+      const n = Math.floor(Number(sizeStr) / step + 1e-12) * step;
+      if (n > 0) sizeStr = priceStr(Number(n.toFixed(Math.min(8, vp))));
+    }
+
+    const levels = resolveRepairTpslLevels({
+      mark: lastMark,
+      holdSide,
+      direction,
+      initialSlPct,
+      parsed: ctx.parsed,
+      executionJson: ctx.executionJson,
+      signalStopLossStr: ctx.stopLossStr,
+      signalTakeProfitStr: ctx.takeProfitStr,
+      contractMeta,
+      forcePrecisionRound: forcePrecision,
+      sizeStr,
+    });
+
+    /** @type {Record<string, unknown>} */
+    const attemptRec = {
+      attempt,
+      at: new Date().toISOString(),
+      mark: lastMark,
+      stopLossStr: levels.stopLossStr,
+      takeProfitStr: levels.takeProfitStr,
+      size: sizeStr,
+      usedSignalSl: levels.usedSignalSl,
+      usedSignalTp: levels.usedSignalTp,
+      precisionRound: forcePrecision,
+    };
+
+    try {
+      const posResp = await client.withHoldSideFallback(
+        (hs) =>
+          client.placePosTpsl({
+            symbol: ctx.symbol,
+            productType: ctx.productType,
+            marginCoin: ctx.marginCoin,
+            holdSide: hs,
+            stopLossTriggerPrice: levels.stopLossStr,
+            stopSurplusTriggerPrice: levels.takeProfitStr,
+            stopSurplusSize: sizeStr,
+            stopLossClientOid: `dc-sl-verify-${ctx.cardId}-${Date.now()}-a${attempt}`,
+            stopSurplusClientOid: `dc-tp-verify-${ctx.cardId}-${Date.now()}-a${attempt}`,
+          }),
+        ctx.holdSide
+      );
+      attemptRec.ok = true;
+      attemptRec.response = posResp;
+      repair.attempts.push(attemptRec);
+
+      await sleep(500);
+      const inspect = await inspectBitgetPositionTpsl(client, ctx);
+      attemptRec.verifyAfter = inspect;
+      if (inspect.ok) {
+        repair.repaired = true;
+        return { ok: true, inspect, repair };
+      }
+      lastError = "verify_still_missing_tpsl";
+      lastCategory = "transient";
+      attemptRec.verifyMissing = true;
+    } catch (e) {
+      const msg = String(/** @type {Error} */ (e).message ?? e);
+      lastError = msg;
+      lastCategory = classifyBitgetTpslRepairError(msg, holdSide);
+      attemptRec.ok = false;
+      attemptRec.error = msg;
+      attemptRec.category = lastCategory;
+      repair.attempts.push(attemptRec);
+
+      if (lastCategory === "sl_breached") {
+        closeImmediately = true;
+        repair.closeReason = "sl_breached";
+        break;
+      }
+      if (lastCategory === "precision") {
+        forcePrecision = true;
+      }
+    }
+
+    if (closeImmediately) break;
+    if (attempt < maxRetries) {
+      await sleep(backoffMs[Math.min(attempt - 1, backoffMs.length - 1)]);
+    }
+  }
+
+  if (!repair.closeReason) {
+    repair.closeReason = closeImmediately ? "sl_breached" : "retries_exhausted";
+  }
+
+  return {
+    ok: false,
+    repair,
+    closeImmediately,
+    closeReason: repair.closeReason,
+    lastCategory,
+    lastError,
+    mark: lastMark,
+  };
+}
+
+/**
+ * @param {ReturnType<typeof import("./logger.js").createLogger>} log
+ * @param {{
+ *   symbol: string;
+ *   holdSide: string;
+ *   cardId: number;
+ *   category: string;
+ *   lastError: string;
+ *   mark: number;
+ *   attempts: Array<Record<string, unknown>>;
+ *   closeImmediately: boolean;
+ *   action: "close"|"alert";
+ * }} details
+ */
+export function formatBitgetNakedPositionAlert(details) {
+  const lines = [
+    details.action === "close" ? "Bitget 裸仓已平" : "Bitget 裸仓告警",
+    `标的 ${details.symbol} ${details.holdSide} card=#${details.cardId}`,
+    `原因分类: ${details.category}`,
+    details.closeImmediately ? "（止损已被穿越 / SL 相对现价无效，立即平仓）" : "（补挂重试已用尽）",
+    `原始错误: ${details.lastError || "—"}`,
+    `标记价: ${details.mark > 0 ? details.mark : "—"}`,
+    `尝试记录: ${JSON.stringify(details.attempts)}`,
+  ];
+  return lines.join("\n");
 }
 
 /**
@@ -449,37 +811,37 @@ export async function ensureBitgetPositionTpslAfterOpen(client, log, ctx, record
     at: new Date().toISOString(),
   };
 
-  try {
-    const posResp = await client.withHoldSideFallback(
-      (hs) =>
-        client.placePosTpsl({
-          symbol: ctx.symbol,
-          productType: ctx.productType,
-          marginCoin: ctx.marginCoin,
-          holdSide: hs,
-          stopLossTriggerPrice: ctx.stopLossStr,
-          stopSurplusTriggerPrice: ctx.takeProfitStr,
-          stopSurplusSize: ctx.size,
-          stopLossClientOid: `dc-sl-verify-${ctx.cardId}-${Date.now()}`,
-          stopSurplusClientOid: `dc-tp-verify-${ctx.cardId}-${Date.now()}`,
-        }),
-      ctx.holdSide
-    );
-    record.tpslRepair = { placePosTpsl: posResp };
-    await sleep(800);
-    lastInspect = await inspectBitgetPositionTpsl(client, ctx);
-    if (lastInspect.ok) {
-      record.tpslVerification = { ok: true, repaired: true, at: new Date().toISOString(), ...lastInspect };
-      return { ok: true, record };
-    }
-  } catch (e) {
-    record.tpslRepair = { error: String(/** @type {Error} */ (e).message ?? e) };
+  const repairResult = await repairBitgetPositionTpsl(client, ctx, record);
+  if (repairResult.ok) {
+    record.tpslVerification = {
+      ok: true,
+      repaired: true,
+      at: new Date().toISOString(),
+      ...repairResult.inspect,
+    };
+    return { ok: true, record };
   }
 
   const action = bitgetNakedPositionAction();
-  const alertText = `Bitget 裸仓处置 ${ctx.symbol} ${ctx.holdSide} card=#${ctx.cardId}：开仓后缺少 TP/SL`;
+  const repair = repairResult.repair ?? { attempts: [] };
+  const category = repairResult.closeReason ?? repairResult.lastCategory ?? "unknown";
+  const alertDetails = {
+    symbol: ctx.symbol,
+    holdSide: ctx.holdSide,
+    cardId: ctx.cardId,
+    category,
+    lastError: repairResult.lastError ?? "",
+    mark: repairResult.mark ?? 0,
+    attempts: repair.attempts ?? [],
+    closeImmediately: Boolean(repairResult.closeImmediately),
+    action,
+  };
+  const alertText = formatBitgetNakedPositionAlert(alertDetails);
 
-  if (action === "close") {
+  const shouldClose =
+    action === "close" && (repairResult.closeImmediately || category === "retries_exhausted" || category === "sl_breached");
+
+  if (shouldClose) {
     try {
       const closeResp = await client.closePositions({
         symbol: ctx.symbol,
@@ -489,12 +851,16 @@ export async function ensureBitgetPositionTpslAfterOpen(client, log, ctx, record
       record.nakedPositionClosed = true;
       record.closeResponse = closeResp;
       record.status = "naked_closed";
-      await sendBitgetTradeTelegramAlert(log, "Bitget 裸仓已平");
-      log.warn(`${alertText} → 已市价平仓`);
+      record.nakedCloseCategory = category;
+      await sendBitgetTradeTelegramAlert(log, alertText);
+      log.warn(`${alertText}`);
     } catch (e) {
       record.nakedPositionCloseError = String(/** @type {Error} */ (e).message ?? e);
-      await sendBitgetTradeTelegramAlert(log, `${alertText}，平仓失败: ${record.nakedPositionCloseError}`);
-      log.warn(`${alertText} → 平仓失败: ${record.nakedPositionCloseError}`);
+      await sendBitgetTradeTelegramAlert(
+        log,
+        `${alertText}\n平仓失败: ${record.nakedPositionCloseError}`
+      );
+      log.warn(`Bitget 裸仓平仓失败 card=#${ctx.cardId}: ${record.nakedPositionCloseError}`);
       return { ok: false, record, reason: "naked_close_failed" };
     }
     return { ok: false, record, reason: "naked_closed" };

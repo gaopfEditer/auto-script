@@ -300,6 +300,22 @@ def _send_card_text_to_chat(alert: dict[str, Any], text: str, chat_id: str) -> b
     return ok
 
 
+def _confluence_gate_or_observation(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.pattern_emit_gate import telegram_push_allowed_or_record_observation
+
+    return telegram_push_allowed_or_record_observation(alert)
+
+
+def _message_with_confluence(alert: dict[str, Any], body: str) -> str:
+    from oi_mornitor.pattern_emit_gate import attach_confluence_on_alert
+    from oi_mornitor.signal_confluence import append_confluence_to_message
+
+    conf = alert.get("confluence")
+    if not isinstance(conf, dict):
+        conf = attach_confluence_on_alert(alert)
+    return append_confluence_to_message(body, conf)
+
+
 def format_ma144_candle_message(alert: dict[str, Any]) -> str:
     """144 均线附近射击之星 / 倒锤子（MAIN 专属文案）。"""
     body = format_candle_card_message(alert)
@@ -328,7 +344,9 @@ def send_ma144_main_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
         return False
-    text = format_ma144_candle_message(alert)
+    if not _confluence_gate_or_observation(alert):
+        return False
+    text = _message_with_confluence(alert, format_ma144_candle_message(alert))
     return _send_card_text_to_chat(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
 
 
@@ -341,7 +359,9 @@ def send_main_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     if not is_main_card_mirror_eligible(alert):
         return False
-    text = format_candle_card_message(alert)
+    if not _confluence_gate_or_observation(alert):
+        return False
+    text = _message_with_confluence(alert, format_candle_card_message(alert))
     return _send_card_text_to_chat(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
 
 
@@ -364,14 +384,13 @@ def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
 
 def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
     """射击之星 / 倒锤子 → OI_CANDLE_CARD 形态群（MAIN 由 pattern_monitor 另推）。"""
-    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
     from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
 
     if not is_candle_push_enabled():
         return False
-    if not passes_push_mtf_gate(alert):
+    if not _confluence_gate_or_observation(alert):
         return False
-    text = format_candle_card_message(alert)
+    text = _message_with_confluence(alert, format_candle_card_message(alert))
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
     ok = _send_card_text_to_chat(alert, text, primary) if primary else False
     if ok:
@@ -399,14 +418,13 @@ def _after_candle_card_pushed(alert: dict[str, Any]) -> None:
 
 def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     """顶部/底部结构 → OI_CANDLE_CARD 形态群（不进 MAIN 群）。"""
-    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
     from oi_mornitor.telegram_push_toggles import is_structure_push_enabled
 
     if not is_structure_push_enabled():
         return False
-    if not passes_push_mtf_gate(alert):
+    if not _confluence_gate_or_observation(alert):
         return False
-    text = format_structure_card_message(alert)
+    text = _message_with_confluence(alert, format_structure_card_message(alert))
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
     ok = _send_card_text_to_chat(alert, text, primary) if primary else False
     pushed = ok
@@ -468,7 +486,13 @@ def send_volume_price_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     if not is_candle_push_enabled():
         return False
-    text = format_volume_price_card_message(alert)
+    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
+
+    if not passes_push_mtf_gate(alert):
+        return False
+    if not _confluence_gate_or_observation(alert):
+        return False
+    text = _message_with_confluence(alert, format_volume_price_card_message(alert))
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
     return _send_card_text_to_chat(alert, text, primary) if primary else False
 

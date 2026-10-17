@@ -58,8 +58,10 @@ class MtfGateTests(unittest.TestCase):
         }
         with mock.patch.dict(os.environ, {"OI_PATTERN_PUSH_MTF_MIN": "2"}, clear=False):
             from oi_mornitor import config
+            import oi_mornitor.pattern_push_gate as pg
 
             config.OI_PATTERN_PUSH_MTF_MIN = 2
+            pg.OI_PATTERN_PUSH_MTF_MIN = 2
             self.assertFalse(passes_push_mtf_gate(alert, peers=[]))
 
     def test_resonance_passes_with_two_intervals(self) -> None:
@@ -99,8 +101,10 @@ class MtfGateTests(unittest.TestCase):
         }
         with mock.patch.dict(os.environ, {"OI_PATTERN_PUSH_MTF_MIN": "2"}, clear=False):
             from oi_mornitor import config
+            import oi_mornitor.pattern_push_gate as pg
 
             config.OI_PATTERN_PUSH_MTF_MIN = 2
+            pg.OI_PATTERN_PUSH_MTF_MIN = 2
             self.assertTrue(passes_push_mtf_gate(alert, peers=peers))
 
 
