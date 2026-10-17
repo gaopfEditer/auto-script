@@ -1343,6 +1343,7 @@ class RadarService:
         self._moonshot_task: asyncio.Task[None] | None = None
         self._trendline_task: asyncio.Task[None] | None = None
         self._range_reversal_task: asyncio.Task[None] | None = None
+        self._vegas_trend_task: asyncio.Task[None] | None = None
         self._dormant_ignition_task: asyncio.Task[None] | None = None
         self._potential_discovery_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
@@ -1641,6 +1642,17 @@ class RadarService:
                 ),
                 name="oi-range-reversal-loop",
             )
+        from oi_mornitor.vegas_trend.runner import run_vegas_trend_loop
+        from oi_mornitor.vegas_trend_config import is_vegas_trend_enabled
+
+        if is_vegas_trend_enabled():
+            self._vegas_trend_task = asyncio.create_task(
+                run_vegas_trend_loop(
+                    lambda: self._running,
+                    get_session=lambda: self._session,
+                ),
+                name="oi-vegas-trend-loop",
+            )
         logger.info(
             "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A + 沉寂爆发 + 潜力发现",
             interval_sec,
@@ -1712,6 +1724,7 @@ class RadarService:
             "_potential_discovery_task",
             "_trendline_task",
             "_range_reversal_task",
+            "_vegas_trend_task",
         ):
             task = getattr(self, attr, None)
             if task:
