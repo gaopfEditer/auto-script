@@ -17,6 +17,7 @@ import {
 import { formatWeexPrice, parseWeexContractMeta } from "./weex-api.js";
 import { normalizeHumanSymbol } from "./card-fields.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
+import { resolveOpenTpslPrices, isValidTakeProfit } from "./bitget-tpsl-guard.js";
 
 /** @param {number} marketPrice @param {number} sl @param {"long"|"short"} holdSide */
 function isValidStopLoss(marketPrice, sl, holdSide) {
@@ -98,12 +99,19 @@ export async function executeWeexStagedMarketOpen(client, input) {
 
   const holdSide = side === "buy" ? "long" : "short";
   const fillPrice = refPrice;
-  const initialSl = calcInitialStopLoss(fillPrice, direction, initialSlPct);
-  if (!initialSl) {
-    return { ok: false, reason: "missing_initial_sl", error: "无法计算初始止损价" };
+  const tpslResolved = resolveOpenTpslPrices({
+    parsed,
+    fillPrice,
+    direction,
+    initialSlPct,
+  });
+  const initialSl = tpslResolved.stopLossPrice;
+  const initialTp = tpslResolved.takeProfitPrice;
+  if (!initialSl || !initialTp) {
+    return { ok: false, reason: "missing_initial_tpsl", error: "无法计算初始止盈止损价" };
   }
-  if (!isValidStopLoss(fillPrice, initialSl, holdSide)) {
-    return { ok: false, reason: "invalid_initial_sl", error: `止损 ${initialSl} 相对市价 ${fillPrice} 无效` };
+  if (!isValidStopLoss(fillPrice, initialSl, holdSide) || !isValidTakeProfit(fillPrice, initialTp, holdSide)) {
+    return { ok: false, reason: "invalid_initial_tpsl", error: `TP/SL 相对市价 ${fillPrice} 无效` };
   }
 
   /** @type {Record<string, unknown>} */
@@ -120,6 +128,9 @@ export async function executeWeexStagedMarketOpen(client, input) {
     leverage,
     initialSlPct,
     initialSlPrice: initialSl,
+    initialTpPrice: initialTp,
+    takeProfits: tpslResolved.takeProfits,
+    presetStopSurplusPrice: tpslResolved.takeProfitStr,
     marginMode: channelTrade.marginMode ?? "crossed",
     volumePlace: contractMeta.volumePlace,
     sizeMultiplier: contractMeta.sizeMultiplier,
@@ -160,15 +171,38 @@ export async function executeWeexStagedMarketOpen(client, input) {
       record.presetStopLossPrice = slPrice;
       record.initialSlPrice = Number(slPrice);
     }
+    const tpPrice = formatWeexPrice(initialTp, contractMeta);
+    if (tpPrice) {
+      try {
+        const tpResp = await client.placeTpSlOrder({
+          symbol,
+          holdSide,
+          planType: "TAKE_PROFIT",
+          triggerPrice: tpPrice,
+          quantity: size,
+          clientOid: `wx-tp-init-${input.cardId}-${Date.now()}`,
+        });
+        record.presetStopSurplusPrice = tpPrice;
+        record.tpOrderId = tpResp?.orderId ?? tpResp?.clientAlgoId ?? "tp_plan";
+        record.tpResponse = tpResp;
+      } catch (e) {
+        return {
+          ok: false,
+          reason: "take_profit_not_attached",
+          error: String(/** @type {Error} */ (e).message ?? e),
+          record,
+        };
+      }
+    }
   } catch (e) {
     return { ok: false, reason: "open_failed", error: String(/** @type {Error} */ (e).message ?? e) };
   }
 
-  if (!record.presetStopLossPrice && !input.dryRun) {
+  if ((!record.presetStopLossPrice || !record.presetStopSurplusPrice) && !input.dryRun) {
     return {
       ok: false,
-      reason: "stop_loss_not_attached",
-      error: "市价开仓未附带止损价",
+      reason: "tpsl_not_attached",
+      error: "市价开仓未附带完整止盈止损",
       record,
     };
   }

@@ -14,6 +14,7 @@ import { normalizeSymbol } from "./card-fields.js";
 import { detectSymbolTier } from "./card-backtest-policy.js";
 import { loadBitgetTradeConfig } from "./bitget-trade-config.js";
 import { appendBitgetOrderHistory, listBitgetOrderHistory } from "./bitget-order-history.js";
+import { ensureBitgetPositionTpslAfterOpen, resolveOpenTpslPrices } from "./bitget-tpsl-guard.js";
 
 /**
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
@@ -119,6 +120,16 @@ export function createBitgetManualService(log) {
     const orderType = body.orderType === "limit" ? "limit" : "market";
     if (!symbol) return { ok: false, error: "invalid_symbol" };
 
+    const slIn = body.stopLossPrice ? String(body.stopLossPrice).trim() : "";
+    const tpIn = body.takeProfitPrice ? String(body.takeProfitPrice).trim() : "";
+    if (!slIn || !tpIn) {
+      return {
+        ok: false,
+        error: "missing_tpsl",
+        hint: "手动下单必须同时提供止盈价 (takeProfitPrice) 与止损价 (stopLossPrice)",
+      };
+    }
+
     const tradeCfg = loadBitgetTradeConfig();
     const dryRun = tradeCfg.dryRun;
     const productType = tradeCfg.default.productType;
@@ -221,6 +232,42 @@ export function createBitgetManualService(log) {
       record.status = "placed";
       record.orderId = data.orderId ?? null;
       record.response = resp;
+      record.presetStopLossPrice = slIn;
+      record.presetStopSurplusPrice = tpIn;
+
+      const direction = side === "sell" ? "short" : "long";
+      const tpslResolved = resolveOpenTpslPrices({
+        parsed: { stopLoss: slIn, takeProfits: [tpIn], direction },
+        fillPrice: refPrice,
+        direction,
+        initialSlPct: tradeCfg.default?.initialSlPct ?? 4.3,
+      });
+
+      const verify = await ensureBitgetPositionTpslAfterOpen(
+        client,
+        log,
+        {
+          symbol,
+          productType,
+          marginCoin,
+          holdSide,
+          size,
+          stopLossStr: tpslResolved.stopLossStr || slIn,
+          takeProfitStr: tpslResolved.takeProfitStr || tpIn,
+          cardId: 0,
+        },
+        record
+      );
+      if (!verify.ok) {
+        appendBitgetOrderHistory(verify.record ?? record);
+        return {
+          ok: false,
+          error: verify.reason ?? "tpsl_verify_failed",
+          record: verify.record ?? record,
+        };
+      }
+      Object.assign(record, verify.record ?? {});
+
       appendBitgetOrderHistory(record);
       log.info(`手动下单 ${symbol} ${side} orderId=${record.orderId ?? "-"}`);
       return { ok: true, record };
