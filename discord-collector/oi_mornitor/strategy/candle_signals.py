@@ -11,6 +11,11 @@ from oi_mornitor.config import (
     STRATEGY_SHOOT_WICK_MAX_RATIO,
     STRATEGY_SHOOT_WICK_RATIO,
 )
+from oi_mornitor.config import (
+    CANDLE_1H_HTF_TREND_ENABLED,
+    CANDLE_1H_HTF_TREND_LOOKBACK,
+    CANDLE_1H_HTF_TREND_MIN_PCT,
+)
 from oi_mornitor.candle_card_config import (
     CANDLE_CARD_VOL_LOOKBACK,
     CANDLE_HAMMER_TREND_LOOKBACK,
@@ -463,6 +468,55 @@ def find_last_closed_pattern_oi_combos(
     return combos
 
 
+def _bar_index_at_or_before(df: pd.DataFrame, close_time_ms: int) -> int:
+    """已收盘 K：open_time(ms) <= close_time_ms 的最后一根。"""
+    if df.empty or "open_time" not in df.columns:
+        return -1
+    idx = -1
+    for i in range(len(df)):
+        try:
+            ot = int(df.iloc[i]["open_time"])
+        except (TypeError, ValueError):
+            continue
+        if ot <= close_time_ms:
+            idx = i
+    return idx
+
+
+def htf_trend_gate_ok(
+    htf_dfs: dict[str, pd.DataFrame] | None,
+    *,
+    signal_close_ms: int,
+    card_kind: str,
+) -> bool:
+    """1h 倒锤子/射击之星：4h 或 1d 至少一侧满足同向趋势背景。"""
+    if not CANDLE_1H_HTF_TREND_ENABLED:
+        return True
+    if not htf_dfs:
+        return False
+    need_up = card_kind == "shooting_star"
+    need_down = card_kind == "inverted_hammer"
+    if not need_up and not need_down:
+        return True
+    lb = CANDLE_1H_HTF_TREND_LOOKBACK
+    min_pct = CANDLE_1H_HTF_TREND_MIN_PCT
+    for iv in ("4h", "1d"):
+        df = htf_dfs.get(iv)
+        if df is None or df.empty:
+            continue
+        idx = _bar_index_at_or_before(df, signal_close_ms)
+        if idx < 1:
+            continue
+        trend = _trend_return(df, idx, lb)
+        if trend is None:
+            continue
+        if need_up and trend >= min_pct:
+            return True
+        if need_down and trend <= -min_pct:
+            return True
+    return False
+
+
 def _trend_return(df: pd.DataFrame, idx: int, lookback: int) -> float | None:
     """信号前 lookback 根（不含信号根）的累计涨跌幅 %；历史不足返回 None。"""
     start = idx - lookback
@@ -486,6 +540,9 @@ def _candle_card_hits_at_index(
     allow_inverted_hammer_oi: bool | None = None,
     filter_kinds: set[str] | None = None,
     allow_main_only_volume: bool = False,
+    interval: str | None = None,
+    htf_dfs: dict[str, pd.DataFrame] | None = None,
+    signal_close_ms: int | None = None,
 ) -> list[dict[str, Any]]:
     """单根 K 上的蜡烛卡片命中（与 Telegram 卡片推送同口径）。"""
     if allow_inverted_hammer_oi is not None:
@@ -567,6 +624,17 @@ def _candle_card_hits_at_index(
 
         if filter_kinds is not None and card_kind not in filter_kinds:
             continue
+        iv = str(interval or "").strip().lower()
+        if iv == "1h":
+            close_ms = signal_close_ms
+            if close_ms is None:
+                close_ms = int(row["open_time"]) if "open_time" in row.index else None
+            if not htf_trend_gate_ok(
+                htf_dfs,
+                signal_close_ms=int(close_ms or 0),
+                card_kind=card_kind,
+            ):
+                continue
         if card_kind in seen_kinds:
             continue
         seen_kinds.add(card_kind)
@@ -654,6 +722,8 @@ def find_last_closed_candle_card_hits(
     allow_inverted_hammer: bool = True,
     allow_inverted_hammer_oi: bool | None = None,
     allow_main_only_volume: bool = False,
+    interval: str | None = None,
+    htf_dfs: dict[str, pd.DataFrame] | None = None,
 ) -> list[dict[str, Any]]:
     """最近收盘柱上的 Telegram 卡片信号。
 
@@ -666,7 +736,8 @@ def find_last_closed_candle_card_hits(
     idx = closed_bar_index(df, now_ms=now_ms)
     if idx < 0:
         return []
-    closed_ts = _ts_sec(int(df.iloc[idx]["open_time"]))
+    open_ms = int(df.iloc[idx]["open_time"])
+    closed_ts = _ts_sec(open_ms)
     markers = collect_candle_signal_markers(df)
     bar_markers = [m for m in markers if int(m.get("time") or 0) == closed_ts]
     return _candle_card_hits_at_index(
@@ -678,4 +749,7 @@ def find_last_closed_candle_card_hits(
         allow_inverted_hammer=allow_inverted_hammer,
         allow_inverted_hammer_oi=allow_inverted_hammer_oi,
         allow_main_only_volume=allow_main_only_volume,
+        interval=interval,
+        htf_dfs=htf_dfs,
+        signal_close_ms=open_ms,
     )

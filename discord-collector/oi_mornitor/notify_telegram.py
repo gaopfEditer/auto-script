@@ -364,9 +364,12 @@ def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
 
 def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
     """射击之星 / 倒锤子 → OI_CANDLE_CARD 形态群（MAIN 由 pattern_monitor 另推）。"""
+    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
     from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
 
     if not is_candle_push_enabled():
+        return False
+    if not passes_push_mtf_gate(alert):
         return False
     text = format_candle_card_message(alert)
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
@@ -396,9 +399,12 @@ def _after_candle_card_pushed(alert: dict[str, Any]) -> None:
 
 def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     """顶部/底部结构 → OI_CANDLE_CARD 形态群（不进 MAIN 群）。"""
+    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
     from oi_mornitor.telegram_push_toggles import is_structure_push_enabled
 
     if not is_structure_push_enabled():
+        return False
+    if not passes_push_mtf_gate(alert):
         return False
     text = format_structure_card_message(alert)
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)

@@ -239,12 +239,17 @@ def _entry_from_alert(alert: dict[str, Any]) -> float | None:
 
 
 def alert_stats_key(alert: dict[str, Any]) -> str:
-    """与前端 PatternAlertTicker.alertKey 对齐。"""
+    """与 ticker / 结算去重对齐：type·symbol·kline_close_time·kind·side（不含文案）。"""
     typ = str(alert.get("type") or "")
     sym = str(alert.get("symbol") or "")
     close_t = alert.get("kline_close_time") or alert.get("time") or alert.get("kline_open_time") or ""
-    msg = alert.get("message") or alert.get("type_label") or ""
-    return f"{typ}:{sym}:{close_t}:{msg}"
+    kind = str(alert.get("kind") or alert.get("signal_kind") or "")
+    side = str(alert.get("side") or "").lower()
+    if side == "bull":
+        side = "long"
+    elif side == "bear":
+        side = "short"
+    return f"{typ}:{sym}:{close_t}:{kind}:{side}"
 
 
 def _display_symbol(symbol: str) -> str:
@@ -628,7 +633,7 @@ def list_alert_stats_page(
     interval: str | None = None,
     symbol: str | None = None,
     asset_class: str | None = None,
-    mtf_resonance_only: bool = False,
+    mtf_resonance_only: bool = True,
     confluence_min_tier: str | None = None,
     mcap_tier_filter: str | None = None,
 ) -> dict[str, Any]:
@@ -950,15 +955,17 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
     if entry is None:
         return None
     key = alert_stats_key(alert)
-    if not key.startswith(":") and key.count(":") < 2:
+    if not key.startswith(":") and key.count(":") < 4:
         return None
     sym_raw = str(alert.get("symbol") or "")
-    signal_at = _to_ms(
-        alert.get("scan_ts")
-        or alert.get("kline_close_time")
-        or alert.get("time")
-        or alert.get("kline_open_time")
-    )
+    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
+    from oi_mornitor.pattern_signal_time import resolve_signal_at_from_alert
+
+    if not passes_push_mtf_gate(alert):
+        return None
+    signal_at = resolve_signal_at_from_alert(alert)
+    if signal_at <= 0:
+        return None
     trade_symbol = normalize_usdt_symbol(sym_raw)
     type_label = str(
         alert.get("type_label") or alert.get("pattern_label") or alert.get("signal_text") or ""
@@ -1008,6 +1015,11 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
             "assetClass": str(alert.get("asset_class") or "crypto"),
             "recordedAt": _now_ms(),
         }
+        if alert.get("scan_ts") is not None:
+            try:
+                rec["scanTs"] = _to_ms(alert.get("scan_ts"))
+            except (TypeError, ValueError):
+                pass
         from oi_mornitor.mcap_tier import resolve_mcap_tier
 
         rec["mcapTier"] = resolve_mcap_tier(trade_symbol or sym_raw)
@@ -1055,7 +1067,9 @@ def record_equity_alert_from_scan(alert: dict[str, Any]) -> dict[str, Any] | Non
         return None
     key = alert_stats_key({**alert, "source": "equity_pattern"})
     sym_raw = str(alert.get("symbol") or "")
-    signal_at = _to_ms(alert.get("kline_close_time") or alert.get("scan_ts"))
+    from oi_mornitor.pattern_signal_time import resolve_signal_at_from_alert
+
+    signal_at = resolve_signal_at_from_alert(alert)
     trade_symbol = normalize_usdt_symbol(sym_raw)
     type_label = str(alert.get("type_label") or "").strip()
     dir_cn = "多" if side == "long" else "空"
@@ -1154,6 +1168,7 @@ def apply_settle_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def summarize(items: list[dict[str, Any]] | None = None, *, exclude_observation: bool = True) -> dict[str, Any]:
     rows = items if items is not None else _load()
     obs_excluded = 0
+    flat_error_excluded = 0
     if exclude_observation:
         from oi_mornitor.pattern_settle_profile import is_observation_record
 
@@ -1164,10 +1179,23 @@ def summarize(items: list[dict[str, Any]] | None = None, *, exclude_observation:
             else:
                 kept.append(r)
         rows = kept
+    headline_rows: list[dict[str, Any]] = []
+    for r in rows:
+        oc = str(r.get("outcome") or "pending")
+        if oc in ("flat", "error"):
+            flat_error_excluded += 1
+            continue
+        headline_rows.append(r)
     pending = wins = losses = flats = errors = 0
     total_pnl = 0.0
     pnl_n = 0
     for r in rows:
+        oc = str(r.get("outcome") or "pending")
+        if oc == "flat":
+            flats += 1
+        elif oc == "error":
+            errors += 1
+    for r in headline_rows:
         oc = str(r.get("outcome") or "pending")
         if oc == "pending":
             pending += 1
@@ -1175,17 +1203,13 @@ def summarize(items: list[dict[str, Any]] | None = None, *, exclude_observation:
             wins += 1
         elif oc == "stop_loss":
             losses += 1
-        elif oc == "flat":
-            flats += 1
-        else:
-            errors += 1
         pnl = _rec_pnl_pct(r)
         if pnl is not None:
             total_pnl += pnl
             pnl_n += 1
     settled = wins + losses
     return {
-        "total": len(rows),
+        "total": len(headline_rows),
         "pending": pending,
         "wins": wins,
         "losses": losses,
@@ -1194,6 +1218,7 @@ def summarize(items: list[dict[str, Any]] | None = None, *, exclude_observation:
         "winRate": (wins / settled) if settled else None,
         "totalPnlPct": round(total_pnl, 2) if pnl_n else None,
         "observationExcluded": obs_excluded,
+        "flatErrorExcluded": flat_error_excluded,
         "leverageHint": (
             "BTC/ETH/SOL 100x · 山寨 20x · V2：invalid/ATR SL · R 倍数 TP · 观察档默认不计胜率"
         ),

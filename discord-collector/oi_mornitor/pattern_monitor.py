@@ -1661,6 +1661,7 @@ class PatternMonitorEngine:
             pool_role: str,
             df: Any,
             closed_ts: int,
+            htf_dfs: dict | None = None,
         ) -> list[dict[str, Any]]:
             if not is_candle_push_enabled():
                 return []
@@ -1690,6 +1691,8 @@ class PatternMonitorEngine:
                     allow_consecutive_shoot=False,
                     allow_inverted_hammer=need_hammer,
                     allow_main_only_volume=True,
+                    interval=iv,
+                    htf_dfs=htf_dfs,
                 )
             except Exception:  # noqa: BLE001
                 return []
@@ -1736,14 +1739,12 @@ class PatternMonitorEngine:
                     "scan_ts": scan_ts,
                     "kline_close_time": close_ts * 1000,
                 }
+                from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
+
+                if not passes_push_mtf_gate(alert):
+                    continue
                 out.append(alert)
                 logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
-                try:
-                    from oi_mornitor.pattern_alert_stats import record_alert_from_push
-
-                    record_alert_from_push(alert)
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("形态卡片胜率入库 %s: %s", sym, exc)
                 card_vol_ok = bool(alert.get("card_vol_ok", True))
                 ok = False
                 if card_vol_ok:
@@ -1845,6 +1846,10 @@ class PatternMonitorEngine:
                     "scan_ts": scan_ts,
                     "kline_close_time": close_ts * 1000,
                 }
+                from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
+
+                if not passes_push_mtf_gate(alert):
+                    continue
                 out.append(alert)
                 logger.info("📩 结构卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 try:
@@ -1882,10 +1887,23 @@ class PatternMonitorEngine:
             if closed_ts is None:
                 return []
 
+            htf_dfs = None
+            if iv == "1h" and is_candle_push_enabled():
+                htf_dfs = {}
+                for hiv in ("4h", "1d"):
+                    hk = await _klines_for(sym, hiv)
+                    if hk and len(hk) >= 30:
+                        try:
+                            htf_dfs[hiv] = enrich_indicators(klines_to_df(hk))
+                        except Exception:  # noqa: BLE001
+                            pass
+
             out: list[dict[str, Any]] = []
             if is_candle_push_enabled():
                 out.extend(
-                    await _emit_candle(sym, iv, is_major, pool_role, df, closed_ts)
+                    await _emit_candle(
+                        sym, iv, is_major, pool_role, df, closed_ts, htf_dfs=htf_dfs
+                    )
                 )
             if is_structure_push_enabled() and pool_role != "main_equity":
                 out.extend(await _emit_structure(sym, iv, df))
