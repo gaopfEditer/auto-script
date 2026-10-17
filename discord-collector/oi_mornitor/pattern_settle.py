@@ -98,6 +98,31 @@ def _sl_price(entry: float, pct: float, *, is_short: bool) -> float:
     return entry * (1 + step) if is_short else entry * (1 - step)
 
 
+def _bar_series_for_settle(
+    bars: list[dict[str, float]],
+    entry: float,
+    *,
+    fine_bars: bool | None,
+) -> list[dict[str, float]]:
+    aligned = _align_bars(bars, entry)
+    if fine_bars is None:
+        from oi_mornitor.config import OI_PATTERN_SETTLE_FINE_BARS
+
+        fine_bars = OI_PATTERN_SETTLE_FINE_BARS
+    if not fine_bars:
+        return _aggregate_to_15m(aligned)
+    if len(aligned) < 2:
+        return aligned
+    deltas = [
+        aligned[i + 1]["ts"] - aligned[i]["ts"]
+        for i in range(min(8, len(aligned) - 1))
+    ]
+    med = sorted(deltas)[len(deltas) // 2]
+    if med >= 14 * 60_000:
+        return aligned
+    return aligned
+
+
 def settle_signal_batch(
     *,
     side: str,
@@ -109,6 +134,10 @@ def settle_signal_batch(
     verify_delay_ms: int = _VERIFY_DELAY_MS,
     now_ms: int | None = None,
     plan: "SettlePlan | None" = None,
+    fine_bars: bool | None = None,
+    breakeven_after_tp1: bool | None = None,
+    fee_pct_per_side: float = 0.0,
+    slippage_pct_per_side: float = 0.0,
 ) -> dict[str, Any]:
     """
     三档分批 + Runner 跟踪止盈。
@@ -136,9 +165,27 @@ def settle_signal_batch(
     verify_at = signal_at_ms + verify_delay_ms
     now = verify_at if now_ms is None else min(now_ms, verify_at)
 
-    aligned = _aggregate_to_15m(_align_bars(bars, entry))
+    if breakeven_after_tp1 is None:
+        from oi_mornitor.config import OI_PATTERN_SETTLE_BREAKEVEN_TP1
+
+        breakeven_after_tp1 = OI_PATTERN_SETTLE_BREAKEVEN_TP1
+
+    from oi_mornitor.config import (
+        SETTLE_WALK_VERSION,
+        SETTLE_WALK_VERSION_LEGACY_AGG,
+    )
+
+    if fine_bars is None:
+        from oi_mornitor.config import OI_PATTERN_SETTLE_FINE_BARS
+
+        use_fine = OI_PATTERN_SETTLE_FINE_BARS
+    else:
+        use_fine = fine_bars
+    settle_walk_version = SETTLE_WALK_VERSION if use_fine else SETTLE_WALK_VERSION_LEGACY_AGG
+
+    series = _bar_series_for_settle(bars, entry, fine_bars=use_fine)
     sorted_bars = [
-        b for b in sorted(aligned, key=lambda x: x["ts"]) if signal_at_ms - 1 <= b["ts"] <= now + 60_000
+        b for b in sorted(series, key=lambda x: x["ts"]) if signal_at_ms - 1 <= b["ts"] <= now + 60_000
     ]
 
     rem = list(batch_weights)
@@ -164,6 +211,7 @@ def settle_signal_batch(
             "symbol": symbol,
             "tradeSymbol": symbol,
             "settleRulesVersion": 2 if plan else 1,
+            "settleVersion": settle_walk_version,
         }
         if plan is not None:
             rec["settleProfileId"] = plan.profile_id
@@ -171,6 +219,18 @@ def settle_signal_batch(
             rec["tp1Price"] = tp1
             rec["tp2Price"] = tp2
             rec["verifyAt"] = verify_at
+        if fee_pct_per_side > 0 or slippage_pct_per_side > 0:
+            from oi_mornitor.pattern_entry import apply_round_trip_costs
+
+            move = apply_round_trip_costs(
+                move,
+                fee_pct=fee_pct_per_side,
+                slippage_pct=slippage_pct_per_side,
+            )
+            rec["movePct"] = move
+            rec["netMovePct"] = move
+            rec["feePctPerSide"] = fee_pct_per_side
+            rec["slippagePctPerSide"] = slippage_pct_per_side
         rec["pnlPct"] = _rec_pnl_pct(rec)
         return rec
 
@@ -196,6 +256,8 @@ def settle_signal_batch(
                 move = price_move_pct(entry, tp1, is_short=is_short)
                 weighted_move += move * rem[0]
                 rem[0] = 0.0
+                if breakeven_after_tp1 and (rem[1] > 0 or rem[2] > 0):
+                    sl = min(sl, entry) if is_short else max(sl, entry)
 
         # 3) TP2 30%
         if rem[1] > 0:
@@ -265,8 +327,12 @@ def settle_signal_by_5m_bars(
     now_ms: int | None = None,
     plan: "SettlePlan | None" = None,
     alert_rec: dict[str, Any] | None = None,
+    fine_bars: bool | None = None,
+    breakeven_after_tp1: bool | None = None,
+    fee_pct_per_side: float = 0.0,
+    slippage_pct_per_side: float = 0.0,
 ) -> dict[str, Any]:
-    """兼容旧名：内部聚合 15m 后走分批结算；可传 alert_rec 自动 build V2 plan。"""
+    """兼容旧名：5m 步进结算；可传 alert_rec 自动 build V2 plan。"""
     del step_pct  # 旧 ±5% 单档已废弃
     if plan is None and alert_rec is not None:
         from oi_mornitor.pattern_settle_profile import build_settle_plan
@@ -282,6 +348,10 @@ def settle_signal_by_5m_bars(
         verify_delay_ms=verify_delay_ms,
         now_ms=now_ms,
         plan=plan,
+        fine_bars=fine_bars,
+        breakeven_after_tp1=breakeven_after_tp1,
+        fee_pct_per_side=fee_pct_per_side,
+        slippage_pct_per_side=slippage_pct_per_side,
     )
 
 

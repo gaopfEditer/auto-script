@@ -34,9 +34,23 @@ from oi_mornitor.backtest_prefetch import _prefetch_klines
 from oi_mornitor.breakout_detector import klines_to_df
 from oi_mornitor.pattern_detector import enrich_indicators
 from oi_mornitor.pattern_monitor import fetch_open_interest_hist
+from oi_mornitor.backtest_metrics import summarize_backtest_extended, summarize_by_dimensions
+from oi_mornitor.backtest_trade_config import (
+    OI_BT_APPLY_EMIT_GATE,
+    OI_BT_FEE_PCT,
+    OI_BT_SLIPPAGE_PCT,
+)
+from oi_mornitor.pattern_emit_gate import (
+    alert_from_candle_hit,
+    alert_from_structure_hit,
+    passes_backtest_emit_gate,
+    stats_peer_stub_from_alert,
+)
+from oi_mornitor.pattern_entry import resolve_backtest_entry_price
 from oi_mornitor.pattern_settle import settle_rules_summary, settle_signal_by_5m_bars
-from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms
+from oi_mornitor.pattern_settle_profile import build_settle_plan, resolve_verify_delay_ms
 from oi_mornitor.pattern_alert_stats import summarize
+from oi_mornitor.candle_card_config import structure_volume_confirmed
 from oi_mornitor.strategy.candle_signals import iter_candle_card_hits_in_range
 from oi_mornitor.strategy.structure_signals import (
     ENABLE_CURVATURE_DECAY,
@@ -82,10 +96,12 @@ class BacktestJob:
     progress: dict[str, Any] = field(default_factory=dict)
     summary: dict[str, Any] | None = None
     confluence_summary: dict[str, Any] | None = None
+    pushed_summary: dict[str, Any] | None = None
     by_kind: list[dict[str, Any]] = field(default_factory=list)
     by_interval: list[dict[str, Any]] = field(default_factory=list)
     by_tier: list[dict[str, Any]] = field(default_factory=list)
     by_mcap_tier: list[dict[str, Any]] = field(default_factory=list)
+    by_type_label: list[dict[str, Any]] = field(default_factory=list)
     items: list[dict[str, Any]] = field(default_factory=list)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -198,6 +214,9 @@ def _job_snapshot(job: BacktestJob) -> dict[str, Any]:
         "params": dict(job.params),
         "progress": dict(job.progress),
         "summary": dict(job.summary) if isinstance(job.summary, dict) else job.summary,
+        "pushedSummary": (
+            dict(job.pushed_summary) if isinstance(job.pushed_summary, dict) else job.pushed_summary
+        ),
         "byKind": list(job.by_kind),
         "byInterval": list(job.by_interval),
         "items": list(job.items),
@@ -304,8 +323,19 @@ def _refresh_live_stats(job: BacktestJob) -> None:
     if items:
         attach_mcap_tier(items)
         attach_confluence_to_backtest_items(items)
+        from oi_mornitor.signal_confluence import passes_confluence_push_gate
+
+        for it in items:
+            conf = it.get("confluence")
+            it["confluenceWouldPush"] = (
+                isinstance(conf, dict) and passes_confluence_push_gate(conf)
+            )
         items.sort(key=lambda x: int(x.get("signalAt") or 0), reverse=True)
-        job.summary = summarize(_pseudo_alerts(items))
+        job.summary = summarize_backtest_extended(items)
+        pushed_bucket = [it for it in items if it.get("confluenceWouldPush")]
+        job.pushed_summary = (
+            summarize_backtest_extended(pushed_bucket) if pushed_bucket else None
+        )
         job.by_kind = _summarize_by_kind(items)
         job.by_interval = _summarize_by_interval(items)
         tier_counts = summarize_by_confluence_tier(items)
@@ -319,6 +349,9 @@ def _refresh_live_stats(job: BacktestJob) -> None:
             ]
             s = summarize(_pseudo_alerts(bucket)) if bucket else {}
             job.by_tier.append({"tier": tier, "count": len(bucket), **s})
+        job.by_type_label = summarize_by_dimensions(
+            items, key_fields=("typeLabel", "interval", "mcapTier")
+        )
         job.by_mcap_tier = []
         for tid in MCAP_TIER_ORDER:
             bucket = [it for it in items if str(it.get("mcapTier") or "t3").lower() == tid]
@@ -486,9 +519,11 @@ def _scan_symbol_interval(
         side: str,
         close_time_ms: int,
         bar_close_sec: int,
-        entry: float,
+        signal_bar_close: float,
+        bar_index: int,
         defense: Any,
         emit: str,
+        hit_payload: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
     ) -> None:
         if live_funnel and funnel is not None:
@@ -518,9 +553,39 @@ def _scan_symbol_interval(
                 return
             struct_last[ck] = bar_close_sec
 
+        hit_payload = hit_payload or {}
+        if emit == "candle":
+            alert = alert_from_candle_hit(
+                sym=symbol,
+                iv=interval,
+                hit={**hit_payload, "kind": kind, "type_label": type_label, "side": side},
+                close_ts_sec=bar_close_sec,
+                close_ms=close_time_ms,
+            )
+        else:
+            alert = alert_from_structure_hit(
+                sym=symbol,
+                iv=interval,
+                hit={**hit_payload, "kind": kind, "type_label": type_label, "side": side, "defense": defense},
+                close_ts_sec=bar_close_sec,
+                close_ms=close_time_ms,
+            )
+        next_open: float | None = None
+        if bar_index + 1 < len(df):
+            try:
+                next_open = float(df.iloc[bar_index + 1]["open"])
+            except (TypeError, ValueError, KeyError):
+                next_open = None
+        entry = resolve_backtest_entry_price(
+            side=side,
+            signal_bar_close=signal_bar_close,
+            next_bar_open=next_open,
+        )
+
         signal_at_ms = _align_signal_at_ms(close_time_ms)
         settle_stub: dict[str, Any] = {
-            "side": side,
+            **alert,
+            "side": "short" if side in ("bear", "short") else "long",
             "entry": entry,
             "tradeSymbol": symbol,
             "symbol": symbol,
@@ -533,18 +598,27 @@ def _scan_symbol_interval(
                 settle_stub["invalid_level"] = float(defense)
             except (TypeError, ValueError):
                 pass
+        from oi_mornitor.mcap_tier import resolve_mcap_tier
+
+        settle_stub["mcapTier"] = resolve_mcap_tier(symbol)
         verify_ms = resolve_verify_delay_ms(settle_stub)
         settle_end = signal_at_ms + verify_ms + 5 * 60_000
         bars_settle = store.load_5m_bars(symbol, signal_at_ms, settle_end)
         settled = settle_signal_by_5m_bars(
-            side=side,
+            side=settle_stub["side"],
             entry=entry,
             symbol=symbol,
             signal_at_ms=signal_at_ms,
             bars_5m=bars_settle,
             now_ms=settle_end,
             alert_rec=settle_stub,
+            fee_pct_per_side=OI_BT_FEE_PCT,
+            slippage_pct_per_side=OI_BT_SLIPPAGE_PCT,
         )
+        try:
+            plan = build_settle_plan(settle_stub)
+        except ValueError:
+            plan = None
         row: dict[str, Any] = {
             "symbol": symbol,
             "interval": interval,
@@ -556,10 +630,14 @@ def _scan_symbol_interval(
             "signalAt": signal_at_ms,
             "entry": entry,
             "defense": defense,
+            "mcapTier": settle_stub.get("mcapTier"),
             "outcome": settled.get("outcome"),
             "movePct": settled.get("movePct"),
+            "netMovePct": settled.get("netMovePct"),
             "pnlPct": settled.get("pnlPct"),
             "exitPrice": settled.get("exitPrice"),
+            "slPrice": settled.get("slPrice") or (plan.sl_price if plan else None),
+            "tp1Price": settled.get("tp1Price") or (plan.tp1_price if plan else None),
             "error": settled.get("error"),
         }
         if extra:
@@ -602,6 +680,8 @@ def _scan_symbol_interval(
                     [hit], interval=interval, now_ms=signal_at_ms
                 ):
                     continue
+                if live_funnel and not structure_volume_confirmed(hit):
+                    continue
                 _append_settled(
                     kind=kind,
                     type_label=str(ev.get("type_label") or kind),
@@ -609,9 +689,11 @@ def _scan_symbol_interval(
                     side=side,
                     close_time_ms=close_ms,
                     bar_close_sec=bar_close_sec,
-                    entry=float(row["close"]),
+                    signal_bar_close=float(row["close"]),
+                    bar_index=bar_index,
                     defense=ev.get("defense"),
                     emit="struct",
+                    hit_payload=hit,
                 )
 
     if candle_kinds:
@@ -646,9 +728,11 @@ def _scan_symbol_interval(
                 side=side,
                 close_time_ms=close_ms,
                 bar_close_sec=bar_close_sec,
-                entry=float(ch.get("close") or ch.get("price") or 0),
+                signal_bar_close=float(ch.get("close") or ch.get("price") or 0),
+                bar_index=int(ch["bar_index"]),
                 defense=ch.get("prior_high"),
                 emit="candle",
+                hit_payload=ch,
                 extra={
                     "nearVegas": ch.get("near_vegas"),
                     "trendPct": ch.get("trend_pct"),
@@ -657,6 +741,57 @@ def _scan_symbol_interval(
             )
 
     return hits
+
+
+def _backtest_item_to_alert(it: dict[str, Any]) -> dict[str, Any]:
+    side = str(it.get("side") or "")
+    kind = str(it.get("kind") or "")
+    sym = str(it.get("symbol") or "")
+    iv = str(it.get("interval") or "")
+    close_ms = int(it.get("signalAt") or 0)
+    bar_sec = close_ms // 1000
+    emit = str(it.get("emit") or "candle")
+    if emit == "struct":
+        return alert_from_structure_hit(
+            sym=sym,
+            iv=iv,
+            hit={
+                "kind": kind,
+                "type_label": it.get("typeLabel"),
+                "side": side,
+                "defense": it.get("defense"),
+                "close": it.get("entry"),
+            },
+            close_ts_sec=bar_sec,
+            close_ms=close_ms,
+        )
+    return alert_from_candle_hit(
+        sym=sym,
+        iv=iv,
+        hit={
+            "kind": kind,
+            "type_label": it.get("typeLabel"),
+            "side": side,
+            "close": it.get("entry"),
+            "observation_only": it.get("observation_only"),
+        },
+        close_ts_sec=bar_sec,
+        close_ms=close_ms,
+    )
+
+
+def _filter_items_chronological_emit_gate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按 signalAt 升序重放 MTF/停推门控（与胜率库 peers 顺序对齐）。"""
+    ordered = sorted(items, key=lambda x: int(x.get("signalAt") or 0))
+    peers: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for it in ordered:
+        alert = _backtest_item_to_alert(it)
+        if not passes_backtest_emit_gate(alert, peers):
+            continue
+        kept.append(it)
+        peers.append(stats_peer_stub_from_alert(alert))
+    return kept
 
 
 def _pseudo_alerts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -901,6 +1036,9 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
             if not fetch_session.closed:
                 await fetch_session.close()
 
+        if live_funnel and OI_BT_APPLY_EMIT_GATE and all_items:
+            all_items[:] = _filter_items_chronological_emit_gate(all_items)
+            job.items = all_items
         _refresh_live_stats(job)
         job.status = "done"
         job.finished_at = time.time()
@@ -1116,6 +1254,7 @@ def job_to_dict(
         "progress": job.progress,
         "summary": job.summary,
         "confluenceSummary": job.confluence_summary,
+        "pushedSummary": job.pushed_summary,
         "filteredSummary": filtered_summary,
         "intervalSummary": interval_summary,
         "byKind": job.by_kind,
