@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -166,6 +167,108 @@ class RMultipleTests(unittest.TestCase):
         r = compute_r_multiple(rec)
         self.assertIsNotNone(r)
         self.assertAlmostEqual(r, -1.0, places=2)
+
+
+class ConfluenceObservationOnlyTests(unittest.TestCase):
+    def test_c_tier_included_in_calibration_not_headline(self) -> None:
+        rec = {
+            "outcome": "take_profit",
+            "entry": 100.0,
+            "slPrice": 99.0,
+            "movePct": 1.0,
+            "side": "long",
+            "confluence_observation_only": True,
+            "typeLabel": "顶部结构",
+        }
+        self.assertIsNotNone(compute_r_multiple(rec))
+        from oi_mornitor.pattern_alert_stats import is_headline_win_rate_excluded, summarize
+
+        self.assertTrue(is_headline_win_rate_excluded(rec))
+        s = summarize([rec], exclude_observation=True)
+        self.assertEqual(s["total"], 0)
+
+    def test_record_uses_confluence_flag_only(self) -> None:
+        from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+        alert = {
+            "type": "candle_pattern_card",
+            "symbol": "ETHUSDT",
+            "interval": "4h",
+            "kind": "shooting_star",
+            "side": "bear",
+            "type_label": "射击之星",
+            "kline_close_time": 1_700_000_000_000,
+            "price": 3000.0,
+            "close": 3000.0,
+            "confluence_observation_only": True,
+            "confluence": {"score": 42, "tier": "C"},
+        }
+        with mock.patch("oi_mornitor.pattern_alert_stats._save", return_value=[]) as save_mock:
+            with mock.patch("oi_mornitor.pattern_alert_stats._load", return_value=[]):
+                with mock.patch(
+                    "oi_mornitor.pattern_push_gate.passes_push_mtf_gate",
+                    return_value=True,
+                ):
+                    record_alert_from_push(alert)
+        saved = save_mock.call_args[0][0][0]
+        self.assertTrue(saved.get("confluence_observation_only"))
+        self.assertFalse(saved.get("observation_only"))
+
+
+class PeerCacheTests(unittest.TestCase):
+    def test_list_alert_stats_cached_avoids_repeated_load(self) -> None:
+        from oi_mornitor.pattern_alert_stats import (
+            _invalidate_confluence_peer_cache,
+            list_alert_stats_cached,
+        )
+
+        _invalidate_confluence_peer_cache()
+        calls = 0
+
+        def fake_load() -> list[dict]:
+            nonlocal calls
+            calls += 1
+            return [{"key": "k", "signalAt": 1}]
+
+        fake_path = mock.Mock()
+        fake_path.stat.return_value = mock.Mock(st_mtime_ns=123)
+        fake_path.is_file.return_value = True
+        with mock.patch("oi_mornitor.pattern_alert_stats._load", side_effect=fake_load):
+            with mock.patch("oi_mornitor.pattern_alert_stats._STATS_FILE", fake_path):
+                a = list_alert_stats_cached()
+                b = list_alert_stats_cached()
+        self.assertEqual(len(a), 1)
+        self.assertEqual(a, b)
+        self.assertEqual(calls, 1)
+
+
+class WeightsFileCacheTests(unittest.TestCase):
+    def test_corrupt_weights_file_falls_back(self) -> None:
+        reload_confluence_weights()
+        with tempfile.TemporaryDirectory() as td:
+            bad = os.path.join(td, "bad.json")
+            with open(bad, "w", encoding="utf-8") as f:
+                f.write("{not-json")
+            with mock.patch.dict(os.environ, {"OI_CONFLUENCE_WEIGHTS_PATH": bad}, clear=False):
+                reload_confluence_weights()
+                w = active_feature_weights()
+                self.assertEqual(w["combo:结构·双周期共振"], DEFAULT_FEATURE_WEIGHTS["combo:结构·双周期共振"])
+
+    def test_weights_reload_on_mtime_change(self) -> None:
+        reload_confluence_weights()
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "w.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"weights": {"side:long": 0.99}}, f)
+            with mock.patch.dict(os.environ, {"OI_CONFLUENCE_WEIGHTS_PATH": path}, clear=False):
+                reload_confluence_weights()
+                w1 = active_feature_weights()
+                self.assertAlmostEqual(w1["side:long"], 0.99)
+                time.sleep(0.02)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({"weights": {"side:long": 0.11}}, f)
+                w2 = active_feature_weights()
+                self.assertAlmostEqual(w2["side:long"], 0.11)
 
 
 class CalibrationFileTests(unittest.TestCase):

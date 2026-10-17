@@ -370,7 +370,8 @@ WEEX 分阶段开仓默认 TP/SL 与 Bitget 共用 `BITGET_INITIAL_SL_PCT` 等�
 - **打分**：`signal_confluence.py` — 加性特征权重（`confluence_features.py`）+ 训练集 raw 分百分位映射 0–100；档位 **A**（Top 20%）、**B**（60–80%）、**C**（其余）。保留 `legacyScore` 供对比。
 - **权重文件**：`data/confluence_weights.json`（与 `pattern_alert_stats.json` 同 data 目录）；缺失时用代码内 `DEFAULT_FEATURE_WEIGHTS`（业主离线拟合 ΔR）。
 - **校准**：`python -m oi_mornitor confluence-calibrate` 或 `python run.py confluence-calibrate` — 读胜率库、按 R 倍（`movePct/SL%`，裁剪 [-3,5]）拟合收缩权重；仅当 **test 顶分位 expR > 底分位** 才覆盖权重文件。
-- **推送门控**：`OI_CONFLUENCE_PUSH_MIN_TIER` 默认 **`B`**（推 A/B）；**C** 档 `observation_only` 入库、不推 TG。文案追加一行：`共振分 82（A）：结构双周期+空单+量价推进`。
+- **推送门控**：`OI_CONFLUENCE_PUSH_MIN_TIER` 默认 **`B`**（推 A/B）；**C** 档 `confluence_observation_only` 入库（**正常结算**、参与校准）、不推 TG、不计头条胜率。文案追加一行：`共振分 82（A）：结构双周期+空单+量价推进`。
+- **性能**：推送算分使用 `list_alert_stats_cached()`（mtime + 默认 60s TTL）且 MTF peer 仅取 signalAt ±4h 窗；`OI_CONFLUENCE_PEER_CACHE_SEC` 可调。
 - **列表**：`/api/pattern-alert-stats` 默认按新 `confluence.score` 降序。
 - **周更 cron（北京时间周日 03:00，示例）**：
 

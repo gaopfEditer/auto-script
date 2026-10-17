@@ -143,6 +143,27 @@ def compute_mtf_resonance_by_key(
     return out
 
 
+def peers_within_mtf_window(
+    records: list[dict[str, Any]],
+    anchor_ms: int,
+    *,
+    window_ms: int = MTF_RESONANCE_WINDOW_MS,
+) -> list[dict[str, Any]]:
+    """MTF 共振仅需 anchor 前后一个时间窗内的 peer（默认 ±4h）。"""
+    if anchor_ms <= 0:
+        return []
+    lo = anchor_ms - window_ms
+    hi = anchor_ms + window_ms
+    out: list[dict[str, Any]] = []
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        sat = int(r.get("signalAt") or 0)
+        if sat > 0 and lo <= sat <= hi:
+            out.append(r)
+    return out
+
+
 def attach_mtf_resonance(records: list[dict[str, Any]]) -> None:
     """就地写入 mtfResonance 字段（无共振则删除旧字段）。"""
     by_key = compute_mtf_resonance_by_key(records)

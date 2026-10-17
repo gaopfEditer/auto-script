@@ -76,24 +76,43 @@ def default_weights_path() -> Path:
     return Path(PATTERN_STATE_DB).resolve().parent / "data" / "confluence_weights.json"
 
 
+def _weights_file_mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns if path.is_file() else -1
+    except OSError:
+        return -1
+
+
 def _load_weights_file() -> dict[str, Any] | None:
+    """读取权重 JSON；缺失/损坏时返回 None（调用方回退 DEFAULT）。按 mtime 缓存。"""
     global _WEIGHTS_CACHE
     path = default_weights_path()
+    mtime_ns = _weights_file_mtime_ns(path)
     with _WEIGHTS_LOCK:
-        if _WEIGHTS_CACHE is not None and _WEIGHTS_CACHE.get("_path") == str(path):
-            return _WEIGHTS_CACHE
-        if not path.is_file():
-            _WEIGHTS_CACHE = {"_path": str(path), "missing": True}
+        cached = _WEIGHTS_CACHE
+        if (
+            cached is not None
+            and cached.get("_path") == str(path)
+            and cached.get("_mtime_ns") == mtime_ns
+        ):
+            return None if cached.get("missing") else cached
+        if mtime_ns < 0:
+            _WEIGHTS_CACHE = {"_path": str(path), "_mtime_ns": mtime_ns, "missing": True}
             return None
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            raw = path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
             logger.warning("读取共振权重失败 %s: %s", path, exc)
-            _WEIGHTS_CACHE = {"_path": str(path), "missing": True}
+            _WEIGHTS_CACHE = {"_path": str(path), "_mtime_ns": mtime_ns, "missing": True}
             return None
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or not isinstance(data.get("weights"), dict):
+            logger.warning("共振权重格式无效 %s，使用内置默认", path)
+            _WEIGHTS_CACHE = {"_path": str(path), "_mtime_ns": mtime_ns, "missing": True}
             return None
+        data = dict(data)
         data["_path"] = str(path)
+        data["_mtime_ns"] = mtime_ns
         _WEIGHTS_CACHE = data
         return data
 
@@ -505,11 +524,21 @@ def passes_confluence_push_gate(confluence: dict[str, Any] | None) -> bool:
 
 def confluence_for_alert(alert: dict[str, Any], peers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """推送前：由 alert + 胜率 peers 计算共振分。"""
+    from oi_mornitor.pattern_alert_stats import (
+        list_alert_stats_cached,
+        mtf_resonance_peers_for_signal_at,
+    )
     from oi_mornitor.pattern_push_gate import alert_to_resonance_stub
     from oi_mornitor.pattern_mtf_resonance import attach_mtf_resonance
 
-    pool = list(peers or [])
     stub = alert_to_resonance_stub(alert)
+    if peers is None:
+        all_cached = list_alert_stats_cached()
+        pool = mtf_resonance_peers_for_signal_at(all_cached, int(stub.get("signalAt") or 0))
+    else:
+        from oi_mornitor.pattern_mtf_resonance import peers_within_mtf_window
+
+        pool = peers_within_mtf_window(peers, int(stub.get("signalAt") or 0))
     combined = pool + [stub]
     attach_mtf_resonance(combined)
     from oi_mornitor.mcap_tier import resolve_mcap_tier

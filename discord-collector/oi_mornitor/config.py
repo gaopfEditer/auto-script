@@ -316,7 +316,7 @@ MAIN_CARD_VOL_LOOKBACK = max(
 MAIN_CARD_VOL_MULT = env_float("OI_MAIN_CARD_VOL_MULT", 1.0, min_val=0.0)
 # 形态推送 / 胜率入库：多周期共振最少档数（1=关闭硬过滤）
 OI_PATTERN_PUSH_MTF_MIN = max(1, env_int("OI_PATTERN_PUSH_MTF_MIN", 2, min_val=1))
-# 共振分推送门槛：B=仅推 A/B；C 档入库 observation_only
+# 共振分推送门槛：B=仅推 A/B；C 档 confluence_observation_only（正常结算+参与校准）
 _OI_CONFLUENCE_PUSH_MIN_RAW = env_str("OI_CONFLUENCE_PUSH_MIN_TIER", "B").strip().upper()
 OI_CONFLUENCE_PUSH_MIN_TIER = (
     _OI_CONFLUENCE_PUSH_MIN_RAW if _OI_CONFLUENCE_PUSH_MIN_RAW in ("A", "B", "C", "D", "ALL") else "B"

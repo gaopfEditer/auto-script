@@ -301,22 +301,20 @@ def _send_card_text_to_chat(alert: dict[str, Any], text: str, chat_id: str) -> b
 
 
 def _attach_confluence_on_alert(alert: dict[str, Any]) -> dict[str, Any]:
-    from oi_mornitor.pattern_alert_stats import list_alert_stats
     from oi_mornitor.signal_confluence import confluence_for_alert
 
-    conf = confluence_for_alert(alert, list_alert_stats())
+    conf = confluence_for_alert(alert)
     alert["confluence"] = conf
     return conf
 
 
 def _record_confluence_observation_only(alert: dict[str, Any]) -> None:
-    """共振 C 档：仅入库观察，不推 TG。"""
+    """共振 C 档：入库并正常结算，但不推 TG、不计头条胜率。"""
     try:
         from oi_mornitor.pattern_alert_stats import record_alert_from_push
 
         stub = dict(alert)
         stub["confluence_observation_only"] = True
-        stub["observation_only"] = True
         record_alert_from_push(stub)
     except Exception as exc:  # noqa: BLE001
         logger.warning("共振观察档入库失败: %s", exc)
