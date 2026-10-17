@@ -845,6 +845,24 @@ export function createBitgetOrderService(store, log) {
 
           cardId: input.cardId,
 
+          direction: String(plan.direction ?? input.parsed?.direction ?? ""),
+
+          initialSlPct: Number(resolved.channel.initialSlPct ?? 4.3),
+
+          parsed: input.parsed,
+
+          executionJson,
+
+          fetchMark: async () => {
+
+            const ticker = await client.getMixTicker({ symbol: plan.symbol, productType: plan.productType });
+
+            const p = Number(ticker?.markPrice ?? ticker?.lastPr ?? 0);
+
+            return Number.isFinite(p) && p > 0 ? p : null;
+
+          },
+
         },
 
         orderRecord
