@@ -1029,8 +1029,14 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
                 rec["invalid_level"] = float(inv)
             except (TypeError, ValueError):
                 pass
-        if alert.get("vp_formal") is False or "观察" in type_label:
+        if alert.get("observation_only") or alert.get("vp_formal") is False or "观察" in type_label:
             rec["observation_only"] = True
+        sp = alert.get("step_pct")
+        if sp is not None:
+            try:
+                rec["stepPct"] = float(sp)
+            except (TypeError, ValueError):
+                pass
         if alert.get("vp_exit_plan"):
             rec["vp_exit_plan"] = alert.get("vp_exit_plan")
         from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms
