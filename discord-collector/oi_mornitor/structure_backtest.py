@@ -371,10 +371,9 @@ def _attach_oi_column(df: Any, oi_map: dict[int, float] | None) -> Any:
 
 
 def _align_signal_at_ms(close_time_ms: int) -> int:
-    """收盘后对齐到下一根 5m open，与 live scan_ts + 5m 核实网格一致。"""
-    if close_time_ms <= 0:
-        return close_time_ms
-    return ((close_time_ms // _5M_MS) + 1) * _5M_MS
+    from oi_mornitor.pattern_signal_time import align_signal_at_ms
+
+    return align_signal_at_ms(close_time_ms)
 
 
 def _cooldown_blocked(

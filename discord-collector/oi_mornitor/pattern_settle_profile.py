@@ -5,10 +5,17 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from oi_mornitor.config import OI_PATTERN_SL_MIN_PCT, OI_PATTERN_SL_MIN_PCT_MAJOR
 from oi_mornitor.mcap_tier import resolve_mcap_tier
+from oi_mornitor.symbol_aliases import human_base_asset
 
+_LEV_100 = frozenset({"BTC", "ETH", "SOL"})
+
+_15M_VERIFY_MS = int(
+    float(os.environ.get("OI_PATTERN_15M_VERIFY_H", "6")) * 60 * 60 * 1000
+)
 _VERIFY_MS = {
-    "15m": 3 * 60 * 60 * 1000,
+    "15m": _15M_VERIFY_MS,
     "30m": 4 * 60 * 60 * 1000,
     "1h": 6 * 60 * 60 * 1000,
     "4h": 12 * 60 * 60 * 1000,
@@ -92,11 +99,13 @@ def _side(rec: dict[str, Any]) -> str:
 def resolve_verify_delay_ms(rec: dict[str, Any]) -> int:
     iv = str(rec.get("interval") or "15m").strip().lower()
     base = _VERIFY_MS.get(iv, _VERIFY_MS["15m"])
+    if str(rec.get("assetClass") or "") == "equity":
+        return 4 * 60 * 60 * 1000
+    if iv == "15m":
+        return int(base)
     sym = str(rec.get("tradeSymbol") or rec.get("symbol") or "")
     tier = resolve_mcap_tier(sym)
     mult = _MCAP_VERIFY_MULT.get(tier, 1.0)
-    if str(rec.get("assetClass") or "") == "equity":
-        return 4 * 60 * 60 * 1000
     return int(base * mult)
 
 
@@ -125,12 +134,25 @@ def build_settle_plan(
 
     atr_val = float(atr) if atr is not None and atr > 0 else entry * cap
 
+    base_asset = human_base_asset(sym)
+    sl_min_pct = (
+        float(OI_PATTERN_SL_MIN_PCT_MAJOR)
+        if base_asset in _LEV_100
+        else float(OI_PATTERN_SL_MIN_PCT)
+    )
+    struct_dist = abs(entry - invalid) if invalid is not None else 0.0
+    atr_dist = atr_k * atr_val
+    pct_dist = entry * (sl_min_pct / 100.0)
+    min_sl_dist = max(struct_dist, atr_dist, pct_dist, entry * 0.001)
+
     if is_short:
         cands: list[float] = [entry * (1 + cap)]
         if invalid is not None and invalid > entry:
             cands.append(invalid)
         cands.append(entry + atr_k * atr_val)
         sl = min(cands)
+        if (sl - entry) < min_sl_dist:
+            sl = entry + min_sl_dist
         risk = max(sl - entry, entry * 0.001)
         tp1 = entry - risk * 1.0
         tp2 = entry - risk * 2.0
@@ -140,6 +162,8 @@ def build_settle_plan(
             cands.append(invalid)
         cands.append(entry - atr_k * atr_val)
         sl = max(cands)
+        if (entry - sl) < min_sl_dist:
+            sl = entry - min_sl_dist
         risk = max(entry - sl, entry * 0.001)
         tp1 = entry + risk * 1.0
         tp2 = entry + risk * 2.0

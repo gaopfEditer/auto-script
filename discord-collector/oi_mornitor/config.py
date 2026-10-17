@@ -298,6 +298,21 @@ CANDLE_SHOOT_TREND_MIN_PCT = float(os.getenv("OI_CANDLE_SHOOT_TREND_MIN_PCT", "3
 # 倒锤子趋势背景：信号前 N 根累计跌幅 ≥ 阈值(%) 才推（看涨前提是前期下跌）
 CANDLE_HAMMER_TREND_LOOKBACK = int(os.getenv("OI_CANDLE_HAMMER_TREND_LOOKBACK", "20"))
 CANDLE_HAMMER_TREND_MIN_PCT = float(os.getenv("OI_CANDLE_HAMMER_TREND_MIN_PCT", "3.0"))
+# 放量 ≥ MA 时是否跳过位置/趋势背景（默认关，与卡片严模式一致）
+CANDLE_VOL_BYPASS_CONTEXT = os.getenv(
+    "OI_CANDLE_VOL_BYPASS_CONTEXT", "0"
+).strip().lower() in ("1", "true", "yes", "on")
+# 1h 倒锤子/射击之星：须 4h 或 1d 同向趋势背景（各周期独立 lookback）
+CANDLE_1H_HTF_TREND_ENABLED = os.getenv(
+    "OI_CANDLE_1H_HTF_TREND_ENABLED", "1"
+).strip().lower() not in ("0", "false", "no")
+CANDLE_1H_HTF_TREND_LOOKBACK = int(os.getenv("OI_CANDLE_1H_HTF_TREND_LOOKBACK") or "20")
+CANDLE_1H_HTF_TREND_MIN_PCT = float(os.getenv("OI_CANDLE_1H_HTF_TREND_MIN_PCT") or "3.0")
+# 形态推送 / 胜率入库：多周期共振最少档数（1=关闭硬过滤）
+OI_PATTERN_PUSH_MTF_MIN = max(1, int(os.getenv("OI_PATTERN_PUSH_MTF_MIN", "2")))
+# 结算 SL 最小距离（%）：山寨默认 0.8，主流 0.4
+OI_PATTERN_SL_MIN_PCT = float(os.getenv("OI_PATTERN_SL_MIN_PCT", "0.8"))
+OI_PATTERN_SL_MIN_PCT_MAJOR = float(os.getenv("OI_PATTERN_SL_MIN_PCT_MAJOR", "0.4"))
 # 结构破位量能确认：头肩顶 / M顶 触发 K 成交量 ≥ 该倍数 × MA20，否则不推
 STRUCTURE_BREAK_VOL_MULT = float(os.getenv("OI_STRUCTURE_BREAK_VOL_MULT", "1.3"))
 # 圆弧顶斜率归一化：按窗口均价相对变化（%/根），避免高价主流/低价山寨尺度失衡

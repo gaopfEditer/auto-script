@@ -1,7 +1,16 @@
-"""形态卡片群推送：量能确认 + 射击之星/倒锤子卡片门控（env 可覆盖）。"""
+"""形态卡片群推送：量能确认 + 射击之星/倒锤子卡片门控（env 经 config.py 统一读取）。"""
 from __future__ import annotations
 
 import os
+
+from oi_mornitor.config import (
+    CANDLE_HAMMER_TREND_LOOKBACK,
+    CANDLE_HAMMER_TREND_MIN_PCT,
+    CANDLE_SHOOT_REQUIRE_POSITION,
+    CANDLE_SHOOT_TREND_LOOKBACK,
+    CANDLE_SHOOT_TREND_MIN_PCT,
+    CANDLE_VOL_BYPASS_CONTEXT,
+)
 
 CANDLE_CARD_REQUIRE_VOL = os.environ.get("OI_CANDLE_CARD_REQUIRE_VOL", "1").strip().lower() not in (
     "0",
@@ -24,21 +33,6 @@ MAIN_CARD_VOL_LOOKBACK = max(
     ),
 )
 MAIN_CARD_VOL_MULT = float(os.environ.get("OI_MAIN_CARD_VOL_MULT") or "1.0")
-
-# 位置/趋势背景（默认关趋势；位置仅当未走「放量直通」时可选）
-CANDLE_SHOOT_REQUIRE_POSITION = os.environ.get(
-    "OI_CANDLE_SHOOT_REQUIRE_POSITION", "0"
-).strip().lower() not in ("0", "false", "no")
-CANDLE_SHOOT_TREND_LOOKBACK = int(os.environ.get("OI_CANDLE_SHOOT_TREND_LOOKBACK") or "20")
-CANDLE_SHOOT_TREND_MIN_PCT = float(os.environ.get("OI_CANDLE_SHOOT_TREND_MIN_PCT") or "0")
-CANDLE_HAMMER_TREND_LOOKBACK = int(os.environ.get("OI_CANDLE_HAMMER_TREND_LOOKBACK") or "20")
-CANDLE_HAMMER_TREND_MIN_PCT = float(os.environ.get("OI_CANDLE_HAMMER_TREND_MIN_PCT") or "0")
-# 量能 ≥ 倍数时跳过位置+趋势（与「结合放量就出信号」一致）
-CANDLE_VOL_BYPASS_CONTEXT = os.environ.get("OI_CANDLE_VOL_BYPASS_CONTEXT", "1").strip().lower() not in (
-    "0",
-    "false",
-    "no",
-)
 
 
 def volume_ratio_from_row(row) -> float | None:

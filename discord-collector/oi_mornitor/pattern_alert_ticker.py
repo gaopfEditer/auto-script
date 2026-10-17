@@ -204,8 +204,13 @@ def _item_key_from_alert(alert: dict[str, Any]) -> str:
         or alert.get("kline_open_time")
         or ""
     )
-    msg = alert.get("message") or alert.get("type_label") or ""
-    return f"{typ}:{sym}:{close_t}:{msg}"
+    kind = str(alert.get("kind") or alert.get("signal_kind") or "")
+    side = str(alert.get("side") or "").lower()
+    if side == "bull":
+        side = "long"
+    elif side == "bear":
+        side = "short"
+    return f"{typ}:{sym}:{close_t}:{kind}:{side}"
 
 
 def purge_legacy_breakout_ticker_items() -> int:
