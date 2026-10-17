@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 from oi_mornitor.trendline.pivots import swing_high_indices, swing_low_indices
@@ -47,40 +48,37 @@ def _count_touches_and_violations(
     wick_viol_mult: float,
     end_idx: int,
 ) -> tuple[int, int]:
-    touches = 0
-    violations = 0
     start = min(idx_a, idx_b)
-    for i in range(start, end_idx + 1):
-        if i < 0 or i >= len(df):
-            continue
-        row = df.iloc[i]
-        level = price_a + slope * (i - idx_a)
-        if level <= 0:
-            continue
-        tol = level * touch_tol_pct
-        h = float(row["high"])
-        l = float(row["low"])
-        c = float(row["close"])
-        dist = min(abs(h - level), abs(l - level), abs(c - level))
-        if dist <= tol:
-            touches += 1
-        body_top = max(float(row["open"]), c)
-        body_bot = min(float(row["open"]), c)
-        if side == "support":
-            close_viol = c < level - level * close_viol_tol_pct
-            wick_only = l < level - tol and c >= level - level * close_viol_tol_pct
-            if close_viol and not wick_only:
-                violations += 1
-            elif wick_only and (level - l) > wick_viol_mult * tol:
-                violations += 0  # 允许小刺破
-        else:
-            close_viol = c > level + level * close_viol_tol_pct
-            wick_only = h > level + tol and c <= level + level * close_viol_tol_pct
-            if close_viol and not wick_only:
-                violations += 1
-            elif wick_only and (h - level) > wick_viol_mult * tol:
-                violations += 0
-    return touches, int(violations)
+    if start > end_idx or end_idx < 0:
+        return 0, 0
+    end_idx = min(end_idx, len(df) - 1)
+    ixs = np.arange(start, end_idx + 1, dtype=np.int64)
+    levels = price_a + slope * (ixs - idx_a)
+    valid = levels > 0
+    if not np.any(valid):
+        return 0, 0
+    ixs = ixs[valid]
+    levels = levels[valid]
+    highs = df["high"].to_numpy(dtype=float)[ixs]
+    lows = df["low"].to_numpy(dtype=float)[ixs]
+    closes = df["close"].to_numpy(dtype=float)[ixs]
+    opens = df["open"].to_numpy(dtype=float)[ixs]
+    tol = levels * touch_tol_pct
+    dist = np.minimum(
+        np.abs(highs - levels),
+        np.minimum(np.abs(lows - levels), np.abs(closes - levels)),
+    )
+    touches = int(np.sum(dist <= tol))
+    viol_tol = levels * close_viol_tol_pct
+    if side == "support":
+        close_viol = closes < levels - viol_tol
+        wick_only = (lows < levels - tol) & (closes >= levels - viol_tol)
+        violations = int(np.sum(close_viol & ~wick_only))
+    else:
+        close_viol = closes > levels + viol_tol
+        wick_only = (highs > levels + tol) & (closes <= levels + viol_tol)
+        violations = int(np.sum(close_viol & ~wick_only))
+    return touches, violations
 
 
 def _rising_lows_ok(df: pd.DataFrame, i: int, j: int) -> bool:

@@ -71,7 +71,7 @@ def test_defaults_with_empty_env(trendline_config_clean_env) -> None:
     assert tc.TRENDLINE_QQQ_TICKER == "QQQ"
     assert tc.TRENDLINE_QQQ_SYMBOL == "QQQUSDT"
     assert tc.TRENDLINE_QQQ_INTERVALS == ("4h", "1d", "1w")
-    assert tc.TRENDLINE_FAPI_FALLBACK_URL == "https://www.binance.com/fapi"
+    assert tc.TRENDLINE_FAPI_FALLBACK_URL == "https://www.binance.com"
     assert tc.TRENDLINE_PIVOT_LEFT == 3
     assert tc.TRENDLINE_PIVOT_RIGHT == 3
     assert tc.TRENDLINE_MIN_TOUCHES == 2

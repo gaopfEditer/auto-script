@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import aiohttp
+import numpy as np
 import pandas as pd
 
 from oi_mornitor.breakout_detector import KLINE_COLS, klines_to_df
@@ -15,9 +16,12 @@ from oi_mornitor.trendline_config import TRENDLINE_CACHE_DIR, TRENDLINE_YAHOO_HO
 
 logger = logging.getLogger(__name__)
 
+_YAHOO_UA = "Mozilla/5.0"
+_YAHOO_HEADERS = {"User-Agent": _YAHOO_UA}
+
 _YAHOO_INTERVAL = {
     "1h": ("1h", "2y"),
-    "4h": ("1h", "2y"),  # 聚合
+    "4h": ("1h", "2y"),  # 自 1h 聚合；4h 桶为 UTC 左对齐（非 RTH 切片，见 _aggregate_4h）
     "1d": ("1d", "5y"),
     "1w": ("1wk", "10y"),
     "1wk": ("1wk", "10y"),
@@ -58,6 +62,25 @@ def _write_cache(path: Path, payload: dict[str, Any]) -> None:
         logger.warning("Yahoo 缓存写入失败: %s", exc)
 
 
+def _datetime_index_to_ms(index: pd.DatetimeIndex) -> np.ndarray:
+    """兼容 pandas 2.x(ns) 与 3.x(ms) 索引分辨率。"""
+    ix = pd.DatetimeIndex(index)
+    if ix.tz is None:
+        ix = ix.tz_localize("UTC")
+    else:
+        ix = ix.tz_convert("UTC")
+    unit = getattr(ix, "unit", "ns")
+    raw = ix.astype(np.int64)
+    if unit == "ms":
+        return raw
+    if unit == "us":
+        return raw // 1_000
+    if unit == "ns":
+        return raw // 1_000_000
+    # 兜底：按纳秒除
+    return raw // 1_000_000
+
+
 def _aggregate_4h(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -75,10 +98,24 @@ def _aggregate_4h(df: pd.DataFrame) -> pd.DataFrame:
         }
     )
     agg = agg.dropna(subset=["open"])
-    agg["open_time"] = (agg.index.astype("int64") // 10**6).astype(int)
+    agg["open_time"] = _datetime_index_to_ms(agg.index).astype(int)
     span = 4 * 3600 * 1000
     agg["close_time"] = agg["open_time"] + span - 1
     return agg.reset_index(drop=True)
+
+
+def _drop_unclosed_rows(rows: list[list[Any]], interval_key: str) -> list[list[Any]]:
+    if not rows:
+        return rows
+    interval_ms = {
+        "1h": 3600_000,
+        "1d": 86400_000,
+        "1wk": 7 * 86400_000,
+        "4h": 4 * 3600_000,
+    }.get(interval_key, 3600_000)
+    now_ms = int(time.time() * 1000)
+    closed = [r for r in rows if int(r[0]) + interval_ms <= now_ms]
+    return closed if closed else rows[:-1] if len(rows) > 1 else rows
 
 
 def _chart_to_rows(data: dict[str, Any], interval: str) -> list[list[Any]]:
@@ -109,7 +146,7 @@ def _chart_to_rows(data: dict[str, Any], interval: str) -> list[list[Any]]:
         vol = float(vols[i] or 0)
         close_ms = open_ms + interval_ms - 1
         rows.append([open_ms, o, h, l, c, vol, close_ms, vol * float(c)])
-    return rows
+    return _drop_unclosed_rows(rows, interval)
 
 
 async def fetch_yahoo_klines(
@@ -118,6 +155,7 @@ async def fetch_yahoo_klines(
     interval: str,
     *,
     fallback: Callable[[], list[list[Any]]] | None = None,
+    raise_on_empty: bool = False,
 ) -> tuple[list[list[Any]], dict[str, Any]]:
     """返回 (binance 形态 klines, meta)。"""
     iv = interval.lower()
@@ -134,13 +172,19 @@ async def fetch_yahoo_klines(
 
     rows: list[list[Any]] = []
     source_host = ""
+    last_status = 0
     for host in TRENDLINE_YAHOO_HOSTS:
         url = (
             f"https://{host}/v8/finance/chart/{ticker}"
             f"?interval={y_iv}&range={range_str}"
         )
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+            async with session.get(
+                url,
+                headers=_YAHOO_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=25),
+            ) as resp:
+                last_status = resp.status
                 if resp.status != 200:
                     continue
                 data = await resp.json()
@@ -157,6 +201,10 @@ async def fetch_yahoo_klines(
         source_host = "fallback"
 
     if not rows:
+        msg = f"Yahoo K线为空 ticker={ticker} interval={iv} status={last_status}"
+        logger.error(msg)
+        if raise_on_empty:
+            raise RuntimeError(msg)
         return [], {"data_source": "yahoo", "error": "empty", "ticker": ticker, "interval": iv}
 
     df = klines_to_df(rows)
@@ -175,6 +223,7 @@ async def fetch_yahoo_klines(
             ]
             for _, r in df.iterrows()
         ]
+        rows = _drop_unclosed_rows(rows, "4h")
 
     meta = {
         "data_source": "yahoo",

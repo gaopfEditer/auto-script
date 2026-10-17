@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from oi_mornitor.strategy.indicators import detect_inverted_hammer, detect_shooting_star
+from oi_mornitor.strategy.indicators import detect_long_lower_wick, detect_shooting_star
 from oi_mornitor.trendline.lines import TrendLine
 
 
@@ -82,30 +82,45 @@ def detect_breakout_retest(
     line: TrendLine,
     lookback: int,
     tol_pct: float,
-) -> bool:
+) -> str | None:
+    """突破后回踩：收盘在突破侧 + 当根触及趋势线 + 拒绝收回突破方向。返回 long/short 或 None。"""
     if idx < 2:
-        return False
+        return None
     level_now = line.price_at(idx)
+    if level_now <= 0:
+        return None
     start = max(0, idx - lookback)
+    row = df.iloc[idx]
+    c_now = float(row["close"])
+    h_now = float(row["high"])
+    l_now = float(row["low"])
+    tol = level_now * tol_pct
+    touch_band = level_now * tol_pct * 2
+
+    if line.side == "resistance":
+        broke = False
+        for j in range(start, idx):
+            lvl = line.price_at(j)
+            if float(df.iloc[j]["close"]) > lvl * (1 + tol_pct):
+                broke = True
+                break
+        if not broke or c_now <= level_now + tol:
+            return None
+        touched = l_now <= level_now + touch_band
+        rejected = c_now > level_now + tol * 0.5
+        return "long" if touched and rejected else None
+
     broke = False
     for j in range(start, idx):
         lvl = line.price_at(j)
-        c = float(df.iloc[j]["close"])
-        if line.side == "support":
-            if c < lvl * (1 - tol_pct):
-                broke = True
-        else:
-            if c > lvl * (1 + tol_pct):
-                broke = True
-    if not broke:
-        return False
-    row = df.iloc[idx]
-    dist = min(
-        abs(float(row["high"]) - level_now),
-        abs(float(row["low"]) - level_now),
-        abs(float(row["close"]) - level_now),
-    )
-    return dist <= level_now * tol_pct * 2
+        if float(df.iloc[j]["close"]) < lvl * (1 - tol_pct):
+            broke = True
+            break
+    if not broke or c_now >= level_now - tol:
+        return None
+    touched = h_now >= level_now - touch_band
+    rejected = c_now < level_now - tol * 0.5
+    return "short" if touched and rejected else None
 
 
 def classify_reversal_at_line(
@@ -125,8 +140,8 @@ def classify_reversal_at_line(
     if bull_side:
         if detect_hammer(row):
             patterns.append(("hammer", "long"))
-        if detect_inverted_hammer(row):
-            patterns.append(("inverted_hammer", "long"))
+        if detect_long_lower_wick(row):
+            patterns.append(("long_lower_wick", "long"))
         if detect_pin_bar(row, side="bull"):
             patterns.append(("pin_bar", "long"))
         bull_eng, bear_eng = detect_engulfing(df, idx)
@@ -145,20 +160,28 @@ def classify_reversal_at_line(
         if detect_sfp_at_line(row, line_price=level, side="resistance", tol_pct=touch_tol_pct):
             patterns.append(("sfp", "short"))
 
-    if detect_breakout_retest(
+    br_side = detect_breakout_retest(
         df,
         idx,
         line=line,
         lookback=breakout_lookback,
         tol_pct=touch_tol_pct,
-    ):
-        side = "long" if line.side == "resistance" else "short"
-        patterns.append(("breakout_retest", side))
+    )
+    if br_side:
+        patterns.append(("breakout_retest", br_side))
 
     if not patterns:
         return None
     # 优先 SFP / engulfing
-    priority = ("sfp", "engulfing", "breakout_retest", "pin_bar", "hammer", "inverted_hammer", "shooting_star")
+    priority = (
+        "sfp",
+        "engulfing",
+        "breakout_retest",
+        "pin_bar",
+        "hammer",
+        "long_lower_wick",
+        "shooting_star",
+    )
     patterns.sort(key=lambda x: priority.index(x[0]) if x[0] in priority else 99)
     kind, trade_side = patterns[0]
     return {

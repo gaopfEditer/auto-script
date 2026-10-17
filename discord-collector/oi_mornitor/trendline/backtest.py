@@ -1,144 +1,88 @@
-"""趋势线信号简易回测（R 倍数 · 胜率 · 最大连亏）。"""
+"""趋势线信号回测：滚动 500 窗口 · PR#9 结算口径 · 分组统计。"""
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
 import pandas as pd
 
+from oi_mornitor.backtest_metrics import summarize_backtest_extended, summarize_by_dimensions
+from oi_mornitor.backtest_trade_config import (
+    OI_BT_BREAKEVEN_AFTER_TP1,
+    OI_BT_FEE_PCT,
+    OI_BT_SETTLE_FINE_BARS,
+    OI_BT_SLIPPAGE_PCT,
+)
 from oi_mornitor.breakout_detector import klines_to_df
-from oi_mornitor.trendline.btc_data import fetch_btc_perp_klines
-from oi_mornitor.trendline.signals import evaluate_bar_signal
+from oi_mornitor.pattern_entry import resolve_backtest_entry_price
+from oi_mornitor.pattern_settle import klines_rows_to_bars, settle_signal_by_5m_bars
+from oi_mornitor.pattern_settle_profile import build_settle_plan, resolve_verify_delay_ms
+from oi_mornitor.trendline.btc_data import fetch_btc_perp_klines_range
+from oi_mornitor.trendline.signals import enrich_trendline_indicators, evaluate_bar_signal
 from oi_mornitor.trendline.yahoo_data import fetch_yahoo_klines
-from oi_mornitor.exchange_sources import fetch_binance_klines_range, fetch_bybit_klines_range
-from oi_mornitor.trendline_config import TRENDLINE_FAPI_BASE_URL, TRENDLINE_BTC_SYMBOL
+from oi_mornitor.trendline_config import (
+    TRENDLINE_BTC_SYMBOL,
+    TRENDLINE_QQQ_TICKER,
+    interval_bar_ms,
+)
 
 
-@dataclass
-class TradeResult:
-    win: bool
-    r_mult: float
+def _interval_ms(iv: str) -> int:
+    return interval_bar_ms(iv)
 
 
-def _simulate_trade(
-    df: pd.DataFrame,
-    entry_idx: int,
-    *,
-    side: str,
-    entry: float,
-    sl: float,
-    tp1: float,
-    max_bars: int = 48,
-) -> TradeResult:
-    risk = abs(entry - sl)
-    if risk <= 0:
-        return TradeResult(win=False, r_mult=0.0)
-    for j in range(entry_idx + 1, min(len(df), entry_idx + 1 + max_bars)):
-        row = df.iloc[j]
-        h, l = float(row["high"]), float(row["low"])
-        if side == "long":
-            if l <= sl:
-                return TradeResult(win=False, r_mult=-1.0)
-            if h >= tp1:
-                return TradeResult(win=True, r_mult=1.0)
-        else:
-            if h >= sl:
-                return TradeResult(win=False, r_mult=-1.0)
-            if l <= tp1:
-                return TradeResult(win=True, r_mult=1.0)
-    last = float(df.iloc[min(len(df) - 1, entry_idx + max_bars)]["close"])
-    if side == "long":
-        r = (last - entry) / risk
-    else:
-        r = (entry - last) / risk
-    return TradeResult(win=r > 0, r_mult=r)
+def _truncate_df_by_months(df: pd.DataFrame, interval: str, months: int) -> pd.DataFrame:
+    if df.empty or months <= 0:
+        return df
+    end_ms = int(df.iloc[-1]["open_time"])
+    start_ms = end_ms - int(months * 30 * 86400 * 1000)
+    return df[df["open_time"].astype(int) >= start_ms].reset_index(drop=True)
 
 
-def _max_consecutive_losses(results: list[TradeResult]) -> int:
-    streak = 0
-    best = 0
-    for t in results:
-        if not t.win:
-            streak += 1
-            best = max(best, streak)
-        else:
-            streak = 0
-    return best
+def _truncate_df_by_years(df: pd.DataFrame, years: int) -> pd.DataFrame:
+    if df.empty or years <= 0:
+        return df
+    end_ms = int(df.iloc[-1]["open_time"])
+    start_ms = end_ms - int(years * 365 * 86400 * 1000)
+    return df[df["open_time"].astype(int) >= start_ms].reset_index(drop=True)
 
 
-def summarize(results: list[TradeResult]) -> dict[str, Any]:
-    if not results:
-        return {"count": 0, "win_rate": 0.0, "expectancy_r": 0.0, "max_consec_losses": 0}
-    wins = sum(1 for t in results if t.win)
-    exp = sum(t.r_mult for t in results) / len(results)
-    return {
-        "count": len(results),
-        "win_rate": wins / len(results),
-        "expectancy_r": exp,
-        "max_consec_losses": _max_consecutive_losses(results),
-    }
+def _bar_close_ms(row: pd.Series, interval: str) -> int:
+    ct = row.get("close_time")
+    if ct is not None and int(ct) > 0:
+        return int(ct)
+    return int(row["open_time"]) + _interval_ms(interval) - 1
 
 
-async def _fetch_btc_history(
-    session: aiohttp.ClientSession,
-    interval: str,
-    months: int,
-) -> pd.DataFrame:
-    end_ms = int(time.time() * 1000)
-    start_ms = end_ms - months * 30 * 86400 * 1000
-    rows = await fetch_binance_klines_range(
-        session,
-        base_url=TRENDLINE_FAPI_BASE_URL,
-        symbol=TRENDLINE_BTC_SYMBOL,
-        interval=interval,
-        start_ms=start_ms,
-        end_ms=end_ms,
-    )
-    if not rows:
-        rows = await fetch_bybit_klines_range(
-            session, symbol=TRENDLINE_BTC_SYMBOL, interval=interval, start_ms=start_ms, end_ms=end_ms
-        )
-    return klines_to_df(rows)
-
-
-async def backtest_btc(interval: str, months: int) -> dict[str, Any]:
-    async with aiohttp.ClientSession() as session:
-        df = await _fetch_btc_history(session, interval, months)
-    return _walk(df, asset="BTC", interval=interval, label_prefix=f"趋势线·BTC {interval}")
-
-
-async def backtest_qqq(interval: str, years: int) -> dict[str, Any]:
-    async with aiohttp.ClientSession() as session:
-        iv = "1wk" if interval in ("1w", "1wk") else interval
-        rows, _ = await fetch_yahoo_klines(session, "QQQ", iv)
-    df = klines_to_df(rows)
-    if years and len(df) > years * 52:
-        df = df.iloc[-years * 52 :]
-    return _walk(
-        df,
-        asset="QQQ",
-        interval=iv,
-        label_prefix=f"趋势线+EMA144·QQQ {iv}",
-        require_ema=True,
-    )
+def _index_after_ts(df: pd.DataFrame, ts_ms: int, interval: str) -> int:
+    for i in range(len(df)):
+        if _bar_close_ms(df.iloc[i], interval) >= ts_ms:
+            return i
+    return len(df) - 1
 
 
 def _walk(
     df: pd.DataFrame,
     *,
     asset: str,
+    symbol: str,
     interval: str,
     label_prefix: str,
     require_ema: bool = False,
-) -> dict[str, Any]:
-    results: list[TradeResult] = []
+    asset_class: str = "crypto",
+) -> list[dict[str, Any]]:
+    hits: list[dict[str, Any]] = []
     warmup = 80
+    next_free_idx = warmup
+    indicators = enrich_trendline_indicators(df)
+
     for idx in range(warmup, len(df) - 2):
+        if idx < next_free_idx:
+            continue
         hit = evaluate_bar_signal(
             df,
             end_idx=idx,
@@ -146,41 +90,224 @@ def _walk(
             interval=interval,
             type_label_prefix=label_prefix,
             require_ema_confluence=require_ema,
+            indicators_df=indicators,
         )
         if not hit:
             continue
+
         side = "long" if hit.get("side") == "bull" else "short"
-        tr = _simulate_trade(
-            df,
-            idx,
+        row = df.iloc[idx]
+        next_open: float | None = None
+        if idx + 1 < len(df):
+            try:
+                next_open = float(df.iloc[idx + 1]["open"])
+            except (TypeError, ValueError, KeyError):
+                next_open = None
+        entry = resolve_backtest_entry_price(
             side=side,
-            entry=float(hit["entry"]),
-            sl=float(hit["sl"]),
-            tp1=float(hit["tp1"]),
+            signal_bar_close=float(hit["entry"]),
+            next_bar_open=next_open,
         )
-        results.append(tr)
-    return summarize(results)
+        close_ms = _bar_close_ms(row, interval)
+        signal_at_ms = close_ms
+
+        settle_stub: dict[str, Any] = {
+            "symbol": symbol,
+            "tradeSymbol": symbol,
+            "interval": interval,
+            "side": side,
+            "entry": entry,
+            "invalid_level": hit.get("invalid_level"),
+            "typeLabel": hit.get("type_label"),
+            "type_label": hit.get("type_label"),
+            "pattern": hit.get("pattern"),
+            "assetClass": asset_class,
+            "signalAt": signal_at_ms,
+        }
+        try:
+            plan = build_settle_plan(settle_stub)
+        except ValueError:
+            continue
+
+        verify_ms = resolve_verify_delay_ms(settle_stub)
+        settle_end = signal_at_ms + verify_ms
+        entry_idx = idx + 1 if next_open is not None else idx
+        settle_rows: list[list[Any]] = []
+        for j in range(entry_idx, len(df)):
+            r = df.iloc[j]
+            if _bar_close_ms(r, interval) > settle_end + _interval_ms(interval):
+                break
+            settle_rows.append(
+                [
+                    int(r["open_time"]),
+                    float(r["open"]),
+                    float(r["high"]),
+                    float(r["low"]),
+                    float(r["close"]),
+                    float(r.get("volume") or 0),
+                ]
+            )
+        bars = klines_rows_to_bars(settle_rows)
+        settled = settle_signal_by_5m_bars(
+            side=side,
+            entry=entry,
+            symbol=symbol,
+            signal_at_ms=signal_at_ms,
+            bars_5m=bars,
+            now_ms=settle_end,
+            alert_rec=settle_stub,
+            fine_bars=OI_BT_SETTLE_FINE_BARS,
+            breakeven_after_tp1=OI_BT_BREAKEVEN_AFTER_TP1,
+            fee_pct_per_side=OI_BT_FEE_PCT,
+            slippage_pct_per_side=OI_BT_SLIPPAGE_PCT,
+        )
+        if str(settled.get("outcome") or "") in ("pending", "error"):
+            continue
+
+        hit_at = settled.get("hitAt")
+        if hit_at is not None:
+            next_free_idx = max(next_free_idx, _index_after_ts(df, int(hit_at), interval) + 1)
+        else:
+            hold_bars = max(4, int(verify_ms / _interval_ms(interval)) + 1)
+            next_free_idx = idx + hold_bars
+
+        hits.append(
+            {
+                "symbol": asset,
+                "tradeSymbol": symbol,
+                "interval": interval,
+                "side": side,
+                "pattern": hit.get("pattern"),
+                "typeLabel": f"{hit.get('pattern')}:{side}",
+                "signalAt": signal_at_ms,
+                "entry": entry,
+                "outcome": settled.get("outcome"),
+                "movePct": settled.get("movePct"),
+                "netMovePct": settled.get("netMovePct"),
+                "pnlPct": settled.get("pnlPct"),
+                "slPrice": settled.get("slPrice") or plan.sl_price,
+            }
+        )
+    return hits
 
 
-async def run_all() -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    out["btc_15m_6m"] = await backtest_btc("15m", 6)
-    out["btc_1h_6m"] = await backtest_btc("1h", 6)
-    out["qqq_4h_2y"] = await backtest_qqq("4h", 2)
-    out["qqq_1d_2y"] = await backtest_qqq("1d", 2)
-    return out
+async def _fetch_btc_df(interval: str, months: int) -> pd.DataFrame:
+    end_ms = int(time.time() * 1000)
+    start_ms = end_ms - months * 30 * 86400 * 1000
+    async with aiohttp.ClientSession() as session:
+        rows, meta = await fetch_btc_perp_klines_range(
+            session, interval, start_ms=start_ms, end_ms=end_ms
+        )
+    if not rows:
+        raise RuntimeError(f"BTC K线拉取失败 interval={interval} meta={meta}")
+    df = klines_to_df(rows)
+    return _truncate_df_by_months(df, interval, months)
+
+
+async def _fetch_qqq_df(interval: str, years: int) -> pd.DataFrame:
+    iv = "1wk" if interval in ("1w", "1wk") else interval
+    async with aiohttp.ClientSession() as session:
+        rows, meta = await fetch_yahoo_klines(session, TRENDLINE_QQQ_TICKER, iv, raise_on_empty=True)
+    df = klines_to_df(rows)
+    return _truncate_df_by_years(df, years)
+
+
+async def run_backtest(
+    *,
+    symbols: list[str],
+    intervals: list[str],
+    months: int,
+    qqq_years: int = 2,
+) -> dict[str, Any]:
+    all_items: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for sym in symbols:
+        s = sym.strip().upper()
+        if s in ("BTC", "BTCUSDT"):
+            for iv in intervals:
+                if iv not in ("15m", "1h", "4h"):
+                    continue
+                try:
+                    df = await _fetch_btc_df(iv, months)
+                    label = f"趋势线·BTC {iv}"
+                    all_items.extend(
+                        _walk(
+                            df,
+                            asset="BTC",
+                            symbol=TRENDLINE_BTC_SYMBOL,
+                            interval=iv,
+                            label_prefix=label,
+                            require_ema=False,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"BTC {iv}: {exc}")
+        elif s in ("QQQ", "QQQUSDT"):
+            qqq_ivs = intervals or ["4h", "1d", "1w"]
+            for iv in qqq_ivs:
+                try:
+                    df = await _fetch_qqq_df(iv, qqq_years)
+                    norm_iv = "1wk" if iv in ("1w", "1wk") else iv
+                    label = f"趋势线+EMA144·QQQ {norm_iv}"
+                    all_items.extend(
+                        _walk(
+                            df,
+                            asset="QQQ",
+                            symbol="QQQUSDT",
+                            interval=norm_iv,
+                            label_prefix=label,
+                            require_ema=norm_iv in ("4h", "1d", "1wk"),
+                            asset_class="equity",
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"QQQ {iv}: {exc}")
+
+    grouped = summarize_by_dimensions(
+        all_items,
+        key_fields=("symbol", "interval", "typeLabel"),
+    )
+    return {
+        "summary": summarize_backtest_extended(all_items),
+        "by_symbol_interval_pattern": grouped,
+        "trade_count": len(all_items),
+        "errors": errors,
+    }
+
+
+def _print_table(report: dict[str, Any]) -> None:
+    rows = report.get("by_symbol_interval_pattern") or []
+    print("symbol | interval | pattern×side | n | win_rate | expectancy_R | max_consec_loss | max_dd%")
+    for r in rows:
+        wr = r.get("winRate")
+        exp = r.get("expectancyR")
+        print(
+            f"{r.get('symbol')} | {r.get('interval')} | {r.get('typeLabel')} | {r.get('count')} | "
+            f"{wr if wr is not None else '—'} | {exp if exp is not None else '—'} | "
+            f"{r.get('maxConsecutiveLosses', '—')} | {r.get('maxDrawdownPct', '—')}"
+        )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="趋势线信号回测摘要")
+    parser = argparse.ArgumentParser(description="趋势线信号回测")
+    parser.add_argument("--symbol", default="BTC,QQQ", help="逗号分隔：BTC,QQQ")
+    parser.add_argument("--interval", default="15m,1h,4h,1d,1w", help="周期列表")
+    parser.add_argument("--months", type=int, default=6, help="BTC 回看月数")
+    parser.add_argument("--qqq-years", type=int, default=2, help="QQQ 回看年数")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    report = asyncio.run(run_all())
+    symbols = [x.strip() for x in args.symbol.split(",") if x.strip()]
+    intervals = [x.strip() for x in args.interval.split(",") if x.strip()]
+    report = asyncio.run(
+        run_backtest(symbols=symbols, intervals=intervals, months=args.months, qqq_years=args.qqq_years)
+    )
     if args.json:
-        print(json.dumps(report, indent=2))
+        print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
-        for k, v in report.items():
-            print(k, v)
+        _print_table(report)
+        if report.get("errors"):
+            print("errors:", report["errors"])
 
 
 if __name__ == "__main__":

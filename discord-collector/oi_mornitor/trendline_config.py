@@ -18,7 +18,7 @@ TRENDLINE_QQQ_TICKER: str = "QQQ"
 TRENDLINE_QQQ_SYMBOL: str = "QQQUSDT"
 TRENDLINE_QQQ_INTERVALS: Tuple[str, ...] = ("4h", "1d", "1w")
 TRENDLINE_FAPI_BASE_URL: str = "https://fapi.binance.com"
-TRENDLINE_FAPI_FALLBACK_URL: str = "https://www.binance.com/fapi"
+TRENDLINE_FAPI_FALLBACK_URL: str = "https://www.binance.com"
 TRENDLINE_PIVOT_LEFT: int = 3
 TRENDLINE_PIVOT_RIGHT: int = 3
 TRENDLINE_MIN_TOUCHES: int = 2
@@ -29,7 +29,7 @@ TRENDLINE_WICK_VIOLATION_MULT: float = 2.0
 TRENDLINE_NEAR_PCT: float = 0.004
 TRENDLINE_NEAR_ATR_MULT: float = 0.35
 TRENDLINE_VOL_MULT: float = 1.5
-TRENDLINE_EMA_NEAR_TOL_PCT: float = 0.012
+TRENDLINE_EMA_NEAR_TOL_PCT: float = 0.004
 TRENDLINE_SL_BUFFER_PCT: float = 0.004
 TRENDLINE_SL_BUFFER_MIN_PCT: float = 0.003
 TRENDLINE_SL_BUFFER_MAX_PCT: float = 0.006
@@ -47,7 +47,7 @@ TRENDLINE_BAR_CLOSE_GRACE_SEC: int = 25
 _ENABLED: bool = True
 
 _DEFAULT_FAPI = "https://fapi.binance.com"
-_DEFAULT_FAPI_FALLBACK = "https://www.binance.com/fapi"
+_DEFAULT_FAPI_FALLBACK = "https://www.binance.com"
 _DEFAULT_YAHOO_HOSTS = "query1.finance.yahoo.com,query2.finance.yahoo.com"
 
 
@@ -181,7 +181,7 @@ def _apply_config() -> None:
     TRENDLINE_NEAR_PCT = _env_float("OI_TRENDLINE_NEAR_PCT", 0.004)
     TRENDLINE_NEAR_ATR_MULT = _env_float("OI_TRENDLINE_NEAR_ATR_MULT", 0.35)
     TRENDLINE_VOL_MULT = _env_float("OI_TRENDLINE_VOL_MULT", 1.5)
-    TRENDLINE_EMA_NEAR_TOL_PCT = _env_float("OI_TRENDLINE_EMA_NEAR_TOL_PCT", 0.012)
+    TRENDLINE_EMA_NEAR_TOL_PCT = _env_float("OI_TRENDLINE_EMA_NEAR_TOL_PCT", 0.004)
     TRENDLINE_SL_BUFFER_PCT = _env_float("OI_TRENDLINE_SL_BUFFER_PCT", 0.004)
     TRENDLINE_SL_BUFFER_MIN_PCT = _env_float("OI_TRENDLINE_SL_BUFFER_MIN_PCT", 0.003)
     TRENDLINE_SL_BUFFER_MAX_PCT = _env_float("OI_TRENDLINE_SL_BUFFER_MAX_PCT", 0.006)
@@ -207,4 +207,63 @@ def is_trendline_enabled() -> bool:
     return _ENABLED
 
 
+def _reload_pattern_side_policy() -> None:
+    global _DISABLED_PATTERN_SIDES, _REENABLE_PATTERN_SIDES
+    from oi_mornitor.env_parse import env_csv_lower
+
+    _DISABLED_PATTERN_SIDES = frozenset(
+        env_csv_lower(
+            "OI_TRENDLINE_DISABLED_PATTERN_SIDES",
+            "shooting_star:short,pin_bar:short,engulfing:short",
+        )
+    )
+    _REENABLE_PATTERN_SIDES = frozenset(
+        env_csv_lower("OI_TRENDLINE_REENABLE_PATTERN_SIDES", "")
+    )
+
+
+_DISABLED_PATTERN_SIDES: frozenset[str] = frozenset()
+_REENABLE_PATTERN_SIDES: frozenset[str] = frozenset()
+
+
+def trendline_ema_near_tol_pct(asset: str) -> float:
+    """按品种默认 EMA144 贴近容差（BTC 0.4% · QQQ 0.6%），可被 env 覆盖。"""
+    from oi_mornitor.env_parse import env_float
+
+    key = str(asset or "").strip().upper()
+    if key in ("BTC", "BTCUSDT"):
+        return env_float("OI_TRENDLINE_EMA_NEAR_TOL_BTC", 0.004, min_val=0.0001, max_val=0.05)
+    if key in ("QQQ", "QQQUSDT"):
+        return env_float("OI_TRENDLINE_EMA_NEAR_TOL_QQQ", 0.006, min_val=0.0001, max_val=0.05)
+    return env_float("OI_TRENDLINE_EMA_NEAR_TOL_PCT", TRENDLINE_EMA_NEAR_TOL_PCT, min_val=0.0001, max_val=0.05)
+
+
+def is_trendline_pattern_side_enabled(pattern: str, trade_side: str) -> bool:
+    """默认关闭回测偏弱的空头形态；OI_TRENDLINE_REENABLE_PATTERN_SIDES 可逐项放开。"""
+    p = str(pattern or "").strip().lower()
+    s = str(trade_side or "").strip().lower()
+    if s in ("bull", "bear"):
+        s = "long" if s == "bull" else "short"
+    token = f"{p}:{s}"
+    if token in _REENABLE_PATTERN_SIDES:
+        return True
+    if token in _DISABLED_PATTERN_SIDES:
+        return False
+    return True
+
+
+def interval_bar_ms(interval: str) -> int:
+    iv = str(interval or "15m").strip().lower()
+    if iv in ("1w", "1wk"):
+        return 7 * 86_400_000
+    mapping = {
+        "15m": 900_000,
+        "1h": 3_600_000,
+        "4h": 14_400_000,
+        "1d": 86_400_000,
+    }
+    return mapping.get(iv, 900_000)
+
+
 _apply_config()
+_reload_pattern_side_policy()

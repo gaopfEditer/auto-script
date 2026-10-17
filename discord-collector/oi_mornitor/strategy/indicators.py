@@ -86,12 +86,12 @@ def detect_shooting_star(
     return True
 
 
-def detect_inverted_hammer(
+def detect_long_lower_wick(
     row: pd.Series,
     *,
     wick_ratio: float = STRATEGY_SHOOT_WICK_RATIO,
 ) -> bool:
-    """倒锤子 — 与 tradingview-bollinger-wicks.pine detect_inverted_shooting_star 一致。"""
+    """长下影线（锤头类）— 原函数名 inverted_hammer 与形态不符，已更正。"""
     o = float(row["open"])
     h = float(row["high"])
     l = float(row["low"])
@@ -102,6 +102,15 @@ def detect_inverted_hammer(
     if body <= 0:
         return False
     return lower_w >= body * wick_ratio and upper_w < lower_w / 3.0
+
+
+def detect_inverted_hammer(
+    row: pd.Series,
+    *,
+    wick_ratio: float = STRATEGY_SHOOT_WICK_RATIO,
+) -> bool:
+    """兼容旧名：实为长下影线检测。"""
+    return detect_long_lower_wick(row, wick_ratio=wick_ratio)
 
 
 def near_bb_upper(row: pd.Series, *, pct_in_band: float = 0.85) -> bool:

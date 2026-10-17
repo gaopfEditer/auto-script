@@ -11,10 +11,10 @@ from oi_mornitor.strategy.indicators import enrich_strategy_indicators
 from oi_mornitor.trendline.lines import TrendLine, detect_trendlines, line_to_dict
 from oi_mornitor.trendline.patterns import classify_reversal_at_line
 from oi_mornitor.trendline.pivots import mark_swing_pivots
+from oi_mornitor.trendline.window import rolling_window_df
 from oi_mornitor.trendline_config import (
     TRENDLINE_BREAKOUT_RETEST_BARS,
     TRENDLINE_CLOSE_VIOLATION_TOL_PCT,
-    TRENDLINE_EMA_NEAR_TOL_PCT,
     TRENDLINE_LOOKBACK_BARS,
     TRENDLINE_MAX_LINES_PER_SIDE,
     TRENDLINE_MIN_TOUCHES,
@@ -29,14 +29,16 @@ from oi_mornitor.trendline_config import (
     TRENDLINE_TOUCH_TOL_PCT,
     TRENDLINE_VOL_MULT,
     TRENDLINE_WICK_VIOLATION_MULT,
+    is_trendline_pattern_side_enabled,
+    trendline_ema_near_tol_pct,
 )
 from oi_mornitor.candle_card_config import volume_ratio_from_row
 
 
-def enrich_trendline_frame(df: pd.DataFrame) -> pd.DataFrame:
+def enrich_trendline_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """指标层（无 pivot），可在整段历史上一次性计算供回测复用。"""
     work = enrich_strategy_indicators(df)
     work = enrich_ema144(work)
-    work = mark_swing_pivots(work, left=TRENDLINE_PIVOT_LEFT, right=TRENDLINE_PIVOT_RIGHT)
     if "atr14" not in work.columns:
         tr = pd.concat(
             [
@@ -56,6 +58,22 @@ def enrich_trendline_frame(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
+def enrich_trendline_frame(
+    df: pd.DataFrame,
+    *,
+    confirm_upto: int | None = None,
+) -> pd.DataFrame:
+    work = enrich_trendline_indicators(df)
+    upto = confirm_upto if confirm_upto is not None else len(work) - 1
+    work = mark_swing_pivots(
+        work,
+        left=TRENDLINE_PIVOT_LEFT,
+        right=TRENDLINE_PIVOT_RIGHT,
+        confirm_upto=upto,
+    )
+    return work
+
+
 def _near_line(row: pd.Series, level: float, atr: float) -> tuple[bool, float, float]:
     if level <= 0:
         return False, 0.0, 0.0
@@ -72,13 +90,13 @@ def detect_active_lines(
     *,
     end_idx: int | None = None,
 ) -> list[dict[str, Any]]:
-    work = enrich_trendline_frame(df)
-    idx = end_idx if end_idx is not None else len(work) - 1
-    if idx < 30:
+    window, rel_end = rolling_window_df(df, end_idx if end_idx is not None else len(df) - 1)
+    if rel_end < 30:
         return []
+    work = enrich_trendline_frame(window, confirm_upto=rel_end)
     lines = detect_trendlines(
         work,
-        end_idx=idx,
+        end_idx=rel_end,
         touch_tol_pct=TRENDLINE_TOUCH_TOL_PCT,
         close_viol_tol_pct=TRENDLINE_CLOSE_VIOLATION_TOL_PCT,
         wick_viol_mult=TRENDLINE_WICK_VIOLATION_MULT,
@@ -86,7 +104,7 @@ def detect_active_lines(
         max_per_side=TRENDLINE_MAX_LINES_PER_SIDE,
         lookback_bars=TRENDLINE_LOOKBACK_BARS,
     )
-    return [line_to_dict(ln, end_idx=idx, df=work) for ln in lines]
+    return [line_to_dict(ln, end_idx=rel_end, df=work) for ln in lines]
 
 
 def _htf_tag(htf_df: pd.DataFrame | None) -> str:
@@ -152,15 +170,28 @@ def evaluate_bar_signal(
     htf_df: pd.DataFrame | None = None,
     require_ema_confluence: bool = False,
     bb_ema_combo: bool = False,
+    indicators_df: pd.DataFrame | None = None,
 ) -> dict[str, Any] | None:
-    work = enrich_trendline_frame(df)
-    if end_idx < 30 or end_idx >= len(work):
+    base = indicators_df if indicators_df is not None else df
+    if end_idx < 30 or end_idx >= len(base):
         return None
-    row = work.iloc[end_idx]
+    window, rel_end = rolling_window_df(base, end_idx)
+    if rel_end < 30:
+        return None
+    if indicators_df is not None:
+        work = mark_swing_pivots(
+            window,
+            left=TRENDLINE_PIVOT_LEFT,
+            right=TRENDLINE_PIVOT_RIGHT,
+            confirm_upto=rel_end,
+        )
+    else:
+        work = enrich_trendline_frame(window, confirm_upto=rel_end)
+    row = work.iloc[rel_end]
     atr = float(row.get("atr14") or 0)
     lines = detect_trendlines(
         work,
-        end_idx=end_idx,
+        end_idx=rel_end,
         touch_tol_pct=TRENDLINE_TOUCH_TOL_PCT,
         close_viol_tol_pct=TRENDLINE_CLOSE_VIOLATION_TOL_PCT,
         wick_viol_mult=TRENDLINE_WICK_VIOLATION_MULT,
@@ -173,7 +204,8 @@ def evaluate_bar_signal(
 
     vol_ratio = volume_ratio_from_row(row)
     vol_bonus = vol_ratio is not None and float(vol_ratio) >= TRENDLINE_VOL_MULT
-    ema_near = near_ema144(row, tol_pct=TRENDLINE_EMA_NEAR_TOL_PCT)
+    ema_tol = trendline_ema_near_tol_pct(asset)
+    ema_near = near_ema144(row, tol_pct=ema_tol)
     rsi = float(row.get("rsi14") or 50)
     oversold = rsi < TRENDLINE_RSI_OVERSOLD
     ema_val = float(row.get("ema144") or 0)
@@ -183,13 +215,13 @@ def evaluate_bar_signal(
     best_score = -1.0
 
     for line in lines:
-        level = line.price_at(end_idx)
+        level = line.price_at(rel_end)
         near, dist_pct, dist_atr = _near_line(row, level, atr)
         if not near:
             continue
         pat = classify_reversal_at_line(
             work,
-            end_idx,
+            rel_end,
             line=line,
             touch_tol_pct=TRENDLINE_TOUCH_TOL_PCT,
             breakout_lookback=TRENDLINE_BREAKOUT_RETEST_BARS,
@@ -197,11 +229,13 @@ def evaluate_bar_signal(
         if not pat:
             continue
         trade_side = pat["trade_side"]
+        if not is_trendline_pattern_side_enabled(str(pat.get("pattern") or ""), trade_side):
+            continue
         if require_ema_confluence and not ema_near:
             continue
         if bb_ema_combo:
             at_bb_low = float(row["low"]) <= float(row.get("bb_lower") or row["low"])
-            if not (ema_near and at_bb_low and pat["pattern"] in ("hammer", "pin_bar", "inverted_hammer")):
+            if not (ema_near and at_bb_low and pat["pattern"] in ("hammer", "pin_bar", "long_lower_wick")):
                 continue
 
         score = line.score + (2.0 if vol_bonus else 0.0) + (1.5 if ema_near else 0.0)
@@ -217,7 +251,7 @@ def evaluate_bar_signal(
         opp = None
         for other in lines:
             if other.side != line.side:
-                opp = other.price_at(end_idx)
+                opp = other.price_at(rel_end)
                 break
         plan = _sl_tp_plan(
             side=trade_side,

@@ -78,6 +78,15 @@ def env_bool(key: str, default: bool) -> bool:
     return default
 
 
+def env_csv_lower(key: str, default: str) -> tuple[str, ...]:
+    v = env_raw(key)
+    text = default if v is None else v
+    parts = tuple(x.strip().lower() for x in str(text).split(",") if x.strip())
+    if parts:
+        return parts
+    return tuple(x.strip().lower() for x in default.split(",") if x.strip())
+
+
 def env_bool_off(key: str, default_on: bool = True) -> bool:
     """默认开：仅 0/false/no 显式关闭。"""
     v = env_raw(key)

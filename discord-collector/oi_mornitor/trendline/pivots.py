@@ -9,8 +9,12 @@ def mark_swing_pivots(
     *,
     left: int,
     right: int,
+    confirm_upto: int | None = None,
 ) -> pd.DataFrame:
-    """在 df 上标注 is_swing_high / is_swing_low。"""
+    """在 df 上标注 is_swing_high / is_swing_low。
+
+    confirm_upto：仅使用下标 <= confirm_upto 的 K 线确认 pivot（避免回测前瞻）。
+    """
     out = df.copy()
     n = len(out)
     if n == 0:
@@ -18,12 +22,15 @@ def mark_swing_pivots(
         out["is_swing_low"] = False
         return out
 
+    cap = confirm_upto if confirm_upto is not None else n - 1
+    cap = min(max(cap, 0), n - 1)
+
     highs = out["high"].astype(float).tolist()
     lows = out["low"].astype(float).tolist()
     is_hi = [False] * n
     is_lo = [False] * n
     for i in range(n):
-        if i < left or i + right >= n:
+        if i < left or i + right > cap:
             continue
         window_hi = highs[i - left : i + right + 1]
         window_lo = lows[i - left : i + right + 1]
