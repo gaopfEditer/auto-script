@@ -22,6 +22,7 @@ _FEATURE_KEYS = (
     "feat:cf_whale_align",
     "feat:cf_quiet_accum",
     "feat:cf_distribution",
+    "feat:cf_distribution_against",
     "feat:cf_liq_reclaim",
     "feat:cf_oi_rebuild_align",
     "feat:cf_oi_rebuild_penalty",

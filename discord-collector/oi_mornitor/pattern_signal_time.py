@@ -12,7 +12,17 @@ def align_signal_at_ms(close_time_ms: int) -> int:
 
 
 def resolve_signal_at_from_alert(alert: dict) -> int:
-    """优先 kline_close_time，对齐 5m；scan_ts 仅作元数据。"""
+    """优先 signalAt（回测/胜率库）；否则 kline_close_time，对齐 5m。"""
+    raw_sat = alert.get("signalAt")
+    if raw_sat is not None:
+        try:
+            n = int(float(raw_sat))
+            if n > 0:
+                if n < 1_000_000_000_000:
+                    n *= 1000
+                return n
+        except (TypeError, ValueError):
+            pass
     raw = (
         alert.get("kline_close_time")
         or alert.get("time")

@@ -51,7 +51,7 @@ async def enrich_alert_capital_flow(
             primary_base=base_url,
             end_time_ms=signal_at,
         )
-        funding = await fetch_funding_at(
+        funding, funding_iv_h = await fetch_funding_at(
             session, symbol=sym, signal_at_ms=signal_at, primary_base=base_url
         )
         global_ls = await fetch_ratio_series(
@@ -94,6 +94,8 @@ async def enrich_alert_capital_flow(
             top_pos_ls=top_pos,
             taker_buy=taker,
             liq_events=liq,
+            interval=iv,
+            funding_interval_hours=funding_iv_h,
         )
         alert["capitalFlow"] = cf
         return cf

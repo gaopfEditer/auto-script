@@ -9,6 +9,7 @@ import aiohttp
 from oi_mornitor.capital_flow_binance import get_json_fapi_chain
 from oi_mornitor.capital_flow_config import CF_FETCH_LIMIT
 from oi_mornitor.capital_flow_store import cache_get, cache_set
+from oi_mornitor.capital_flow_symbols import funding_interval_hours, resolve_fapi_symbol
 from oi_mornitor.chart_deriv_hist import _norm_period
 from oi_mornitor.symbol_aliases import normalize_usdt_symbol
 
@@ -41,10 +42,12 @@ async def fetch_oi_hist_series(
     primary_base: str | None = None,
     end_time_ms: int | None = None,
 ) -> list[tuple[int, float]]:
-    sym = normalize_usdt_symbol(symbol)
+    sym = await resolve_fapi_symbol(session, symbol, primary_base=primary_base)
     if not sym:
         return []
     period = _norm_period(interval)
+    if not period:
+        return []
     cap = min(max(limit or CF_FETCH_LIMIT, 1), 500)
     cache_key = f"oi:{sym}:{period}:{cap}:{end_time_ms or 0}"
     cached = cache_get(cache_key)
@@ -77,44 +80,44 @@ async def fetch_funding_at(
     symbol: str,
     signal_at_ms: int,
     primary_base: str | None = None,
-) -> float | None:
-    sym = normalize_usdt_symbol(symbol)
-    if not sym:
-        return None
-    cache_key = f"fund:{sym}:{signal_at_ms // 3600_000}"
+) -> tuple[float | None, float]:
+    """返回 (已结算费率, fundingIntervalHours)。仅取 fundingTime <= signal_at_ms 的最近一期。"""
+    sym = await resolve_fapi_symbol(session, symbol, primary_base=primary_base)
+    if not sym or signal_at_ms <= 0:
+        return None, 8.0
+    interval_h = await funding_interval_hours(session, sym, primary_base=primary_base)
+    cache_key = f"fund:{sym}:{signal_at_ms // 60_000}:{interval_h}"
     cached = cache_get(cache_key)
-    if isinstance(cached, (int, float)):
-        return float(cached)
+    if isinstance(cached, (list, tuple)) and len(cached) == 2:
+        return cached[0], float(cached[1])
+    start_ms = max(0, signal_at_ms - 90 * 24 * 3600_000)
+    params: dict[str, Any] = {
+        "symbol": sym,
+        "startTime": start_ms,
+        "endTime": int(signal_at_ms),
+        "limit": 1000,
+    }
     status, data, _ = await get_json_fapi_chain(
         session,
         "/fapi/v1/fundingRate",
-        params={"symbol": sym, "limit": 30},
+        params=params,
         primary_base=primary_base,
         label=f"funding:{sym}",
     )
-    if status != 200 or not isinstance(data, list):
-        return None
     rate: float | None = None
-    for row in data:
-        if not isinstance(row, dict):
-            continue
-        try:
-            ft = int(row.get("fundingTime") or 0)
-            r = float(row.get("fundingRate") or 0)
-        except (TypeError, ValueError):
-            continue
-        if ft <= signal_at_ms:
-            rate = r
-        elif ft > signal_at_ms and rate is None:
-            rate = r
-    if rate is None and data:
-        try:
-            rate = float(data[-1].get("fundingRate") or 0)
-        except (TypeError, ValueError, AttributeError):
-            rate = None
-    if rate is not None:
-        cache_set(cache_key, rate)
-    return rate
+    if status == 200 and isinstance(data, list):
+        for row in sorted(data, key=lambda r: int((r or {}).get("fundingTime") or 0)):
+            if not isinstance(row, dict):
+                continue
+            try:
+                ft = int(row.get("fundingTime") or 0)
+                r = float(row.get("fundingRate") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ft <= signal_at_ms:
+                rate = r
+    cache_set(cache_key, (rate, interval_h))
+    return rate, interval_h
 
 
 async def fetch_ratio_series(
@@ -127,10 +130,12 @@ async def fetch_ratio_series(
     primary_base: str | None = None,
     end_time_ms: int | None = None,
 ) -> list[tuple[int, float]]:
-    sym = normalize_usdt_symbol(symbol)
+    sym = await resolve_fapi_symbol(session, symbol, primary_base=primary_base)
     if not sym:
         return []
     period = _norm_period(interval)
+    if not period:
+        return []
     cap = min(max(limit or CF_FETCH_LIMIT, 1), 500)
     cache_key = f"ratio:{endpoint}:{sym}:{period}:{cap}:{end_time_ms or 0}"
     cached = cache_get(cache_key)
@@ -162,10 +167,12 @@ async def fetch_taker_buy_ratio_series(
     primary_base: str | None = None,
     end_time_ms: int | None = None,
 ) -> list[tuple[int, float]]:
-    sym = normalize_usdt_symbol(symbol)
+    sym = await resolve_fapi_symbol(session, symbol, primary_base=primary_base)
     if not sym:
         return []
     period = _norm_period(interval)
+    if not period:
+        return []
     cap = min(max(limit or CF_FETCH_LIMIT, 1), 500)
     cache_key = f"taker:{sym}:{period}:{cap}:{end_time_ms or 0}"
     cached = cache_get(cache_key)

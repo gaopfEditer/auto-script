@@ -51,6 +51,7 @@ FEATURE_DISPLAY: dict[str, str] = {
     "feat:cf_whale_align": "大户同向",
     "feat:cf_quiet_accum": "吸筹",
     "feat:cf_distribution": "派发",
+    "feat:cf_distribution_against": "派发逆多",
     "feat:cf_liq_reclaim": "清算回收",
     "feat:cf_oi_rebuild_align": "OI重建同向",
     "feat:cf_oi_rebuild_penalty": "OI重建逆向",

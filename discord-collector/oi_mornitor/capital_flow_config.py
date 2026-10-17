@@ -31,8 +31,9 @@ CF_DIST_PRICE_PROG_MAX = env_float("OI_CF_DIST_PRICE_PROG_PCT", 0.35, min_val=0.
 # 清算回收
 CF_LIQ_RECLAIM_BARS = env_int("OI_CF_LIQ_RECLAIM_BARS", 3, min_val=1, max_val=8)
 CF_LIQ_RECLAIM_WICK_FRAC = env_float("OI_CF_LIQ_RECLAIM_FRAC", 0.5, min_val=0.2, max_val=0.95)
-CF_LIQ_PROXY_VOL_RATIO = env_float("OI_CF_LIQ_PROXY_VOL", 2.0, min_val=1.2, max_val=6.0)
-CF_LIQ_PROXY_OI_DROP = env_float("OI_CF_LIQ_PROXY_OI_DROP", 0.05, min_val=0.01, max_val=0.3)
+CF_LIQ_PROXY_VOL_RATIO = env_float("OI_CF_LIQ_PROXY_VOL", 1.5, min_val=1.1, max_val=6.0)
+CF_LIQ_PROXY_OI_DROP = env_float("OI_CF_LIQ_PROXY_OI_DROP", 0.03, min_val=0.01, max_val=0.3)
+CF_LIQ_PROXY_OI_WINDOW = env_int("OI_CF_LIQ_PROXY_OI_WINDOW", 3, min_val=1, max_val=6)
 
 # 拉取 / 缓存
 CF_FETCH_LIMIT = env_int("OI_CF_FETCH_LIMIT", 120, min_val=30, max_val=500)

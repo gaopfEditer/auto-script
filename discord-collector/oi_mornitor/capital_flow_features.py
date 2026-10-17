@@ -11,6 +11,7 @@ from oi_mornitor.capital_flow_config import (
     CF_FUNDING_CROWDED_SHORT,
     CF_FUNDING_NEUTRAL_ABS,
     CF_LIQ_PROXY_OI_DROP,
+    CF_LIQ_PROXY_OI_WINDOW,
     CF_LIQ_PROXY_VOL_RATIO,
     CF_LIQ_RECLAIM_BARS,
     CF_LIQ_RECLAIM_WICK_FRAC,
@@ -26,26 +27,70 @@ from oi_mornitor.capital_flow_fetch import oi_coverage_days
 
 Bar = dict[str, float | int]
 
+_INTERVAL_MS: dict[str, int] = {
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "8h": 28_800_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+    "1w": 604_800_000,
+}
 
-def _bar_from_kline(row: list[Any]) -> Bar | None:
+
+def _interval_ms(interval: str) -> int:
+    s = (interval or "15m").strip().lower()
+    if s in ("60m", "60"):
+        return _INTERVAL_MS["1h"]
+    if s in ("240m", "240"):
+        return _INTERVAL_MS["4h"]
+    return _INTERVAL_MS.get(s, 900_000)
+
+
+def signal_interval_cutoff_ms(signal_at_ms: int, interval: str) -> int:
+    """允许纳入的最后一根 K 的收盘时刻上界（= signalAt，已与 5m 核实网格对齐）。"""
+    return int(signal_at_ms)
+
+
+def _bar_from_kline(row: list[Any], *, interval: str) -> Bar | None:
     try:
         ot = int(row[0])
         o, h, l, c = float(row[1]), float(row[2]), float(row[3]), float(row[4])
         vol = float(row[5])
+        close_ms = int(row[6]) if len(row) > 6 else ot + _interval_ms(interval)
     except (TypeError, ValueError, IndexError):
         return None
-    return {"open_time_ms": ot, "time_sec": ot // 1000, "o": o, "h": h, "l": l, "c": c, "v": vol}
+    return {
+        "open_time_ms": ot,
+        "close_time_ms": close_ms,
+        "time_sec": ot // 1000,
+        "close_time_sec": close_ms // 1000,
+        "o": o,
+        "h": h,
+        "l": l,
+        "c": c,
+        "v": vol,
+    }
 
 
-def klines_to_bars(klines: list[list[Any]], *, signal_at_ms: int) -> list[Bar]:
-    """仅保留收盘时间不晚于 signalAt 的 K 线。"""
+def klines_to_bars(
+    klines: list[list[Any]],
+    *,
+    signal_at_ms: int,
+    interval: str = "15m",
+) -> list[Bar]:
+    """仅保留收盘时间 <= cutoff 的 K 线（cutoff = signalAt 按周期取整）。"""
+    cutoff = signal_interval_cutoff_ms(signal_at_ms, interval)
     bars: list[Bar] = []
     for row in klines:
-        b = _bar_from_kline(row)
+        b = _bar_from_kline(row, interval=interval)
         if not b:
             continue
-        close_ms = int(b["open_time_ms"]) + 1
-        if close_ms > signal_at_ms:
+        if int(b["close_time_ms"]) > cutoff:
             continue
         bars.append(b)
     return bars
@@ -62,6 +107,15 @@ def _value_at_or_before(series: list[tuple[int, float]], time_sec: int) -> float
 
 def _series_slice_upto(series: list[tuple[int, float]], time_sec: int) -> list[tuple[int, float]]:
     return [(t, v) for t, v in series if t <= time_sec]
+
+
+def _oi_at_bar_close(oi_series: list[tuple[int, float]], bar: Bar) -> float | None:
+    return _value_at_or_before(oi_series, int(bar["close_time_sec"]))
+
+
+def _taker_at_bar_open(taker_series: list[tuple[int, float]], bar: Bar) -> float | None:
+    """Taker ratio 时间戳为 period 起点，与 K 线 open 对齐。"""
+    return _value_at_or_before(taker_series, int(bar["time_sec"]))
 
 
 def _atr_pct(bars: list[Bar], lookback: int = 14) -> float | None:
@@ -104,6 +158,36 @@ def _long_wick(bar: Bar) -> tuple[bool, str]:
     return False, dom
 
 
+def _flush_at_bar(
+    oi_series: list[tuple[int, float]],
+    bars: list[Bar],
+    end_idx: int,
+) -> dict[str, Any] | None:
+    look = min(CF_OI_FLUSH_LOOKBACK_BARS, end_idx + 1)
+    window = bars[end_idx - look + 1 : end_idx + 1]
+    oi_vals: list[float] = []
+    for b in window:
+        v = _oi_at_bar_close(oi_series, b)
+        if v is not None and v > 0:
+            oi_vals.append(v)
+    if len(oi_vals) < 2:
+        return None
+    peak = max(oi_vals)
+    cur = oi_vals[-1]
+    drop = (peak - cur) / peak if peak > 0 else 0.0
+    wick_ok, wick_side = _long_wick(bars[end_idx])
+    if drop >= CF_OI_FLUSH_DROP_PCT and wick_ok:
+        bias = "long" if wick_side == "lower" else "short"
+        return {
+            "active": True,
+            "dropPct": round(drop * 100, 2),
+            "wick": wick_side,
+            "bias": bias,
+            "barIdx": end_idx,
+        }
+    return None
+
+
 def _oi_flush_state(
     oi_series: list[tuple[int, float]],
     bars: list[Bar],
@@ -111,39 +195,44 @@ def _oi_flush_state(
     out: dict[str, Any] = {"active": False, "dropPct": None, "wick": None, "bias": None}
     if not bars or len(oi_series) < 3:
         return out
-    look = min(CF_OI_FLUSH_LOOKBACK_BARS, len(bars))
-    window_bars = bars[-look:]
-    oi_vals: list[float] = []
-    for b in window_bars:
-        v = _value_at_or_before(oi_series, int(b["time_sec"]))
-        if v is not None and v > 0:
-            oi_vals.append(v)
-    if len(oi_vals) < 2:
-        return out
-    peak = max(oi_vals)
-    cur = oi_vals[-1]
-    drop = (peak - cur) / peak if peak > 0 else 0.0
-    last_bar = bars[-1]
-    wick_ok, wick_side = _long_wick(last_bar)
-    if drop >= CF_OI_FLUSH_DROP_PCT and wick_ok:
-        bias = "long" if wick_side == "lower" else "short"
-        out.update({"active": True, "dropPct": round(drop * 100, 2), "wick": wick_side, "bias": bias})
+    hit = _flush_at_bar(oi_series, bars, len(bars) - 1)
+    if hit:
+        out.update({k: hit[k] for k in ("active", "dropPct", "wick", "bias")})
     return out
 
 
+def _find_past_flush(
+    oi_series: list[tuple[int, float]],
+    bars: list[Bar],
+    *,
+    max_bars_back: int = 24,
+) -> dict[str, Any] | None:
+    if len(bars) < 4:
+        return None
+    start = max(0, len(bars) - max_bars_back)
+    for idx in range(len(bars) - 2, start - 1, -1):
+        hit = _flush_at_bar(oi_series, bars, idx)
+        if hit:
+            return hit
+    return None
+
+
 def _oi_rebuild_against(
-    flush: dict[str, Any],
     oi_series: list[tuple[int, float]],
     bars: list[Bar],
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"active": False, "priceDir": None, "oiRisePct": None}
-    if not flush.get("active") or len(bars) < CF_REBUILD_BARS + 2:
+    flush = _find_past_flush(oi_series, bars)
+    if not flush:
         return out
-    tail = bars[-(CF_REBUILD_BARS + 1) :]
+    flush_idx = int(flush.get("barIdx") or 0)
+    tail = bars[flush_idx + 1 :]
+    if len(tail) < 2 or len(tail) > CF_REBUILD_BARS + 2:
+        tail = bars[flush_idx + 1 : flush_idx + 1 + CF_REBUILD_BARS]
     if len(tail) < 2:
         return out
-    oi_start = _value_at_or_before(oi_series, int(tail[0]["time_sec"]))
-    oi_end = _value_at_or_before(oi_series, int(tail[-1]["time_sec"]))
+    oi_start = _oi_at_bar_close(oi_series, bars[flush_idx])
+    oi_end = _oi_at_bar_close(oi_series, tail[-1])
     if oi_start is None or oi_end is None or oi_start <= 0:
         return out
     oi_rise = (oi_end - oi_start) / oi_start
@@ -163,14 +252,23 @@ def _oi_rebuild_against(
     return out
 
 
-def _funding_state(rate: float | None) -> dict[str, Any]:
-    out: dict[str, Any] = {"rate": rate, "ratePct": None, "bias": None, "extreme": False}
+def _funding_state(rate: float | None, *, funding_interval_hours: float = 8.0) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "rate": rate,
+        "ratePct": None,
+        "bias": None,
+        "extreme": False,
+        "fundingIntervalHours": funding_interval_hours,
+    }
     if rate is None:
         return out
+    scale = 8.0 / max(float(funding_interval_hours), 1.0)
+    norm = rate * scale
     out["ratePct"] = round(rate * 100, 4)
-    if rate >= CF_FUNDING_CROWDED_LONG:
+    out["ratePct8h"] = round(norm * 100, 4)
+    if norm >= CF_FUNDING_CROWDED_LONG:
         out.update({"bias": "short", "extreme": True})
-    elif rate <= CF_FUNDING_CROWDED_SHORT:
+    elif norm <= CF_FUNDING_CROWDED_SHORT:
         out.update({"bias": "long", "extreme": True})
     return out
 
@@ -207,15 +305,15 @@ def _quiet_accumulation(
         return out
     if len(bars) < 6 or len(oi_series) < 4:
         return out
-    t_end = int(bars[-1]["time_sec"])
-    oi_end = _value_at_or_before(oi_series, t_end)
-    oi_start = _value_at_or_before(oi_series, int(bars[-6]["time_sec"]))
+    last = bars[-1]
+    oi_end = _oi_at_bar_close(oi_series, last)
+    oi_start = _oi_at_bar_close(oi_series, bars[-6])
     if oi_end is None or oi_start is None or oi_start <= 0:
         return out
     oi_rise = (oi_end - oi_start) / oi_start
     if oi_rise < CF_QUIET_OI_RISE_PCT:
         return out
-    taker_tail = _series_slice_upto(taker_series, t_end)
+    taker_tail = _series_slice_upto(taker_series, int(last["time_sec"]))
     if len(taker_tail) < 4:
         return out
     recent = [v for _, v in taker_tail[-3:]]
@@ -244,14 +342,13 @@ def _distribution(
     prog = abs(float(last["c"]) - float(last["o"])) / float(last["o"]) * 100.0
     if prog > CF_DIST_PRICE_PROG_MAX:
         return out
-    t_sec = int(last["time_sec"])
-    oi_end = _value_at_or_before(oi_series, t_sec)
-    oi_prev = _value_at_or_before(oi_series, int(bars[-4]["time_sec"]))
+    oi_end = _oi_at_bar_close(oi_series, last)
+    oi_prev = _oi_at_bar_close(oi_series, bars[-4])
     if oi_end is None or oi_prev is None or oi_prev <= 0:
         return out
     if oi_end >= oi_prev:
         return out
-    taker = _value_at_or_before(taker_series, t_sec)
+    taker = _taker_at_bar_open(taker_series, last)
     if taker is None or taker > 0.48:
         return out
     highs = [float(b["h"]) for b in bars[-20:]]
@@ -260,6 +357,40 @@ def _distribution(
     out["active"] = True
     out["volRatio"] = round(float(last["v"]) / avg_vol, 2)
     return out
+
+
+def _proxy_liq_spike_at(
+    bars: list[Bar],
+    oi_series: list[tuple[int, float]],
+    i: int,
+) -> tuple[bool, str]:
+    b = bars[i]
+    vols = [float(x["v"]) for x in bars[max(0, i - 20) : i]]
+    avg_v = sum(vols) / len(vols) if vols else 0.0
+    wick_ok, wick_side = _long_wick(b)
+    if not wick_ok:
+        return False, wick_side
+    vol_spike = avg_v > 0 and float(b["v"]) >= avg_v * CF_LIQ_PROXY_VOL_RATIO
+    if not vol_spike:
+        return False, wick_side
+    win = min(CF_LIQ_PROXY_OI_WINDOW, i)
+    if win < 1:
+        return False, wick_side
+    oi_start = _oi_at_bar_close(oi_series, bars[i - win])
+    oi_end = _oi_at_bar_close(oi_series, b)
+    if oi_start is None or oi_end is None or oi_start <= 0:
+        return False, wick_side
+    oi_drop = (oi_start - oi_end) / oi_start
+    return oi_drop >= CF_LIQ_PROXY_OI_DROP, wick_side
+
+
+def _bar_index_for_event(bars: list[Bar], event_ms: int) -> int | None:
+    for i, b in enumerate(bars):
+        ot = int(b["open_time_ms"])
+        ct = int(b["close_time_ms"])
+        if ot <= event_ms <= ct:
+            return i
+    return None
 
 
 def _liquidation_reclaim(
@@ -272,29 +403,34 @@ def _liquidation_reclaim(
         return out
     spike_idx: int | None = None
     spike_bar: Bar | None = None
-    for i in range(len(bars) - CF_LIQ_RECLAIM_BARS - 1, max(0, len(bars) - 12), -1):
-        b = bars[i]
-        vols = [float(x["v"]) for x in bars[max(0, i - 20) : i]]
-        avg_v = sum(vols) / len(vols) if vols else 0.0
-        oi_prev = _value_at_or_before(oi_series, int(b["time_sec"]))
-        oi_now = _value_at_or_before(oi_series, int(bars[min(i + 1, len(bars) - 1)]["time_sec"]))
-        wick_ok, wick_side = _long_wick(b)
-        oi_drop = 0.0
-        if oi_prev and oi_now and oi_prev > 0:
-            oi_drop = (oi_prev - oi_now) / oi_prev
-        vol_spike = avg_v > 0 and float(b["v"]) >= avg_v * CF_LIQ_PROXY_VOL_RATIO
-        if wick_ok and vol_spike and oi_drop >= CF_LIQ_PROXY_OI_DROP:
+    for i in range(len(bars) - CF_LIQ_RECLAIM_BARS - 1, max(0, len(bars) - 16), -1):
+        ok, _ = _proxy_liq_spike_at(bars, oi_series, i)
+        if ok:
             spike_idx = i
-            spike_bar = b
+            spike_bar = bars[i]
             out["source"] = "proxy"
             break
     if spike_idx is None and liq_events:
-        last_ms = int(bars[-1]["open_time_ms"])
-        recent = [e for e in liq_events if int(e.get("eventTimeMs") or 0) >= last_ms - 6 * 3600_000]
-        if recent:
-            spike_idx = len(bars) - CF_LIQ_RECLAIM_BARS - 1
-            spike_bar = bars[spike_idx]
-            out["source"] = "ws"
+        last_ms = int(bars[-1]["close_time_ms"])
+        recent = sorted(
+            [e for e in liq_events if int(e.get("eventTimeMs") or 0) >= last_ms - 12 * 3600_000],
+            key=lambda e: int(e.get("eventTimeMs") or 0),
+            reverse=True,
+        )
+        for ev in recent:
+            idx = _bar_index_for_event(bars, int(ev.get("eventTimeMs") or 0))
+            if idx is None or idx >= len(bars) - CF_LIQ_RECLAIM_BARS:
+                continue
+            b = bars[idx]
+            vols = [float(x["v"]) for x in bars[max(0, idx - 20) : idx]]
+            avg_v = sum(vols) / len(vols) if vols else 0.0
+            wick_ok, _ = _long_wick(b)
+            vol_ok = avg_v <= 0 or float(b["v"]) >= avg_v * (CF_LIQ_PROXY_VOL_RATIO * 0.85)
+            if wick_ok and vol_ok:
+                spike_idx = idx
+                spike_bar = b
+                out["source"] = "ws"
+                break
     if spike_idx is None or spike_bar is None:
         return out
     upper, lower, body, wick_side = _wick_parts(spike_bar)
@@ -327,8 +463,10 @@ def compute_capital_flow(
     top_pos_ls: list[tuple[int, float]],
     taker_buy: list[tuple[int, float]],
     liq_events: list[dict[str, Any]] | None = None,
+    interval: str = "15m",
+    funding_interval_hours: float = 8.0,
 ) -> dict[str, Any]:
-    bars = klines_to_bars(klines, signal_at_ms=signal_at_ms)
+    bars = klines_to_bars(klines, signal_at_ms=signal_at_ms, interval=interval)
     flags: dict[str, bool] = {}
     raw: dict[str, Any] = {}
     bias: dict[str, str | None] = {}
@@ -338,18 +476,18 @@ def compute_capital_flow(
     raw["oiFlushDropPct"] = flush.get("dropPct")
     bias["oi_flush"] = flush.get("bias")
 
-    rebuild = _oi_rebuild_against(flush, oi_series, bars)
+    rebuild = _oi_rebuild_against(oi_series, bars)
     flags["oi_rebuild_against"] = bool(rebuild.get("active"))
     raw["oiRebuildOirisePct"] = rebuild.get("oiRisePct")
     raw["oiRebuildPriceDir"] = rebuild.get("priceDir")
 
-    fund = _funding_state(funding_rate)
+    fund = _funding_state(funding_rate, funding_interval_hours=funding_interval_hours)
     flags["funding_extreme"] = bool(fund.get("extreme"))
     raw["fundingRate"] = fund.get("rate")
     raw["fundingRatePct"] = fund.get("ratePct")
     bias["funding_extreme"] = fund.get("bias")
 
-    t_sec = int(bars[-1]["time_sec"]) if bars else signal_at_ms // 1000
+    t_sec = int(bars[-1]["close_time_sec"]) if bars else signal_at_ms // 1000
     whale = _whale_retail(global_ls, top_pos_ls, t_sec)
     flags["whale_retail_divergence"] = bool(whale.get("diverge"))
     raw["globalLsRatio"] = whale.get("global")
@@ -426,7 +564,6 @@ def confluence_feature_keys(cf: dict[str, Any], side: str) -> set[str]:
         "funding_extreme": "feat:cf_funding_align",
         "whale_retail_divergence": "feat:cf_whale_align",
         "quiet_accumulation": "feat:cf_quiet_accum",
-        "distribution": "feat:cf_distribution",
         "liquidation_reclaim": "feat:cf_liq_reclaim",
         "oi_rebuild_align": "feat:cf_oi_rebuild_align",
     }
@@ -438,6 +575,12 @@ def confluence_feature_keys(cf: dict[str, Any], side: str) -> set[str]:
     flags = cf.get("flags") if isinstance(cf.get("flags"), dict) else {}
     if flags.get("funding_extreme") and not align.get("funding_extreme"):
         feats.add("feat:cf_funding_against")
+    if flags.get("distribution"):
+        s = "long" if side in ("long", "bull") else ("short" if side in ("short", "bear") else "")
+        if s == "short" and align.get("distribution"):
+            feats.add("feat:cf_distribution")
+        elif s == "long":
+            feats.add("feat:cf_distribution_against")
     return feats
 
 
