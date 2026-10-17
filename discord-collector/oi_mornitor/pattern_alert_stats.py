@@ -1103,6 +1103,8 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
         conf = alert.get("confluence")
         if isinstance(conf, dict):
             rec["confluence"] = conf
+        if isinstance(alert.get("capitalFlow"), dict):
+            rec["capitalFlow"] = alert.get("capitalFlow")
         if alert.get("vp_exit_plan"):
             rec["vp_exit_plan"] = alert.get("vp_exit_plan")
         from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms

@@ -313,7 +313,8 @@ def _message_with_confluence(alert: dict[str, Any], body: str) -> str:
     conf = alert.get("confluence")
     if not isinstance(conf, dict):
         conf = attach_confluence_on_alert(alert)
-    return append_confluence_to_message(body, conf)
+    cf = alert.get("capitalFlow") if isinstance(alert.get("capitalFlow"), dict) else None
+    return append_confluence_to_message(body, conf, capital_flow=cf)
 
 
 def format_ma144_candle_message(alert: dict[str, Any]) -> str:
@@ -520,18 +521,30 @@ async def send_pattern_oi_telegram_async(alert: dict[str, Any]) -> bool:
 
 
 async def send_candle_card_telegram_async(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.capital_flow_attach import enrich_alert_capital_flow_auto
+
+    await enrich_alert_capital_flow_auto(alert)
     return await asyncio.to_thread(send_candle_card_telegram, alert)
 
 
 async def send_main_card_telegram_async(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.capital_flow_attach import enrich_alert_capital_flow_auto
+
+    await enrich_alert_capital_flow_auto(alert)
     return await asyncio.to_thread(send_main_card_telegram, alert)
 
 
 async def send_ma144_main_card_telegram_async(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.capital_flow_attach import enrich_alert_capital_flow_auto
+
+    await enrich_alert_capital_flow_auto(alert)
     return await asyncio.to_thread(send_ma144_main_card_telegram, alert)
 
 
 async def send_structure_card_telegram_async(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.capital_flow_attach import enrich_alert_capital_flow_auto
+
+    await enrich_alert_capital_flow_auto(alert)
     return await asyncio.to_thread(send_structure_card_telegram, alert)
 
 

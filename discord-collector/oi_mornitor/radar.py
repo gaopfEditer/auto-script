@@ -1617,6 +1617,9 @@ class RadarService:
             ),
             name="oi-potential-discovery",
         )
+        from oi_mornitor.capital_flow_liq_ws import run_liquidation_ws
+
+        asyncio.create_task(run_liquidation_ws(), name="oi-capital-flow-liq-ws")
         logger.info(
             "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A + 沉寂爆发 + 潜力发现",
             interval_sec,
