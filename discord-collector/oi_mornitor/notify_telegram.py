@@ -609,3 +609,70 @@ def send_trendline_card_telegram(alert: dict[str, Any]) -> bool:
 
 async def send_trendline_card_telegram_async(alert: dict[str, Any]) -> bool:
     return await asyncio.to_thread(send_trendline_card_telegram, alert)
+
+
+def format_range_reversal_card_message(alert: dict[str, Any]) -> str:
+    pair = _pair_label(str(alert.get("symbol") or ""))
+    type_label = str(alert.get("type_label") or "区间反转")
+    iv = str(alert.get("interval") or "—")
+    t = _fmt_time(alert.get("kline_close_time") or alert.get("kline_open_time") or alert.get("time"))
+    rh = _fmt_price(alert.get("range_high"))
+    rl = _fmt_price(alert.get("range_low"))
+    entry = _fmt_price(alert.get("entry") or alert.get("close"))
+    sl = _fmt_price(alert.get("sl"))
+    tp1 = _fmt_price(alert.get("tp1"))
+    tp2 = _fmt_price(alert.get("tp2"))
+    vr = alert.get("vol_ratio")
+    vr_s = _fmt_vol_x(vr) if vr is not None else "—"
+    tags = alert.get("tags") or []
+    tag_s = " · ".join(str(x) for x in tags) if tags else ""
+    lines = [
+        f"📦 {type_label}",
+        f"💰 交易对: {pair}",
+        f"⏰ 周期: {iv} · 时间: {t}",
+        f"📊 区间: 高 {rh} · 低 {rl}",
+        f"💵 入场: {entry}",
+        f"🛡️ SL: {sl} · TP1(中轴): {tp1} · TP2(对轨): {tp2}",
+        f"🕯 量能 {vr_s}",
+    ]
+    if tag_s:
+        lines.append(f"🏷 {tag_s}")
+    return "\n".join(lines)
+
+
+def send_range_reversal_card_telegram(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.pattern_emit_gate import telegram_push_allowed_or_record_observation
+    from oi_mornitor.range_reversal_config import (
+        RANGE_REVERSAL_TELEGRAM_CHAT_ID,
+        is_range_reversal_enabled,
+    )
+
+    if not is_range_reversal_enabled():
+        return False
+    if str(alert.get("type") or "") != "range_reversal_signal_card":
+        return False
+    chat = RANGE_REVERSAL_TELEGRAM_CHAT_ID
+    if not chat:
+        return False
+    if not telegram_push_allowed_or_record_observation(alert):
+        return False
+    text = format_range_reversal_card_message(alert)
+    ok = _send_card_text_to_chat(alert, text, chat)
+    if ok:
+        try:
+            from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+            record_alert_from_push(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("区间反转胜率入库失败: %s", exc)
+        try:
+            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
+
+            record_ticker_from_alert(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("区间反转 ticker 入库失败: %s", exc)
+    return ok
+
+
+async def send_range_reversal_card_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_range_reversal_card_telegram, alert)

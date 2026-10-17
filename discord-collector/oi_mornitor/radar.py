@@ -1342,6 +1342,7 @@ class RadarService:
         self._settle_report_task: asyncio.Task[None] | None = None
         self._moonshot_task: asyncio.Task[None] | None = None
         self._trendline_task: asyncio.Task[None] | None = None
+        self._range_reversal_task: asyncio.Task[None] | None = None
         self._dormant_ignition_task: asyncio.Task[None] | None = None
         self._potential_discovery_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
@@ -1629,6 +1630,17 @@ class RadarService:
                 ),
                 name="oi-trendline-loop",
             )
+        from oi_mornitor.range_reversal.runner import run_range_reversal_loop
+        from oi_mornitor.range_reversal_config import is_range_reversal_enabled
+
+        if is_range_reversal_enabled():
+            self._range_reversal_task = asyncio.create_task(
+                run_range_reversal_loop(
+                    lambda: self._running,
+                    get_session=lambda: self._session,
+                ),
+                name="oi-range-reversal-loop",
+            )
         logger.info(
             "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A + 沉寂爆发 + 潜力发现",
             interval_sec,
@@ -1699,6 +1711,7 @@ class RadarService:
             "_dormant_ignition_task",
             "_potential_discovery_task",
             "_trendline_task",
+            "_range_reversal_task",
         ):
             task = getattr(self, attr, None)
             if task:
