@@ -42,6 +42,14 @@ import {
 } from "./telegram-auto-trade.js";
 
 import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
+import { STAGED_TP_PARTIAL_RATIOS } from "./discord-signal-staged-trade.js";
+import {
+  ensureBitgetPositionTpslAfterOpen,
+  placeBitgetOpenWithPresets,
+  placeBitgetPartialTakeProfits,
+  resolveOpenTpslPrices,
+} from "./bitget-tpsl-guard.js";
+import { parseBitgetContractMeta } from "./bitget-order-from-signal.js";
 
 
 
@@ -147,6 +155,8 @@ export function createBitgetOrderService(store, log) {
 
    *   isReverse?: boolean;
 
+   *   executionJson?: unknown;
+
    * }} input
 
    */
@@ -189,6 +199,8 @@ export function createBitgetOrderService(store, log) {
 
         dryRun,
 
+        log,
+
       });
 
     } else if (input.parsed.signalPhase === "open" || input.parsed.awaitingTpsl) {
@@ -202,6 +214,10 @@ export function createBitgetOrderService(store, log) {
         cardId: input.cardId,
 
         dryRun,
+
+        log,
+
+        executionJson: input.executionJson,
 
       });
 
@@ -227,6 +243,10 @@ export function createBitgetOrderService(store, log) {
         cardId: input.cardId,
 
         dryRun,
+
+        log,
+
+        executionJson: input.executionJson,
 
       });
 
@@ -371,7 +391,7 @@ export function createBitgetOrderService(store, log) {
 
     const isStaged = isStagedTradeSignal(parsed) || resolved.channel.stagedTrade;
     const exAfterPrepare = normalizeExecution(executionJson, parsed);
-    if (!isStaged && !telegramTradeRequiresTpsl(exAfterPrepare)) {
+    if (!telegramTradeRequiresTpsl(exAfterPrepare) && !isStaged) {
       log.warn(
         `Bitget 跳过 card=#${input.cardId}：务必设置止盈止损（已试默认 TP/SL 仍缺有效入场）`
       );
@@ -400,6 +420,8 @@ export function createBitgetOrderService(store, log) {
         isReverse: input.isReverse,
 
         prevBitgetOrder: input.prevBitgetOrder ?? null,
+
+        executionJson,
 
       });
 
@@ -619,7 +641,7 @@ export function createBitgetOrderService(store, log) {
 
           const clientOid = `${String(plan.clientOid)}-r${attempt}`.slice(0, 50);
 
-          const resp = await client.placeOrder({
+          const openBase = {
 
             symbol: plan.symbol,
 
@@ -641,17 +663,91 @@ export function createBitgetOrderService(store, log) {
 
             clientOid,
 
-            presetStopSurplusPrice: plan.takeProfitPrice ?? undefined,
+          };
 
-            presetStopLossPrice: plan.stopLossPrice ?? undefined,
+          let refForTpsl = Number(plan.price ?? 0);
+          if (!Number.isFinite(refForTpsl) || refForTpsl <= 0) {
+            const ticker = await client.getMixTicker({ symbol: plan.symbol, productType: plan.productType });
+            refForTpsl = Number(ticker?.markPrice ?? ticker?.lastPr ?? 0);
+          }
+
+          const tpslResolved = resolveOpenTpslPrices({
+
+            parsed: input.parsed,
+
+            executionJson,
+
+            fillPrice: refForTpsl,
+
+            direction: plan.direction ?? String(input.parsed?.direction ?? ""),
+
+            initialSlPct: Number(resolved.channel.initialSlPct ?? tradeCfg.default?.initialSlPct ?? 4.3),
 
           });
+
+          const presetResult = await placeBitgetOpenWithPresets(client, {
+
+            openBase,
+
+            symbol: plan.symbol,
+
+            productType: plan.productType,
+
+            marginCoin: plan.marginCoin,
+
+            holdSide,
+
+            direction: String(plan.direction ?? input.parsed?.direction ?? ""),
+
+            size: plan.size,
+
+            initialSlPct: Number(resolved.channel.initialSlPct ?? 4.3),
+
+            stopLossStr: plan.stopLossPrice ?? tpslResolved.stopLossStr,
+
+            takeProfitStr: plan.takeProfitPrice ?? tpslResolved.takeProfitStr,
+
+            parsed: input.parsed,
+
+            executionJson,
+
+            fetchMark: async () => {
+
+              const ticker = await client.getMixTicker({ symbol: plan.symbol, productType: plan.productType });
+
+              const p = Number(ticker?.markPrice ?? ticker?.lastPr ?? 0);
+
+              return Number.isFinite(p) && p > 0 ? p : null;
+
+            },
+
+          });
+
+          if (!presetResult.ok) {
+
+            attemptErrors.push(
+
+              `attempt ${attempt}: ${presetResult.reason} ${(presetResult.presetErrors ?? []).join("; ")}`
+
+            );
+
+            continue;
+
+          }
+
+          const resp = presetResult.openResp;
 
           const data = resp && typeof resp === "object" && "data" in resp ? /** @type {Record<string, unknown>} */ (resp.data) : {};
 
           orderId = data.orderId ?? data.order_id ?? null;
 
           lastResp = resp;
+
+          orderRecord.presetStopLossPrice = presetResult.presetStopLossPrice;
+
+          orderRecord.presetStopSurplusPrice = presetResult.presetStopSurplusPrice;
+
+          orderRecord.takeProfits = tpslResolved.takeProfits;
 
           await new Promise((r) => setTimeout(r, 500 * attempt));
 
@@ -722,6 +818,106 @@ export function createBitgetOrderService(store, log) {
         orderRecord.orderId = orderId;
 
         orderRecord.response = lastResp;
+
+      }
+
+      const verify = await ensureBitgetPositionTpslAfterOpen(
+
+        client,
+
+        log,
+
+        {
+
+          symbol: plan.symbol,
+
+          productType: plan.productType,
+
+          marginCoin: plan.marginCoin,
+
+          holdSide,
+
+          size: plan.size,
+
+          stopLossStr: String(orderRecord.presetStopLossPrice ?? plan.stopLossPrice),
+
+          takeProfitStr: String(orderRecord.presetStopSurplusPrice ?? plan.takeProfitPrice),
+
+          cardId: input.cardId,
+
+        },
+
+        orderRecord
+
+      );
+
+      if (!verify.ok) {
+
+        await persistOrderResult(input.cardId, input.parsed, verify.record ?? orderRecord);
+
+        return {
+
+          failed: true,
+
+          reason: verify.reason ?? "tpsl_verify_failed",
+
+          error: String(verify.record?.nakedPositionCloseError ?? "TP/SL 校验失败"),
+
+        };
+
+      }
+
+      Object.assign(orderRecord, verify.record ?? {});
+
+      const tpList =
+
+        Array.isArray(orderRecord.takeProfits) && orderRecord.takeProfits.length
+
+          ? /** @type {string[]} */ (orderRecord.takeProfits)
+
+          : (exAfterPrepare.planned?.takeProfitPrices ?? []).map((p) => String(p));
+
+      if (tpList.length > 1) {
+
+        let contractMeta = parseBitgetContractMeta(null);
+
+        try {
+
+          const contract = await client.getMixContract({ symbol: plan.symbol, productType: plan.productType });
+
+          contractMeta = parseBitgetContractMeta(contract);
+
+        } catch {
+
+          /* ignore */
+
+        }
+
+        const partial = await placeBitgetPartialTakeProfits(client, {
+
+          symbol: plan.symbol,
+
+          productType: plan.productType,
+
+          marginCoin: plan.marginCoin,
+
+          holdSide,
+
+          size: plan.size,
+
+          takeProfits: tpList,
+
+          tpPartialRatios: /** @type {number[]} */ (resolved.channel.tpPartialRatios ?? STAGED_TP_PARTIAL_RATIOS),
+
+          contractMeta,
+
+          cardId: input.cardId,
+
+          skipFirstLevel: true,
+
+        });
+
+        orderRecord.tpResults = partial.tpResults;
 
       }
 

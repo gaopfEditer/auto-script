@@ -648,6 +648,15 @@ async getOrdersPending(q) {
 
     },
 
+    /** @param {{ productType: string; symbol?: string; planType?: string }} q */
+    async getOrdersPlanPending(q) {
+      return signedRequest("GET", "/api/v2/mix/order/orders-plan-pending", {
+        productType: q.productType,
+        symbol: q.symbol,
+        planType: q.planType,
+      }, null);
+    },
+
   };
 
 }

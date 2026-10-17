@@ -10,6 +10,14 @@ import {
 import { parseEntryPriceForOrder, resolveOrderLeverage, resolveBitgetOrderSize, directionToSide, parseBitgetContractMeta, formatOrderSize } from "./bitget-order-from-signal.js";
 import { normalizeSymbol } from "./card-fields.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
+import {
+  ensureBitgetPositionTpslAfterOpen,
+  isValidStopLoss,
+  isValidTakeProfit,
+  placeBitgetOpenWithPresets,
+  priceStr,
+  resolveOpenTpslPrices,
+} from "./bitget-tpsl-guard.js";
 
 /** @param {number} ms */
 function sleep(ms) {
@@ -84,21 +92,6 @@ export async function hasBitgetSymbolExposure(client, p) {
 }
 
 const BITGET_OPEN_MAX_ATTEMPTS = 3;
-
-/** @param {number} price */
-function priceStr(price) {
-  if (!Number.isFinite(price) || price <= 0) return "";
-  const s = String(price);
-  if (s.includes(".")) return s.replace(/\.?0+$/, "") || s;
-  return s;
-}
-
-/** @param {number} marketPrice @param {number} sl @param {"long"|"short"} holdSide */
-function isValidStopLoss(marketPrice, sl, holdSide) {
-  if (!Number.isFinite(marketPrice) || !Number.isFinite(sl) || marketPrice <= 0 || sl <= 0) return false;
-  if (holdSide === "long") return sl < marketPrice;
-  return sl > marketPrice;
-}
 
 /** @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client @param {string} symbol @param {string} productType */
 async function fetchContractMeta(client, symbol, productType) {
@@ -179,6 +172,8 @@ async function fetchMarkPrice(client, symbol, productType) {
  *   channelTrade: Record<string, unknown>;
  *   cardId: number;
  *   dryRun: boolean;
+ *   log?: ReturnType<typeof import("./logger.js").createLogger>;
+ *   executionJson?: unknown;
  * }} input
  */
 export async function executeStagedMarketOpen(client, input) {
@@ -214,15 +209,23 @@ export async function executeStagedMarketOpen(client, input) {
 
   const holdSide = side === "buy" ? "long" : "short";
   const fillPrice = refPrice;
-  const initialSl = calcInitialStopLoss(fillPrice, direction, initialSlPct);
-  if (!initialSl) {
-    return { ok: false, reason: "missing_initial_sl", error: "无法计算初始止损价" };
+  const tpslResolved = resolveOpenTpslPrices({
+    parsed,
+    executionJson: input.executionJson,
+    fillPrice,
+    direction,
+    initialSlPct,
+  });
+  const initialSl = tpslResolved.stopLossPrice;
+  const initialTp = tpslResolved.takeProfitPrice;
+  if (!initialSl || !initialTp) {
+    return { ok: false, reason: "missing_initial_tpsl", error: "无法计算初始止盈止损价" };
   }
-  if (!isValidStopLoss(fillPrice, initialSl, holdSide)) {
+  if (!isValidStopLoss(fillPrice, initialSl, holdSide) || !isValidTakeProfit(fillPrice, initialTp, holdSide)) {
     return {
       ok: false,
-      reason: "invalid_initial_sl",
-      error: `止损 ${initialSl} 相对市价 ${fillPrice} 方向无效（${holdSide}）`,
+      reason: "invalid_initial_tpsl",
+      error: `TP/SL 相对市价 ${fillPrice} 方向无效（${holdSide}） sl=${initialSl} tp=${initialTp}`,
     };
   }
 
@@ -239,6 +242,10 @@ export async function executeStagedMarketOpen(client, input) {
     leverage,
     initialSlPct,
     initialSlPrice: initialSl,
+    initialTpPrice: initialTp,
+    takeProfits: tpslResolved.takeProfits,
+    stopLossPrice: tpslResolved.stopLossStr,
+    presetStopSurplusPrice: tpslResolved.takeProfitStr,
     marginMode: channelTrade.marginMode ?? "crossed",
     productType,
     volumePlace: contractMeta.volumePlace,
@@ -248,6 +255,7 @@ export async function executeStagedMarketOpen(client, input) {
 
   if (input.dryRun) {
     record.slPlan = { planType: "loss_plan", triggerPrice: initialSl, size };
+    record.tpPlan = { planType: "profit_plan", triggerPrice: initialTp, size };
     return { ok: true, record, dryRun: true };
   }
 
@@ -305,57 +313,35 @@ export async function executeStagedMarketOpen(client, input) {
     };
 
     try {
-      let openResp;
-      let openPresetSlError = "";
-      try {
-        openResp = await client.placeOrder({
-          ...openBase,
-          presetStopLossPrice: initialSl ? priceStr(initialSl) : undefined,
-        });
-        if (initialSl) {
-          record.presetStopLossPrice = priceStr(initialSl);
-          record.slOrderId = "preset_on_open";
-        }
-      } catch (openErr) {
-        openPresetSlError = String(/** @type {Error} */ (openErr).message ?? openErr);
-        openResp = await client.placeOrder(openBase);
-        if (openPresetSlError) record.openPresetSlError = openPresetSlError;
+      const presetResult = await placeBitgetOpenWithPresets(client, {
+        openBase,
+        symbol,
+        productType,
+        marginCoin,
+        holdSide,
+        direction,
+        size,
+        initialSlPct,
+        stopLossStr: tpslResolved.stopLossStr,
+        takeProfitStr: tpslResolved.takeProfitStr,
+        parsed,
+        executionJson: input.executionJson,
+        fetchMark: () => fetchMarkPrice(client, symbol, productType),
+      });
 
-        if (initialSl) {
-          try {
-            const markAfter = (await fetchMarkPrice(client, symbol, productType)) ?? fillPrice;
-            const slPrice = calcInitialStopLoss(markAfter, direction, initialSlPct);
-            if (!slPrice || !isValidStopLoss(markAfter, slPrice, holdSide)) {
-              record.slError = `fallback SL invalid: ${slPrice} vs ${markAfter}`;
-            } else {
-              const slResp = await client.withHoldSideFallback(
-                (hs) =>
-                  client.placeTpslOrder({
-                    symbol,
-                    productType,
-                    marginCoin,
-                    planType: "loss_plan",
-                    triggerPrice: priceStr(slPrice),
-                    holdSide: hs,
-                    size,
-                    clientOid: `dc-sl-init-${input.cardId}-${Date.now()}-${attempt}`,
-                  }),
-                holdSide
-              );
-              const slData =
-                slResp && typeof slResp === "object" && "data" in slResp
-                  ? /** @type {Record<string, unknown>} */ (slResp.data)
-                  : {};
-              record.slOrderId = slData.orderId ?? slData.planId ?? null;
-              record.slResponse = slResp;
-              record.initialSlPrice = slPrice;
-              record.presetStopLossPrice = priceStr(slPrice);
-            }
-          } catch (e) {
-            record.slError = String(/** @type {Error} */ (e).message ?? e);
-          }
-        }
+      if (!presetResult.ok) {
+        const miss = `attempt ${attempt}: ${presetResult.reason} ${(presetResult.presetErrors ?? []).join("; ")}`;
+        attemptErrors.push(miss);
+        record.lastOpenError = miss;
+        continue;
       }
+
+      const openResp = presetResult.openResp;
+      record.presetStopLossPrice = presetResult.presetStopLossPrice;
+      record.presetStopSurplusPrice = presetResult.presetStopSurplusPrice;
+      record.slOrderId = "preset_on_open";
+      record.tpOrderId = "preset_on_open";
+      record.openPresetAttempt = presetResult.presetAttempt;
 
       const openData =
         openResp && typeof openResp === "object" && "data" in openResp
@@ -399,18 +385,48 @@ export async function executeStagedMarketOpen(client, input) {
 
   if (attemptErrors.length) record.openRetryErrors = attemptErrors;
 
-  const slAttached = Boolean(
-    record.slOrderId ||
-      record.presetStopLossPrice ||
-      (input.dryRun && initialSl)
+  const tpslAttached = Boolean(
+    record.presetStopLossPrice &&
+      record.presetStopSurplusPrice &&
+      (record.slOrderId || record.tpOrderId)
   );
-  if (!slAttached) {
+  if (!tpslAttached) {
     return {
       ok: false,
-      reason: "stop_loss_not_attached",
-      error: String(record.slError ?? record.openPresetSlError ?? "开仓后未挂上止损，已中止记为成功"),
+      reason: "tpsl_not_attached",
+      error: String(record.slError ?? record.openPresetSlError ?? "开仓未附带完整 TP/SL"),
       record,
     };
+  }
+
+  if (input.log) {
+    const verify = await ensureBitgetPositionTpslAfterOpen(
+      client,
+      input.log,
+      {
+        symbol,
+        productType,
+        marginCoin,
+        holdSide,
+        size,
+        stopLossStr: String(record.presetStopLossPrice),
+        takeProfitStr: String(record.presetStopSurplusPrice),
+        cardId: input.cardId,
+      },
+      record
+    );
+    if (!verify.ok) {
+      const failRecord = verify.record ?? record;
+      return {
+        ok: false,
+        reason: verify.reason ?? "tpsl_verify_failed",
+        error: String(
+          failRecord.nakedPositionCloseError ?? failRecord.tpslRepair?.error ?? "开仓后 TP/SL 校验失败"
+        ),
+        record: failRecord,
+      };
+    }
+    if (verify.record) Object.assign(record, verify.record);
   }
 
   return { ok: true, record };
@@ -563,6 +579,7 @@ export async function executeStagedTpslUpdate(client, input) {
  *   channelTrade: Record<string, unknown>;
  *   cardId: number;
  *   dryRun: boolean;
+ *   log?: ReturnType<typeof import("./logger.js").createLogger>;
  * }} input
  */
 export async function executeStagedReverse(client, input) {
@@ -612,6 +629,7 @@ export async function executeStagedReverse(client, input) {
     channelTrade: input.channelTrade,
     cardId: input.cardId,
     dryRun: false,
+    log: input.log,
   });
   if (!openResult.ok) {
     record.status = "reverse_failed";

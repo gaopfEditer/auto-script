@@ -22,7 +22,8 @@
     "oi:publish-potential": "PYTHONPATH=. oi_mornitor/venv/bin/python oi_mornitor/scripts/publish_potential_json.py",
     "oi:potential-scan": "PYTHONPATH=. oi_mornitor/venv/bin/python oi_mornitor/scripts/run_potential_scan_once.py",
     "news:start": "PYTHONPATH=. ${NEWS_PYTHON:-../../auto-deal-eth/news_mornitor/venv/bin/python} news_mornitor/run.py web",
-    "content:start": "PYTHONPATH=. oi_mornitor/venv/bin/python -m content_board"
+    "content:start": "PYTHONPATH=. oi_mornitor/venv/bin/python -m content_board",
+    "test": "BITGET_SKIP_TELEGRAM_ALERT=1 node --test src/*.test.js"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",
