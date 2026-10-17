@@ -206,7 +206,7 @@ class ConfluenceObservationOnlyTests(unittest.TestCase):
         with mock.patch("oi_mornitor.pattern_alert_stats._save", return_value=[]) as save_mock:
             with mock.patch("oi_mornitor.pattern_alert_stats._load", return_value=[]):
                 with mock.patch(
-                    "oi_mornitor.pattern_push_gate.passes_push_mtf_gate",
+                    "oi_mornitor.pattern_emit_gate.passes_pattern_card_emit_gate",
                     return_value=True,
                 ):
                     record_alert_from_push(alert)

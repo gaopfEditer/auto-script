@@ -6,6 +6,7 @@ import unittest
 from oi_mornitor.pattern_emit_gate import (
     passes_backtest_emit_gate,
     passes_pattern_card_emit_gate,
+    would_telegram_push,
 )
 from oi_mornitor.pattern_entry import resolve_backtest_entry_price
 from oi_mornitor.pattern_settle import settle_signal_batch
@@ -120,6 +121,27 @@ class MtfChronologicalGateTests(unittest.TestCase):
         pg.OI_PATTERN_PUSH_MTF_MIN = 1
         self.assertTrue(passes_pattern_card_emit_gate(alert, []))
         self.assertTrue(passes_backtest_emit_gate(alert, []))
+
+    def test_confluence_c_blocks_telegram_not_backtest_scan(self) -> None:
+        from oi_mornitor import config
+        import oi_mornitor.pattern_push_gate as pg
+
+        config.OI_PATTERN_PUSH_MTF_MIN = 1
+        pg.OI_PATTERN_PUSH_MTF_MIN = 1
+        config.OI_CONFLUENCE_PUSH_MIN_TIER = "B"
+        alert = {
+            "type": "candle_pattern_card",
+            "symbol": "BTCUSDT",
+            "interval": "15m",
+            "kind": "shooting_star",
+            "side": "bear",
+            "type_label": "射击之星",
+            "kline_close_time": 1_700_000_000_000,
+            "price": 50000.0,
+        }
+        alert["confluence"] = {"tier": "C", "score": 40}
+        self.assertTrue(passes_backtest_emit_gate(alert, []))
+        self.assertFalse(would_telegram_push(alert, []))
 
 
 if __name__ == "__main__":
