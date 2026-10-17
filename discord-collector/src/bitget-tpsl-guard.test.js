@@ -9,6 +9,10 @@ import {
   resolveRepairTpslLevels,
   isValidTakeProfit,
   isValidStopLoss,
+  bitgetRequireTpslEnabled,
+  bitgetNakedPositionAction,
+  bitgetTpslVerifyWindowMs,
+  bitgetTpslRepairRetries,
 } from "./bitget-tpsl-guard.js";
 
 const baseCtx = {
@@ -335,5 +339,35 @@ describe("ensureBitgetPositionTpslAfterOpen", () => {
     assert.equal(record.tpslRepair.attempts[0].category, "sl_breached");
 
     if (origAlert !== undefined) process.env.BITGET_SKIP_TELEGRAM_ALERT = origAlert;
+  });
+});
+
+describe("bitget tpsl env defaults", () => {
+  const keys = [
+    "BITGET_REQUIRE_TPSL",
+    "BITGET_NAKED_POSITION_ACTION",
+    "BITGET_TPSL_VERIFY_SEC",
+    "BITGET_TPSL_REPAIR_RETRIES",
+  ];
+  const saved = {};
+
+  it("空字符串或非法值回退安全默认", () => {
+    for (const k of keys) {
+      saved[k] = process.env[k];
+      process.env[k] = "";
+    }
+    process.env.BITGET_TPSL_VERIFY_SEC = "not-a-number";
+    process.env.BITGET_TPSL_REPAIR_RETRIES = "NaN";
+    process.env.BITGET_NAKED_POSITION_ACTION = "bogus";
+
+    assert.equal(bitgetRequireTpslEnabled(), true);
+    assert.equal(bitgetNakedPositionAction(), "close");
+    assert.equal(bitgetTpslVerifyWindowMs(), 8000);
+    assert.equal(bitgetTpslRepairRetries(), 3);
+
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
   });
 });

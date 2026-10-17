@@ -1,29 +1,38 @@
 """结算 V2：按信号类型/周期/市值梯队解析 SL(R/ATR/invalid) 与 TP(R 倍数)。"""
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any
 
-from oi_mornitor.config import OI_PATTERN_SL_MIN_PCT, OI_PATTERN_SL_MIN_PCT_MAJOR
+from oi_mornitor.config import (
+    OI_PATTERN_15M_VERIFY_MS,
+    OI_PATTERN_SL_MIN_PCT,
+    OI_PATTERN_SL_MIN_PCT_MAJOR,
+    OI_SETTLE_ATR_K_T1,
+    OI_SETTLE_ATR_K_T2,
+    OI_SETTLE_ATR_K_T3,
+    OI_SETTLE_CAP_T1,
+    OI_SETTLE_CAP_T2,
+    OI_SETTLE_CAP_T3,
+)
 from oi_mornitor.mcap_tier import resolve_mcap_tier
 from oi_mornitor.symbol_aliases import human_base_asset
 
 _LEV_100 = frozenset({"BTC", "ETH", "SOL"})
 
-_15M_VERIFY_MS = int(
-    float(os.environ.get("OI_PATTERN_15M_VERIFY_H", "6")) * 60 * 60 * 1000
-)
-_VERIFY_MS = {
-    "15m": _15M_VERIFY_MS,
-    "30m": 4 * 60 * 60 * 1000,
-    "1h": 6 * 60 * 60 * 1000,
-    "4h": 12 * 60 * 60 * 1000,
-}
 _MCAP_VERIFY_MULT = {"t1": 1.5, "t2": 1.0, "t3": 0.67}
 
-_ATR_K = {"t1": 1.5, "t2": 2.0, "t3": 2.5}
-_CAP_PCT = {"t1": 0.02, "t2": 0.03, "t3": 0.04}
+_ATR_K = {"t1": OI_SETTLE_ATR_K_T1, "t2": OI_SETTLE_ATR_K_T2, "t3": OI_SETTLE_ATR_K_T3}
+_CAP_PCT = {"t1": OI_SETTLE_CAP_T1, "t2": OI_SETTLE_CAP_T2, "t3": OI_SETTLE_CAP_T3}
+
+
+def _verify_ms_by_interval() -> dict[str, int]:
+    return {
+        "15m": OI_PATTERN_15M_VERIFY_MS,
+        "30m": 4 * 60 * 60 * 1000,
+        "1h": 6 * 60 * 60 * 1000,
+        "4h": 12 * 60 * 60 * 1000,
+    }
 
 
 @dataclass(frozen=True)
@@ -97,8 +106,9 @@ def _side(rec: dict[str, Any]) -> str:
 
 
 def resolve_verify_delay_ms(rec: dict[str, Any]) -> int:
+    verify_ms = _verify_ms_by_interval()
     iv = str(rec.get("interval") or "15m").strip().lower()
-    base = _VERIFY_MS.get(iv, _VERIFY_MS["15m"])
+    base = verify_ms.get(iv, verify_ms["15m"])
     if str(rec.get("assetClass") or "") == "equity":
         return 4 * 60 * 60 * 1000
     if iv == "15m":
@@ -123,8 +133,8 @@ def build_settle_plan(
 
     sym = str(rec.get("tradeSymbol") or rec.get("symbol") or "")
     tier = resolve_mcap_tier(sym)
-    atr_k = float(os.environ.get(f"OI_SETTLE_ATR_K_{tier.upper()}") or _ATR_K.get(tier, 2.0))
-    cap = float(os.environ.get(f"OI_SETTLE_CAP_{tier.upper()}") or _CAP_PCT.get(tier, 0.03))
+    atr_k = float(_ATR_K.get(tier, OI_SETTLE_ATR_K_T2))
+    cap = float(_CAP_PCT.get(tier, OI_SETTLE_CAP_T2))
 
     invalid_raw = rec.get("invalid_level") or rec.get("invalidLevel")
     try:

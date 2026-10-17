@@ -215,6 +215,40 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 - 推送节流：同币同周期同方向在 `OI_CARD_PUSH_COOLDOWN_BARS`(4) 根 K 内只推一次（发送成功才计时）
 - 蜡烛卡片文案补参考位：看跌给「上方防守=前20根高点 / 下方参考=布林中轨」，看涨给「下方防守=前20根低点 / 上方参考=布林中轨」
 
+#### 环境变量默认（PR #3 形态质量 / PR #4–#5 Bitget TP·SL）
+
+未配置 `.env`、或值为空字符串 / 非法时，代码内硬编码默认如下（读取实现：`oi_mornitor/env_parse.py`、`oi_mornitor/config.py`、`discord-collector/src/env-defaults.js`）。
+
+| 变量 | 默认 | 读取位置 |
+|------|------|----------|
+| `OI_CANDLE_SHOOT_REQUIRE_POSITION` | `1`（开） | `config.py` → `candle_card_config` / `candle_signals` |
+| `OI_CANDLE_SHOOT_TREND_LOOKBACK` | `20` | `config.py` |
+| `OI_CANDLE_SHOOT_TREND_MIN_PCT` | `3.0` | `config.py` |
+| `OI_CANDLE_HAMMER_TREND_LOOKBACK` | `20` | `config.py` |
+| `OI_CANDLE_HAMMER_TREND_MIN_PCT` | `3.0` | `config.py` |
+| `OI_CANDLE_VOL_BYPASS_CONTEXT` | `0`（关） | `config.py` |
+| `OI_CANDLE_1H_HTF_TREND_ENABLED` | `1`（开） | `config.py` → `candle_signals.htf_trend_gate_ok` |
+| `OI_CANDLE_1H_HTF_TREND_LOOKBACK` | `20` | `config.py` |
+| `OI_CANDLE_1H_HTF_TREND_MIN_PCT` | `3.0` | `config.py` |
+| `OI_CANDLE_CARD_REQUIRE_VOL` | `1`（开） | `config.py` → `candle_card_config` |
+| `OI_CANDLE_CARD_VOL_MULT` | `1.2` | `config.py` → `candle_card_config` |
+| `OI_CANDLE_CARD_VOL_LOOKBACK` | `3` | `config.py` → `candle_card_config` |
+| `OI_MAIN_CARD_VOL_LOOKBACK` | 同 `OI_CANDLE_CARD_VOL_LOOKBACK` | `config.py` → `candle_card_config` |
+| `OI_MAIN_CARD_VOL_MULT` | `1.0` | `config.py` → `candle_card_config` |
+| `OI_PATTERN_PUSH_MTF_MIN` | `2` | `config.py` → `pattern_push_gate` |
+| `OI_PATTERN_SL_MIN_PCT` | `0.8`（%） | `config.py` → `pattern_settle_profile` |
+| `OI_PATTERN_SL_MIN_PCT_MAJOR` | `0.4`（%） | `config.py` → `pattern_settle_profile` |
+| `OI_PATTERN_15M_VERIFY_H` | `6`（小时） | `config.py` → `pattern_settle_profile.resolve_verify_delay_ms` |
+| `OI_SETTLE_ATR_K_T1` / `T2` / `T3` | `1.5` / `2.0` / `2.5` | `config.py` → `pattern_settle_profile.build_settle_plan` |
+| `OI_SETTLE_CAP_T1` / `T2` / `T3` | `0.02` / `0.03` / `0.04` | `config.py` → `pattern_settle_profile.build_settle_plan` |
+| `BITGET_REQUIRE_TPSL` | `1`（开） | `bitget-tpsl-guard.js` |
+| `BITGET_NAKED_POSITION_ACTION` | `close` | `bitget-tpsl-guard.js` |
+| `BITGET_TPSL_VERIFY_SEC` | `8` | `bitget-tpsl-guard.js` |
+| `BITGET_TPSL_REPAIR_RETRIES` | `3` | `bitget-tpsl-guard.js` |
+| `BITGET_SKIP_TELEGRAM_ALERT` | 未设（会发 TG） | `bitget-tpsl-guard.js` |
+
+WEEX 分阶段开仓默认 TP/SL 与 Bitget 共用 `BITGET_INITIAL_SL_PCT` 等（`config.js` / `weex-staged-order.js`）；TP/SL 成交后校验逻辑在 Bitget 路径，无独立 `WEEX_*` 校验变量。
+
 ### 5.5 入场条件明细（胜率列表 typeLabel）
 
 以下为 Telegram / ticker / 胜率库里常见类型的**达成条件**（实现以代码为准）。
