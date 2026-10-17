@@ -32,6 +32,11 @@ _PR3_KEYS = [
     "OI_SETTLE_CAP_T1",
     "OI_SETTLE_CAP_T2",
     "OI_SETTLE_CAP_T3",
+    "OI_CONFLUENCE_PUSH_MIN_TIER",
+    "OI_CONFLUENCE_SHRINK_K",
+    "OI_CONFLUENCE_MIN_N",
+    "OI_CONFLUENCE_SPLIT_AT",
+    "OI_CONFLUENCE_WEIGHTS_PATH",
 ]
 
 
@@ -82,6 +87,9 @@ class EnvConfigDefaultsTests(unittest.TestCase):
             self.assertEqual(config.OI_PATTERN_SL_MIN_PCT, 0.8)
             self.assertEqual(config.OI_PATTERN_15M_VERIFY_H, 6.0)
             self.assertEqual(config.CANDLE_CARD_VOL_MULT, 1.2)
+            self.assertEqual(config.OI_CONFLUENCE_PUSH_MIN_TIER, "B")
+            self.assertEqual(config.OI_CONFLUENCE_SHRINK_K, 50)
+            self.assertEqual(config.OI_CONFLUENCE_MIN_N, 30)
 
 
 if __name__ == "__main__":

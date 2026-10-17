@@ -365,7 +365,22 @@ WEEX 分阶段开仓默认 TP/SL 与 Bitget 共用 `BITGET_INITIAL_SL_PCT` 等�
 > **用途**：形态页底部 **Ticker / 胜率弹窗** 用的核算口径；与 §9 **卡片生命周期看板** 独立。  
 > 列表回答：「这条 TG 推送的信号，若按统一规则进场，3h 内算胜还是负？」
 
-### 10.0 数据流
+### 10.0 共振分 V2（校准 / 推送 / 列表排序）
+
+- **打分**：`signal_confluence.py` — 加性特征权重（`confluence_features.py`）+ 训练集 raw 分百分位映射 0–100；档位 **A**（Top 20%）、**B**（60–80%）、**C**（其余）。保留 `legacyScore` 供对比。
+- **权重文件**：`data/confluence_weights.json`（与 `pattern_alert_stats.json` 同 data 目录）；缺失时用代码内 `DEFAULT_FEATURE_WEIGHTS`（业主离线拟合 ΔR）。
+- **校准**：`python -m oi_mornitor confluence-calibrate` 或 `python run.py confluence-calibrate` — 读胜率库、按 R 倍（`movePct/SL%`，裁剪 [-3,5]）拟合收缩权重；仅当 **test 顶分位 expR > 底分位** 才覆盖权重文件。
+- **推送门控**：`OI_CONFLUENCE_PUSH_MIN_TIER` 默认 **`B`**（推 A/B）；**C** 档 `observation_only` 入库、不推 TG。文案追加一行：`共振分 82（A）：结构双周期+空单+量价推进`。
+- **列表**：`/api/pattern-alert-stats` 默认按新 `confluence.score` 降序。
+- **周更 cron（北京时间周日 03:00，示例）**：
+
+```cron
+0 3 * * 0 cd /path/to/discord-collector/oi_mornitor && /usr/bin/python3 run.py confluence-calibrate >> /var/log/oi_confluence_calibrate.log 2>&1
+```
+
+环境变量（空/非法回退默认，见 `env_parse.py`）：`OI_CONFLUENCE_PUSH_MIN_TIER`、`OI_CONFLUENCE_WEIGHTS_PATH`、`OI_CONFLUENCE_SHRINK_K`（50）、`OI_CONFLUENCE_MIN_N`（30）、`OI_CONFLUENCE_SPLIT_AT`（`2026-10-14 20:44`）。
+
+### 10.0.1 数据流
 
 ```
 信号产生（形态扫描 / TG 推送 / 交易卡片归档）

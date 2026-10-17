@@ -619,7 +619,9 @@ def _apply_tier_filters(
     )
     if not skip_mcap:
         out = filter_by_mcap_tier(out, mcap_tier=mcap_f)
-    return out
+    from oi_mornitor.signal_confluence import sort_records_by_confluence_score
+
+    return sort_records_by_confluence_score(out)
 
 
 def list_alert_stats_page(
@@ -733,6 +735,15 @@ def list_alert_stats_page(
             interval=iv or None,
         )
     )
+    if not tier_active:
+        from oi_mornitor.signal_confluence import (
+            attach_signal_confluence,
+            sort_records_by_confluence_score,
+        )
+
+        attach_mtf_resonance(filtered)
+        attach_signal_confluence(filtered)
+        filtered = sort_records_by_confluence_score(filtered)
     mcap_opts = list_mcap_tier_options(
         _tier_rows(
             filter_alert_stats(
@@ -1029,8 +1040,16 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
                 rec["invalid_level"] = float(inv)
             except (TypeError, ValueError):
                 pass
-        if alert.get("vp_formal") is False or "观察" in type_label:
+        if (
+            alert.get("vp_formal") is False
+            or "观察" in type_label
+            or alert.get("observation_only")
+            or alert.get("confluence_observation_only")
+        ):
             rec["observation_only"] = True
+        conf = alert.get("confluence")
+        if isinstance(conf, dict):
+            rec["confluence"] = conf
         if alert.get("vp_exit_plan"):
             rec["vp_exit_plan"] = alert.get("vp_exit_plan")
         from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms
