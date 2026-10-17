@@ -136,6 +136,9 @@ def _walk(df: pd.DataFrame, *, symbol: str, interval: str, asset_class: str) -> 
                 "outcome": settled.get("outcome"),
                 "movePct": settled.get("movePct"),
                 "pnlPct": settled.get("pnlPct"),
+                "netMovePct": settled.get("netMovePct"),
+                "movePct": settled.get("movePct"),
+                "slPrice": plan.sl_price,
                 "sl_pct": hit.get("sl_pct"),
                 "rr_planned": hit.get("rr_planned"),
             }
