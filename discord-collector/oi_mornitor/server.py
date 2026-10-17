@@ -419,13 +419,13 @@ async def handle_backtest_structure_options(_request: web.Request) -> web.Respon
             ),
             "confluenceTiers": [
                 {"id": "all", "label": "全部信号（未筛综合分）"},
-                {"id": "A", "label": "A 档（≥78 分）"},
-                {"id": "B", "label": "B 档及以上（≥58）"},
-                {"id": "C", "label": "C 档及以上（≥40）"},
+                {"id": "A", "label": "A 档（训练分布 Top 20%）"},
+                {"id": "B", "label": "B 档及以上（≥60 分 / 60–80%）"},
+                {"id": "C", "label": "C 档及以上（其余）"},
             ],
             "confluenceNote": (
-                "综合分与形态信号列表同源：形态族 + 周期 + 多周期共振 + TG 来源 + MAIN 白名单；"
-                "回测完成后对全历史信号做 MTF 共振再算分。"
+                "V2 加性共振分：特征权重来自 pattern_alert_stats R 倍校准（confluence_weights.json）；"
+                "推送默认 B 及以上（OI_CONFLUENCE_PUSH_MIN_TIER）。"
             ),
             "mcapTiers": tier_catalog_for_api(),
             "mcapTierNote": (

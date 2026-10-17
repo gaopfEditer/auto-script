@@ -18,7 +18,7 @@ load_dotenv(_REPO_ROOT / ".env")
 load_dotenv(_PKG_ROOT / ".env")
 load_dotenv()
 
-from oi_mornitor.env_parse import env_bool, env_bool_off, env_float, env_int
+from oi_mornitor.env_parse import env_bool, env_bool_off, env_float, env_int, env_str
 
 # 币安 U 本位永续 REST
 FAPI_BASE_URL = os.getenv("OI_FAPI_BASE_URL", "https://fapi.binance.com").rstrip("/")
@@ -316,6 +316,14 @@ MAIN_CARD_VOL_LOOKBACK = max(
 MAIN_CARD_VOL_MULT = env_float("OI_MAIN_CARD_VOL_MULT", 1.0, min_val=0.0)
 # 形态推送 / 胜率入库：多周期共振最少档数（1=关闭硬过滤）
 OI_PATTERN_PUSH_MTF_MIN = max(1, env_int("OI_PATTERN_PUSH_MTF_MIN", 2, min_val=1))
+# 共振分推送门槛：B=仅推 A/B；C 档 confluence_observation_only（正常结算+参与校准）
+_OI_CONFLUENCE_PUSH_MIN_RAW = env_str("OI_CONFLUENCE_PUSH_MIN_TIER", "B").strip().upper()
+OI_CONFLUENCE_PUSH_MIN_TIER = (
+    _OI_CONFLUENCE_PUSH_MIN_RAW if _OI_CONFLUENCE_PUSH_MIN_RAW in ("A", "B", "C", "D", "ALL") else "B"
+)
+OI_CONFLUENCE_SHRINK_K = env_int("OI_CONFLUENCE_SHRINK_K", 50, min_val=1)
+OI_CONFLUENCE_MIN_N = env_int("OI_CONFLUENCE_MIN_N", 30, min_val=1)
+OI_CONFLUENCE_SPLIT_AT = env_str("OI_CONFLUENCE_SPLIT_AT", "2026-10-14 20:44")
 # 结算 SL 最小距离（%）：山寨默认 0.8，主流 0.4
 OI_PATTERN_SL_MIN_PCT = env_float("OI_PATTERN_SL_MIN_PCT", 0.8, min_val=0.0)
 OI_PATTERN_SL_MIN_PCT_MAJOR = env_float("OI_PATTERN_SL_MIN_PCT_MAJOR", 0.4, min_val=0.0)

@@ -31,6 +31,11 @@ _LEGACY_BREAKOUT_TYPES = frozenset({
 _LEGACY_BREAKOUT_LABELS = ("带量突破", "形态多头爆发", "多头爆发")
 
 _LOCK = threading.RLock()
+_CONFLUENCE_PEER_CACHE: dict[str, Any] = {
+    "mtime_ns": None,
+    "loaded_at": 0.0,
+    "rows": None,
+}
 
 
 def _is_legacy_breakout_record(rec: dict[str, Any]) -> bool:
@@ -291,11 +296,16 @@ def _load() -> list[dict[str, Any]]:
         return list(_memory)
 
 
+def _invalidate_confluence_peer_cache() -> None:
+    _CONFLUENCE_PEER_CACHE["rows"] = None
+
+
 def _save(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     global _memory
     with _LOCK:
         cleaned = _normalize(items)
         _memory = cleaned
+        _invalidate_confluence_peer_cache()
         try:
             _STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
             _STATS_FILE.write_text(
@@ -313,6 +323,52 @@ def _save(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def list_alert_stats() -> list[dict[str, Any]]:
     return _load()
+
+
+def list_alert_stats_cached() -> list[dict[str, Any]]:
+    """TG 共振 peer 池：按文件 mtime + TTL 缓存，避免每次推送全量读盘。
+
+    默认 TTL 60s（`OI_CONFLUENCE_PEER_CACHE_SEC`）。11k 行 JSON 量级下推送路径应命中缓存。
+    """
+    from oi_mornitor.env_parse import env_int
+
+    ttl = env_int("OI_CONFLUENCE_PEER_CACHE_SEC", 60, min_val=0)
+    now = time.monotonic()
+    try:
+        mtime_ns = _STATS_FILE.stat().st_mtime_ns if _STATS_FILE.is_file() else 0
+    except OSError:
+        mtime_ns = 0
+    with _LOCK:
+        cached = _CONFLUENCE_PEER_CACHE["rows"]
+        if (
+            cached is not None
+            and _CONFLUENCE_PEER_CACHE["mtime_ns"] == mtime_ns
+            and (ttl <= 0 or now - float(_CONFLUENCE_PEER_CACHE["loaded_at"]) <= ttl)
+        ):
+            return list(cached)
+        rows = _load()
+        _CONFLUENCE_PEER_CACHE["mtime_ns"] = mtime_ns
+        _CONFLUENCE_PEER_CACHE["loaded_at"] = now
+        _CONFLUENCE_PEER_CACHE["rows"] = rows
+        return list(rows)
+
+
+def is_headline_win_rate_excluded(rec: dict[str, Any]) -> bool:
+    """头条胜率汇总排除（仍参与结算与共振校准）。"""
+    from oi_mornitor.pattern_settle_profile import is_observation_record
+
+    if is_observation_record(rec):
+        return True
+    return bool(rec.get("confluence_observation_only"))
+
+
+def mtf_resonance_peers_for_signal_at(
+    all_stats: list[dict[str, Any]],
+    signal_at_ms: int,
+) -> list[dict[str, Any]]:
+    from oi_mornitor.pattern_mtf_resonance import peers_within_mtf_window
+
+    return peers_within_mtf_window(all_stats, signal_at_ms)
 
 
 def _type_label_of(rec: dict[str, Any]) -> str:
@@ -619,7 +675,9 @@ def _apply_tier_filters(
     )
     if not skip_mcap:
         out = filter_by_mcap_tier(out, mcap_tier=mcap_f)
-    return out
+    from oi_mornitor.signal_confluence import sort_records_by_confluence_score
+
+    return sort_records_by_confluence_score(out)
 
 
 def list_alert_stats_page(
@@ -733,6 +791,15 @@ def list_alert_stats_page(
             interval=iv or None,
         )
     )
+    if not tier_active:
+        from oi_mornitor.signal_confluence import (
+            attach_signal_confluence,
+            sort_records_by_confluence_score,
+        )
+
+        attach_mtf_resonance(filtered)
+        attach_signal_confluence(filtered)
+        filtered = sort_records_by_confluence_score(filtered)
     mcap_opts = list_mcap_tier_options(
         _tier_rows(
             filter_alert_stats(
@@ -1029,8 +1096,13 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
                 rec["invalid_level"] = float(inv)
             except (TypeError, ValueError):
                 pass
-        if alert.get("vp_formal") is False or "观察" in type_label:
+        if alert.get("vp_formal") is False or "观察" in type_label or alert.get("observation_only"):
             rec["observation_only"] = True
+        if alert.get("confluence_observation_only"):
+            rec["confluence_observation_only"] = True
+        conf = alert.get("confluence")
+        if isinstance(conf, dict):
+            rec["confluence"] = conf
         if alert.get("vp_exit_plan"):
             rec["vp_exit_plan"] = alert.get("vp_exit_plan")
         from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms
@@ -1170,11 +1242,9 @@ def summarize(items: list[dict[str, Any]] | None = None, *, exclude_observation:
     obs_excluded = 0
     flat_error_excluded = 0
     if exclude_observation:
-        from oi_mornitor.pattern_settle_profile import is_observation_record
-
         kept: list[dict[str, Any]] = []
         for r in rows:
-            if is_observation_record(r):
+            if is_headline_win_rate_excluded(r):
                 obs_excluded += 1
             else:
                 kept.append(r)
