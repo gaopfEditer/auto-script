@@ -3,6 +3,7 @@
  */
 import { isLongDirection, isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
+import { envBool, envInt, envStr } from "./env-defaults.js";
 
 const LIQUIDATION_DEFAULT_TP_SL_PCT = 5;
 const LIQUIDATION_DEFAULT_TP_PCTS = [0.05, 0.08, 0.12];
@@ -80,23 +81,22 @@ export function isValidTakeProfit(marketPrice, tp, holdSide) {
 }
 
 export function bitgetRequireTpslEnabled() {
-  return !["0", "false", "no", "off"].includes(String(process.env.BITGET_REQUIRE_TPSL ?? "1").toLowerCase());
+  return envBool("BITGET_REQUIRE_TPSL", true);
 }
 
 /** @returns {"close"|"alert"} */
 export function bitgetNakedPositionAction() {
-  const v = String(process.env.BITGET_NAKED_POSITION_ACTION ?? "close").toLowerCase();
+  const v = envStr("BITGET_NAKED_POSITION_ACTION", "close", ["close", "alert"]).toLowerCase();
   return v === "alert" ? "alert" : "close";
 }
 
 export function bitgetTpslVerifyWindowMs() {
-  const sec = Number(process.env.BITGET_TPSL_VERIFY_SEC ?? 8);
-  return Math.max(2, Math.min(60, Number.isFinite(sec) ? sec : 8)) * 1000;
+  const sec = envInt("BITGET_TPSL_VERIFY_SEC", 8, { min: 2, max: 60 });
+  return sec * 1000;
 }
 
 export function bitgetTpslRepairRetries() {
-  const n = Number(process.env.BITGET_TPSL_REPAIR_RETRIES ?? 3);
-  return Math.max(1, Math.min(10, Number.isFinite(n) ? n : 3));
+  return envInt("BITGET_TPSL_REPAIR_RETRIES", 3, { min: 1, max: 10 });
 }
 
 /** @typedef {"sl_breached"|"precision"|"transient"|"hold_side"|"unknown"} TpslRepairErrorCategory */

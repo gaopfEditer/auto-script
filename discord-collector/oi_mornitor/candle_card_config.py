@@ -1,38 +1,19 @@
 """形态卡片群推送：量能确认 + 射击之星/倒锤子卡片门控（env 经 config.py 统一读取）。"""
 from __future__ import annotations
 
-import os
-
 from oi_mornitor.config import (
+    CANDLE_CARD_REQUIRE_VOL,
+    CANDLE_CARD_VOL_LOOKBACK,
+    CANDLE_CARD_VOL_MULT,
     CANDLE_HAMMER_TREND_LOOKBACK,
     CANDLE_HAMMER_TREND_MIN_PCT,
     CANDLE_SHOOT_REQUIRE_POSITION,
     CANDLE_SHOOT_TREND_LOOKBACK,
     CANDLE_SHOOT_TREND_MIN_PCT,
     CANDLE_VOL_BYPASS_CONTEXT,
+    MAIN_CARD_VOL_LOOKBACK,
+    MAIN_CARD_VOL_MULT,
 )
-
-CANDLE_CARD_REQUIRE_VOL = os.environ.get("OI_CANDLE_CARD_REQUIRE_VOL", "1").strip().lower() not in (
-    "0",
-    "false",
-    "no",
-)
-# 默认略放宽：形态 + 放量即可进列表/TG
-CANDLE_CARD_VOL_MULT = float(os.environ.get("OI_CANDLE_CARD_VOL_MULT") or "1.2")
-# 信号柱或前 N 根内任一根放量 ≥ MA×倍数即通过（0=仅看信号柱，兼容旧口径）
-CANDLE_CARD_VOL_LOOKBACK = max(
-    0, int(os.environ.get("OI_CANDLE_CARD_VOL_LOOKBACK") or "3")
-)
-# MAIN 群镜像专用量能（默认：含信号柱共 3 根内 vol > vol_ma）
-MAIN_CARD_VOL_LOOKBACK = max(
-    0,
-    int(
-        os.environ.get("OI_MAIN_CARD_VOL_LOOKBACK")
-        or os.environ.get("OI_CANDLE_CARD_VOL_LOOKBACK")
-        or "3"
-    ),
-)
-MAIN_CARD_VOL_MULT = float(os.environ.get("OI_MAIN_CARD_VOL_MULT") or "1.0")
 
 
 def volume_ratio_from_row(row) -> float | None:

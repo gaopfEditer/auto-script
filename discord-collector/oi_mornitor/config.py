@@ -18,6 +18,8 @@ load_dotenv(_REPO_ROOT / ".env")
 load_dotenv(_PKG_ROOT / ".env")
 load_dotenv()
 
+from oi_mornitor.env_parse import env_bool, env_bool_off, env_float, env_int
+
 # 币安 U 本位永续 REST
 FAPI_BASE_URL = os.getenv("OI_FAPI_BASE_URL", "https://fapi.binance.com").rstrip("/")
 # 币安现货 REST（主力现货流向）
@@ -289,30 +291,44 @@ STRUCTURE_KLINE_LIMIT = int(os.getenv("OI_STRUCTURE_KLINE_LIMIT", "250"))
 
 # ---- 卡片推送信号过滤（2026-09 调优，全部可经环境变量开关）----
 # 射击之星位置过滤：收盘须在 BB 上轨区（basis + 0.85×带宽）或贴近 Vegas A/B 通道，否则不推
-CANDLE_SHOOT_REQUIRE_POSITION = os.getenv(
-    "OI_CANDLE_SHOOT_REQUIRE_POSITION", "1"
-).strip().lower() in ("1", "true", "yes", "on")
+CANDLE_SHOOT_REQUIRE_POSITION = env_bool("OI_CANDLE_SHOOT_REQUIRE_POSITION", True)
 # 射击之星趋势背景：信号前 N 根（不含信号根）累计涨幅 ≥ 阈值(%) 才推（看跌前提是前期上涨）
-CANDLE_SHOOT_TREND_LOOKBACK = int(os.getenv("OI_CANDLE_SHOOT_TREND_LOOKBACK", "20"))
-CANDLE_SHOOT_TREND_MIN_PCT = float(os.getenv("OI_CANDLE_SHOOT_TREND_MIN_PCT", "3.0"))
+CANDLE_SHOOT_TREND_LOOKBACK = env_int("OI_CANDLE_SHOOT_TREND_LOOKBACK", 20, min_val=1)
+CANDLE_SHOOT_TREND_MIN_PCT = env_float("OI_CANDLE_SHOOT_TREND_MIN_PCT", 3.0, min_val=0.0)
 # 倒锤子趋势背景：信号前 N 根累计跌幅 ≥ 阈值(%) 才推（看涨前提是前期下跌）
-CANDLE_HAMMER_TREND_LOOKBACK = int(os.getenv("OI_CANDLE_HAMMER_TREND_LOOKBACK", "20"))
-CANDLE_HAMMER_TREND_MIN_PCT = float(os.getenv("OI_CANDLE_HAMMER_TREND_MIN_PCT", "3.0"))
+CANDLE_HAMMER_TREND_LOOKBACK = env_int("OI_CANDLE_HAMMER_TREND_LOOKBACK", 20, min_val=1)
+CANDLE_HAMMER_TREND_MIN_PCT = env_float("OI_CANDLE_HAMMER_TREND_MIN_PCT", 3.0, min_val=0.0)
 # 放量 ≥ MA 时是否跳过位置/趋势背景（默认关，与卡片严模式一致）
-CANDLE_VOL_BYPASS_CONTEXT = os.getenv(
-    "OI_CANDLE_VOL_BYPASS_CONTEXT", "0"
-).strip().lower() in ("1", "true", "yes", "on")
+CANDLE_VOL_BYPASS_CONTEXT = env_bool("OI_CANDLE_VOL_BYPASS_CONTEXT", False)
 # 1h 倒锤子/射击之星：须 4h 或 1d 同向趋势背景（各周期独立 lookback）
-CANDLE_1H_HTF_TREND_ENABLED = os.getenv(
-    "OI_CANDLE_1H_HTF_TREND_ENABLED", "1"
-).strip().lower() not in ("0", "false", "no")
-CANDLE_1H_HTF_TREND_LOOKBACK = int(os.getenv("OI_CANDLE_1H_HTF_TREND_LOOKBACK") or "20")
-CANDLE_1H_HTF_TREND_MIN_PCT = float(os.getenv("OI_CANDLE_1H_HTF_TREND_MIN_PCT") or "3.0")
+CANDLE_1H_HTF_TREND_ENABLED = env_bool_off("OI_CANDLE_1H_HTF_TREND_ENABLED", True)
+CANDLE_1H_HTF_TREND_LOOKBACK = env_int("OI_CANDLE_1H_HTF_TREND_LOOKBACK", 20, min_val=1)
+CANDLE_1H_HTF_TREND_MIN_PCT = env_float("OI_CANDLE_1H_HTF_TREND_MIN_PCT", 3.0, min_val=0.0)
+# 形态群推送量能（与 candle_card_config 共用）
+CANDLE_CARD_REQUIRE_VOL = env_bool_off("OI_CANDLE_CARD_REQUIRE_VOL", True)
+CANDLE_CARD_VOL_MULT = env_float("OI_CANDLE_CARD_VOL_MULT", 1.2, min_val=0.0)
+_CANDLE_CARD_VOL_LOOKBACK_DEFAULT = max(0, env_int("OI_CANDLE_CARD_VOL_LOOKBACK", 3, min_val=0))
+CANDLE_CARD_VOL_LOOKBACK = _CANDLE_CARD_VOL_LOOKBACK_DEFAULT
+MAIN_CARD_VOL_LOOKBACK = max(
+    0,
+    env_int("OI_MAIN_CARD_VOL_LOOKBACK", _CANDLE_CARD_VOL_LOOKBACK_DEFAULT, min_val=0),
+)
+MAIN_CARD_VOL_MULT = env_float("OI_MAIN_CARD_VOL_MULT", 1.0, min_val=0.0)
 # 形态推送 / 胜率入库：多周期共振最少档数（1=关闭硬过滤）
-OI_PATTERN_PUSH_MTF_MIN = max(1, int(os.getenv("OI_PATTERN_PUSH_MTF_MIN", "2")))
+OI_PATTERN_PUSH_MTF_MIN = max(1, env_int("OI_PATTERN_PUSH_MTF_MIN", 2, min_val=1))
 # 结算 SL 最小距离（%）：山寨默认 0.8，主流 0.4
-OI_PATTERN_SL_MIN_PCT = float(os.getenv("OI_PATTERN_SL_MIN_PCT", "0.8"))
-OI_PATTERN_SL_MIN_PCT_MAJOR = float(os.getenv("OI_PATTERN_SL_MIN_PCT_MAJOR", "0.4"))
+OI_PATTERN_SL_MIN_PCT = env_float("OI_PATTERN_SL_MIN_PCT", 0.8, min_val=0.0)
+OI_PATTERN_SL_MIN_PCT_MAJOR = env_float("OI_PATTERN_SL_MIN_PCT_MAJOR", 0.4, min_val=0.0)
+# 15m 信号核实窗（小时）
+OI_PATTERN_15M_VERIFY_H = env_float("OI_PATTERN_15M_VERIFY_H", 6.0, min_val=1.0, max_val=72.0)
+OI_PATTERN_15M_VERIFY_MS = int(OI_PATTERN_15M_VERIFY_H * 60 * 60 * 1000)
+# 结算 V2 ATR 乘数（按市值梯队，可被 OI_SETTLE_ATR_K_T1 等覆盖）
+OI_SETTLE_ATR_K_T1 = env_float("OI_SETTLE_ATR_K_T1", 1.5, min_val=0.1)
+OI_SETTLE_ATR_K_T2 = env_float("OI_SETTLE_ATR_K_T2", 2.0, min_val=0.1)
+OI_SETTLE_ATR_K_T3 = env_float("OI_SETTLE_ATR_K_T3", 2.5, min_val=0.1)
+OI_SETTLE_CAP_T1 = env_float("OI_SETTLE_CAP_T1", 0.02, min_val=0.001)
+OI_SETTLE_CAP_T2 = env_float("OI_SETTLE_CAP_T2", 0.03, min_val=0.001)
+OI_SETTLE_CAP_T3 = env_float("OI_SETTLE_CAP_T3", 0.04, min_val=0.001)
 # 结构破位量能确认：头肩顶 / M顶 触发 K 成交量 ≥ 该倍数 × MA20，否则不推
 STRUCTURE_BREAK_VOL_MULT = float(os.getenv("OI_STRUCTURE_BREAK_VOL_MULT", "1.3"))
 # 圆弧顶斜率归一化：按窗口均价相对变化（%/根），避免高价主流/低价山寨尺度失衡
