@@ -285,6 +285,13 @@ async def handle_focus_symbols_get(_request: web.Request) -> web.Response:
     })
 
 
+async def handle_trendline_lines_get(_request: web.Request) -> web.Response:
+    """最近检测到的趋势线（供后续图表叠加）。"""
+    from oi_mornitor.trendline.store import get_snapshot
+
+    return _json_response({"ok": True, **get_snapshot()})
+
+
 async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
     """多端共享的形态信号胜率列表（长期保存；默认分页每页 100）。"""
     from oi_mornitor.pattern_alert_stats import list_alert_stats_page
@@ -1205,6 +1212,7 @@ def create_app() -> web.Application:
 
     app.router.add_post("/api/focus-symbols", handle_focus_symbols_put)
 
+    app.router.add_get("/api/trendline/lines", handle_trendline_lines_get)
     app.router.add_get("/api/pattern-alert-stats", handle_pattern_alert_stats_get)
     app.router.add_post("/api/pattern-alert-stats/record-card", handle_pattern_alert_stats_record_card)
     app.router.add_post("/api/pattern-alert-stats/recalculate-v2", handle_pattern_alert_stats_recalculate_v2)

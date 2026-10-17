@@ -1341,6 +1341,7 @@ class RadarService:
         self._card_price_task: asyncio.Task[None] | None = None
         self._settle_report_task: asyncio.Task[None] | None = None
         self._moonshot_task: asyncio.Task[None] | None = None
+        self._trendline_task: asyncio.Task[None] | None = None
         self._dormant_ignition_task: asyncio.Task[None] | None = None
         self._potential_discovery_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
@@ -1617,6 +1618,17 @@ class RadarService:
             ),
             name="oi-potential-discovery",
         )
+        from oi_mornitor.trendline.runner import run_trendline_loop
+        from oi_mornitor.trendline_config import is_trendline_enabled
+
+        if is_trendline_enabled():
+            self._trendline_task = asyncio.create_task(
+                run_trendline_loop(
+                    lambda: self._running,
+                    get_session=lambda: self._session,
+                ),
+                name="oi-trendline-loop",
+            )
         logger.info(
             "雷达后台循环已启动，间隔 %ds；卡片生命周期 %.0fs；卡片市价 %.0fs；币股 %.0fs；形态结算摘要 北京 4h；潜力暴涨 A + 沉寂爆发 + 潜力发现",
             interval_sec,
@@ -1686,6 +1698,7 @@ class RadarService:
             "_moonshot_task",
             "_dormant_ignition_task",
             "_potential_discovery_task",
+            "_trendline_task",
         ):
             task = getattr(self, attr, None)
             if task:
