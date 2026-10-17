@@ -337,6 +337,11 @@ OI_SETTLE_ATR_K_T3 = env_float("OI_SETTLE_ATR_K_T3", 2.5, min_val=0.1)
 OI_SETTLE_CAP_T1 = env_float("OI_SETTLE_CAP_T1", 0.02, min_val=0.001)
 OI_SETTLE_CAP_T2 = env_float("OI_SETTLE_CAP_T2", 0.03, min_val=0.001)
 OI_SETTLE_CAP_T3 = env_float("OI_SETTLE_CAP_T3", 0.04, min_val=0.001)
+# 结算步进 v3：5m 逐步 + 同柱 SL 优先 + TP1 保本（新 pending 记录写入 settleVersion=3）
+OI_PATTERN_SETTLE_FINE_BARS = env_bool_off("OI_PATTERN_SETTLE_FINE_BARS", True)
+OI_PATTERN_SETTLE_BREAKEVEN_TP1 = env_bool_off("OI_PATTERN_SETTLE_BREAKEVEN_TP1", True)
+SETTLE_WALK_VERSION = 3
+SETTLE_WALK_VERSION_LEGACY_AGG = 2
 # 结构破位量能确认：头肩顶 / M顶 触发 K 成交量 ≥ 该倍数 × MA20，否则不推
 STRUCTURE_BREAK_VOL_MULT = float(os.getenv("OI_STRUCTURE_BREAK_VOL_MULT", "1.3"))
 # 圆弧顶斜率归一化：按窗口均价相对变化（%/根），避免高价主流/低价山寨尺度失衡

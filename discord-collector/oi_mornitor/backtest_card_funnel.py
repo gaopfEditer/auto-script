@@ -14,10 +14,13 @@ from oi_mornitor.config import (
     CANDLE_CARD_MAJOR_SYMBOLS,
 )
 from oi_mornitor.pattern_monitor import pick_candle_card_alt_symbols
+from oi_mornitor.signal_policy import PATTERN_DISABLED_INTERVALS
 from oi_mornitor.strategy.structure_signals import (
     STRUCTURE_CARD_INTERVALS,
     STRUCTURE_PUSH_COOLDOWN_BARS,
 )
+
+_LIVE_DISABLED_INTERVALS = PATTERN_DISABLED_INTERVALS
 
 _MAJORS = {s.upper() for s in CANDLE_CARD_MAJOR_SYMBOLS}
 _INTERVAL_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400}

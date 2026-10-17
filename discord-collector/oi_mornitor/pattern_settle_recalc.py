@@ -55,6 +55,9 @@ async def _settle_one(session: Any, rec: dict[str, Any], *, now_ms: int) -> dict
         return None
     if entry <= 0 or signal_at <= 0:
         return None
+    oc = str(rec.get("outcome") or "pending")
+    if oc in ("take_profit", "stop_loss", "flat"):
+        return None
 
     side = str(rec.get("side") or "long")
     work = dict(rec)

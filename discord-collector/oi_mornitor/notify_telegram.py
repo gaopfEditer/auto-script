@@ -300,43 +300,19 @@ def _send_card_text_to_chat(alert: dict[str, Any], text: str, chat_id: str) -> b
     return ok
 
 
-def _attach_confluence_on_alert(alert: dict[str, Any]) -> dict[str, Any]:
-    from oi_mornitor.signal_confluence import confluence_for_alert
-
-    conf = confluence_for_alert(alert)
-    alert["confluence"] = conf
-    return conf
-
-
-def _record_confluence_observation_only(alert: dict[str, Any]) -> None:
-    """共振 C 档：入库并正常结算，但不推 TG、不计头条胜率。"""
-    try:
-        from oi_mornitor.pattern_alert_stats import record_alert_from_push
-
-        stub = dict(alert)
-        stub["confluence_observation_only"] = True
-        record_alert_from_push(stub)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("共振观察档入库失败: %s", exc)
-
-
 def _confluence_gate_or_observation(alert: dict[str, Any]) -> bool:
-    """True=可推送；False=已记观察档并应跳过 TG。"""
-    from oi_mornitor.signal_confluence import passes_confluence_push_gate
+    from oi_mornitor.pattern_emit_gate import telegram_push_allowed_or_record_observation
 
-    conf = _attach_confluence_on_alert(alert)
-    if passes_confluence_push_gate(conf):
-        return True
-    _record_confluence_observation_only(alert)
-    return False
+    return telegram_push_allowed_or_record_observation(alert)
 
 
 def _message_with_confluence(alert: dict[str, Any], body: str) -> str:
+    from oi_mornitor.pattern_emit_gate import attach_confluence_on_alert
     from oi_mornitor.signal_confluence import append_confluence_to_message
 
     conf = alert.get("confluence")
     if not isinstance(conf, dict):
-        conf = _attach_confluence_on_alert(alert)
+        conf = attach_confluence_on_alert(alert)
     return append_confluence_to_message(body, conf)
 
 
@@ -408,12 +384,9 @@ def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
 
 def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
     """射击之星 / 倒锤子 → OI_CANDLE_CARD 形态群（MAIN 由 pattern_monitor 另推）。"""
-    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
     from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
 
     if not is_candle_push_enabled():
-        return False
-    if not passes_push_mtf_gate(alert):
         return False
     if not _confluence_gate_or_observation(alert):
         return False
@@ -445,12 +418,9 @@ def _after_candle_card_pushed(alert: dict[str, Any]) -> None:
 
 def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     """顶部/底部结构 → OI_CANDLE_CARD 形态群（不进 MAIN 群）。"""
-    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
     from oi_mornitor.telegram_push_toggles import is_structure_push_enabled
 
     if not is_structure_push_enabled():
-        return False
-    if not passes_push_mtf_gate(alert):
         return False
     if not _confluence_gate_or_observation(alert):
         return False

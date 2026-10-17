@@ -1025,10 +1025,10 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
     if not key.startswith(":") and key.count(":") < 4:
         return None
     sym_raw = str(alert.get("symbol") or "")
-    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
+    from oi_mornitor.pattern_emit_gate import passes_pattern_card_emit_gate
     from oi_mornitor.pattern_signal_time import resolve_signal_at_from_alert
 
-    if not passes_push_mtf_gate(alert):
+    if not passes_pattern_card_emit_gate(alert):
         return None
     signal_at = resolve_signal_at_from_alert(alert)
     if signal_at <= 0:
@@ -1201,6 +1201,7 @@ def apply_settle_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "dir",
         "settleProfileId",
         "settleRulesVersion",
+        "settleVersion",
         "slPrice",
         "tp1Price",
         "tp2Price",

@@ -37,6 +37,9 @@ _PR3_KEYS = [
     "OI_CONFLUENCE_MIN_N",
     "OI_CONFLUENCE_SPLIT_AT",
     "OI_CONFLUENCE_WEIGHTS_PATH",
+    "OI_BT_FEE_PCT",
+    "OI_BT_SLIPPAGE_PCT",
+    "OI_BT_ENTRY_MODE",
 ]
 
 
@@ -90,6 +93,14 @@ class EnvConfigDefaultsTests(unittest.TestCase):
             self.assertEqual(config.OI_CONFLUENCE_PUSH_MIN_TIER, "B")
             self.assertEqual(config.OI_CONFLUENCE_SHRINK_K, 50)
             self.assertEqual(config.OI_CONFLUENCE_MIN_N, 30)
+
+    def test_backtest_trade_env_defaults(self) -> None:
+        from oi_mornitor import backtest_trade_config as btc
+
+        importlib.reload(btc)
+        self.assertEqual(btc.OI_BT_FEE_PCT, 0.06)
+        self.assertEqual(btc.OI_BT_SLIPPAGE_PCT, 0.03)
+        self.assertEqual(btc.OI_BT_ENTRY_MODE, "next_bar_open")
 
 
 if __name__ == "__main__":
