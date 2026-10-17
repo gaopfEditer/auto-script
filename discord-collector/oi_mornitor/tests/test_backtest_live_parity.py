@@ -1,9 +1,7 @@
 """回测与 Live 共享路径一致性（fixture，无需外网）。"""
 from __future__ import annotations
 
-import os
 import unittest
-from unittest import mock
 
 from oi_mornitor.pattern_emit_gate import (
     passes_backtest_emit_gate,
