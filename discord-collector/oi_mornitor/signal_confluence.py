@@ -44,6 +44,16 @@ DEFAULT_FEATURE_WEIGHTS: dict[str, float] = {
     "mcap:t2": -0.057,
     "combo:单周期15m量价确认封顶": -0.036,
     "side:long": -0.02,
+    "feat:cf_distribution": 0.05,
+    "feat:cf_distribution_against": -0.05,
+    "feat:cf_funding_align": 0.0,
+    "feat:cf_whale_align": 0.0,
+    "feat:cf_liq_reclaim": 0.0,
+    "feat:cf_quiet_accum": 0.0,
+    "feat:cf_oi_flush_align": 0.0,
+    "feat:cf_oi_rebuild_align": 0.0,
+    "feat:cf_funding_against": 0.0,
+    "feat:cf_oi_rebuild_penalty": 0.0,
 }
 
 _WEIGHTS_VERSION = 2
@@ -548,14 +558,28 @@ def confluence_for_alert(alert: dict[str, Any], peers: list[dict[str, Any]] | No
     for k in ("vol_ratio", "macd_divergence", "htf_trend_aligned", "kol_tier"):
         if alert.get(k) is not None:
             stub[k] = alert.get(k)
+    if isinstance(alert.get("capitalFlow"), dict):
+        stub["capitalFlow"] = alert.get("capitalFlow")
     return compute_signal_confluence(stub)
 
 
-def append_confluence_to_message(text: str, conf: dict[str, Any] | None) -> str:
-    if not conf or conf.get("score") is None:
-        return text
-    line = format_confluence_tg_line(conf)
-    return f"{text}\n{line}" if text.strip() else line
+def append_confluence_to_message(
+    text: str,
+    conf: dict[str, Any] | None,
+    *,
+    capital_flow: dict[str, Any] | None = None,
+) -> str:
+    from oi_mornitor.capital_flow_features import format_capital_flow_tg_line
+
+    lines: list[str] = []
+    if text.strip():
+        lines.append(text.strip())
+    cf_line = format_capital_flow_tg_line(capital_flow)
+    if cf_line:
+        lines.append(cf_line)
+    if conf and conf.get("score") is not None:
+        lines.append(format_confluence_tg_line(conf))
+    return "\n".join(lines) if lines else text
 
 
 def backtest_item_confluence_key(item: dict[str, Any]) -> str:
@@ -584,13 +608,25 @@ def _backtest_item_to_confluence_record(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _copy_capital_flow_to_record(rec: dict[str, Any], item: dict[str, Any]) -> None:
+    cf = item.get("capitalFlow")
+    if isinstance(cf, dict):
+        rec["capitalFlow"] = cf
+
+
 def attach_confluence_to_backtest_items(items: list[dict[str, Any]]) -> None:
     """回测明细：先 MTF 共振，再综合分（与形态信号列表同口径）。"""
     from oi_mornitor.pattern_mtf_resonance import attach_mtf_resonance
 
     if not items:
         return
-    records = [_backtest_item_to_confluence_record(it) for it in items if isinstance(it, dict)]
+    records = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        rec = _backtest_item_to_confluence_record(it)
+        _copy_capital_flow_to_record(rec, it)
+        records.append(rec)
     attach_mtf_resonance(records)
     attach_signal_confluence(records)
     by_key = {str(r["key"]): r for r in records if r.get("key")}

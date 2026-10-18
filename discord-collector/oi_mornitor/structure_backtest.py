@@ -102,6 +102,8 @@ class BacktestJob:
     by_tier: list[dict[str, Any]] = field(default_factory=list)
     by_mcap_tier: list[dict[str, Any]] = field(default_factory=list)
     by_type_label: list[dict[str, Any]] = field(default_factory=list)
+    capital_flow_coverage: dict[str, Any] | None = None
+    capital_flow_features: list[dict[str, Any]] = field(default_factory=list)
     items: list[dict[str, Any]] = field(default_factory=list)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -352,6 +354,10 @@ def _refresh_live_stats(job: BacktestJob) -> None:
         job.by_type_label = summarize_by_dimensions(
             items, key_fields=("typeLabel", "interval", "mcapTier")
         )
+        from oi_mornitor.capital_flow_backtest import coverage_summary, feature_table_for_items
+
+        job.capital_flow_coverage = coverage_summary(items)
+        job.capital_flow_features = feature_table_for_items(items)
         job.by_mcap_tier = []
         for tid in MCAP_TIER_ORDER:
             bucket = [it for it in items if str(it.get("mcapTier") or "t3").lower() == tid]
@@ -1032,6 +1038,19 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
                     await asyncio.sleep(0)
                 if i % 4 == 3 or i + 1 == total:
                     await _persist_job_async(job)
+            from oi_mornitor.capital_flow_config import CF_BACKTEST_ATTACH, CF_BACKTEST_MAX_ITEMS
+
+            if CF_BACKTEST_ATTACH and all_items:
+                from oi_mornitor.capital_flow_backtest import attach_capital_flow_to_backtest_items
+
+                cap_n = min(len(all_items), CF_BACKTEST_MAX_ITEMS)
+                subset = sorted(all_items, key=lambda x: int(x.get("signalAt") or 0))[-cap_n:]
+                job.progress["current"] = f"资金流特征 0/{len(subset)}"
+                await attach_capital_flow_to_backtest_items(
+                    subset,
+                    session=fetch_session,
+                    base_url=FAPI_BASE_URL,
+                )
         finally:
             if not fetch_session.closed:
                 await fetch_session.close()
