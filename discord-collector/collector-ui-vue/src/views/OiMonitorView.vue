@@ -16,6 +16,8 @@ const embedDeployError = ref("");
 const latencyMs = ref(null);
 /** 一旦激活过就保留 iframe，避免 status 抖动拆掉页面状态 */
 const iframeReady = ref(false);
+/** iframe 至少成功 load 过一次后，status 闪断不再整块卸掉嵌入 */
+const embedStable = ref(false);
 
 let pollTimer = null;
 
@@ -162,10 +164,13 @@ async function refreshStatus() {
       );
     }
     const sym = String(route.query.symbol ?? "").trim();
-    if (!sym || !embedUrl.value.includes("patterns?symbol=")) {
-      const next = pickEmbedUrl(j);
-      if (!isCollectorMainSiteUrl(next)) {
-        embedUrl.value = next;
+    // iframe 已加载后勿再改 src（轮询只更新状态）；否则形态弹窗/图表会被整页重载抹掉
+    if (!iframeReady.value) {
+      if (!sym || !embedUrl.value.includes("patterns?symbol=")) {
+        const next = pickEmbedUrl(j);
+        if (!isCollectorMainSiteUrl(next)) {
+          embedUrl.value = next;
+        }
       }
     }
     embedDeployError.value = j.embedDeployError ? String(j.embedDeployError) : "";
@@ -174,6 +179,7 @@ async function refreshStatus() {
     hint.value = j.hint ? String(j.hint) : "";
     if (embedDeployError.value) {
       iframeReady.value = false;
+      embedStable.value = false;
       error.value = embedDeployError.value;
       return;
     }
@@ -181,10 +187,17 @@ async function refreshStatus() {
     latencyMs.value = Number.isFinite(j.latencyMs) ? j.latencyMs : null;
   } catch (e) {
     active.value = false;
-    iframeReady.value = false;
-    error.value = String(e?.message ?? e);
-    hint.value = "collect:ui 未响应；请先 pnpm run collect:ui（OI 在 8765 也需其代理 /api/oi/status）";
-    if (!embedUrl.value) embedUrl.value = pickEmbedUrl({});
+    const msg = String(e?.message ?? e);
+    if (!embedStable.value) {
+      iframeReady.value = false;
+      error.value = msg;
+      hint.value =
+        "collect:ui 未响应；请先 pnpm run collect:ui（OI 在 8765 也需其代理 /api/oi/status）";
+      if (!embedUrl.value) embedUrl.value = pickEmbedUrl({});
+    } else {
+      // 探测闪断：保留 iframe，避免整块白屏 1～2s
+      latencyMs.value = null;
+    }
   } finally {
     loading.value = false;
   }
@@ -200,6 +213,7 @@ function forceReloadOiFrame() {
 
 function onIframeLoad() {
   iframeLoading.value = false;
+  embedStable.value = true;
 }
 
 watch(iframeKey, () => {
@@ -255,7 +269,7 @@ onUnmounted(() => {
     </div>
     <div v-else class="oi-frame-wrap">
       <PageLoadingBlock
-        v-if="iframeLoading"
+        v-if="iframeLoading && !embedStable"
         message="加载 OI 信号页…"
         hint="首次打开需下载脚本并连接雷达快照，可能需十数秒"
       />

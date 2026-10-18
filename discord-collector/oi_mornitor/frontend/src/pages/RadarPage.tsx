@@ -13,6 +13,8 @@ import { deriveAllLists } from "../utils/deriveLists";
 
 export function RadarPage() {
   const { snapshot, online, bootstrapping } = useRadarSSE();
+  const bootBlocking =
+    bootstrapping && !(snapshot.all_tickers?.length ?? 0);
   const { symbols: focusSymbols, entries: focusEntries, remove: removeFocus } = useSpecialFocus();
   const [timeframe, setTimeframe] = useState<OiTimeframe>("5m");
   const {
@@ -38,7 +40,7 @@ export function RadarPage() {
         focusEntries={focusEntries}
         onRemoveFocus={(sym) => void removeFocus(sym)}
       />
-      {bootstrapping ? (
+      {bootBlocking ? (
         <PageBootLoading
           inset={false}
           message="加载 OI 雷达…"

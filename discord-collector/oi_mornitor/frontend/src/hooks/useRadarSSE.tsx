@@ -33,14 +33,26 @@ function initialSnapshot(): RadarSnapshot {
   return loadRadarSnapshotCache() ?? EMPTY_SNAPSHOT;
 }
 
+function snapshotHasUsableData(s: RadarSnapshot): boolean {
+  if ((s.all_tickers?.length ?? 0) > 0) return true;
+  const p = s.pattern;
+  if (!p) return false;
+  return (
+    (p.watchlist?.length ?? 0) > 0 ||
+    (p.states?.length ?? 0) > 0 ||
+    (p.pattern_alerts?.length ?? 0) > 0
+  );
+}
+
 function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
   const [snapshot, setSnapshot] = useState<RadarSnapshot>(initialSnapshot);
   const [online, setOnline] = useState(false);
-  const [bootstrapping, setBootstrapping] = useState(true);
+  const [bootstrapping, setBootstrapping] = useState(
+    () => !snapshotHasUsableData(initialSnapshot()),
+  );
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downSinceRef = useRef(0);
   const didFirstSilentRef = useRef(false);
-  const [reconnectEpoch, setReconnectEpoch] = useState(0);
 
   const apply = useCallback((data: RadarSnapshot) => {
     setSnapshot((prev) => {
@@ -70,6 +82,7 @@ function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
     let cancelled = false;
     let watchTimer: ReturnType<typeof setTimeout> | null = null;
     let onlineNow = false;
+    let lastMessageAt = Date.now();
 
     if (!downSinceRef.current) downSinceRef.current = Date.now();
 
@@ -120,21 +133,36 @@ function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
         if (cancelled || onlineNow) return;
         didFirstSilentRef.current = true;
         console.info("[radar-sse] silent refresh · rebootstrap + reconnect");
-        void bootstrap().finally(() => {
-          if (cancelled) return;
-          didFirstSilentRef.current = true;
-          if (!onlineNow) setReconnectEpoch((n) => n + 1);
+        void bootstrap().then(() => {
+          if (cancelled || onlineNow) return;
+          try {
+            es?.close();
+          } catch {
+            /* ignore */
+          }
+          es = null;
+          connect();
         });
       }, delay);
     };
 
     const connect = () => {
       if (cancelled) return;
+      if (retryRef.current) {
+        clearTimeout(retryRef.current);
+        retryRef.current = null;
+      }
+      try {
+        es?.close();
+      } catch {
+        /* ignore */
+      }
       es = new EventSource("/api/stream");
       es.onopen = () => {
         markUp();
       };
       es.onmessage = (ev) => {
+        lastMessageAt = Date.now();
         try {
           apply(JSON.parse(ev.data));
           if (!onlineNow) markUp();
@@ -143,8 +171,15 @@ function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
         }
       };
       es.onerror = () => {
+        // 浏览器常在重连瞬间误报 onerror；近期仍有数据则不断线
+        if (Date.now() - lastMessageAt < intervalMs * 2) return;
         markDown();
-        es?.close();
+        try {
+          es?.close();
+        } catch {
+          /* ignore */
+        }
+        es = null;
         armWatch();
         retryRef.current = setTimeout(connect, intervalMs);
       };
@@ -156,10 +191,15 @@ function useRadarSSEState(intervalMs = 5000): RadarSSEValue {
     return () => {
       cancelled = true;
       clearWatch();
-      es?.close();
+      try {
+        es?.close();
+      } catch {
+        /* ignore */
+      }
+      es = null;
       if (retryRef.current) clearTimeout(retryRef.current);
     };
-  }, [apply, intervalMs, reconnectEpoch]);
+  }, [apply, intervalMs]);
 
   return useMemo(
     () => ({ snapshot, online, bootstrapping, patchPattern }),
