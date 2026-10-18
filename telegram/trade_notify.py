@@ -51,15 +51,30 @@ async def push_aggregate_text(
     use_http = bool(get_telegram_send_url())
     for cid in targets:
         try:
+            sent = False
             if use_http:
                 import asyncio
 
-                await asyncio.to_thread(send_text_via_http, cid, text)
+                try:
+                    await asyncio.to_thread(send_text_via_http, cid, text)
+                    sent = True
+                except (urllib.error.URLError, OSError, RuntimeError) as e:
+                    if client is not None:
+                        print(
+                            f"[!] HTTP 推送 {cid} 失败 ({e})，回退 Telethon",
+                            flush=True,
+                        )
+                        await send_text_via_client(client, cid, text)
+                        sent = True
+                    else:
+                        raise
             elif client is not None:
                 await send_text_via_client(client, cid, text)
+                sent = True
             else:
                 raise RuntimeError("需要 TELEGRAM_SEND_URL 或 Telethon client")
-            ok.append(cid)
+            if sent:
+                ok.append(cid)
         except (urllib.error.URLError, OSError, RuntimeError) as e:
             print(f"[!] 推送至 {cid} 失败: {e}", flush=True)
         except Exception as e:

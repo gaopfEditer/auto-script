@@ -401,10 +401,24 @@ export async function openStore(cfg, log) {
   `;
 
   const insertMsgSql = `
-    INSERT IGNORE INTO discord_messages (
+    INSERT INTO discord_messages (
       message_id, guild_id, guild_name, channel_id, channel_name, author_id, created_at_ms,
       content, author_username, author_global_name, author_avatar, event_type, source, raw_json, received_at
     ) VALUES ?
+    ON DUPLICATE KEY UPDATE
+      guild_id = IF(VALUES(guild_id) != '', VALUES(guild_id), guild_id),
+      guild_name = COALESCE(VALUES(guild_name), guild_name),
+      channel_id = IF(VALUES(channel_id) != '', VALUES(channel_id), channel_id),
+      channel_name = COALESCE(VALUES(channel_name), channel_name),
+      author_id = IF(VALUES(author_id) != '', VALUES(author_id), author_id),
+      content = VALUES(content),
+      author_username = COALESCE(VALUES(author_username), author_username),
+      author_global_name = COALESCE(VALUES(author_global_name), author_global_name),
+      author_avatar = COALESCE(VALUES(author_avatar), author_avatar),
+      event_type = VALUES(event_type),
+      source = VALUES(source),
+      raw_json = VALUES(raw_json),
+      received_at = VALUES(received_at)
   `;
 
   /**

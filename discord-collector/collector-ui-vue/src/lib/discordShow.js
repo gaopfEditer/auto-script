@@ -105,6 +105,11 @@ export function mergeChannelMessages(prev, incoming) {
       changed = true;
       continue;
     }
+    if (msgAttachments(m).length > msgAttachments(existing).length) {
+      map.set(id, m);
+      changed = true;
+      continue;
+    }
     if (!sameMessageForMerge(existing, m)) {
       map.set(id, m);
       changed = true;
@@ -205,6 +210,16 @@ function embedImagesFromRaw(raw) {
     }
   }
   return out;
+}
+
+/** v-memo / 列表差分：附件数量或 URL 变化时需重绘 */
+/** @param {Record<string, unknown>} m */
+export function messageAttachmentsMemoKey(m) {
+  const att = msgAttachments(m);
+  if (!att.length) return "0";
+  return att
+    .map((a, i) => `${i}:${attachmentDisplayUrl(a)}:${a.filename ?? ""}`)
+    .join("|");
 }
 
 /** @param {Record<string, unknown>} m */

@@ -101,6 +101,14 @@ const channelHasMoreOlder = reactive({});
 const channelOlderLoadAt = reactive({});
 const LOAD_OLDER_COOLDOWN_MS = 1_800;
 const LOAD_OLDER_PAGE_SIZE = 50;
+/** 切频道后后台向上翻页（CDP + MySQL），不打扰当前视口（仍停在底部） */
+const CHANNEL_HISTORY_WARMUP_PAGES = 4;
+const CHANNEL_HISTORY_WARMUP_PAGE_DELAY_MS = 650;
+const CHANNEL_HISTORY_WARMUP_START_DELAY_MS = 400;
+/** 切频道后后台预热：驱动 CDP 上滚 + 拉库，刷新视口上方历史附件（不打扰当前滚到底部） */
+const CHANNEL_HISTORY_WARMUP_PAGES = 5;
+const CHANNEL_HISTORY_WARMUP_STEP_MS = 650;
+const CHANNEL_HISTORY_WARMUP_START_MS = 450;
 const snapshotWarming = ref(false);
 const navPending = ref(false);
 const navError = ref("");
@@ -1068,6 +1076,9 @@ async function selectGuild(g) {
   await loadChannelsForGuild(g.guildId);
 }
 
+/** @type {Map<string, boolean>} */
+const channelHistoryWarmupInflight = new Map();
+
 /** 选频道序号：快速连点时丢弃过期的二次拉库 */
 let selectChannelSeq = 0;
 /** 同一频道短时间重复点击：跳过再拉库 */
@@ -1146,6 +1157,44 @@ async function selectChannel(ch) {
     }
   } finally {
     if (seq === selectChannelSeq) navPending.value = false;
+  }
+  if (seq === selectChannelSeq) {
+    void warmupChannelHistoryAfterSelect(ch, seq);
+  }
+}
+
+/**
+ * 切频道后静默预热：驱动 CDP 上滚并拉更早一页消息，刷新上方附件 URL；视口保持底部。
+ * @param {ChannelItem} ch
+ * @param {number} seq
+ */
+async function warmupChannelHistoryAfterSelect(ch, seq) {
+  const cid = String(ch.channelId ?? "").trim();
+  const gid = String(ch.guildId || selectedGuildId.value || DEFAULT_SHOW_GUILD_ID).trim();
+  if (!cid || !gid) return;
+  if (channelHistoryWarmupInflight.get(cid)) return;
+
+  channelHistoryWarmupInflight.set(cid, true);
+  try {
+    await new Promise((r) => setTimeout(r, CHANNEL_HISTORY_WARMUP_START_DELAY_MS));
+    if (seq !== selectChannelSeq) return;
+
+    for (let page = 0; page < CHANNEL_HISTORY_WARMUP_PAGES; page += 1) {
+      if (seq !== selectChannelSeq) return;
+      if (channelHasMoreOlder[cid] === false) break;
+      const result = await loadOlderMessagesForChannel(ch, { background: true });
+      if (result !== "ok") break;
+      await new Promise((r) => setTimeout(r, CHANNEL_HISTORY_WARMUP_PAGE_DELAY_MS));
+    }
+
+    if (seq !== selectChannelSeq) return;
+    await loadMessagesForChannel(ch, { silent: true, force: true });
+    await nextTick();
+    scrollMsgsBottomIfNear();
+  } catch {
+    /* CDP 不可用时仍可用库内 before 翻页 */
+  } finally {
+    channelHistoryWarmupInflight.delete(cid);
   }
 }
 

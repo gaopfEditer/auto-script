@@ -7,6 +7,7 @@ import {
   groupChannelMessages,
   isImageAttachment,
   messageTextContent,
+  messageAttachmentsMemoKey,
   msgAttachments,
   msgAvatarUrl,
   msgDisplayName,
@@ -108,9 +109,12 @@ function onAttachmentImgError(att, i, msg, e) {
       :key="String(g.head.messageId ?? g.head.message_id)"
       v-memo="[
         g.head.messageId ?? g.head.message_id,
+        messageAttachmentsMemoKey(g.head),
         g.tail.length,
+        g.tail.map((m) => messageAttachmentsMemoKey(m)).join(';'),
         g.tail[g.tail.length - 1]?.messageId ?? g.tail[g.tail.length - 1]?.message_id,
         highlightMessageId,
+        attachmentFailEpoch,
       ]"
       class="msg-group"
       :class="{ 'msg-highlight': isHighlightedMessage(g.head) }"
@@ -152,7 +156,7 @@ function onAttachmentImgError(att, i, msg, e) {
                   :src="attachmentDisplayUrl(att)"
                   :alt="att.filename || '图片'"
                   class="msg-image"
-                  loading="lazy"
+                  loading="eager"
                   decoding="async"
                   referrerpolicy="no-referrer"
                         @error="onAttachmentImgError(att, i, g.head, $event)"
@@ -197,7 +201,7 @@ function onAttachmentImgError(att, i, msg, e) {
                   :src="attachmentDisplayUrl(att)"
                   :alt="att.filename || '图片'"
                   class="msg-image"
-                  loading="lazy"
+                  loading="eager"
                   decoding="async"
                   referrerpolicy="no-referrer"
                         @error="onAttachmentImgError(att, i, m, $event)"

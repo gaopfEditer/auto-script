@@ -295,6 +295,8 @@ export const config = {
     String(process.env.OLLAMA_ENABLED ?? "1").toLowerCase()
   ),
   telegramSendUrl: (process.env.TELEGRAM_SEND_URL ?? "http://127.0.0.1:8000/api/telegram/send").trim(),
+  /** HTTP 网关失败时兜底（与 oi_mornitor notify_telegram 同源 env） */
+  telegramBotToken: (process.env.TELEGRAM_BOT_TOKEN ?? "").trim(),
   telegramPushChatId: (() => {
     const v = String(process.env.TELEGRAM_PUSH_CHAT_ID ?? "").trim();
     if (!v) return "";

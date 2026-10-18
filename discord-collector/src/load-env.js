@@ -8,7 +8,10 @@ import dotenv from "dotenv";
 
 const _dir = path.dirname(fileURLToPath(import.meta.url));
 const envPath = path.join(_dir, "..", ".env");
+/** 仓库根 .env（如 TELEGRAM_BOT_TOKEN）；discord-collector/.env 同名项优先 */
+const repoRootEnvPath = path.join(_dir, "..", "..", ".env");
 
+dotenv.config({ path: repoRootEnvPath, override: false });
 dotenv.config({ path: envPath, override: true });
 
 /**

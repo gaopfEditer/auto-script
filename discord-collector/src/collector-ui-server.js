@@ -637,6 +637,9 @@ async function main() {
       enabled: tg.enabled,
       chatId: tg.chatId != null && tg.chatId !== "" ? String(tg.chatId) : null,
       sendUrl: tg.sendUrl || config.telegramSendUrl,
+      botTokenConfigured: Boolean(config.telegramBotToken),
+      hint:
+        "Discord→TG 走 TELEGRAM_SEND_URL；网关不通时 collect:ui 会回退 TELEGRAM_BOT_TOKEN。8000 被其它服务占用时请改端口或清空 SEND_URL 仅用 Bot。",
     });
   });
 
@@ -1408,7 +1411,9 @@ async function main() {
     `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /cards  |  /fetch  |  /twitter  |  /archives  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws`
   );
   if (mysqlOffline) {
-    log.warn("MySQL 离线 — 服务已启动但无持久化；修复数据库后请重启 collect:ui");
+    log.warn(
+      "MySQL 离线 — 信号卡不入库、卡片页/评估不可用；识别成功的 Discord 信号仍会尝试推 TELEGRAM_PUSH_CHAT_ID（无 cardId）。请修复 MYSQL_* 后重启 collect:ui"
+    );
   } else {
     cardPriceMonitor.start();
     if (store.migrateCoinActionPasteCards) {
