@@ -1,5 +1,16 @@
 import { readOkJson } from "./httpJson.js";
 
+/** @returns {Promise<{ filterEnabled: boolean, channelIds: string[], namesByChannelId: Record<string, string> }>} */
+export async function fetchShowDiscordGroups() {
+  const res = await fetch("/api/show/discord-groups");
+  const data = await readOkJson(res, "加载 Show 频道白名单失败");
+  return {
+    filterEnabled: Boolean(data.filterEnabled),
+    channelIds: /** @type {string[]} */ (data.channelIds ?? []),
+    namesByChannelId: /** @type {Record<string, string>} */ (data.namesByChannelId ?? {}),
+  };
+}
+
 export async function fetchGuilds() {
   const res = await fetch("/api/discord/guilds");
   const data = await readOkJson(res, "加载群组失败");

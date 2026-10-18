@@ -77,6 +77,73 @@ function parseIdList(raw) {
   ];
 }
 
+/**
+ * Show 侧栏 `DISCORD_GROUPS`：`channelId:显示名` 逗号分隔（仅第一个 `:` 分割 id / 名）。
+ * @returns {{ channelIds: string[], namesByChannelId: Record<string, string> }}
+ */
+export function parseDiscordGroups(raw) {
+  /** @type {string[]} */
+  const channelIds = [];
+  /** @type {Record<string, string>} */
+  const namesByChannelId = {};
+  const seen = new Set();
+  if (!raw?.trim()) return { channelIds, namesByChannelId };
+  for (const part of raw.replace(/\|/g, ",").split(",")) {
+    const seg = part.trim();
+    if (!seg) continue;
+    const colon = seg.indexOf(":");
+    let id = "";
+    let name = "";
+    if (colon > 0) {
+      id = seg.slice(0, colon).trim();
+      name = seg.slice(colon + 1).trim();
+    } else {
+      id = seg;
+    }
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    channelIds.push(id);
+    if (name) namesByChannelId[id] = name;
+  }
+  return { channelIds, namesByChannelId };
+}
+
+/**
+ * @template {{ channelId: string, guildId?: string, name?: string, [key: string]: unknown }} T
+ * @param {T[]} channels
+ * @param {string} [guildId]
+ * @param {{ channelIds: string[], namesByChannelId: Record<string, string> }} [groups]
+ * @returns {T[]}
+ */
+export function applyDiscordGroupsChannelList(channels, guildId = "", groups) {
+  const { channelIds, namesByChannelId } =
+    groups ?? parseDiscordGroups(process.env.DISCORD_GROUPS ?? "");
+  if (!channelIds.length) return channels;
+  const gid = String(guildId ?? "").trim();
+  const byId = new Map(channels.map((c) => [String(c.channelId), c]));
+  /** @type {T[]} */
+  const out = [];
+  for (const id of channelIds) {
+    const envName = namesByChannelId[id];
+    const row = byId.get(id);
+    if (row) {
+      out.push(envName ? { ...row, name: envName } : row);
+      continue;
+    }
+    if (!gid) continue;
+    out.push({
+      channelId: id,
+      guildId: gid,
+      name: envName || `频道 ${id.slice(-6)}`,
+      type: 0,
+      lastMessagePreview: "",
+      lastMessageAtMs: 0,
+      updatedAt: null,
+    });
+  }
+  return out;
+}
+
 /** @param {string[]} envKeys */
 function envProxy(...envKeys) {
   for (const key of envKeys) {
@@ -109,6 +176,13 @@ export const config = {
    */
   cdpVisibilityKeepalive: !["0", "false", "no", "off"].includes(
     String(process.env.COLLECTOR_CDP_VISIBILITY_KEEPALIVE ?? "1").toLowerCase()
+  ),
+  /**
+   * CDP 保活/切频道/翻页：不激活 Chrome 标签（静默刷新、后台新开标签）。
+   * 默认开；COLLECTOR_CDP_SILENT_NAV=0 恢复 bringToFront + Playwright reload。
+   */
+  cdpSilentNavigation: !["0", "false", "no", "off"].includes(
+    String(process.env.COLLECTOR_CDP_SILENT_NAV ?? "1").toLowerCase()
   ),
   /**
    * 定时用 CDP 轮询打开信号频道（每次只切 1 个，避免连跳）。
@@ -200,6 +274,8 @@ export const config = {
     .filter(Boolean),
   /** 非空时仅入库/展示这些 guild 的消息 */
   monitoredGuildIds: parseIdList(process.env.DISCORD_MONITORED_GUILD_IDS ?? ""),
+  /** Show 侧栏频道白名单（`DISCORD_GROUPS`）；空=展示该服全部已同步频道 */
+  discordGroups: parseDiscordGroups(process.env.DISCORD_GROUPS ?? ""),
   /** 信号卡片监听频道（默认内置 4 个） */
   discordSignalChannelIds: parseIdList(process.env.DISCORD_SIGNAL_CHANNEL_IDS ?? ""),
   /** Telegram 推送频道（空=内置 8 个） */
@@ -340,7 +416,8 @@ export const config = {
   /** OI Monitor（同仓 oi_mornitor）：健康检查与 UI 嵌入地址 */
   oiWebBaseUrl: (process.env.OI_WEB_BASE_URL ?? "http://127.0.0.1:8765").replace(/\/$/, ""),
   /** iframe 优先地址；空则用 oiWebBaseUrl。oi:dev 时可设 http://127.0.0.1:5173 */
-  oiEmbedUrl: (process.env.OI_EMBED_URL ?? process.env.VITE_OI_EMBED_URL ?? "").replace(/\/$/, ""),
+  /** 本机 iframe 覆盖（如 oi:dev :5173）；勿用 VITE_*，避免与 Vue dev 端口混淆 */
+  oiEmbedUrl: (process.env.OI_EMBED_URL ?? "").replace(/\/$/, ""),
   /**
    * 浏览器侧公网嵌入地址（前端上云时必填）。
    * 本地探测仍用 oiWebBaseUrl；iframe 优先用本字段，避免把 127.0.0.1 塞给访客浏览器。

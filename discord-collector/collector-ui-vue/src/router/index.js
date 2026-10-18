@@ -84,6 +84,13 @@ function buildRoutes() {
       component: () => import("../views/CommunityView.vue"),
     });
   }
+  if (__UI_PAGE_TELEGRAM__) {
+    routes.push({
+      path: "/telegram",
+      name: "telegram",
+      component: () => import("../views/TelegramPromView.vue"),
+    });
+  }
 
   // —— Local 模块（仅非 deploy；构建期 __UI_PAGE_* = false 时整段 DCE）——
   if (__UI_PAGE_MANUAL_STATS__) {
@@ -99,13 +106,6 @@ function buildRoutes() {
       path: "/fetch",
       name: "fetch",
       component: () => import("../views/YoutubeFetchView.vue"),
-    });
-  }
-  if (__UI_PAGE_TELEGRAM__) {
-    routes.push({
-      path: "/telegram",
-      name: "telegram",
-      component: () => import("../views/TelegramPromView.vue"),
     });
   }
   if (__UI_PAGE_ARCHIVES__) {

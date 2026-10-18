@@ -12,29 +12,38 @@ export default defineConfig(({ mode }) => {
   const devPort = Number(env.VITE_DEV_PORT || env.COLLECTOR_VUE_DEV_PORT) || 5178;
   const apiTarget = `http://127.0.0.1:${uiPort}`;
 
+  const oiPublicEmbedUrl = (
+    env.VITE_OI_PUBLIC_EMBED_URL ||
+    env.OI_PUBLIC_EMBED_URL ||
+    "https://op.b.ezcoin.ink"
+  )
+    .trim()
+    .replace(/\/$/, "");
+
   const uiMode = String(env.VITE_UI_MODE ?? "").trim().toLowerCase();
   const isDeployBuild =
     mode === "production" &&
     uiMode !== "local" &&
     uiMode !== "dev" &&
     uiMode !== "full";
-  /** 本机工具页：deploy 构建强制关闭，避免误写入 VITE_UI_PAGES 后打进包 */
-  const LOCAL_ONLY = new Set([
-    "manual-stats",
-    "telegram",
-    "fetch",
-    "archives",
-    "debug",
-  ]);
+  /** 本机 Local 模块：deploy 构建强制关闭（Telegram 顶栏模块可打包） */
+  const LOCAL_ONLY = new Set(["manual-stats", "fetch", "archives", "debug"]);
   const pagesCsv =
-    String(env.VITE_UI_PAGES ?? "show,cards,eval,community,oi,news").trim() ||
-    "show,cards,eval,community,oi,news";
+    String(env.VITE_UI_PAGES ?? "show,cards,eval,community,oi,news,telegram").trim() ||
+    "show,cards,eval,community,oi,news,telegram";
   const pageSet = new Set(
     pagesCsv
       .split(/[,;\s]+/)
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s && !LOCAL_ONLY.has(s))
   );
+  /** deploy 必进包（仅 Local 二级模块剔除）；与 .env VITE_UI_PAGES 取并集 */
+  if (isDeployBuild) {
+    for (const name of ["show", "cards", "eval", "community", "oi", "news", "telegram"]) {
+      pageSet.add(name);
+    }
+    for (const name of LOCAL_ONLY) pageSet.delete(name);
+  }
   /** @param {string} name */
   const pageOn = (name) => {
     if (LOCAL_ONLY.has(name)) return !isDeployBuild;
@@ -49,6 +58,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     define: {
+      "import.meta.env.VITE_OI_PUBLIC_EMBED_URL": JSON.stringify(oiPublicEmbedUrl),
       __UI_DEPLOY__: JSON.stringify(isDeployBuild),
       __UI_PAGE_SHOW__: JSON.stringify(pageOn("show")),
       __UI_PAGE_FETCH__: JSON.stringify(pageOn("fetch")),
@@ -92,6 +102,9 @@ export default defineConfig(({ mode }) => {
     server: {
       port: devPort,
       strictPort: true,
+      fs: {
+        allow: [collectorRoot, path.resolve(collectorRoot, "..")],
+      },
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
         "/community-avatars": { target: apiTarget, changeOrigin: true },

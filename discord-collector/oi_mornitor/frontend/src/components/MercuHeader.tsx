@@ -7,7 +7,6 @@ import { isOiOperator } from "../utils/oiOperator";
 import {
   focusSymbolsToItems,
   HEADER_BOARDS,
-  HEADER_FETCH_MS,
   type FocusEntryMeta,
   type HeaderBoardId,
 } from "../utils/headerRankBoards";
@@ -102,7 +101,7 @@ export const MercuHeader = memo(function MercuHeader({
       ? "特别关注 · 含沉寂拉盘点火（自动 36h）"
       : boardId === "dormant"
         ? `沉寂拉盘 · 第三梯队小市值 · 慢扫4h筛候选(地量+试盘) · 快扫15m点火 · 更新 ${dormantFetched}`
-        : `${boardLabel} · ${meta.sourceLabel} · 24h · 每 ${HEADER_FETCH_MS / 60_000} 分钟刷新 · 更新 ${fetchedLabel}${meta.error ? ` · ${meta.error}` : ""}`;
+        : `${boardLabel} · ${meta.sourceLabel} · 24h · 约每 ${Math.max(1, Math.round(meta.refreshSec / 60))} 分钟刷新 · 更新 ${fetchedLabel}${meta.error ? ` · ${meta.error}` : ""}`;
 
   return (
     <header className="mercu-header">

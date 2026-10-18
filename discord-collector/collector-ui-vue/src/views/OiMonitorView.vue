@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import PageLoadingBlock from "../components/PageLoadingBlock.vue";
+import { isLocalClient } from "../lib/localClient.js";
 
 defineOptions({ name: "OiMonitorView" });
 
@@ -11,6 +12,7 @@ const loading = ref(true);
 const embedUrl = ref("");
 const error = ref("");
 const hint = ref("");
+const embedDeployError = ref("");
 const latencyMs = ref(null);
 /** 一旦激活过就保留 iframe，避免 status 抖动拆掉页面状态 */
 const iframeReady = ref(false);
@@ -22,34 +24,113 @@ const iframeLoading = ref(true);
 
 const iframeSrc = embedUrl;
 
+/** 生产默认 OI 独立站（与 op.c 主站分离） */
+const DEFAULT_PUBLIC_OI_ORIGIN = "https://op.b.ezcoin.ink";
+
 /**
- * 根据当前页面 URL 判断：
- * - http://localhost/* 或 http://127.0.0.1/* → 嵌本机 OI (http://127.0.0.1:8765/)
- * - https://* → 生产独立部署的 OI 前端（hash 路由，无需 /oi-static/ 前缀）
- * 支持壳层 query：`/oi?symbol=BTCUSDT` → iframe `#/patterns?symbol=…&add=1`
- * @param {Record<string, unknown>} _j
+ * @param {string} raw
+ * @returns {string}
+ */
+function productionOiOriginFallback() {
+  const fromEnv = String(import.meta.env.VITE_OI_PUBLIC_EMBED_URL ?? "").trim().replace(/\/$/, "");
+  return fromEnv || DEFAULT_PUBLIC_OI_ORIGIN;
+}
+
+/** @param {string} url */
+function isCollectorMainSiteUrl(url) {
+  try {
+    const u = new URL(String(url).trim(), location.href);
+    if (u.origin === location.origin) return true;
+    const host = u.hostname.toLowerCase();
+    if (host !== "localhost" && host !== "127.0.0.1") return false;
+    const port = u.port || (u.protocol === "https:" ? "443" : "80");
+    const devPort = String(import.meta.env.VITE_DEV_PORT ?? "5178");
+    return port === "3851" || port === "5178" || port === devPort;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 访客浏览器禁止嵌 127.0.0.1；本机禁止嵌主站 dev/collect 端口（5178/3851）。
+ * @param {string} url
+ */
+function sanitizeEmbedForBrowser(url) {
+  const u = String(url ?? "").trim();
+  if (!u) return "";
+  if (isCollectorMainSiteUrl(u)) return "";
+  if (isLocalClient()) return u;
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(u)) {
+    return `${productionOiOriginFallback()}/`;
+  }
+  return u;
+}
+
+/**
+ * 本机开发：只用 OI :8765 / oi:dev :5173，忽略 status 里的公网或误配主站地址。
+ * @param {Record<string, unknown>} [status]
+ */
+function resolveLocalOiEmbedBase(status) {
+  const oiDev = String(import.meta.env.VITE_OI_EMBED_URL ?? "").trim();
+  const candidates = [
+    status?.localEmbedUrl,
+    oiDev,
+    "http://127.0.0.1:8765/",
+    status?.embedUrl,
+    status?.publicEmbedUrl,
+  ];
+  for (const raw of candidates) {
+    const s = String(raw ?? "").trim();
+    if (!s || isCollectorMainSiteUrl(s)) continue;
+    return s;
+  }
+  return "http://127.0.0.1:8765/";
+}
+
+/**
+ * @param {string} baseUrl status 或默认根地址（可含 ?v= 缓存戳）
+ * @param {string} [symbol]
+ */
+function buildOiIframeSrc(baseUrl, symbol) {
+  let root = sanitizeEmbedForBrowser(baseUrl);
+  if (!root) {
+    root = isLocalClient() ? "http://127.0.0.1:8765/" : `${productionOiOriginFallback()}/`;
+  }
+  const sym = String(symbol ?? "").trim().toUpperCase();
+  if (!sym) return root;
+  const hash = `#/patterns?symbol=${encodeURIComponent(sym)}&add=1`;
+  const noHash = root.split("#")[0] || root;
+  const withSlash = /\/$/.test(noHash) ? noHash : `${noHash}/`;
+  return `${withSlash}${hash}`;
+}
+
+/**
+ * @param {Record<string, unknown>} [status]
  * @param {string} [symbolOverride]
  */
-function pickEmbedUrl(_j, symbolOverride) {
-  const protocol = String(typeof location !== "undefined" ? location.protocol : "https:");
-  let base = "https://op.b.ezcoin.ink/";
-  if (protocol === "http:") {
-    base = "http://127.0.0.1:8765/";
-  }
-  const fromRoute = String(symbolOverride ?? route.query.symbol ?? "").trim().toUpperCase();
-  let symbol = fromRoute;
-  if (!symbol) {
-    try {
-      const q = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
-      symbol = (q.get("symbol") || "").trim().toUpperCase();
-    } catch {
-      /* ignore */
+function pickEmbedUrl(status, symbolOverride) {
+  const sym =
+    String(symbolOverride ?? route.query.symbol ?? "").trim() ||
+    (() => {
+      try {
+        const q = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+        return (q.get("symbol") || "").trim();
+      } catch {
+        return "";
+      }
+    })();
+
+  let base = "";
+  if (isLocalClient()) {
+    base = resolveLocalOiEmbedBase(status);
+  } else {
+    // 线上只用公网 OI 站；绝不使用 embedUrl（未配公网时可能是 127.0.0.1 或误配成主站 op.c）
+    base = String(status?.publicEmbedUrl ?? "").trim();
+    if (!base || isCollectorMainSiteUrl(base)) {
+      base = `${productionOiOriginFallback()}/`;
     }
   }
-  if (symbol) {
-    return `${base}#/patterns?symbol=${encodeURIComponent(symbol)}&add=1`;
-  }
-  return base;
+  return buildOiIframeSrc(base, sym);
 }
 
 function applySymbolToEmbed(sym) {
@@ -80,15 +161,23 @@ async function refreshStatus() {
         `collect:ui 未返回 JSON (HTTP ${r.status})：${text.slice(0, 120)}`
       );
     }
-    // 已有深链币种时不要被 status 轮询冲掉
     const sym = String(route.query.symbol ?? "").trim();
     if (!sym || !embedUrl.value.includes("patterns?symbol=")) {
-      embedUrl.value = pickEmbedUrl(j);
+      const next = pickEmbedUrl(j);
+      if (!isCollectorMainSiteUrl(next)) {
+        embedUrl.value = next;
+      }
     }
+    embedDeployError.value = j.embedDeployError ? String(j.embedDeployError) : "";
     active.value = Boolean(j.active);
-    iframeReady.value = true;
     error.value = j.error ? String(j.error) : "";
     hint.value = j.hint ? String(j.hint) : "";
+    if (embedDeployError.value) {
+      iframeReady.value = false;
+      error.value = embedDeployError.value;
+      return;
+    }
+    iframeReady.value = true;
     latencyMs.value = Number.isFinite(j.latencyMs) ? j.latencyMs : null;
   } catch (e) {
     active.value = false;
@@ -126,6 +215,7 @@ watch(
 
 onMounted(() => {
   const sym = String(route.query.symbol ?? "").trim();
+  embedUrl.value = pickEmbedUrl({});
   if (sym) applySymbolToEmbed(sym);
   void refreshStatus();
   pollTimer = setInterval(() => void refreshStatus(), 5_000);
@@ -141,19 +231,20 @@ onUnmounted(() => {
     <div v-if="!iframeReady" class="oi-gate">
       <div class="oi-card">
         <h2>OI Monitor</h2>
-        <p class="lead">模块已切换；等待 OI 后端就绪后自动嵌入。</p>
+        <p class="lead">模块已切换；等待 OI 后端就绪后自动嵌入独立 OI 站点。</p>
         <PageLoadingBlock
           v-if="loading"
           :overlay="false"
           message="连接 OI 服务…"
-          hint="正在探测 collect:ui 与 OI 后端（8765）"
+          hint="collect:ui 探测本机 :8765；iframe 指向 OI_PUBLIC_EMBED_URL"
         />
-        <p v-else class="warn">未激活{{ error ? `：${error}` : "" }}</p>
-        <p v-if="hint" class="hint">{{ hint }}</p>
+        <p v-else class="warn">{{ error || "未激活" }}</p>
+        <p v-if="embedDeployError" class="warn deploy-err">{{ embedDeployError }}</p>
+        <p v-if="hint && !embedDeployError" class="hint">{{ hint }}</p>
         <ol>
-          <li>终端 A：<code>pnpm run collect:ui</code>（会自动守护 OI :8765，重启 collect:ui 即重启 OI）</li>
-          <li>终端 B（可选）：<code>pnpm run dev:ui-vue</code></li>
-          <li>仅调试 OI 前端时：<code>pnpm run oi:dev</code>（Vite :5173）</li>
+          <li>主站 <code>op.c</code>：<code>pnpm run collect:ui</code> + 静态 <code>collector-ui</code></li>
+          <li>OI 站 <code>op.b</code>：仅部署 <code>oi_mornitor/public/oi-dist</code>（勿覆盖为 Vue 主站）</li>
+          <li><code>OI_PUBLIC_EMBED_URL=https://op.b.ezcoin.ink</code>（主站 .env）</li>
         </ol>
         <p class="muted">
           嵌入地址：<code>{{ iframeSrc || embedUrl || "—" }}</code>
@@ -254,6 +345,10 @@ h2 {
 .warn {
   color: #f38688;
   margin: 0 0 0.5rem;
+}
+.deploy-err {
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 .muted,
 .hint {

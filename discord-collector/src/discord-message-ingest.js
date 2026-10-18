@@ -457,11 +457,11 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
 
     const limit = isRestBatch ? toPersist.length : broadcastLimit;
     const pushCardApi = pushRows.some((r) => String(r.source ?? "") === "card_api");
-    // 仅新入库（或 card_api）推 Show；Gateway 重复帧不再刷 UI
+    // Gateway：仅新入库推 Show，避免重复帧刷屏。REST（CDP 点频道 / before 翻页）：有消息就推，否则切频道 inserted=0 时 UI 永远空白。
     const shouldPushUi =
       result.inserted > 0 ||
       pushCardApi ||
-      (isRestBatch && restQuery?.before && toPersist.length > 0);
+      (isRestBatch && toPersist.length > 0);
     if (pushRows.length && shouldPushUi) {
       pushDiscordMessageBatch({
         kind: "discord_message_batch",

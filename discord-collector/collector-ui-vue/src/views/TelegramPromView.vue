@@ -1,6 +1,13 @@
 <script setup>
 import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { subscribeCollectorSocket } from "../composables/useCollectorSocket.js";
+import {
+  canToggleTelegramRealIdentity,
+  disguiseChannel,
+  disguiseMessage,
+  getTelegramShowRealIdentity,
+  setTelegramShowRealIdentity,
+} from "../lib/telegramChannelPersona.js";
 
 defineOptions({ name: "TelegramPromView" });
 
@@ -38,6 +45,27 @@ const symbolQuery = ref("");
 const loading = ref(false);
 const error = ref("");
 const status = ref("连接中…");
+const showRealIdentity = ref(getTelegramShowRealIdentity());
+const canToggleIdentity = canToggleTelegramRealIdentity();
+
+const displayChannels = computed(() =>
+  channels.value.map((c) => disguiseChannel(c, showRealIdentity.value)),
+);
+
+/** @type {import('vue').ComputedRef<Record<string, { name: string, avatarUrl?: string }>>} */
+const channelById = computed(() => {
+  /** @type {Record<string, { name: string, avatarUrl?: string }>} */
+  const map = {};
+  for (const c of displayChannels.value) {
+    map[c.chatId] = { name: c.name, avatarUrl: c.avatarUrl };
+    map[String(Number(c.chatId))] = { name: c.name, avatarUrl: c.avatarUrl };
+  }
+  return map;
+});
+
+const displayMessages = computed(() =>
+  messages.value.map((m) => disguiseMessage(m, channelById.value, showRealIdentity.value)),
+);
 
 /** @type {import("vue").Ref<LiveMessage | null>} */
 const editPin = ref(null);
@@ -87,7 +115,7 @@ const filteredMessages = computed(() => {
   const id = activeChatId.value;
   const period = timePeriod.value;
   const sym = symbolQuery.value;
-  return messages.value
+  return displayMessages.value
     .filter((m) => {
       if (id && m.chatId !== id && m.chatId !== String(Number(id))) return false;
       if (m.pinned) return true; // 置顶始终可见（再按币种筛）
@@ -105,12 +133,17 @@ const filteredMessages = computed(() => {
 
 const visibleChannels = computed(() => {
   const id = activeChatId.value;
-  if (!id) return channels.value;
-  return channels.value.filter((c) => c.chatId === id);
+  if (!id) return displayChannels.value;
+  return displayChannels.value.filter((c) => c.chatId === id);
 });
 
+function toggleRealIdentity() {
+  showRealIdentity.value = !showRealIdentity.value;
+  setTelegramShowRealIdentity(showRealIdentity.value);
+}
+
 const pinnedMessages = computed(() =>
-  messages.value
+  displayMessages.value
     .filter((m) => m.pinned)
     .filter((m) => {
       const id = activeChatId.value;
@@ -376,6 +409,15 @@ onUnmounted(() => {
       </div>
       <div class="tg-live-meta">
         <span class="status">{{ status }}</span>
+        <button
+          v-if="canToggleIdentity"
+          type="button"
+          class="ghost identity-toggle"
+          :title="showRealIdentity ? '当前：真实群名与头像' : '当前：别名与公网头像'"
+          @click="toggleRealIdentity"
+        >
+          {{ showRealIdentity ? "显示别名" : "显示真实" }}
+        </button>
         <button type="button" :disabled="loading" @click="loadMessages">
           {{ loading ? "刷新中…" : "刷新" }}
         </button>
@@ -416,12 +458,12 @@ onUnmounted(() => {
         全部
       </button>
       <button
-        v-for="c in channels"
+        v-for="c in displayChannels"
         :key="c.chatId"
         type="button"
         class="chip"
         :class="{ on: activeChatId === c.chatId }"
-        :title="c.chatId"
+        :title="showRealIdentity ? c.chatId : `${c.name} · ${c.chatId}`"
         @click="selectChannel(c.chatId)"
       >
         <img v-if="c.avatarUrl" class="chip-av" :src="c.avatarUrl" alt="" />

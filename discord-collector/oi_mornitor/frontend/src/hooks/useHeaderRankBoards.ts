@@ -3,6 +3,7 @@ import {
   dormantFunnelToItems,
   emptyBinanceBoards,
   HEADER_FETCH_MS,
+  HEADER_FETCH_MS_DIRECT_BINANCE,
   type BinanceLeaderboardsPayload,
   type DormantFunnelPayload,
   type HeaderBoardItem,
@@ -89,11 +90,27 @@ export function useHeaderRankBoards() {
     }
   }, []);
 
+  const [leaderboardPollMs, setLeaderboardPollMs] = useState(HEADER_FETCH_MS);
+
   useEffect(() => {
     void fetchLeaderboards();
-    const id = window.setInterval(() => void fetchLeaderboards(), HEADER_FETCH_MS);
+    const id = window.setInterval(() => void fetchLeaderboards(), leaderboardPollMs);
     return () => window.clearInterval(id);
-  }, [fetchLeaderboards]);
+  }, [fetchLeaderboards, leaderboardPollMs]);
+
+  useEffect(() => {
+    const sec = meta.refreshSec;
+    const isRadar =
+      meta.error?.includes("雷达快照") ||
+      meta.error?.includes("冷却") ||
+      meta.sourceLabel.includes("雷达");
+    const next = isRadar
+      ? HEADER_FETCH_MS
+      : sec >= HEADER_FETCH_MS_DIRECT_BINANCE / 1000
+        ? HEADER_FETCH_MS_DIRECT_BINANCE
+        : Math.max(HEADER_FETCH_MS, sec * 1000);
+    setLeaderboardPollMs(next);
+  }, [meta.refreshSec, meta.error, meta.sourceLabel]);
 
   useEffect(() => {
     void fetchDormantFunnel();

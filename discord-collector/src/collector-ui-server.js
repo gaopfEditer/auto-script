@@ -11,7 +11,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 
 import { buildFrameChannelPayload, jsonWire } from "./collect-ws-decode.js";
-import { config } from "./config.js";
+import { applyDiscordGroupsChannelList, config } from "./config.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { startCdpChannelRotate } from "./cdp-channel-rotate.js";
 import { createShowLayoutStore } from "./show-layout-store.js";
@@ -393,17 +393,20 @@ async function main() {
   app.get("/api/oi/status", async (_req, res) => {
     const apiBase = config.oiWebBaseUrl;
     const timeoutMs = Number.isFinite(config.oiHealthTimeoutMs) ? config.oiHealthTimeoutMs : 3_000;
-    /** 浏览器可访问的嵌入地址（上云时用公网 / frp 口，勿把 127.0.0.1 给访客） */
-    const publicEmbed =
-      config.oiPublicEmbedUrl || config.oiEmbedUrl || apiBase;
-    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, latencyMs?: number, error?: string, hint?: string, uiBuild?: string }} */
+    /** 浏览器 iframe 用公网 OI 站；勿回落到 127.0.0.1（访客浏览器不可达） */
+    const publicEmbed = (config.oiPublicEmbedUrl || config.oiEmbedUrl || "").replace(/\/$/, "");
+    const devEmbed = (config.oiEmbedUrl || apiBase).replace(/\/$/, "");
+    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, localEmbedUrl: string, latencyMs?: number, error?: string, hint?: string, uiBuild?: string }} */
     const out = {
       ok: true,
       active: false,
       apiBase,
       embedUrl: publicEmbed,
       publicEmbedUrl: publicEmbed,
-      hint: "oi_mornitor 由 collect:ui 自动守护；也可手动：pnpm run oi:start；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8765",
+      localEmbedUrl: "",
+      hint: publicEmbed
+        ? undefined
+        : "主站 /oi 需 OI_PUBLIC_EMBED_URL（如 https://op.b.ezcoin.ink）；本机健康检查仍用 OI_WEB_BASE_URL",
     };
 
     /** @param {string} url */
@@ -430,10 +433,13 @@ async function main() {
       }
     }
 
-    /** 读 OI index.html 的 JS hash（服务端无 CORS；Python 未重启也能拿到） */
-    async function peekIndexAssetBuild(base) {
+    /**
+     * 拉公网 OI 嵌入站首页，判断是否误部署了 collector-ui 主站。
+     * @param {string} base
+     */
+    async function peekPublicEmbedPage(base) {
       const root = String(base || "").replace(/\/$/, "");
-      if (!root) return "";
+      if (!root) return { asset: "", isCollectorUi: false };
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
@@ -441,15 +447,22 @@ async function main() {
           signal: ctrl.signal,
           headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
         });
-        if (!r.ok) return "";
+        if (!r.ok) return { asset: "", isCollectorUi: false };
         const html = await r.text();
+        const isCollectorUi = /<title>\s*discord-collector\s*<\/title>/i.test(html);
         const m = html.match(/\/assets\/(index-[A-Za-z0-9_-]+\.js)/);
-        return m ? m[1] : "";
+        return { asset: m ? m[1] : "", isCollectorUi };
       } catch {
-        return "";
+        return { asset: "", isCollectorUi: false };
       } finally {
         clearTimeout(timer);
       }
+    }
+
+    /** @param {string} base */
+    async function peekIndexAssetBuild(base) {
+      const { asset } = await peekPublicEmbedPage(base);
+      return asset;
     }
 
     const t0 = Date.now();
@@ -468,12 +481,33 @@ async function main() {
       const assetBuild = await peekIndexAssetBuild(apiBase);
       const uiBuild = assetBuild || up.uiBuild || "";
       if (uiBuild) out.uiBuild = uiBuild;
-      // iframe 固定用 OI_WEB_BASE_URL；带 ?v= 打破浏览器对旧文档的强缓存
-      const embedBase = String(publicEmbed || apiBase).replace(/\/$/, "");
-      out.embedUrl = uiBuild
-        ? `${embedBase}/?v=${encodeURIComponent(uiBuild)}`
-        : `${embedBase}/`;
-      out.publicEmbedUrl = out.embedUrl;
+      const localBase = (config.oiEmbedUrl || devEmbed).replace(/\/$/, "");
+      const localWithCache = uiBuild
+        ? `${localBase}/?v=${encodeURIComponent(uiBuild)}`
+        : `${localBase}/`;
+      out.localEmbedUrl = localWithCache;
+
+      if (publicEmbed) {
+        const publicPage = await peekPublicEmbedPage(publicEmbed);
+        if (publicPage.isCollectorUi) {
+          out.embedDeployError = `公网 OI 地址 ${publicEmbed} 当前是 discord-collector 主站（title=discord-collector），不是 OI React。请在 op.b 仅部署 oi_mornitor/public/oi-dist，勿上传 public/collector-ui。`;
+          out.embedUrl = "";
+          out.publicEmbedUrl = "";
+          out.hint = out.embedDeployError;
+        } else {
+          const assetForPublic = publicPage.asset || uiBuild;
+          const withCacheBust = assetForPublic
+            ? `${publicEmbed}/?v=${encodeURIComponent(assetForPublic)}`
+            : `${publicEmbed}/`;
+          out.embedUrl = withCacheBust;
+          out.publicEmbedUrl = withCacheBust;
+        }
+      } else {
+        out.embedUrl = "";
+        out.publicEmbedUrl = "";
+        out.hint =
+          "未配置 OI_PUBLIC_EMBED_URL；访客浏览器请设为主站独立 OI 域名（如 https://op.b.ezcoin.ink）";
+      }
       res.json(out);
     } catch (e) {
       out.latencyMs = Date.now() - t0;
@@ -968,6 +1002,16 @@ async function main() {
     res.json({ ok: true, snapshot: discordIngest.context.snapshot() });
   });
 
+  app.get("/api/show/discord-groups", (_req, res) => {
+    const { channelIds, namesByChannelId } = config.discordGroups;
+    res.json({
+      ok: true,
+      filterEnabled: channelIds.length > 0,
+      channelIds,
+      namesByChannelId,
+    });
+  });
+
   app.get("/api/discord/cdp-active", (_req, res) => {
     res.json({ ok: true, ...discordIngest.getCdpPage() });
   });
@@ -997,7 +1041,7 @@ async function main() {
     try {
       const guildId = String(req.params.guildId ?? "").trim();
       const rows = await store.listDiscordChannelsByGuild(guildId);
-      const channels = rows.map((row) => ({
+      let channels = rows.map((row) => ({
         channelId: row.channel_id,
         guildId: row.guild_id,
         name: row.name,
@@ -1006,6 +1050,7 @@ async function main() {
         lastMessageAtMs: row.last_message_at_ms,
         updatedAt: row.updated_at,
       }));
+      channels = applyDiscordGroupsChannelList(channels, guildId, config.discordGroups);
       res.json({ ok: true, guildId, channels });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -1019,6 +1064,20 @@ async function main() {
       enriched.rawJson = undefined;
       return enriched;
     });
+  }
+
+  /**
+   * 按 channel 查库；带 guildId 无结果时去掉 guild 条件再查（历史行可能 guild_id 为空或与 Show 默认服不一致）。
+   * @param {number} limit
+   * @param {Record<string, unknown>} filters
+   * @param {{ includeRaw?: boolean }} [options]
+   */
+  async function listRecentMessagesRelaxed(limit, filters, options) {
+    let rows = await store.listRecentMessages(limit, filters, options);
+    const ch = String(filters.channelId ?? "").trim();
+    const gid = String(filters.guildId ?? "").trim();
+    if (rows.length > 0 || !ch || !gid) return rows;
+    return store.listRecentMessages(limit, { ...filters, guildId: "" }, options);
   }
 
   /** @param {import("express").Request} req */
@@ -1044,7 +1103,7 @@ async function main() {
       const wantChronological = orderParam !== "desc";
       const beforeMessageId = String(req.query.before ?? req.query.before_message_id ?? "").trim();
       const fromMs = beforeMessageId ? undefined : parseMessageDaysFromMs(req);
-      let rows = await store.listRecentMessages(
+      let rows = await listRecentMessagesRelaxed(
         limit,
         {
           channelId,
@@ -1057,7 +1116,7 @@ async function main() {
       );
       let fallbackOlder = false;
       if (channelId && !beforeMessageId && fromMs != null && rows.length === 0) {
-        rows = await store.listRecentMessages(
+        rows = await listRecentMessagesRelaxed(
           limit,
           { channelId, guildId, order: "desc" },
           { includeRaw: true }
@@ -1095,9 +1154,12 @@ async function main() {
       );
       const fromMs = Date.now() - days * 86400000;
       const channels = await store.listDiscordChannelsByGuild(guildId);
-      const channelIds = channels
+      let channelIds = channels
         .map((c) => String(c.channel_id ?? c.channelId ?? "").trim())
         .filter(Boolean);
+      if (config.discordGroups.channelIds.length) {
+        channelIds = config.discordGroups.channelIds;
+      }
       /** @type {Record<string, Record<string, unknown>[]>} */
       const byChannel = {};
       const concurrency = 6;
@@ -1105,13 +1167,13 @@ async function main() {
         const batch = channelIds.slice(i, i + concurrency);
         await Promise.all(
           batch.map(async (channelId) => {
-            let rows = await store.listRecentMessages(
+            let rows = await listRecentMessagesRelaxed(
               perChannel,
               { channelId, guildId, order: "desc", fromMs },
               { includeRaw: true }
             );
             if (!rows.length) {
-              rows = await store.listRecentMessages(
+              rows = await listRecentMessagesRelaxed(
                 perChannel,
                 { channelId, guildId, order: "desc" },
                 { includeRaw: true }
@@ -1411,6 +1473,7 @@ async function main() {
     pageReloadIntervalMs: config.pageReloadIntervalMs,
     cdpAutoGoto: config.cdpAutoGoto,
     cdpVisibilityKeepalive: config.cdpVisibilityKeepalive,
+    cdpSilentNavigation: config.cdpSilentNavigation,
     networkTrace: config.collectNetworkTrace,
     wsFrameTrace: config.collectWsFrameTrace,
     diagnosticSink,
