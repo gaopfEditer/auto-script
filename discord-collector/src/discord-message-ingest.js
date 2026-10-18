@@ -436,6 +436,22 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
 
     const result = await store.insertDiscordMessagesBatch(toPersist);
 
+    if (isRestBatch && typeof store.mergeDiscordChannelShowHistoryCache === "function") {
+      /** @type {Map<string, string[]>} */
+      const idsByChannel = new Map();
+      for (const r of toPersist) {
+        const cid = String(r.channelId ?? "").trim();
+        const mid = String(r.messageId ?? "").trim();
+        if (!cid || !mid) continue;
+        const bucket = idsByChannel.get(cid) ?? [];
+        bucket.push(mid);
+        idsByChannel.set(cid, bucket);
+      }
+      for (const [cid, ids] of idsByChannel) {
+        await store.mergeDiscordChannelShowHistoryCache(cid, { messageIds: ids });
+      }
+    }
+
     const pushRows = toPersist;
 
     /** @type {Map<string, { channelId: string, guildId: string, name: string, lastMessagePreview: string, lastMessageAtMs: number }>} */

@@ -3,6 +3,7 @@ import { computed, reactive, ref } from "vue";
 import PageLoadingBlock from "./PageLoadingBlock.vue";
 import {
   attachmentDisplayUrl,
+  discordAttachmentProxyUrl,
   fmtMsgTime,
   groupChannelMessages,
   isImageAttachment,
@@ -13,6 +14,7 @@ import {
   msgDisplayName,
 } from "../lib/discordShow.js";
 import {
+  clearAttachmentImgDead,
   isAttachmentImgDead,
   markAttachmentImgDead,
   stableAttachmentImgKey,
@@ -64,7 +66,7 @@ function avatarErrorKey(m) {
 }
 
 /** @param {Record<string, unknown>} att @param {number} i @param {Record<string, unknown>} msg @param {Event} e */
-function onAttachmentImgError(att, i, msg, e) {
+async function onAttachmentImgError(att, i, msg, e) {
   const key = stableAttachmentImgKey(att, i, msg);
   if (isAttachmentImgDead(key)) return;
 
@@ -77,18 +79,32 @@ function onAttachmentImgError(att, i, msg, e) {
 
   const direct = String(att.url ?? "").trim();
   const proxy = String(att.proxyUrl ?? att.proxy_url ?? "").trim();
-  const primary = attachmentDisplayUrl(att);
-  const alt =
-    primary && direct && primary !== direct
-      ? direct
-      : primary && proxy && primary !== proxy
-        ? proxy
-        : "";
+  const altRaw = direct && proxy && direct !== proxy ? (img.src.includes("cdn-proxy") ? direct : proxy) : "";
 
-  if (alt && img.dataset.dcAltTried !== "1") {
+  if (altRaw && img.dataset.dcAltTried !== "1") {
     img.dataset.dcAltTried = "1";
-    img.src = alt;
+    img.src = discordAttachmentProxyUrl(altRaw);
     return;
+  }
+
+  const mid = messageDomId(msg);
+  if (mid && img.dataset.dcRefreshTried !== "1") {
+    img.dataset.dcRefreshTried = "1";
+    try {
+      const res = await fetch(`/api/discord/messages/${encodeURIComponent(mid)}/attachments`);
+      const data = await res.json();
+      const fresh = Array.isArray(data.attachments) ? data.attachments[i] : null;
+      if (fresh && typeof fresh === "object") {
+        const next = attachmentDisplayUrl(fresh);
+        if (next && next !== img.src) {
+          clearAttachmentImgDead(key);
+          img.src = next;
+          return;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   markAttachmentImgDead(key);

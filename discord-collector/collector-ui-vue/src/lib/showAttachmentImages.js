@@ -39,3 +39,9 @@ export function markAttachmentImgDead(key) {
   if (!key) return;
   failedKeys.add(key);
 }
+
+/** @param {string} key */
+export function clearAttachmentImgDead(key) {
+  if (!key) return;
+  failedKeys.delete(key);
+}

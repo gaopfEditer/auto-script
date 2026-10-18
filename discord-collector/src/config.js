@@ -210,6 +210,16 @@ export const config = {
     300,
     Math.max(20, Number(process.env.DISCORD_SHOW_SNAPSHOT_PER_CHANNEL) || 120)
   ),
+  /** Show 频道历史 CDP 预热有效时长（多前端共享库内标记，期内不重复上滚） */
+  discordShowHistoryWarmTtlMs: Math.max(
+    3_600_000,
+    Number(process.env.DISCORD_SHOW_HISTORY_WARM_TTL_HOURS || 12) * 3_600_000
+  ),
+  /** 服务端单次预热最多 CDP 上滚页数 */
+  discordShowHistoryWarmPages: Math.min(
+    8,
+    Math.max(1, Number(process.env.DISCORD_SHOW_HISTORY_WARM_PAGES) || 4)
+  ),
   /** @deprecated 已改为每次只切 1 频道，dwell 不再使用；保留以免旧配置报错 */
   cdpChannelRotateDwellMs: Math.max(
     3_000,

@@ -74,8 +74,18 @@ import {
   setTradeOrderSizeUsdt,
   setTradePlatformToggles,
 } from "./trade-platform-toggles.js";
+import { isChannelShowHistoryFresh } from "./discord-show-history-cache.js";
+import { registerDiscordCdnProxyRoutes } from "./discord-cdn-proxy.js";
+import { extractAttachmentsForClient } from "./discord-message-format.js";
 
 /** 慢客户端：超过 soft 跳过 diag/frame；超过 hard 断开（防 WS 发送队列撑爆堆） */
+const showHistoryWarmInflight = new Map();
+
+/** @param {number} ms */
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 const WS_SEND_BUFFER_SOFT = 2 * 1024 * 1024;
 const WS_SEND_BUFFER_HARD = 16 * 1024 * 1024;
 
@@ -268,6 +278,8 @@ async function main() {
   };
 
   app.use(express.json({ limit: "512kb" }));
+
+  registerDiscordCdnProxyRoutes(app, createLogger("discord-cdn"));
 
   registerDiscordSignalRoutes(app, store, signalCards, broadcast);
   registerBitgetRoutes(app, bitgetOrder, bitgetManual);
@@ -1097,6 +1109,87 @@ async function main() {
     return undefined;
   }
 
+  /**
+   * @param {string} channelId
+   * @param {string} [beforeMessageId]
+   */
+  async function showHistoryCachePayload(channelId, beforeMessageId = "") {
+    const cid = String(channelId ?? "").trim();
+    if (!cid || typeof store.getDiscordChannelShowHistoryCache !== "function") return null;
+    const cache = await store.getDiscordChannelShowHistoryCache(cid);
+    const ttlMs = config.discordShowHistoryWarmTtlMs;
+    const before = String(beforeMessageId ?? "").trim();
+    const fresh = isChannelShowHistoryFresh(cache, { ttlMs, beforeMessageId: before });
+    return {
+      warmedAtMs: cache.warmedAtMs > 0 ? cache.warmedAtMs : null,
+      oldestMessageId: cache.oldestMessageId || null,
+      fresh,
+      ttlMs,
+    };
+  }
+
+  /**
+   * @param {string} guildId
+   * @param {string} channelId
+   * @param {number} maxPages
+   */
+  async function runDiscordShowHistoryWarm(guildId, channelId, maxPages) {
+    if (typeof scrollDiscordHistoryImpl !== "function") {
+      return { ok: false, error: "CDP 尚未就绪", pagesDone: 0 };
+    }
+    const fromMs = Date.now() - config.discordShowSnapshotDays * 86400000;
+    let pagesDone = 0;
+    for (let i = 0; i < maxPages; i += 1) {
+      const cache = await store.getDiscordChannelShowHistoryCache(channelId);
+      const oldest = await store.getOldestDiscordMessageIdForChannel(channelId, { fromMs });
+      if (
+        isChannelShowHistoryFresh(cache, {
+          ttlMs: config.discordShowHistoryWarmTtlMs,
+          beforeMessageId: oldest,
+        })
+      ) {
+        break;
+      }
+      const out = /** @type {{ ok?: boolean, error?: string }} */ (
+        await scrollDiscordHistoryImpl(guildId, channelId, {
+          beforeMessageId: oldest || undefined,
+        })
+      );
+      if (!out?.ok) {
+        return { ok: false, error: out?.error ?? "CDP 上滚失败", pagesDone };
+      }
+      pagesDone += 1;
+      await sleepMs(650);
+    }
+    return { ok: true, pagesDone };
+  }
+
+  app.get("/api/discord/messages/:messageId/attachments", async (req, res) => {
+    try {
+      const messageId = String(req.params.messageId ?? "").trim();
+      if (!messageId) {
+        res.status(400).json({ ok: false, error: "messageId required" });
+        return;
+      }
+      if (typeof store.getDiscordMessageRawJson !== "function") {
+        res.status(503).json({ ok: false, error: "store unavailable" });
+        return;
+      }
+      const rawJson = await store.getDiscordMessageRawJson(messageId);
+      if (!rawJson) {
+        res.status(404).json({ ok: false, error: "message not found" });
+        return;
+      }
+      res.json({
+        ok: true,
+        messageId,
+        attachments: extractAttachmentsForClient(rawJson),
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
   app.get("/api/discord/messages", async (req, res) => {
     try {
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
@@ -1128,12 +1221,16 @@ async function main() {
       }
       let clientRows = discordMessageRowsForClient(rows);
       if (wantChronological) clientRows = clientRows.reverse();
+      const showHistory = channelId
+        ? await showHistoryCachePayload(channelId, beforeMessageId)
+        : null;
       res.json({
         ok: true,
         debugMode: isDebugMode(),
         rows: clientRows,
         fromMs: fallbackOlder ? null : fromMs ?? null,
         fallbackOlder,
+        showHistory,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -1285,6 +1382,65 @@ async function main() {
     }
   });
 
+  /**
+   * Show 切频道：服务端按库内缓存决定是否 CDP 上滚（多前端共享，已刷新则只读 MySQL）。
+   */
+  app.post("/api/discord/channels/show-history-warm", async (req, res) => {
+    const guildId = String(req.body?.guildId ?? "").trim();
+    const channelId = String(req.body?.channelId ?? "").trim();
+    const maxPages = Math.min(
+      8,
+      Math.max(1, Number(req.body?.maxPages) || config.discordShowHistoryWarmPages)
+    );
+    if (!guildId || !channelId) {
+      res.status(400).json({ ok: false, error: "缺少 guildId 或 channelId" });
+      return;
+    }
+    try {
+      const fromMs = Date.now() - config.discordShowSnapshotDays * 86400000;
+      const oldest = await store.getOldestDiscordMessageIdForChannel(channelId, { fromMs });
+      const showHistory = await showHistoryCachePayload(channelId, oldest);
+      if (showHistory?.fresh) {
+        res.json({
+          ok: true,
+          skipped: true,
+          reason: "cache_fresh",
+          pagesDone: 0,
+          showHistory,
+        });
+        return;
+      }
+
+      let inflight = showHistoryWarmInflight.get(channelId);
+      if (!inflight) {
+        inflight = runDiscordShowHistoryWarm(guildId, channelId, maxPages).finally(() => {
+          showHistoryWarmInflight.delete(channelId);
+        });
+        showHistoryWarmInflight.set(channelId, inflight);
+      }
+      const result = await inflight;
+      const showHistoryAfter = await showHistoryCachePayload(channelId, oldest);
+      if (result.ok) {
+        res.json({
+          ok: true,
+          skipped: result.pagesDone === 0 && showHistoryAfter?.fresh,
+          reason: result.pagesDone === 0 ? "cache_fresh" : "warmed",
+          pagesDone: result.pagesDone,
+          showHistory: showHistoryAfter,
+        });
+      } else {
+        res.status(500).json({
+          ok: false,
+          error: result.error ?? "预热失败",
+          pagesDone: result.pagesDone ?? 0,
+          showHistory: showHistoryAfter,
+        });
+      }
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
   /** Show 向上翻页：驱动 CDP 内 Discord 消息列表上滚，触发 /messages?before= 采集 */
   app.post("/api/cdp/discord-channel-scroll-up", async (req, res) => {
     const guildId = String(req.body?.guildId ?? req.query?.guild_id ?? "").trim();
@@ -1296,6 +1452,24 @@ async function main() {
     if (!guildId || !channelId) {
       res.status(400).json({ ok: false, error: "缺少 guildId 或 channelId" });
       return;
+    }
+    if (typeof store.getDiscordChannelShowHistoryCache === "function" && beforeMessageId) {
+      const cache = await store.getDiscordChannelShowHistoryCache(channelId);
+      if (
+        isChannelShowHistoryFresh(cache, {
+          ttlMs: config.discordShowHistoryWarmTtlMs,
+          beforeMessageId,
+        })
+      ) {
+        res.json({
+          ok: true,
+          skipped: true,
+          reason: "cache_fresh",
+          cdpSkipped: true,
+          ...tracePayload,
+        });
+        return;
+      }
     }
     if (typeof scrollDiscordHistoryImpl !== "function") {
       res.status(503).json({ ok: false, error: "CDP 尚未就绪" });

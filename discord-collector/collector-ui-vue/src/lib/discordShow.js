@@ -175,8 +175,8 @@ function normalizeAttachment(item) {
   const pick = url || proxyUrl;
   if (!pick) return null;
   return {
-    url: pick,
-    proxyUrl: proxyUrl || undefined,
+    url: url || proxyUrl,
+    proxyUrl: proxyUrl && proxyUrl !== url ? proxyUrl : undefined,
     filename: String(a.filename ?? "").trim(),
     contentType: String(a.content_type ?? a.contentType ?? "").trim(),
     width: typeof a.width === "number" ? a.width : undefined,
@@ -234,26 +234,55 @@ export function msgAttachments(m) {
     const list = Array.isArray(r.attachments)
       ? r.attachments.map(normalizeAttachment).filter(Boolean)
       : [];
-    if (list.length) return list;
-    return embedImagesFromRaw(raw);
+    const embeds = embedImagesFromRaw(raw);
+    if (!list.length) return embeds;
+    const seen = new Set(list.map((a) => attachmentDisplayUrl(a)));
+    for (const e of embeds) {
+      const u = attachmentDisplayUrl(e);
+      if (u && !seen.has(u)) list.push(e);
+    }
+    return list;
   }
   return [];
 }
 
-/** 展示用 URL：优先 proxy（部分环境直连 cdn 会 403） */
+/** @param {string} raw */
+export function discordAttachmentProxyUrl(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  try {
+    const h = new URL(s).hostname.toLowerCase();
+    if (
+      h === "cdn.discordapp.com" ||
+      h === "media.discordapp.net" ||
+      h.endsWith(".discordapp.net") ||
+      h.endsWith(".discordapp.com")
+    ) {
+      return `/api/discord/cdn-proxy?u=${encodeURIComponent(s)}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return s;
+}
+
+/** 展示用 URL：经本机代理 Discord CDN，减轻 403；其它仍直连 */
 export function attachmentDisplayUrl(att) {
   if (!att || typeof att !== "object") return "";
   const proxy = String(att.proxyUrl ?? "").trim();
   const direct = String(att.url ?? "").trim();
-  return proxy || direct;
+  const pick = proxy || direct;
+  return discordAttachmentProxyUrl(pick);
 }
 
-/** @param {{ contentType?: string, filename?: string }} att */
+/** @param {{ contentType?: string, filename?: string, url?: string, proxyUrl?: string }} att */
 export function isImageAttachment(att) {
   const ct = String(att.contentType ?? "").toLowerCase();
   if (ct.startsWith("image/")) return true;
   const fn = String(att.filename ?? "").toLowerCase();
-  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(fn);
+  if (/\.(png|jpe?g|gif|webp|bmp|svg|apng)$/i.test(fn)) return true;
+  const u = String(att.url ?? att.proxyUrl ?? "").toLowerCase();
+  return /\/attachments\/|\/ephemeral-attachments\/|\.(png|jpe?g|gif|webp)(\?|$)/i.test(u);
 }
 
 /** @param {Record<string, unknown>} m */
