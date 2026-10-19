@@ -62,6 +62,17 @@ def test_upsert_watchlist_leader_passthrough_any_channel():
     assert wl["symbols"]["BTCUSDT"].get("leader") is True
 
 
+def test_webhook_endpoints_primary_and_secondary(monkeypatch):
+    monkeypatch.setenv("KOL_GROK_WEBHOOK_URL", "https://a.example/hook")
+    monkeypatch.setenv("KOL_GROK_WEBHOOK_KEY", "k1")
+    monkeypatch.setenv("KOL_GROK_WEBHOOK_URL_2", "https://b.example/hook")
+    monkeypatch.setenv("KOL_GROK_WEBHOOK_KEY_2", "k2")
+    eps = webhook_endpoints()
+    assert len(eps) == 2
+    assert eps[0][0].startswith("https://a")
+    assert eps[1][0].startswith("https://b")
+
+
 def test_alert_key_format():
     assert alert_key("BTCUSDT", "15m", "inverted_hammer", 1700000000000) == (
         "BTCUSDT|15m|inverted_hammer|1700000000000"
