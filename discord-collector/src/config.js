@@ -407,12 +407,12 @@ export const config = {
   cardVerifyStockWindowDays: Number(process.env.CARD_VERIFY_STOCK_WINDOW_DAYS ?? 30),
   /** 自动校验盈亏按杠杆倍数（默认 100x） */
   cardVerifyLeverage: Number(process.env.CARD_VERIFY_LEVERAGE ?? 100),
-  /** 卡片批量回溯：每 N 小时标记一次盈亏（默认 4h）；超 N 天取消任务（默认 3 天） */
+  /** 卡片批量回溯：每 N 小时标记一次盈亏（默认 12h）；K 线拉取最长 N 天（默认 365），不因天数截止任务 */
   cardBatchBacktestEnabled: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_BATCH_BACKTEST_ENABLED ?? "1").toLowerCase()
   ),
-  cardBacktestSliceHours: Number(process.env.CARD_BACKTEST_SLICE_HOURS ?? 4),
-  cardBacktestMaxDays: Number(process.env.CARD_BACKTEST_MAX_DAYS ?? 3),
+  cardBacktestSliceHours: Number(process.env.CARD_BACKTEST_SLICE_HOURS ?? 12),
+  cardBacktestMaxDays: Number(process.env.CARD_BACKTEST_MAX_DAYS ?? 365),
   /** 评价表单：主流 BTC/ETH 默认杠杆 */
   cardEvalMajorLeverage: Number(process.env.CARD_EVAL_MAJOR_LEVERAGE ?? 100),
   /** 评价表单：山寨默认杠杆 */

@@ -57,6 +57,7 @@ from oi_mornitor.capital_bias import (
     build_capital_confluence,
     build_capital_intensity,
 )
+from oi_mornitor.oi_entry_filter import annotate_alert_row
 from oi_mornitor.market_matrix import MarketMatrixCache
 from oi_mornitor.matrix_breakout import MatrixBreakoutEngine
 from oi_mornitor.pattern_monitor import PatternMonitorEngine
@@ -1230,6 +1231,7 @@ class BinanceOIRadar:
             if row:
                 row["flow_by_tf"] = flow_by_symbol.get(meta.symbol, empty_flow_by_tf())
                 row["spot_flow_by_tf"] = spot_flow_by_symbol.get(meta.symbol, empty_flow_by_tf())
+                annotate_alert_row(row)  # OI_ENTRY_FILTER_V2 默认关；开启时标注 L1/L2
                 evaluated.append(row)
 
         self.rank_engine.enrich(evaluated)

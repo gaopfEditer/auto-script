@@ -453,6 +453,32 @@ export function calcProfitPercents(buy, sell, direction, leverage, symbol, entry
 }
 
 /** @param {unknown} raw */
+/** @param {Record<string, unknown> | null} bt */
+function backtestView(bt) {
+  if (!bt) return null;
+  if (bt.mode !== "batch_backtest") return bt;
+  const primaryKey = String(bt.primaryProfile ?? "card");
+  const profiles =
+    bt.profiles && typeof bt.profiles === "object"
+      ? /** @type {Record<string, unknown>} */ (bt.profiles)
+      : null;
+  const p =
+    profiles?.[primaryKey] && typeof profiles[primaryKey] === "object"
+      ? /** @type {Record<string, unknown>} */ (profiles[primaryKey])
+      : null;
+  if (!p) return bt;
+  const entry = p.entryPriceUsed ?? p.entry ?? bt.entry ?? null;
+  return {
+    ...bt,
+    ...p,
+    profiles,
+    primaryProfile: primaryKey,
+    mode: "batch_backtest",
+    entry,
+    entered: Boolean(p.entered),
+  };
+}
+
 function parseCardJsonBlob(raw) {
   if (!raw) return null;
   if (typeof raw === "object") return /** @type {Record<string, unknown>} */ (raw);
@@ -490,7 +516,7 @@ export function resolveCardPnlPct(card) {
     return alignPnlWithOutcome(outcome, Number(progress.pnlPct));
   }
 
-  const bt = parseCardJsonBlob(card.backtest ?? card.backtest_json);
+  const bt = backtestView(parseCardJsonBlob(card.backtest ?? card.backtest_json));
   if (bt) {
     const p = Number(bt.pnlPct ?? bt.pnl);
     if (Number.isFinite(p)) return alignPnlWithOutcome(outcome, p);
@@ -559,11 +585,11 @@ export function resolveCardEvalOutcome(card) {
   if (tpHits.length > 0 || po === "take_profit" || status === "closed_tp") return "take_profit";
   if (status === "closed_sl" || po === "stop_loss" || progress?.slHitAt) return "stop_loss";
 
-  const bt = parseCardJsonBlob(card.backtest ?? card.backtest_json);
-  const bo = String(bt?.outcome ?? "").trim();
+  const bt = backtestView(parseCardJsonBlob(card.backtest ?? card.backtest_json));
+  const bo = String(bt?.outcome ?? progress?.outcome ?? "").trim();
   if (bo === "take_profit" || bo === "stop_loss") {
     const entryHit = Boolean(progress?.entryHitAt);
-    if (entryHit || bt?.entry != null) return bo;
+    if (entryHit || bt?.entry != null || bt?.entered === true || progress?.entered) return bo;
   }
 
   if (hasEvaluatedYield(ex)) {
@@ -601,13 +627,47 @@ export function isCardEnteredForEval(card) {
   const po = String(progress?.outcome ?? "").trim();
   if (po === "take_profit" || po === "stop_loss") return true;
 
-  const bt = parseCardJsonBlob(card.backtest ?? card.backtest_json);
+  const bt = backtestView(parseCardJsonBlob(card.backtest ?? card.backtest_json));
   const bo = String(bt?.outcome ?? "").trim();
   if (bo === "take_profit" || bo === "stop_loss") {
-    if (bt?.entry != null || entryHit) return true;
+    if (bt?.entry != null || bt?.entered === true || entryHit) return true;
   }
+  if (bt?.mode === "batch_backtest" && (progress?.entered || bt?.entered)) return true;
 
   return false;
+}
+
+/** @param {Record<string, unknown>} card @returns {string[]} */
+export function backtestSummaryLines(card) {
+  const bt = backtestView(parseCardJsonBlob(card.backtest ?? card.backtest_json));
+  if (!bt) return [];
+  /** @type {string[]} */
+  const lines = [];
+  if (bt.mode === "batch_backtest") {
+    lines.push("策略：批量回溯（双策略）");
+    const profiles =
+      bt.profiles && typeof bt.profiles === "object"
+        ? /** @type {Record<string, Record<string, unknown>>} */ (bt.profiles)
+        : null;
+    if (profiles) {
+      for (const [key, row] of Object.entries(profiles)) {
+        if (!row || typeof row !== "object") continue;
+        const label = key === "fixed_5_7_10_20" ? "固定 5%+7/10/20%" : key === "card" ? "卡片 TP/SL" : key;
+        const entered = row.entered ? "已入场" : "未入场";
+        const oc = String(row.outcome ?? "pending");
+        const pnl = row.pnlLabel ?? (Number.isFinite(Number(row.pnlPct)) ? `${row.pnlPct}%` : "—");
+        lines.push(`· ${label}：${entered} · ${oc} · ${pnl}`);
+        if (row.note) lines.push(`  ${row.note}`);
+      }
+    } else if (bt.pnlLabel || bt.pnlPct != null) {
+      lines.push(`· 主策略：${bt.pnlLabel ?? `${bt.pnlPct}%`}`);
+    }
+    if (bt.taskCancelled) lines.push("· 历史记录：曾按旧规则截止；可勾选后「批量回溯」重跑");
+  } else if (bt.mode === "liquidation" || bt.autoEval) {
+    lines.push(`清算/回测：${bt.outcome ?? "—"} ${bt.pnlLabel ?? ""}`.trim());
+    if (bt.note) lines.push(String(bt.note));
+  }
+  return lines;
 }
 
 /** @param {import("./discordSignalApi.js").SignalCard[]} cards */

@@ -1,6 +1,6 @@
 /**
  * 卡片批量回溯：双策略（固定 5% 止损 + 7/10/20% 止盈 vs 卡片自带 TP/SL）、
- * 市价/限价入场、每 4h 标记盈亏、超 3 天取消任务。
+ * 市价/限价入场、默认每 12h 标记盈亏；超过 12h 仍续跑直至触达止盈/止损。
  */
 import { calcLeveragePnl, fetchKlinesForCard } from "./card-price-fetch.js";
 import { archiveCardToClient } from "./card-archive-service.js";
@@ -29,12 +29,22 @@ export function buildFixed5071020Levels(entry, isShort) {
   return { tps, sl, tpPcts, slPct };
 }
 
-export function batchBacktestSliceMs() {
-  return Math.max(3_600_000, (Number(config.cardBacktestSliceHours) || 4) * 3_600_000);
+export function batchBacktestSliceHours() {
+  return Math.max(1, Number(config.cardBacktestSliceHours) || 12);
 }
 
+export function batchBacktestSliceMs() {
+  return Math.max(3_600_000, batchBacktestSliceHours() * 3_600_000);
+}
+
+/** K 线拉取窗口上限（自信号起），不用于截止回溯任务 */
 export function batchBacktestMaxMs() {
-  return Math.max(batchBacktestSliceMs(), (Number(config.cardBacktestMaxDays) || 3) * 86_400_000);
+  return Math.max(batchBacktestSliceMs(), (Number(config.cardBacktestMaxDays) || 365) * 86_400_000);
+}
+
+function batchBacktestMarkLabel() {
+  const h = batchBacktestSliceHours();
+  return h >= 24 ? `${Math.round(h / 24)}d标记` : `${h}h标记`;
 }
 
 /**
@@ -64,8 +74,7 @@ function attachPeriodicSettlements(base, klines, endMs) {
     return { periodicSettlements: [], taskCancelled: false };
   }
   const sliceMs = batchBacktestSliceMs();
-  const capMs = entryMs + batchBacktestMaxMs();
-  const evalEnd = Math.min(endMs, capMs);
+  const evalEnd = endMs;
   /** @type {Array<{ at: string, ts: number, price: number, pnlPct: number }>} */
   const periodicSettlements = [];
   for (let t = entryMs + sliceMs; t <= evalEnd; t += sliceMs) {
@@ -84,8 +93,7 @@ function attachPeriodicSettlements(base, klines, endMs) {
       pnlPct: pnl ? Math.round(pnl.pnlPctOnMargin * 100) / 100 : 0,
     });
   }
-  const taskCancelled = evalEnd >= capMs && base.outcome === "pending";
-  return { periodicSettlements, taskCancelled };
+  return { periodicSettlements, taskCancelled: false };
 }
 
 /**
@@ -117,41 +125,31 @@ export function evaluateProfileBacktest(card, klines, opts) {
     maxEndMs: endMs,
     fixedLevels,
   });
-  const { periodicSettlements, taskCancelled } =
+  const { periodicSettlements } =
     base.outcome === "pending" || base.outcome === "take_profit"
       ? attachPeriodicSettlements(base, klines, endMs)
-      : { periodicSettlements: [], taskCancelled: false };
+      : { periodicSettlements: [] };
 
   /** @type {Record<string, unknown>} */
   const out = {
     ...base,
     profile,
     entryMode: base.plannedEntry != null && !base.marketAtSignal ? "limit" : "market",
-    sliceHours: Number(config.cardBacktestSliceHours) || 4,
-    maxDays: Number(config.cardBacktestMaxDays) || 3,
+    sliceHours: batchBacktestSliceHours(),
+    maxDays: Number(config.cardBacktestMaxDays) || 365,
     backtestEndMs: endMs,
     periodicSettlements,
-    taskCancelled,
+    taskCancelled: false,
   };
 
-  if (taskCancelled) {
-    out.outcome = "expired";
-    out.status = "expired";
-    out.note = "超过 3 天未触达止盈/止损，回溯任务已取消";
-    if (periodicSettlements.length) {
-      const last = periodicSettlements[periodicSettlements.length - 1];
-      out.pnlPct = last.pnlPct;
-      out.periodicMark = last;
-      const lev = Number(base.leverage) || 20;
-      out.pnlLabel = `${last.pnlPct >= 0 ? "+" : ""}${last.pnlPct.toFixed(2)}% (@${lev}x, 4h标记)`;
-    }
-  } else if (base.outcome === "pending" && periodicSettlements.length) {
+  const markLabel = batchBacktestMarkLabel();
+  if (base.outcome === "pending" && periodicSettlements.length) {
     const last = periodicSettlements[periodicSettlements.length - 1];
     out.periodicMark = last;
     out.pnlPct = last.pnlPct;
     const lev = Number(base.leverage) || 20;
-    out.pnlLabel = `${last.pnlPct >= 0 ? "+" : ""}${last.pnlPct.toFixed(2)}% (@${lev}x, 4h标记)`;
-    out.note = "未触达止盈止损，按最近 4h 收盘价估算盈亏";
+    out.pnlLabel = `${last.pnlPct >= 0 ? "+" : ""}${last.pnlPct.toFixed(2)}% (@${lev}x, ${markLabel})`;
+    out.note = `未触达止盈止损，按最近 ${batchBacktestSliceHours()}h 收盘价估算盈亏；续跑直至触达 TP/SL`;
   }
 
   return out;
@@ -215,9 +213,9 @@ export async function runCardBatchBacktest(card, opts = {}) {
     pnlPct: primary?.pnlPct ?? 0,
     pnlLabel: primary?.pnlLabel ?? null,
     settledAt: new Date().toISOString(),
-    sliceHours: Number(config.cardBacktestSliceHours) || 4,
-    maxDays: Number(config.cardBacktestMaxDays) || 3,
-    taskCancelled,
+    sliceHours: batchBacktestSliceHours(),
+    maxDays: Number(config.cardBacktestMaxDays) || 365,
+    taskCancelled: false,
   };
 }
 
@@ -230,13 +228,11 @@ export function shouldSkipBatchBacktest(card, opts = {}) {
   const ex = normalizeExecution(card.execution);
   if (hasEvaluatedYield(ex)) return "evaluated_yield";
   const prog = card.progress && typeof card.progress === "object" ? card.progress : null;
-  if (prog && prog.taskCancelled === true) return "task_cancelled_3d";
   const bt =
     card.backtest && typeof card.backtest === "object"
       ? /** @type {Record<string, unknown>} */ (card.backtest)
       : null;
   if (bt?.mode === "batch_backtest") {
-    if (bt.taskCancelled === true) return "already_cancelled";
     return null;
   }
   if (ex.outcome && ex.outcome !== "pending") return "outcome_set";
@@ -247,6 +243,42 @@ export function shouldSkipBatchBacktest(card, opts = {}) {
  * @param {ReturnType<typeof archiveCardToClient>} card
  * @param {Record<string, unknown>} doc
  */
+/**
+ * 批量回溯主策略字段展平（与 liquidation 的 backtestJson 字段对齐，供评价/展示读取）。
+ * @param {Record<string, unknown> | null | undefined} doc
+ */
+export function flattenBatchBacktestDoc(doc) {
+  if (!doc || doc.mode !== "batch_backtest") return doc ?? null;
+  const primaryKey = String(doc.primaryProfile ?? BATCH_PROFILES.CARD);
+  const profiles =
+    doc.profiles && typeof doc.profiles === "object"
+      ? /** @type {Record<string, unknown>} */ (doc.profiles)
+      : null;
+  const p =
+    profiles?.[primaryKey] && typeof profiles[primaryKey] === "object"
+      ? /** @type {Record<string, unknown>} */ (profiles[primaryKey])
+      : null;
+  if (!p) return doc;
+  const entry = p.entryPriceUsed ?? p.entry ?? doc.entry ?? null;
+  return {
+    ...doc,
+    ...p,
+    profiles,
+    primaryProfile: primaryKey,
+    mode: "batch_backtest",
+    entry,
+    entered: Boolean(p.entered),
+    entryPriceUsed: p.entryPriceUsed ?? entry,
+    entryHitAt: p.entryHitAt ?? doc.entryHitAt ?? null,
+    outcome: p.outcome ?? doc.outcome ?? "pending",
+    pnlPct: p.pnlPct ?? doc.pnlPct ?? 0,
+    pnlLabel: p.pnlLabel ?? doc.pnlLabel ?? null,
+    settlementPrice: p.settlementPrice ?? doc.settlementPrice ?? null,
+    note: p.note ?? doc.note ?? null,
+    status: p.status ?? doc.status ?? null,
+  };
+}
+
 export function buildBatchBacktestPatch(card, doc) {
   const ex = normalizeExecution(card.execution);
   const primaryKey = String(doc.primaryProfile ?? BATCH_PROFILES.CARD);
@@ -258,11 +290,12 @@ export function buildBatchBacktestPatch(card, doc) {
     primary && typeof primary === "object" ? /** @type {Record<string, unknown>} */ (primary) : null;
 
   const nextCheckAt = new Date(Date.now() + batchBacktestSliceMs()).toISOString();
+  const flat = flattenBatchBacktestDoc(doc);
 
   /** @type {Record<string, unknown>} */
   const patch = {
     backtestJson: {
-      ...doc,
+      ...(flat ?? doc),
       autoEval: true,
     },
     progressJson: {
@@ -270,11 +303,14 @@ export function buildBatchBacktestPatch(card, doc) {
       lastCheckAt: new Date().toISOString(),
       nextCheckAt,
       primaryProfile: primaryKey,
-      outcome: doc.outcome ?? "pending",
-      pnlPct: doc.pnlPct ?? 0,
-      taskCancelled: Boolean(doc.taskCancelled ?? p?.taskCancelled),
-      sliceHours: doc.sliceHours ?? 4,
-      maxDays: doc.maxDays ?? 3,
+      outcome: flat?.outcome ?? doc.outcome ?? "pending",
+      pnlPct: flat?.pnlPct ?? doc.pnlPct ?? 0,
+      entryHitAt: flat?.entryHitAt ?? p?.entryHitAt ?? null,
+      entered: Boolean(flat?.entered ?? p?.entered),
+      status: flat?.status ?? p?.status ?? (p?.entered ? "entered" : "not_entered"),
+      taskCancelled: false,
+      sliceHours: doc.sliceHours ?? batchBacktestSliceHours(),
+      maxDays: doc.maxDays ?? (Number(config.cardBacktestMaxDays) || 365),
     },
   };
 
@@ -393,11 +429,9 @@ export function isBatchBacktestDue(card, nowMs = Date.now()) {
   if (shouldSkipBatchBacktest(card, {})) return false;
   const prog = card.progress && typeof card.progress === "object" ? card.progress : null;
   if (prog?.mode !== "batch_backtest") return false;
-  if (prog.taskCancelled) return false;
   const signalAt = resolveCardSignalAt(card) ?? card.signalAt ?? card.createdAt;
   const signalMs = signalAt ? Date.parse(String(signalAt)) : NaN;
   if (!Number.isFinite(signalMs)) return false;
-  if (nowMs - signalMs > batchBacktestMaxMs()) return false;
   const ex = normalizeExecution(card.execution);
   if (ex.outcome && ex.outcome !== "pending") return false;
   const next = prog.nextCheckAt ? Date.parse(String(prog.nextCheckAt)) : NaN;

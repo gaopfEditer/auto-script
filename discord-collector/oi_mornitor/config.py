@@ -113,6 +113,19 @@ POLL_5M_SEC = int(os.getenv("OI_POLL_5M_SEC", "60"))
 POLL_15M_SEC = int(os.getenv("OI_POLL_15M_SEC", "180"))
 ALERT_COOLDOWN_SEC = int(os.getenv("OI_ALERT_COOLDOWN_SEC", "300"))
 
+# --- OI 三层入场过滤（默认关，避免改变现网异动噪声；回测脚本默认开）---
+# OI_ENTRY_FILTER_V2=1 时：对告警行标注 consensus / 背离 / 形态等待字段
+# OI_ENTRY_FILTER_V2_GATE_ALERT=1 时：仅 L1+L2 通过才保持 is_alert（更激进，默认关）
+OI_ENTRY_FILTER_V2 = env_bool("OI_ENTRY_FILTER_V2", False)
+OI_ENTRY_FILTER_V2_GATE_ALERT = env_bool("OI_ENTRY_FILTER_V2_GATE_ALERT", False)
+OI_ENTRY_FLAT_ABS_PCT = env_float("OI_ENTRY_FLAT_ABS_PCT", 0.15, min_val=0.0)
+OI_ENTRY_DIVERGENCE_MODE = env_str("OI_ENTRY_DIVERGENCE_MODE", "filter")  # filter | downweight
+OI_ENTRY_PATTERN_TIMEOUT_SEC = env_int("OI_ENTRY_PATTERN_TIMEOUT_SEC", 900, min_val=60)
+OI_ENTRY_PATTERN_TIMEOUT_BARS = env_int("OI_ENTRY_PATTERN_TIMEOUT_BARS", 3, min_val=1)
+OI_ENTRY_PATTERNS = env_str(
+    "OI_ENTRY_PATTERNS", "shooting_star,inverted_hammer,engulfing"
+)
+
 # OI 分钟级快照缓存长度（支持 1d 窗口差分）
 OI_CACHE_MAXLEN = int(os.getenv("OI_CACHE_MAXLEN", "1440"))
 MATRIX_TOP_N = int(os.getenv("OI_MATRIX_TOP_N", "7"))

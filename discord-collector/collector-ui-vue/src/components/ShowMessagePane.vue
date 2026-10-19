@@ -3,7 +3,7 @@ import { computed, reactive, ref } from "vue";
 import PageLoadingBlock from "./PageLoadingBlock.vue";
 import {
   attachmentDisplayUrl,
-  discordAttachmentProxyUrl,
+  attachmentImgSrcCandidates,
   fmtMsgTime,
   groupChannelMessages,
   isImageAttachment,
@@ -65,6 +65,22 @@ function avatarErrorKey(m) {
   return String(m.authorId ?? m.author_id ?? m.messageId ?? m.message_id ?? "");
 }
 
+/**
+ * @param {HTMLImageElement} img
+ * @param {string[]} candidates
+ */
+function tryNextAttachmentSrc(img, candidates) {
+  const tried = Number(img.dataset.dcTryIdx ?? "0");
+  for (let j = tried; j < candidates.length; j += 1) {
+    const next = candidates[j];
+    if (!next || next === img.src) continue;
+    img.dataset.dcTryIdx = String(j + 1);
+    img.src = next;
+    return true;
+  }
+  return false;
+}
+
 /** @param {Record<string, unknown>} att @param {number} i @param {Record<string, unknown>} msg @param {Event} e */
 async function onAttachmentImgError(att, i, msg, e) {
   const key = stableAttachmentImgKey(att, i, msg);
@@ -77,15 +93,8 @@ async function onAttachmentImgError(att, i, msg, e) {
     return;
   }
 
-  const direct = String(att.url ?? "").trim();
-  const proxy = String(att.proxyUrl ?? att.proxy_url ?? "").trim();
-  const altRaw = direct && proxy && direct !== proxy ? (img.src.includes("cdn-proxy") ? direct : proxy) : "";
-
-  if (altRaw && img.dataset.dcAltTried !== "1") {
-    img.dataset.dcAltTried = "1";
-    img.src = discordAttachmentProxyUrl(altRaw);
-    return;
-  }
+  const chain = attachmentImgSrcCandidates(att);
+  if (tryNextAttachmentSrc(img, chain)) return;
 
   const mid = messageDomId(msg);
   if (mid && img.dataset.dcRefreshTried !== "1") {
@@ -95,12 +104,12 @@ async function onAttachmentImgError(att, i, msg, e) {
       const data = await res.json();
       const fresh = Array.isArray(data.attachments) ? data.attachments[i] : null;
       if (fresh && typeof fresh === "object") {
-        const next = attachmentDisplayUrl(fresh);
-        if (next && next !== img.src) {
-          clearAttachmentImgDead(key);
-          img.src = next;
-          return;
-        }
+        const freshKey = stableAttachmentImgKey(fresh, i, msg);
+        clearAttachmentImgDead(key);
+        clearAttachmentImgDead(freshKey);
+        img.dataset.dcTryIdx = "0";
+        const freshChain = attachmentImgSrcCandidates(fresh);
+        if (tryNextAttachmentSrc(img, freshChain)) return;
       }
     } catch {
       /* ignore */

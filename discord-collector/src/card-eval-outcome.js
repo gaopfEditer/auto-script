@@ -1,8 +1,16 @@
 /**
  * 卡片评价结果统计（与前端 signalExecution 对齐）。
  */
+import { flattenBatchBacktestDoc } from "./card-batch-backtest-engine.js";
 import { normalizeExecution, hasEvaluatedYield } from "./discord-signal-execution.js";
 import { parseProgressJson } from "./card-level-progress.js";
+
+/** @param {Record<string, unknown> | null} bt */
+function backtestView(bt) {
+  if (!bt) return null;
+  const flat = flattenBatchBacktestDoc(bt);
+  return flat && typeof flat === "object" ? flat : bt;
+}
 
 /** @param {ReturnType<typeof import("./discord-signal-card-service.js").signalCardToClient>} card */
 export function resolveCardEvalOutcome(card) {
@@ -17,14 +25,24 @@ export function resolveCardEvalOutcome(card) {
   if (tpHits.length > 0 || po === "take_profit" || status === "closed_tp") return "take_profit";
   if (status === "closed_sl" || po === "stop_loss" || progress?.slHitAt) return "stop_loss";
 
-  const bt =
+  const btRaw =
     card.backtest && typeof card.backtest === "object"
       ? /** @type {Record<string, unknown>} */ (card.backtest)
       : null;
+  const bt = backtestView(btRaw);
   const bo = String(bt?.outcome ?? "").trim();
   if (bo === "take_profit" || bo === "stop_loss") {
     const entryHit = Boolean(progress?.entryHitAt);
-    if (entryHit || bt?.entry != null) return bo;
+    if (entryHit || bt?.entry != null || bt?.entered === true) return bo;
+  }
+  if (bt?.mode === "batch_backtest" && String(progress?.mode ?? "") === "batch_backtest") {
+    const po2 = String(progress?.outcome ?? bt?.outcome ?? "").trim();
+    if (
+      (po2 === "take_profit" || po2 === "stop_loss") &&
+      (progress?.entered || bt?.entered || bt?.entry != null)
+    ) {
+      return po2;
+    }
   }
 
   if (hasEvaluatedYield(ex)) {
@@ -62,14 +80,16 @@ export function isCardEnteredForEval(card) {
   const po = String(progress?.outcome ?? "").trim();
   if (po === "take_profit" || po === "stop_loss") return true;
 
-  const bt =
+  const btRaw =
     card.backtest && typeof card.backtest === "object"
       ? /** @type {Record<string, unknown>} */ (card.backtest)
       : null;
+  const bt = backtestView(btRaw);
   const bo = String(bt?.outcome ?? "").trim();
   if (bo === "take_profit" || bo === "stop_loss") {
-    if (bt?.entry != null || entryHit) return true;
+    if (bt?.entry != null || bt?.entered === true || entryHit) return true;
   }
+  if (bt?.mode === "batch_backtest" && (progress?.entered || bt?.entered)) return true;
 
   return false;
 }

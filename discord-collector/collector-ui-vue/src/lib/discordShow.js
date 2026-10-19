@@ -266,13 +266,43 @@ export function discordAttachmentProxyUrl(raw) {
   return s;
 }
 
-/** 展示用 URL：经本机代理 Discord CDN，减轻 403；其它仍直连 */
-export function attachmentDisplayUrl(att) {
-  if (!att || typeof att !== "object") return "";
-  const proxy = String(att.proxyUrl ?? "").trim();
+/** @param {Record<string, unknown>} att */
+export function attachmentCdnRawUrls(att) {
+  if (!att || typeof att !== "object") return [];
   const direct = String(att.url ?? "").trim();
-  const pick = proxy || direct;
-  return discordAttachmentProxyUrl(pick);
+  const proxy = String(att.proxyUrl ?? att.proxy_url ?? "").trim();
+  /** @type {string[]} */
+  const out = [];
+  const add = (u) => {
+    if (u && !out.includes(u)) out.push(u);
+  };
+  add(direct);
+  add(proxy);
+  return out;
+}
+
+/**
+ * 展示首选直连 CDN（referrerpolicy=no-referrer）；失败时由 ShowMessagePane 依次试代理与其它候选。
+ * @param {Record<string, unknown>} att
+ */
+export function attachmentDisplayUrl(att) {
+  const raw = attachmentCdnRawUrls(att);
+  return raw[0] ?? "";
+}
+
+/**
+ * 直连 + 代理 候选（去重），供 img onerror 链式重试。
+ * @param {Record<string, unknown>} att
+ */
+export function attachmentImgSrcCandidates(att) {
+  /** @type {string[]} */
+  const out = [];
+  for (const raw of attachmentCdnRawUrls(att)) {
+    if (!out.includes(raw)) out.push(raw);
+    const proxied = discordAttachmentProxyUrl(raw);
+    if (proxied && proxied !== raw && !out.includes(proxied)) out.push(proxied);
+  }
+  return out;
 }
 
 /** @param {{ contentType?: string, filename?: string, url?: string, proxyUrl?: string }} att */

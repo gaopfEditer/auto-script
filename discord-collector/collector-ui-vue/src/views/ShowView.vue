@@ -42,6 +42,7 @@ import {
   normalizeChannelGroups,
   newChannelGroupId,
 } from "../lib/discordShow.js";
+import { resetAttachmentImgDeadCache } from "../lib/showAttachmentImages.js";
 
 defineOptions({ name: "ShowView" });
 
@@ -104,6 +105,8 @@ const LOAD_OLDER_COOLDOWN_MS = 1_800;
 const LOAD_OLDER_PAGE_SIZE = 50;
 /** 切频道后请求服务端预热（已刷新则只读 MySQL，不重复 CDP） */
 const CHANNEL_HISTORY_WARMUP_START_DELAY_MS = 450;
+/** 无键盘/鼠标操作超过该时间后滚到最新消息 */
+const SHOW_IDLE_JUMP_BOTTOM_MS = 5 * 60 * 1000;
 const snapshotWarming = ref(false);
 const navPending = ref(false);
 const navError = ref("");
@@ -125,6 +128,9 @@ const channelStripById = ref({});
 /** @type {ReturnType<typeof setInterval> | null} */
 let channelStripTimer = null;
 let saveTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+let lastShowUserActivityAt = Date.now();
+/** @type {ReturnType<typeof setTimeout> | null} */
+let idleJumpBottomTimer = null;
 /** @type {ReturnType<typeof setTimeout> | null} */
 let discordBatchFlushTimer = null;
 let discordBatchFlushFirstAt = 0;
@@ -1110,6 +1116,8 @@ async function selectChannel(ch) {
   }
   clearChannelUnread(ch.channelId);
   navError.value = "";
+  resetAttachmentImgDeadCache();
+  bumpShowUserActivity();
   channelStickBottom.value = true;
   syncPaneMessagesFromStore();
   scrollMsgsBottom();
@@ -1240,6 +1248,31 @@ async function scrollMsgsToBottomAfterLayout() {
       });
     });
   });
+}
+
+function bumpShowUserActivity() {
+  lastShowUserActivityAt = Date.now();
+  scheduleIdleJumpBottomTimer();
+}
+
+function scheduleIdleJumpBottomTimer() {
+  if (idleJumpBottomTimer) clearTimeout(idleJumpBottomTimer);
+  idleJumpBottomTimer = setTimeout(() => void onShowIdleJumpBottom(), SHOW_IDLE_JUMP_BOTTOM_MS);
+}
+
+async function onShowIdleJumpBottom() {
+  idleJumpBottomTimer = null;
+  if (!selectedChannel.value) {
+    scheduleIdleJumpBottomTimer();
+    return;
+  }
+  if (Date.now() - lastShowUserActivityAt < SHOW_IDLE_JUMP_BOTTOM_MS - 100) {
+    scheduleIdleJumpBottomTimer();
+    return;
+  }
+  channelStickBottom.value = true;
+  await scrollMsgsToBottomAfterLayout();
+  scheduleIdleJumpBottomTimer();
 }
 
 /** @param {string} messageId */
@@ -1817,10 +1850,15 @@ onMounted(async () => {
     channelStickBottom.value = true;
     void scrollMsgsToBottomAfterLayout();
   }
+  bumpShowUserActivity();
 });
 
 onUnmounted(() => {
   flushPendingDiscordBatchesImmediate();
+  if (idleJumpBottomTimer) {
+    clearTimeout(idleJumpBottomTimer);
+    idleJumpBottomTimer = null;
+  }
   if (channelStripTimer) {
     clearInterval(channelStripTimer);
     channelStripTimer = null;
@@ -1832,6 +1870,8 @@ onUnmounted(() => {
   <div
     class="show-app"
     :class="{ 'has-signal-cards': showSignalCards, 'no-guild-rail': !SHOW_GUILD_RAIL }"
+    @pointerdown="bumpShowUserActivity"
+    @keydown="bumpShowUserActivity"
   >
     <aside v-if="SHOW_GUILD_RAIL" class="guild-rail">
       <button
@@ -2063,7 +2103,12 @@ onUnmounted(() => {
       <p v-if="navPending" class="kook-nav-alert info">CDP 正在打开 Discord 频道并拉取消息…</p>
       <p v-if="channelMessagesHint" class="kook-nav-alert info">{{ channelMessagesHint }}</p>
 
-      <div ref="msgsScrollEl" class="msg-scroll msg-scroll-loadable" @scroll="onMsgsScroll">
+      <div
+        ref="msgsScrollEl"
+        class="msg-scroll msg-scroll-loadable"
+        @scroll="onMsgsScroll"
+        @wheel="bumpShowUserActivity"
+      >
         <ShowMessagePane
           v-if="selectedChannel"
           :key="selectedChannel.channelId"

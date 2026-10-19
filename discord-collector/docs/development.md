@@ -5,6 +5,7 @@
 - [前端部署手册](./frontend-deploy.md)
 - [前端上云 + 后台本地](./deploy-frontend-remote-backend-local.md)
 - [WebSocket 推送架构](./websocket-push-architecture.md)
+- [Show 消息与图片展示](./show-messages-and-images.md)
 - [信号卡片模板](./card-templates.md)
 - [开放建卡 API](./cards-api.md)
 - [OI Monitor](../oi_mornitor/README.md)

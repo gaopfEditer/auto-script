@@ -44,6 +44,7 @@ import {
   cardHasCompletedEvaluation,
   hasEvaluatedYield,
   evaluationSummaryLines,
+  backtestSummaryLines,
 } from "../lib/signalExecution.js";
 import { resolveCardSourceLink } from "../lib/cardSourceLink.js";
 import { groupCardsByWeek } from "../lib/weekLabel.js";
@@ -96,6 +97,9 @@ const allSelected = computed(
   () => cards.value.length > 0 && selectedCardIds.value.length === cards.value.length
 );
 const modalOpen = computed(() => selectedId.value > 0 && !!selected.value);
+const selectedBacktestLines = computed(() =>
+  selected.value ? backtestSummaryLines(/** @type {Record<string, unknown>} */ (selected.value)) : []
+);
 
 const execDraft = ref(emptyExecution());
 const noteDraft = ref("");
@@ -400,7 +404,7 @@ async function runBatchBacktestSelected() {
       `批量回溯：处理 ${j.processed ?? 0}`,
       `跳过 ${j.skipped ?? 0}`,
       `失败 ${j.failed ?? 0}`,
-      "（固定 5% 止损 + 7/10/20% 止盈 · 卡片策略 · 4h 标记 · 3 天截止）",
+      "（固定 5% 止损 + 7/10/20% 止盈 · 卡片策略 · 12h 标记 · 直至 TP/SL）",
     ].join(" · ");
     await reload();
   } catch (e) {
@@ -606,7 +610,7 @@ onUnmounted(() => {
             <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
           </span>
           <span class="grid-count-rules" data-onboard="cards-rules">
-            清算：100x/20x 杠杆 · 缺 TP/SL 时默认 ±5%。批量回溯：双策略（5% 止损+7/10/20% 止盈 vs 卡片 TP/SL）· 未写入场=信号时市价，限价=触价入场 · 未触 TP/SL 每 4h 标记盈亏 · 超 3 天取消任务
+            清算：100x/20x 杠杆 · 缺 TP/SL 时默认 ±5%。批量回溯：双策略（5% 止损+7/10/20% 止盈 vs 卡片 TP/SL）· 未写入场=信号时市价，限价=触价入场 · 默认每 12h 标记盈亏 · 超过 12h 仍续跑直至 TP/SL
           </span>
         </span>
         <div v-if="canManageCards" class="grid-head-actions">
@@ -641,7 +645,7 @@ onUnmounted(() => {
             type="button"
             class="btn tiny-btn"
             :disabled="!selectedCount || backtesting || liquidating"
-            title="固定止损止盈 + 卡片策略；4 小时周期标记；3 天自动截止"
+            title="固定止损止盈 + 卡片策略；默认 12 小时周期标记；续跑直至止盈/止损"
             @click="runBatchBacktestSelected"
           >
             {{ backtesting ? "回溯中…" : "批量回溯" }}
@@ -763,6 +767,17 @@ onUnmounted(() => {
             <div class="block">
               <h4>计划价位</h4>
               <p>{{ formatPlannedSummary(cardExecution(selected)) }}</p>
+            </div>
+
+            <div v-if="selectedBacktestLines.length" class="block backtest-block">
+              <h4>回测 / 批量回溯</h4>
+              <p v-for="(line, i) in selectedBacktestLines" :key="i" class="muted backtest-line">{{ line }}</p>
+            </div>
+            <div v-else-if="canManageCards && selected" class="block backtest-block">
+              <h4>回测 / 批量回溯</h4>
+              <p class="muted eval-hint">
+                尚无回测数据：勾选卡片点「批量回溯」，或左侧「清算筛选」写入清算回测（需本机 collect:ui 与 K 线可拉取）。
+              </p>
             </div>
 
             <div class="block eval-block">

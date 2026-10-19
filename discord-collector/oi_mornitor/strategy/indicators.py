@@ -86,6 +86,18 @@ def detect_shooting_star(
     return True
 
 
+def detect_hammer(
+    row: pd.Series,
+    *,
+    wick_ratio: float = STRATEGY_SHOOT_WICK_RATIO,
+) -> bool:
+    """锤子 / 大垂子：长下影、短上影、实体相对较小（偏多反转形态几何）。
+
+    与 ``detect_inverted_hammer`` 使用同一套影线比例；§11 KOL 场景显式用 hammer 名。
+    """
+    return detect_inverted_hammer(row, wick_ratio=wick_ratio)
+
+
 def detect_inverted_hammer(
     row: pd.Series,
     *,
