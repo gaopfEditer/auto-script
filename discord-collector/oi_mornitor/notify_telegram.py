@@ -550,3 +550,203 @@ async def send_structure_card_telegram_async(alert: dict[str, Any]) -> bool:
 
 async def send_volume_price_card_telegram_async(alert: dict[str, Any]) -> bool:
     return await asyncio.to_thread(send_volume_price_card_telegram, alert)
+
+
+def format_trendline_card_message(alert: dict[str, Any]) -> str:
+    """趋势线 / EMA144 共振告警卡片。"""
+    pair = _pair_label(str(alert.get("symbol") or ""))
+    type_label = str(alert.get("type_label") or "趋势线信号")
+    iv = str(alert.get("interval") or "—")
+    t = _fmt_time(alert.get("kline_close_time") or alert.get("kline_open_time") or alert.get("time"))
+    entry = _fmt_price(alert.get("entry") or alert.get("close"))
+    line_px = _fmt_price(alert.get("line_price"))
+    dist = alert.get("distance_pct")
+    dist_s = f"{float(dist) * 100:.2f}%" if dist is not None else "—"
+    pattern = str(alert.get("pattern") or "—")
+    vr = alert.get("vol_ratio")
+    vr_s = _fmt_vol_x(vr) if vr is not None else "—"
+    sl = _fmt_price(alert.get("sl"))
+    tp1 = _fmt_price(alert.get("tp1"))
+    tp2 = _fmt_price(alert.get("tp2"))
+    tags = alert.get("tags") or []
+    tag_s = " · ".join(str(x) for x in tags) if tags else ""
+    src = str((alert.get("data_meta") or {}).get("data_source") or alert.get("data_source") or "")
+    stale = (alert.get("data_meta") or {}).get("staleness_sec")
+    stale_s = f"{int(stale)}s" if stale is not None else "—"
+    lines = [
+        f"📐 {type_label}",
+        f"💰 交易对: {pair}",
+        f"⏰ 周期: {iv}",
+        f"⏰ 时间: {t}",
+        f"📏 趋势线: {line_px} (距 {dist_s})",
+        f"🕯 形态: {pattern} · 量能 {vr_s}",
+        f"💵 入场: {entry}",
+        f"🛡️ SL: {sl} · TP1: {tp1} · TP2: {tp2}",
+    ]
+    if tag_s:
+        lines.append(f"🏷 {tag_s}")
+    if src:
+        lines.append(f"📡 数据源: {src} · 陈旧 {stale_s}")
+    if alert.get("observation_only"):
+        lines.append("⚠️ 观察模式（结算数据受限）")
+    return "\n".join(lines)
+
+
+def send_trendline_card_telegram(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.trendline_config import TRENDLINE_TELEGRAM_CHAT_ID, is_trendline_enabled
+
+    if not is_trendline_enabled():
+        return False
+    if str(alert.get("type") or "") != "trendline_signal_card":
+        return False
+    chat = TRENDLINE_TELEGRAM_CHAT_ID
+    if not chat:
+        return False
+    text = format_trendline_card_message(alert)
+    ok = _send_card_text_to_chat(alert, text, chat)
+    if ok:
+        try:
+            from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+            record_alert_from_push(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("趋势线胜率入库失败: %s", exc)
+        try:
+            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
+
+            record_ticker_from_alert(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("趋势线 ticker 入库失败: %s", exc)
+    return ok
+
+
+async def send_trendline_card_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_trendline_card_telegram, alert)
+
+
+def format_range_reversal_card_message(alert: dict[str, Any]) -> str:
+    pair = _pair_label(str(alert.get("symbol") or ""))
+    type_label = str(alert.get("type_label") or "区间反转")
+    iv = str(alert.get("interval") or "—")
+    t = _fmt_time(alert.get("kline_close_time") or alert.get("kline_open_time") or alert.get("time"))
+    rh = _fmt_price(alert.get("range_high"))
+    rl = _fmt_price(alert.get("range_low"))
+    entry = _fmt_price(alert.get("entry") or alert.get("close"))
+    sl = _fmt_price(alert.get("sl"))
+    tp1 = _fmt_price(alert.get("tp1"))
+    tp2 = _fmt_price(alert.get("tp2"))
+    vr = alert.get("vol_ratio")
+    vr_s = _fmt_vol_x(vr) if vr is not None else "—"
+    tags = alert.get("tags") or []
+    tag_s = " · ".join(str(x) for x in tags) if tags else ""
+    lines = [
+        f"📦 {type_label}",
+        f"💰 交易对: {pair}",
+        f"⏰ 周期: {iv} · 时间: {t}",
+        f"📊 区间: 高 {rh} · 低 {rl}",
+        f"💵 入场: {entry}",
+        f"🛡️ SL: {sl} · TP1(中轴): {tp1} · TP2(对轨): {tp2}",
+        f"🕯 量能 {vr_s}",
+    ]
+    if tag_s:
+        lines.append(f"🏷 {tag_s}")
+    return "\n".join(lines)
+
+
+def send_range_reversal_card_telegram(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.pattern_emit_gate import telegram_push_allowed_or_record_observation
+    from oi_mornitor.range_reversal_config import (
+        RANGE_REVERSAL_TELEGRAM_CHAT_ID,
+        is_range_reversal_enabled,
+    )
+
+    if not is_range_reversal_enabled():
+        return False
+    if str(alert.get("type") or "") != "range_reversal_signal_card":
+        return False
+    chat = RANGE_REVERSAL_TELEGRAM_CHAT_ID
+    if not chat:
+        return False
+    if not telegram_push_allowed_or_record_observation(alert):
+        return False
+    text = format_range_reversal_card_message(alert)
+    ok = _send_card_text_to_chat(alert, text, chat)
+    if ok:
+        try:
+            from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+            record_alert_from_push(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("区间反转胜率入库失败: %s", exc)
+        try:
+            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
+
+            record_ticker_from_alert(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("区间反转 ticker 入库失败: %s", exc)
+    return ok
+
+
+async def send_range_reversal_card_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_range_reversal_card_telegram, alert)
+
+
+def format_vegas_trend_card_message(alert: dict[str, Any]) -> str:
+    pair = _pair_label(str(alert.get("symbol") or ""))
+    type_label = str(alert.get("type_label") or "维加斯顺势")
+    iv = str(alert.get("interval") or "—")
+    t = _fmt_time(alert.get("kline_close_time") or alert.get("time"))
+    entry = _fmt_price(alert.get("entry"))
+    sl = _fmt_price(alert.get("sl"))
+    tp1 = _fmt_price(alert.get("tp1"))
+    tp2 = _fmt_price(alert.get("tp2"))
+    td = str(alert.get("trend_dir") or "—")
+    vr = alert.get("vol_ratio")
+    vr_s = _fmt_vol_x(vr) if vr is not None else "—"
+    tags = alert.get("tags") or []
+    tag_s = " · ".join(str(x) for x in tags)
+    lines = [
+        f"🎰 {type_label}",
+        f"💰 交易对: {pair}",
+        f"⏰ 周期: {iv} · 时间: {t}",
+        f"📈 趋势: {td} · 量能 {vr_s}",
+        f"💵 入场: {entry}",
+        f"🛡️ SL: {sl} · TP1(1R): {tp1} · TP2: {tp2}",
+    ]
+    if tag_s:
+        lines.append(f"🏷 {tag_s}")
+    return "\n".join(lines)
+
+
+def send_vegas_trend_card_telegram(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.pattern_emit_gate import telegram_push_allowed_or_record_observation
+    from oi_mornitor.vegas_trend_config import VEGAS_TREND_TELEGRAM_CHAT_ID, is_vegas_trend_enabled
+
+    if not is_vegas_trend_enabled():
+        return False
+    if str(alert.get("type") or "") != "vegas_trend_signal_card":
+        return False
+    chat = VEGAS_TREND_TELEGRAM_CHAT_ID
+    if not chat:
+        return False
+    if not telegram_push_allowed_or_record_observation(alert):
+        return False
+    ok = _send_card_text_to_chat(alert, format_vegas_trend_card_message(alert), chat)
+    if ok:
+        try:
+            from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+            record_alert_from_push(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("维加斯顺势胜率入库失败: %s", exc)
+        try:
+            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
+
+            record_ticker_from_alert(alert)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("维加斯顺势 ticker 入库失败: %s", exc)
+    return ok
+
+
+async def send_vegas_trend_card_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_vegas_trend_card_telegram, alert)

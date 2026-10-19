@@ -35,6 +35,16 @@ RadarService.scan_once (~30–60s)
 | 形态信号结算摘要（4h） | 胜率库 `pattern_alert_stats` | 形态列表 | ✅ `MAIN_CARD_TELEGRAM_CHAT_ID` · 北京 04/08/12/16/20/24 |
 | 回踩/射击之星 | `pattern.pullback_*` | ❌ 未接 | 仅 `run_coin_monitor --telegram` |
 | 形态信号列表胜率 | `pattern_alert_stats` + Ticker | 形态页 ✅ | ✅ 4h 结算摘要 |
+| **趋势线 / 趋势线+EMA144**（BTC 15m/1h · QQQ 4h/1d/1w） | — | — | ✅ `OI_TRENDLINE_TELEGRAM_CHAT_ID`（默认同 MAIN）· `trendline/runner` |
+
+### 趋势线模块（`trendline/` · 仅告警）
+
+- **默认开启**：`OI_TRENDLINE_ENABLED=1`（空或未设均为开）；所有 `OI_TRENDLINE_*` 空串/非法值回退代码默认（见 `trendline_config.py`）。
+- **BTC**：USDT-M 永续 K 线，`fapi.binance.com` 失败时 `https://www.binance.com/fapi`；周期 15m/1h 检测 pivot 趋势线 + 收盘反转形态；1h/4h 可附加布林下轨 + EMA144 + 锤子。
+- **QQQ**：Yahoo `v8/finance/chart`（1h 聚合 4h），本地缓存；趋势线与 EMA144 共振区 + 放量插针；超卖 RSI 为加分标签。
+- **推送**：类型标签如 `趋势线·BTC 15m`、`趋势线+EMA144·QQQ 1d`；含线价、距离、形态、量比、SL/TP1/TP2；`pattern_alert_stats` 独立 typeLabel 统计。
+- **API**：`GET /api/trendline/lines` 返回最近检测到的趋势线 JSON（供后续图表）。
+- **调度**：雷达后台 `oi-trendline-loop`，按各周期 K 线收盘 + `OI_TRENDLINE_BAR_CLOSE_GRACE_SEC` 缓冲扫描。
 
 ---
 

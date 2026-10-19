@@ -1341,6 +1341,9 @@ class RadarService:
         self._card_price_task: asyncio.Task[None] | None = None
         self._settle_report_task: asyncio.Task[None] | None = None
         self._moonshot_task: asyncio.Task[None] | None = None
+        self._trendline_task: asyncio.Task[None] | None = None
+        self._range_reversal_task: asyncio.Task[None] | None = None
+        self._vegas_trend_task: asyncio.Task[None] | None = None
         self._dormant_ignition_task: asyncio.Task[None] | None = None
         self._potential_discovery_task: asyncio.Task[None] | None = None
         self._tv_alert_task: asyncio.Task[None] | None = None
@@ -1617,6 +1620,39 @@ class RadarService:
             ),
             name="oi-potential-discovery",
         )
+        from oi_mornitor.trendline.runner import run_trendline_loop
+        from oi_mornitor.trendline_config import is_trendline_enabled
+
+        if is_trendline_enabled():
+            self._trendline_task = asyncio.create_task(
+                run_trendline_loop(
+                    lambda: self._running,
+                    get_session=lambda: self._session,
+                ),
+                name="oi-trendline-loop",
+            )
+        from oi_mornitor.range_reversal.runner import run_range_reversal_loop
+        from oi_mornitor.range_reversal_config import is_range_reversal_enabled
+
+        if is_range_reversal_enabled():
+            self._range_reversal_task = asyncio.create_task(
+                run_range_reversal_loop(
+                    lambda: self._running,
+                    get_session=lambda: self._session,
+                ),
+                name="oi-range-reversal-loop",
+            )
+        from oi_mornitor.vegas_trend.runner import run_vegas_trend_loop
+        from oi_mornitor.vegas_trend_config import is_vegas_trend_enabled
+
+        if is_vegas_trend_enabled():
+            self._vegas_trend_task = asyncio.create_task(
+                run_vegas_trend_loop(
+                    lambda: self._running,
+                    get_session=lambda: self._session,
+                ),
+                name="oi-vegas-trend-loop",
+            )
         from oi_mornitor.capital_flow_liq_ws import run_liquidation_ws
 
         asyncio.create_task(run_liquidation_ws(), name="oi-capital-flow-liq-ws")
@@ -1689,6 +1725,9 @@ class RadarService:
             "_moonshot_task",
             "_dormant_ignition_task",
             "_potential_discovery_task",
+            "_trendline_task",
+            "_range_reversal_task",
+            "_vegas_trend_task",
         ):
             task = getattr(self, attr, None)
             if task:

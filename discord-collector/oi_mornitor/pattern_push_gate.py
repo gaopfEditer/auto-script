@@ -73,6 +73,11 @@ def passes_push_mtf_gate(
     min_tiers: int | None = None,
 ) -> bool:
     """OI_PATTERN_PUSH_MTF_MIN：共振周期数不足则不入库、不推 TG。"""
+    if min_tiers is None and alert.get("push_mtf_min") is not None:
+        try:
+            min_tiers = int(alert["push_mtf_min"])
+        except (TypeError, ValueError):
+            min_tiers = None
     need = int(min_tiers if min_tiers is not None else OI_PATTERN_PUSH_MTF_MIN)
     if need <= 1:
         return True

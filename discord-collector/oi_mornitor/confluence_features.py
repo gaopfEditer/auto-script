@@ -45,6 +45,8 @@ FEATURE_DISPLAY: dict[str, str] = {
     "feat:kol_a": "KOL-A",
     "feat:kol_b": "KOL-B",
     "feat:kol_c": "KOL-C",
+    "vegas_trend": "维加斯顺势",
+    "vegas_trend_volume": "维加斯顺势放量",
     "feat:cf_oi_flush_align": "OI骤降同向",
     "feat:cf_funding_align": "费率同向",
     "feat:cf_funding_against": "费率逆向",
@@ -204,6 +206,13 @@ def extract_confluence_features(rec: dict[str, Any]) -> set[str]:
         feats.add("feat:kol_b")
     elif kol == "C":
         feats.add("feat:kol_c")
+
+    if _bool_feat(rec, "vegas_trend") or "维加斯顺势" in lab:
+        feats.add("vegas_trend")
+    if _bool_feat(rec, "vegas_trend_volume", "vegasTrendVolume") or (
+        rec.get("vol_ok") is True and "维加斯顺势" in lab
+    ):
+        feats.add("vegas_trend_volume")
 
     cf = rec.get("capitalFlow")
     if isinstance(cf, dict):
