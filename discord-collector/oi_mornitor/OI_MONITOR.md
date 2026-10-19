@@ -708,6 +708,8 @@ crypto mornitor 发出「二次预警」
 
 `text` 格式：`KOL二次预警｜15m｜Nine Call · GTCUSDT · 吞没（空） · 贴近EMA144（0.6%） · 放量1.9x`（无异常放量时省略放量段；柱体穿越 EMA 时写「触及EMA144」）。
 
+**提及新鲜度与归因（2026-10-20）**：仅 `KOL_MENTION_MAX_AGE_HOURS`（默认 48h）内的**真实提及**计入；原文须以整词 / `$TICKER` / `#TICKER` / `TICKERUSDT` 出现（防子串误匹配）。消息只列新鲜 KOL，并带提及日期（北京时间）：`KOL二次预警｜15m｜Nine Call（10/19提及） · NOMUSDT · 吞没（空） · 贴近EMA144（0.6%）`。
+
 可选：K 线时间、卡片链接。
 
 ### 13.4 与 OI 热钱推送的隔离
@@ -755,6 +757,7 @@ crypto mornitor 发出「二次预警」
 | `KOL_FOLLOW_ALL_RECENT` | `0` | `1`=任意频道提及都进列表（调试） |
 | `KOL_EMA144_NEAR_PCT` | `1.5` | **EMA144 硬门控**阈值 %（收盘距 EMA；或柱体触及即过）；兼容旧名 `KOL_EMA_NEAR_PCT` |
 | `KOL_EMA144_NEAR_PCT_LEADER` | （空=同上） | 龙头单独阈值（可选） |
+| `KOL_MENTION_MAX_AGE_HOURS` | `48` | KOL→币 提及有效期（小时）；超期链接移出 watchlist、不在消息中列出；龙头仍走「龙头直通」 |
 | `KOL_ALERT_INCLUDE_FORMING` | `0` | `1`=含未收盘当根；默认只看**已收盘**倒数第二根 |
 
 **实现文件（2026-10-19）**：`oi_mornitor/kol_secondary_alert.py`、`oi_mornitor/kol_signal_lifecycle.py`、`oi_mornitor/scripts/grok_kol_secondary_forward.py`、`~/.grokbot/kol-secondary/config.env`（例：`oi_mornitor/docs/kol-secondary-config.env.example`）、`oi_mornitor/data/kol_secondary/`（含 `signal_lifecycle.json`）。

@@ -237,7 +237,8 @@ def pull_recent_cards(*, after_id: int = 0, limit: int = 200, bootstrap_recent: 
                     cur.execute(
                         """
                         SELECT id, channel_id, symbol, source_type,
-                               COALESCE(signal_at, created_at) AS event_at
+                               COALESCE(signal_at, created_at) AS event_at,
+                               LEFT(raw_content, 2000) AS raw_text
                         FROM discord_signal_cards
                         WHERE symbol IS NOT NULL AND symbol <> ''
                         ORDER BY id DESC
@@ -250,7 +251,8 @@ def pull_recent_cards(*, after_id: int = 0, limit: int = 200, bootstrap_recent: 
                     cur.execute(
                         """
                         SELECT id, channel_id, symbol, source_type,
-                               COALESCE(signal_at, created_at) AS event_at
+                               COALESCE(signal_at, created_at) AS event_at,
+                               LEFT(raw_content, 2000) AS raw_text
                         FROM discord_signal_cards
                         WHERE symbol IS NOT NULL AND symbol <> ''
                           AND id > %s
@@ -282,6 +284,7 @@ def pull_recent_cards(*, after_id: int = 0, limit: int = 200, bootstrap_recent: 
                     "source_type": str(r.get("source_type") or ""),
                     "mentioned_at": mentioned,
                     "ts_ms": ts_ms,
+                    "raw_text": str(r.get("raw_text") or ""),
                 }
             )
         return out
@@ -294,7 +297,8 @@ def pull_recent_cards(*, after_id: int = 0, limit: int = 200, bootstrap_recent: 
         sql = (
             "SELECT id, channel_id, symbol, source_type, "
             "COALESCE(signal_at, created_at) AS event_at, "
-            "UNIX_TIMESTAMP(COALESCE(signal_at, created_at))*1000 AS ts_ms "
+            "UNIX_TIMESTAMP(COALESCE(signal_at, created_at))*1000 AS ts_ms, "
+            "REPLACE(REPLACE(REPLACE(LEFT(raw_content,2000),'\\t',' '),'\\n',' '),'\\r',' ') AS raw_text "
             "FROM discord_signal_cards "
             "WHERE symbol IS NOT NULL AND symbol<>'' "
             "ORDER BY id DESC "
@@ -304,7 +308,8 @@ def pull_recent_cards(*, after_id: int = 0, limit: int = 200, bootstrap_recent: 
         sql = (
             "SELECT id, channel_id, symbol, source_type, "
             "COALESCE(signal_at, created_at) AS event_at, "
-            "UNIX_TIMESTAMP(COALESCE(signal_at, created_at))*1000 AS ts_ms "
+            "UNIX_TIMESTAMP(COALESCE(signal_at, created_at))*1000 AS ts_ms, "
+            "REPLACE(REPLACE(REPLACE(LEFT(raw_content,2000),'\\t',' '),'\\n',' '),'\\r',' ') AS raw_text "
             "FROM discord_signal_cards "
             f"WHERE symbol IS NOT NULL AND symbol<>'' AND id > {after_id} "
             "ORDER BY id ASC "
@@ -344,6 +349,7 @@ def pull_recent_cards(*, after_id: int = 0, limit: int = 200, bootstrap_recent: 
                 "source_type": parts[3],
                 "mentioned_at": parts[4],
                 "ts_ms": ts_ms,
+                "raw_text": parts[6] if len(parts) > 6 else "",
             }
         )
     if bootstrap:
@@ -369,6 +375,103 @@ def save_watchlist(wl: dict[str, Any]) -> None:
     save_json(data_dir() / "watchlist.json", wl)
 
 
+def mention_max_age_hours() -> float:
+    return env_float("KOL_MENTION_MAX_AGE_HOURS", 48.0, min_val=1.0, max_val=24 * 60)
+
+
+def parse_mention_ms(value: Any) -> int | None:
+    """mentioned_at → epoch ms；无时区按 UTC（与 pull_recent_cards 一致）。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    txt = str(value).strip().replace("T", " ").replace("Z", "+00:00")
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(txt, fmt)
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    return None
+
+
+def mention_date_label(value: Any) -> str:
+    """M/D（Asia/Shanghai）。"""
+    ms = parse_mention_ms(value)
+    if ms is None:
+        return ""
+    from datetime import timedelta
+
+    dt = datetime.fromtimestamp(ms / 1000, tz=timezone(timedelta(hours=8)))
+    return f"{dt.month}/{dt.day}"
+
+
+def mention_is_genuine(symbol: str, raw_text: str) -> bool:
+    """原文须以整词 / $TICKER / #TICKER / TICKERUSDT 出现 base，防子串误匹配（如 UB ⊂ UBER）。
+    raw_text 为空（旧数据）时不判伪。"""
+    text = str(raw_text or "")
+    if not text.strip():
+        return True
+    base = normalize_watch_symbol(symbol)
+    if base.endswith("USDT"):
+        base = base[:-4]
+    if not base:
+        return False
+    pat = re.compile(
+        r"(?<![A-Za-z0-9])[#$]?" + re.escape(base) + r"(?:[/\-_ ]?USDT(?:\.P)?)?(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+    return bool(pat.search(text))
+
+
+def fresh_sources(entry: Mapping[str, Any] | None, *, now_ms: int | None = None) -> list[dict[str, Any]]:
+    """仅保留在 KOL_MENTION_MAX_AGE_HOURS 内的真实提及（按时间升序）。"""
+    now = int(now_ms if now_ms is not None else time.time() * 1000)
+    cutoff = now - int(mention_max_age_hours() * 3600 * 1000)
+    out = []
+    for s in (entry or {}).get("sources") or []:
+        if not isinstance(s, dict) or s.get("genuine") is False:
+            continue
+        ms = parse_mention_ms(s.get("mentioned_at"))
+        if ms is not None and ms >= cutoff:
+            out.append(s)
+    out.sort(key=lambda x: parse_mention_ms(x.get("mentioned_at")) or 0)
+    return out
+
+
+def prune_stale_watchlist(wl: dict[str, Any], *, now_ms: int | None = None) -> int:
+    """过期 KOL→币 链接移出 watchlist；龙头保留（龙头直通）。返回删除数。"""
+    symbols: dict[str, Any] = wl.setdefault("symbols", {})
+    removed = 0
+    for sym in list(symbols):
+        entry = symbols[sym] if isinstance(symbols[sym], dict) else {}
+        fresh = fresh_sources(entry, now_ms=now_ms)
+        leader = bool(entry.get("leader") or is_leader_symbol(sym))
+        if not fresh and not leader:
+            del symbols[sym]
+            removed += 1
+            continue
+        if len(fresh) != len(entry.get("sources") or []):
+            entry["sources"] = fresh
+    return removed
+
+
+def kol_label(entry: Mapping[str, Any] | None, symbol: str, *, now_ms: int | None = None) -> str:
+    """仅列新鲜提及的 KOL：『Nine Call（10/19提及）』，多 KOL 用 / 连接；龙头无新鲜提及 → 龙头直通。"""
+    fresh = fresh_sources(entry, now_ms=now_ms)
+    latest: dict[str, str] = {}
+    for s in fresh:
+        latest[str(s.get("kol_name") or "未知")] = mention_date_label(s.get("mentioned_at"))
+    names = sorted(latest, key=lambda n: -max(parse_mention_ms(x.get("mentioned_at")) or 0 for x in fresh if str(x.get("kol_name") or "未知") == n))[:3]
+    parts = [f"{n}（{latest[n]}提及）" if latest[n] else n for n in names]
+    leader = bool((entry or {}).get("leader") or is_leader_symbol(symbol))
+    if leader:
+        parts = ["龙头直通"] + parts
+    return "/".join(parts)
+
+
 def upsert_watchlist_from_card(
     wl: dict[str, Any],
     card: Mapping[str, Any],
@@ -383,6 +486,10 @@ def upsert_watchlist_from_card(
     channel_id = str(card.get("channel_id") or "")
     leader = is_leader_symbol(sym)
     if not leader and not follow_all and channel_id not in followed_ids:
+        return False
+    raw_text = str(card.get("raw_text") or "")
+    if not mention_is_genuine(sym, raw_text):
+        logger.info("ticker 误匹配跳过 card=%s sym=%s", card.get("id"), sym)
         return False
 
     symbols: dict[str, Any] = wl.setdefault("symbols", {})
@@ -404,6 +511,8 @@ def upsert_watchlist_from_card(
         "channel_id": channel_id,
         "mentioned_at": card.get("mentioned_at") or datetime.now(timezone.utc).isoformat(),
         "card_id": card.get("id"),
+        "genuine": True,
+        "snippet": raw_text[:120],
     }
     # dedupe same channel recent
     if not any(
@@ -547,7 +656,8 @@ def build_alert_text(alert: Mapping[str, Any]) -> str:
         ema_s = f"触及EMA144（{abs(d):.1f}%）" if d is not None else "触及EMA144"
     else:
         ema_s = f"贴近EMA144（{abs(d):.1f}%）" if d is not None else "贴近EMA144"
-    parts = [f"{alert.get('kol_name') or '未知'} · {alert.get('symbol')} · {pat}", ema_s]
+    who = alert.get("kol_label") or alert.get("kol_name") or "未知"
+    parts = [f"{who} · {alert.get('symbol')} · {pat}", ema_s]
     v = alert.get("abnormal_volume") or {}
     if v.get("yes"):
         parts.append(f"放量{float(v.get('ratio') or 0):.1f}x")
@@ -661,14 +771,12 @@ def evaluate_symbol(
             ordered.append(i)
 
     alerts: list[dict[str, Any]] = []
-    sources = list((entry or {}).get("sources") or [])
+    sources = fresh_sources(entry)
     leader = bool((entry or {}).get("leader") or is_leader_symbol(symbol))
-    primary_kol = "龙头直通" if leader and not sources else ""
-    if sources:
-        last = sources[-1] if isinstance(sources[-1], dict) else {}
-        primary_kol = str(last.get("kol_name") or primary_kol or "未知")
-        if leader:
-            primary_kol = f"龙头直通/{primary_kol}"
+    if not sources and not leader:
+        return []  # KOL 提及已过期 → 不列出、不告警
+    primary_kol = kol_label(entry, symbol)
+    last_mention = sources[-1].get("mentioned_at") if sources else None
 
     for idx in ordered:
         hits = scan_patterns_on_bar(bars, idx, allowed=allow)
@@ -722,7 +830,10 @@ def evaluate_symbol(
                     "tf": tf,
                     "bar_ts": bar_ts,
                     "leader": leader,
-                    "sources": sources[-5:],
+                    "kol_label": primary_kol,
+                    "mentioned_at": last_mention,
+                    "mention_max_age_hours": mention_max_age_hours(),
+                    "sources": [{k: v for k, v in x.items() if k != "snippet"} for x in sources[-5:]],
                     "detected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 }
             )
@@ -893,6 +1004,7 @@ def ingest_new_cards(
         bootstrap_recent=bootstrap,
     )
     wl = load_watchlist()
+    pruned = prune_stale_watchlist(wl)
     added = 0
     max_id = after
     for card in cards:
@@ -903,7 +1015,7 @@ def ingest_new_cards(
         cur["last_card_id"] = max_id
         cur["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         save_cursor(cur)
-    if added:
+    if added or pruned:
         save_watchlist(wl)
     else:
         # still persist empty symbols structure on first run
@@ -915,6 +1027,7 @@ def ingest_new_cards(
         "watch_size": len(wl.get("symbols") or {}),
         "last_card_id": cur.get("last_card_id"),
         "followed": len(followed),
+        "pruned_stale": pruned,
     }
 
 
@@ -944,6 +1057,8 @@ def _watch_scan_targets(symbols: dict[str, Any]) -> list[tuple[str, dict[str, An
 
 def scan_watchlist_alerts() -> list[dict[str, Any]]:
     wl = load_watchlist()
+    if prune_stale_watchlist(wl):
+        save_watchlist(wl)
     symbols = wl.get("symbols") or {}
     out: list[dict[str, Any]] = []
     for sym, entry in _watch_scan_targets(symbols if isinstance(symbols, dict) else {}):
@@ -955,6 +1070,10 @@ def scan_watchlist_alerts() -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "fresh_sources",
+    "kol_label",
+    "mention_is_genuine",
+    "prune_stale_watchlist",
     "build_alert_text",
     "ema144_gate",
     "ema144_near_pct",
