@@ -164,6 +164,16 @@ def peers_within_mtf_window(
     return out
 
 
+def has_mtf_resonance(rec: dict[str, Any]) -> bool:
+    m = rec.get("mtfResonance")
+    if not isinstance(m, dict):
+        return False
+    try:
+        return int(m.get("tiers") or 0) >= 2
+    except (TypeError, ValueError):
+        return False
+
+
 def attach_mtf_resonance(records: list[dict[str, Any]]) -> None:
     """就地写入 mtfResonance 字段（无共振则删除旧字段）。"""
     by_key = compute_mtf_resonance_by_key(records)

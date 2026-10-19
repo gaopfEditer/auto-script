@@ -303,12 +303,15 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
     asset_class = str(q.get("assetClass") or q.get("asset_class") or "all").strip() or "all"
     mtf_raw = str(q.get("mtfResonance") or q.get("mtf") or "").strip().lower()
     show_all_raw = str(q.get("showAll") or q.get("allMtf") or "").strip().lower()
-    if show_all_raw in ("1", "true", "yes", "on"):
+    if mtf_raw in ("1", "true", "yes", "on"):
+        mtf_resonance_only = True
+    elif show_all_raw in ("1", "true", "yes", "on"):
         mtf_resonance_only = False
     elif mtf_raw in ("0", "false", "no", "off"):
         mtf_resonance_only = False
     else:
-        mtf_resonance_only = True
+        # 与前端默认一致：未勾选「仅多周期共振」时展示全量
+        mtf_resonance_only = False
     conf_tier = str(q.get("confluenceTier") or q.get("confluenceMinTier") or "all").strip() or "all"
     mcap_tier = str(q.get("mcapTier") or q.get("mcapTierFilter") or "all").strip() or "all"
     payload = list_alert_stats_page(

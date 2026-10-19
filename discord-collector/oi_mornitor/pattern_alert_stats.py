@@ -691,7 +691,7 @@ def list_alert_stats_page(
     interval: str | None = None,
     symbol: str | None = None,
     asset_class: str | None = None,
-    mtf_resonance_only: bool = True,
+    mtf_resonance_only: bool = False,
     confluence_min_tier: str | None = None,
     mcap_tier_filter: str | None = None,
 ) -> dict[str, Any]:

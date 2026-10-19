@@ -651,7 +651,9 @@ def filter_items_by_confluence(
 ) -> list[dict[str, Any]]:
     out = list(items)
     if mtf_resonance_only:
-        out = [it for it in out if isinstance(it.get("mtfResonance"), dict)]
+        from oi_mornitor.pattern_mtf_resonance import has_mtf_resonance
+
+        out = [it for it in out if has_mtf_resonance(it)]
     min_raw = str(min_tier or "all").strip().upper()
     if min_raw and min_raw != "ALL":
         if min_raw == "D":

@@ -281,6 +281,33 @@ def send_telegram_text(text: str, *, chat_id: str | None = None) -> bool:
     return False
 
 
+def _pattern_push_chat_order(primary_chat_id: str | None = None) -> list[str]:
+    """形态卡片推送顺序：主目标群 → TELEGRAM_PUSH_CHAT_ID → TELEGRAM_CHAT_ID（去重、保序）。"""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(raw: str | None) -> None:
+        c = str(raw or "").strip()
+        if not c or c in seen:
+            return
+        seen.add(c)
+        out.append(c)
+
+    add(primary_chat_id)
+    add(TELEGRAM_PUSH_CHAT_ID)
+    add(TELEGRAM_CHAT_ID)
+    return out
+
+
+def _send_card_text_with_fallback(
+    alert: dict[str, Any], text: str, primary_chat_id: str | None
+) -> bool:
+    for chat in _pattern_push_chat_order(primary_chat_id):
+        if _send_card_text_to_chat(alert, text, chat):
+            return True
+    return False
+
+
 def _send_card_text_to_chat(alert: dict[str, Any], text: str, chat_id: str) -> bool:
     from oi_mornitor.telegram_push_dedupe import (
         alert_push_dedupe_key,
@@ -348,7 +375,7 @@ def send_ma144_main_card_telegram(alert: dict[str, Any]) -> bool:
     if not _confluence_gate_or_observation(alert):
         return False
     text = _message_with_confluence(alert, format_ma144_candle_message(alert))
-    return _send_card_text_to_chat(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
+    return _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
 
 
 def send_main_card_telegram(alert: dict[str, Any]) -> bool:
@@ -363,7 +390,9 @@ def send_main_card_telegram(alert: dict[str, Any]) -> bool:
     if not _confluence_gate_or_observation(alert):
         return False
     text = _message_with_confluence(alert, format_candle_card_message(alert))
-    return _send_card_text_to_chat(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
+    ok = _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
+    _after_candle_card_pushed(alert)
+    return ok
 
 
 def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
@@ -380,7 +409,7 @@ def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
         return False
     if not is_main_card_mirror_eligible(alert):
         return False
-    return _send_card_text_to_chat(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
+    return _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
 
 
 def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
@@ -393,13 +422,11 @@ def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     text = _message_with_confluence(alert, format_candle_card_message(alert))
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
-    ok = _send_card_text_to_chat(alert, text, primary) if primary else False
+    ok = _send_card_text_with_fallback(alert, text, primary) if primary else False
     if ok:
         _mirror_to_main_card(alert, text)
-    pushed = ok
-    if pushed:
-        _after_candle_card_pushed(alert)
-    return pushed
+    _after_candle_card_pushed(alert)
+    return ok
 
 
 def _after_candle_card_pushed(alert: dict[str, Any]) -> None:
@@ -427,22 +454,9 @@ def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     text = _message_with_confluence(alert, format_structure_card_message(alert))
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
-    ok = _send_card_text_to_chat(alert, text, primary) if primary else False
-    pushed = ok
-    if pushed:
-        try:
-            from oi_mornitor.pattern_alert_stats import record_alert_from_push
-
-            record_alert_from_push(alert)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("形态信号胜率入库失败: %s", exc)
-        try:
-            from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
-
-            record_ticker_from_alert(alert)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("形态 ticker 入库失败: %s", exc)
-    return pushed
+    ok = _send_card_text_with_fallback(alert, text, primary) if primary else False
+    _after_candle_card_pushed(alert)
+    return ok
 
 
 def format_volume_price_card_message(alert: dict[str, Any]) -> str:
@@ -495,7 +509,7 @@ def send_volume_price_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     text = _message_with_confluence(alert, format_volume_price_card_message(alert))
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
-    return _send_card_text_to_chat(alert, text, primary) if primary else False
+    return _send_card_text_with_fallback(alert, text, primary) if primary else False
 
 def send_pattern_oi_telegram(alert: dict[str, Any]) -> bool:
     """同步发送；未配置或关闭时返回 False。
