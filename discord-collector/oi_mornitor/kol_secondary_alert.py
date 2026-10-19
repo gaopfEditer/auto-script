@@ -502,6 +502,65 @@ def ema_series(closes: Sequence[float], period: int) -> list[float | None]:
     return out
 
 
+def ema144_near_pct(*, leader: bool = False) -> float:
+    """EMA144 门控阈值 %：KOL_EMA144_NEAR_PCT（兼容旧 KOL_EMA_NEAR_PCT），默认 1.5。
+    龙头可单独 KOL_EMA144_NEAR_PCT_LEADER，未设则同规则。"""
+    base = env_str("KOL_EMA144_NEAR_PCT", "") or env_str("KOL_EMA_NEAR_PCT", "") or "1.5"
+    if leader:
+        base = env_str("KOL_EMA144_NEAR_PCT_LEADER", "") or base
+    try:
+        v = float(base)
+    except ValueError:
+        v = 1.5
+    return min(max(v, 0.05), 20.0)
+
+
+def ema144_gate(bar: Mapping[str, Any], ema: float | None, *, near_pct: float) -> dict[str, Any]:
+    """硬门控：形态柱 high-low 触及/穿越 EMA144，或收盘距 EMA144 ≤ near_pct%。"""
+    if ema is None or ema <= 0:
+        return {"pass": False, "touch": False, "distance_pct": None, "reason": "ema_unavailable"}
+    hi = float(bar.get("high") or 0)
+    lo = float(bar.get("low") or 0)
+    close = float(bar.get("close") or 0)
+    dist = (close / ema - 1.0) * 100.0
+    touch = lo <= ema <= hi
+    ok = touch or abs(dist) <= near_pct
+    return {
+        "pass": ok,
+        "touch": touch,
+        "distance_pct": round(dist, 3),
+        "near_pct": near_pct,
+        "reason": "touch" if touch else ("near" if ok else "far"),
+    }
+
+
+def build_alert_text(alert: Mapping[str, Any]) -> str:
+    """最终可直接转发的中文一行文案。"""
+    side = str(alert.get("side") or "").lower()
+    side_zh = {"long": "多", "short": "空"}.get(side, "")
+    pat = str(alert.get("pattern_zh") or alert.get("pattern") or "")
+    if side_zh:
+        pat = f"{pat}（{side_zh}）"
+    e = alert.get("ema144") or {}
+    d = e.get("distance_pct")
+    if e.get("touch"):
+        ema_s = f"触及EMA144（{abs(d):.1f}%）" if d is not None else "触及EMA144"
+    else:
+        ema_s = f"贴近EMA144（{abs(d):.1f}%）" if d is not None else "贴近EMA144"
+    parts = [f"{alert.get('kol_name') or '未知'} · {alert.get('symbol')} · {pat}", ema_s]
+    v = alert.get("abnormal_volume") or {}
+    if v.get("yes"):
+        parts.append(f"放量{float(v.get('ratio') or 0):.1f}x")
+    return f"KOL二次预警｜{alert.get('tf') or '15m'}｜" + " · ".join(parts)
+
+
+def append_filtered_log(rec: Mapping[str, Any]) -> None:
+    path = data_dir() / "filtered.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec), ensure_ascii=False) + "\n")
+
+
 def ema144_position(
     bars: Sequence[Mapping[str, Any]],
     index: int,
@@ -574,7 +633,7 @@ def evaluate_symbol(
     vol_lb = env_int("KOL_VOL_LOOKBACK", 20, min_val=5, max_val=200)
     vol_mult = env_float("KOL_VOL_MULT", 2.0, min_val=0.5, max_val=20.0)
     ema_period = env_int("KOL_EMA_PERIOD", 144, min_val=5, max_val=500)
-    near_pct = env_float("KOL_EMA_NEAR_PCT", 1.5, min_val=0.1, max_val=20.0)
+    near_pct = ema144_near_pct()
     limit = max(ema_period + vol_lb + 20, env_int("KOL_KLINE_LIMIT", 200, min_val=50, max_val=1500))
 
     try:
@@ -616,13 +675,28 @@ def evaluate_symbol(
         if not hits:
             continue
         vol = abnormal_volume(bars, idx, lookback=vol_lb, mult=vol_mult)
-        ema = ema144_position(bars, idx, period=ema_period, near_pct=near_pct)
+        g_pct = ema144_near_pct(leader=leader)
+        ema = ema144_position(bars, idx, period=ema_period, near_pct=g_pct)
+        gate = ema144_gate(bars[idx], ema.get("ema"), near_pct=g_pct)
         bar_ts = int(float(bars[idx].get("open_time") or 0))
         for hit in hits:
             kind = str(hit.get("kind") or "")
             if kind in {"hammer", "大锤子"}:
                 continue
-            alerts.append(
+            if not gate["pass"]:
+                try:
+                    append_filtered_log({
+                        "status": "filtered_far_from_ema",
+                        "symbol": symbol, "tf": tf, "pattern": kind, "side": hit.get("side"),
+                        "bar_ts": bar_ts, "leader": leader, "kol_name": primary_kol or "未知",
+                        "ema144": ema.get("ema"), "distance_pct": gate["distance_pct"],
+                        "near_pct": g_pct, "reason": gate["reason"],
+                        "logged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    })
+                except Exception as exc:
+                    logger.warning("filtered log fail: %s", exc)
+                continue
+            alert = (
                 {
                     "type": "kol_secondary_alert",
                     "kol_name": primary_kol or "未知",
@@ -639,8 +713,12 @@ def evaluate_symbol(
                     },
                     "ema144": {
                         "side": ema["side"],
-                        "distance_pct": ema["distance_pct"],
+                        "distance_pct": gate["distance_pct"],
+                        "touch": gate["touch"],
+                        "near_pct": g_pct,
+                        "value": ema.get("ema"),
                     },
+                    "ema_gate": gate["reason"],
                     "tf": tf,
                     "bar_ts": bar_ts,
                     "leader": leader,
@@ -648,6 +726,9 @@ def evaluate_symbol(
                     "detected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 }
             )
+            alert["timeframe"] = tf
+            alert["text"] = build_alert_text(alert)
+            alerts.append(alert)
     return alerts
 
 
@@ -874,6 +955,9 @@ def scan_watchlist_alerts() -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "build_alert_text",
+    "ema144_gate",
+    "ema144_near_pct",
     "PATTERN_ZH",
     "abnormal_volume",
     "active_followed_ids",
