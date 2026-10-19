@@ -565,7 +565,7 @@ OI 异动候选 (5m/15m, OI_PUMP|OI_DUMP)
 | 5 | **KOL 二次预警**（直播逻辑，见 §13）：卡片打「关注」标签的 KOL → 币进关注列表 → 列表币出现约定形态时由 **crypto mornitor** 发二次预警 | 接线中（2026-10-19）：`kol_secondary_alert.py` + `scripts/grok_kol_secondary_forward.py`；关注名单暂用临时种子；webhook 未配则 dry-run→`alerts.jsonl` |
 | 6 | **龙头直通**：`BTC` / `ETH` / `QQQ`（及对应交易对如 BTCUSDT 等）被任一 KOL 提到 → **直接进关注列表**，同样走二次预警 | ✅ 已在 `kol_secondary_alert` 实现（`KOL_LEADER_SYMBOLS`） |
 | 7 | **回测数据源未验证前禁止用未经验证数据报胜率** | ✅ 门禁见 §11.5 |
-| 8 | **形态列表（二次预警）**：**倒垂子（inverted_hammer）/ 吞没（engulfing）/ 射击之星（shooting_star）**；**大锤子（hammer）已从列表移除** | ✅ 以本章为准 |
+| 8 | **形态列表（二次预警）**：**倒锤子（inverted_hammer）/ 吞没（engulfing）/ 射击之星（shooting_star）**；**大锤子（hammer）已从列表移除** | ✅ 以本章为准 |
 
 **恢复 OI 推送**：删 `DISABLED` → 重启 forwarder → `resume` 例程 folder `oi`（须用户明确要求）。
 
@@ -582,7 +582,7 @@ OI 异动候选 (5m/15m, OI_PUMP|OI_DUMP)
 |---------|------|----------|----------|
 | `A_pure_oi` | 全市场 OI 异动 | OI 信号即入场（不做形态等待） | 信号数、胜率、期望 |
 | `B_oi_pattern` | 同 A | OI 后经 §10 L1/L2，再等形态确认（§10 L3 allowlist） | 同上 |
-| `C_kol_pattern` | KOL 关注名单提到的币（+ 龙头直通，见 §13） | 关注列表币出现 **倒垂子 / 吞没 / 射击之星** 之一（**不含大锤子**） | 同上 |
+| `C_kol_pattern` | KOL 关注名单提到的币（+ 龙头直通，见 §13） | 关注列表币出现 **倒锤子 / 吞没 / 射击之星** 之一（**不含大锤子**） | 同上 |
 
 > **口径对齐（2026-10-19 晚通话）**：C 臂与 §13 二次预警形态一致 = `inverted_hammer,engulfing,shooting_star`。此前试跑曾用 `hammer,engulfing`（已过时）；重跑时须改 `KOL_PATTERNS` 并更新 §12。
 
@@ -666,7 +666,7 @@ OI 异动候选 (5m/15m, OI_PUMP|OI_DUMP)
 龙头直通：BTC / ETH / QQQ（含 *USDT 等交易对映射）被任意 KOL 提到 → 直接进关注列表
         ↓
 关注列表中的币，K 线出现下列形态之一：
-  • 倒垂子 inverted_hammer
+  • 倒锤子 inverted_hammer
   • 吞没 engulfing
   • 射击之星 shooting_star
   （大锤子 hammer：已移除，不要再加回）
@@ -685,9 +685,11 @@ crypto mornitor 发出「二次预警」
 
 ### 13.3 二次预警触发与内容
 
-**触发**：关注列表内 symbol，在约定周期（建议与形态监控一致：15m/1h，可配置）收出或确认：
+**触发**：关注列表内 symbol，在约定周期（默认 **15m**，`KOL_ALERT_TF`）对**已收盘**最后一根 K（默认倒数第二根；`KOL_ALERT_INCLUDE_FORMING=1` 才含未收盘当根）检出：
 
 - `inverted_hammer` 或 `engulfing` 或 `shooting_star`
+
+形态命中即告警；**异常放量与 EMA144 仅作附加上报字段，不作门控**。
 
 **消息字段（必填）**：
 
@@ -695,7 +697,7 @@ crypto mornitor 发出「二次预警」
 |------|------|
 | KOL 名 | 带入关注列表的来源 KOL（龙头直通可写「龙头直通」+ 提及者） |
 | 币种 | symbol |
-| 形态 | 倒垂子 / 吞没 / 射击之星 |
+| 形态 | 倒锤子 / 吞没 / 射击之星 |
 | 异常放量 | **前一根或当根**相对近期均量是否异常放量（阈值可配置；须写明用的是前根还是当根） |
 | EMA144 位置 | 现价相对 EMA144：上方 / 下方 / 附近（附距离% 更佳） |
 
@@ -742,6 +744,7 @@ crypto mornitor 发出「二次预警」
 | `KOL_POLL_SEC` | `45` | 轮询间隔 |
 | `KOL_FOLLOW_ALL_RECENT` | `0` | `1`=任意频道提及都进列表（调试） |
 | `KOL_EMA_NEAR_PCT` | `1.5` | EMA「附近」阈值 % |
+| `KOL_ALERT_INCLUDE_FORMING` | `0` | `1`=含未收盘当根；默认只看**已收盘**倒数第二根 |
 
 **实现文件（2026-10-19）**：`oi_mornitor/kol_secondary_alert.py`、`oi_mornitor/scripts/grok_kol_secondary_forward.py`、`~/.grokbot/kol-secondary/config.env`、`oi_mornitor/data/kol_secondary/`。
 

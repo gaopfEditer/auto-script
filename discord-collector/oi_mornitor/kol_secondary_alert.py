@@ -29,7 +29,7 @@ _DEFAULT_DATA = _PKG / "data" / "kol_secondary"
 _HOME_DATA = Path.home() / ".grokbot" / "kol-secondary"
 
 PATTERN_ZH = {
-    "inverted_hammer": "倒垂子",
+    "inverted_hammer": "倒锤子",
     "engulfing": "吞没",
     "shooting_star": "射击之星",
 }
