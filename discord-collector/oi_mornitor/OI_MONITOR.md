@@ -691,6 +691,8 @@ crypto mornitor 发出「二次预警」
 
 形态命中即告警；**异常放量与 EMA144 仅作附加上报字段，不作门控**。
 
+**有效期（2026-10 增补）**：告警发出后登记 `signal_lifecycle.json` 活跃信号。默认 **TTL 4h**（`KOL_SIGNAL_TTL_HOURS`，**下限 4h**）；入场计划为信号柱 **下一根周期开盘价**（`next_bar_open`，滑点 `KOL_ENTRY_SLIPPAGE_PCT`）。**TTL 内未入场** → `ignored_expired`；入场后 **SL/TP1 命中**（复用 `build_settle_plan` 价位）→ `ignored_sl` / `ignored_tp`。终态后不再推送/不再视为可跟单；状态事件默认只写本地 `alerts.jsonl`（`type=kol_secondary_lifecycle`），**不额外 spam webhook**。
+
 **消息字段（必填）**：
 
 | 字段 | 含义 |
@@ -740,13 +742,16 @@ crypto mornitor 发出「二次预警」
 | `KOL_ALERT_TF` | `15m` | 形态周期 |
 | `KOL_VOL_LOOKBACK` / `KOL_VOL_MULT` | 如 20 / 2.0 | 异常放量：当根或前根 vs 均量 |
 | `KOL_EMA_PERIOD` | `144` | EMA 位置 |
-| `KOL_GROK_WEBHOOK_URL` / `KOL_GROK_WEBHOOK_KEY` | （空=dry-run） | crypto mornitor 例程 webhook |
+| `KOL_GROK_WEBHOOK_URL` / `KOL_GROK_WEBHOOK_KEY` | （空=dry-run） | crypto mornitor 主 webhook |
+| `KOL_GROK_WEBHOOK_URL_2` / `KOL_GROK_WEBHOOK_KEY_2` | （可选） | 备 webhook，与主路同 payload |
+| `KOL_SIGNAL_TTL_HOURS` | `4` | 信号有效期（小时，**≥4**）；超时未入场作废 |
+| `KOL_ENTRY_SLIPPAGE_PCT` | 同 `OI_BT_SLIPPAGE_PCT` | 下一根开盘价入场滑点 |
 | `KOL_POLL_SEC` | `45` | 轮询间隔 |
 | `KOL_FOLLOW_ALL_RECENT` | `0` | `1`=任意频道提及都进列表（调试） |
 | `KOL_EMA_NEAR_PCT` | `1.5` | EMA「附近」阈值 % |
 | `KOL_ALERT_INCLUDE_FORMING` | `0` | `1`=含未收盘当根；默认只看**已收盘**倒数第二根 |
 
-**实现文件（2026-10-19）**：`oi_mornitor/kol_secondary_alert.py`、`oi_mornitor/scripts/grok_kol_secondary_forward.py`、`~/.grokbot/kol-secondary/config.env`、`oi_mornitor/data/kol_secondary/`。
+**实现文件（2026-10-19）**：`oi_mornitor/kol_secondary_alert.py`、`oi_mornitor/kol_signal_lifecycle.py`、`oi_mornitor/scripts/grok_kol_secondary_forward.py`、`~/.grokbot/kol-secondary/config.env`（例：`oi_mornitor/docs/kol-secondary-config.env.example`）、`oi_mornitor/data/kol_secondary/`（含 `signal_lifecycle.json`）。
 
 ---
 

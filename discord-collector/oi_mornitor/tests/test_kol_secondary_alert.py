@@ -6,6 +6,7 @@ from oi_mornitor.kol_secondary_alert import (
     alert_key,
     follow_patterns,
     upsert_watchlist_from_card,
+    webhook_endpoints,
 )
 
 

@@ -676,6 +676,123 @@ def post_webhook(url: str, key: str, payload: dict[str, Any]) -> None:
         r.read()
 
 
+def webhook_endpoints() -> list[tuple[str, str]]:
+    """主/备 Grok webhook（URL+KEY 与 URL_2+KEY_2）。"""
+    out: list[tuple[str, str]] = []
+    for url_key, sec_key in (
+        ("KOL_GROK_WEBHOOK_URL", "KOL_GROK_WEBHOOK_KEY"),
+        ("KOL_GROK_WEBHOOK_URL_2", "KOL_GROK_WEBHOOK_KEY_2"),
+    ):
+        u = env_str(url_key, "").strip()
+        k = env_str(sec_key, "").strip()
+        if u and k:
+            out.append((u, k))
+    return out
+
+
+def post_webhooks(payload: dict[str, Any]) -> None:
+    eps = webhook_endpoints()
+    last_exc: Exception | None = None
+    for url, key in eps:
+        try:
+            post_webhook(url, key, payload)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("KOL webhook POST fail %s: %s", url[:48], exc)
+    if last_exc and len(eps) == 1:
+        raise last_exc
+
+
+def load_lifecycle_state() -> dict[str, Any]:
+    raw = load_json(data_dir() / "signal_lifecycle.json", {"signals": {}})
+    if "signals" not in raw or not isinstance(raw.get("signals"), dict):
+        raw["signals"] = {}
+    return raw
+
+
+def save_lifecycle_state(state: dict[str, Any]) -> None:
+    save_json(data_dir() / "signal_lifecycle.json", state)
+
+
+def lifecycle_terminal_keys(state: dict[str, Any] | None = None) -> set[str]:
+    st = state if state is not None else load_lifecycle_state()
+    from oi_mornitor.kol_signal_lifecycle import is_terminal_status
+
+    out: set[str] = set()
+    for key, rec in (st.get("signals") or {}).items():
+        if isinstance(rec, dict) and is_terminal_status(str(rec.get("status") or "")):
+            out.add(str(key))
+    return out
+
+
+def register_lifecycle_signal(alert: Mapping[str, Any], *, fired_at_ms: int | float | None = None) -> dict[str, Any]:
+    from oi_mornitor.kol_signal_lifecycle import enrich_alert_lifecycle, new_lifecycle_record
+
+    enriched = enrich_alert_lifecycle(alert, fired_at_ms=fired_at_ms)
+    rec = new_lifecycle_record(enriched, fired_at_ms=fired_at_ms)
+    st = load_lifecycle_state()
+    signals: dict[str, Any] = st.setdefault("signals", {})
+    signals[str(rec["dedupe_key"])] = rec
+    save_lifecycle_state(st)
+    return enriched
+
+
+def advance_active_lifecycle(*, now_ms: int | float | None = None) -> list[dict[str, Any]]:
+    """刷新所有未终态信号；返回本轮新产生的 lifecycle 事件（仅本地日志）。"""
+    from oi_mornitor.kol_signal_lifecycle import (
+        advance_lifecycle_record,
+        bars_for_lifecycle,
+        is_terminal_status,
+    )
+
+    st = load_lifecycle_state()
+    signals: dict[str, Any] = st.setdefault("signals", {})
+    events: list[dict[str, Any]] = []
+    now = int(now_ms if now_ms is not None else time.time() * 1000)
+
+    by_fetch: dict[tuple[str, str], list[str]] = {}
+    for key, rec in list(signals.items()):
+        if not isinstance(rec, dict) or is_terminal_status(str(rec.get("status") or "")):
+            continue
+        sym = str(rec.get("symbol") or "")
+        tf = str(rec.get("tf") or env_str("KOL_ALERT_TF", "15m")).lower()
+        by_fetch.setdefault((sym, tf), []).append(str(key))
+
+    kline_cache: dict[tuple[str, str], list[dict[str, float]]] = {}
+    ema_period = env_int("KOL_EMA_PERIOD", 144, min_val=5, max_val=500)
+    vol_lb = env_int("KOL_VOL_LOOKBACK", 20, min_val=5, max_val=200)
+    limit = max(ema_period + vol_lb + 20, env_int("KOL_KLINE_LIMIT", 200, min_val=50, max_val=1500))
+
+    for (sym, tf), _keys in by_fetch.items():
+        try:
+            rows = fetch_klines_sync(sym, tf, limit)
+            kline_cache[(sym, tf)] = bars_for_lifecycle(rows)
+        except Exception as exc:
+            logger.warning("lifecycle klines %s %s: %s", sym, tf, exc)
+
+    changed = False
+    for key, rec in list(signals.items()):
+        if not isinstance(rec, dict) or is_terminal_status(str(rec.get("status") or "")):
+            continue
+        sym = str(rec.get("symbol") or "")
+        tf = str(rec.get("tf") or "15m").lower()
+        bars = kline_cache.get((sym, tf))
+        if not bars:
+            continue
+        updated, ev = advance_lifecycle_record(rec, bars, now_ms=now)
+        if updated != rec:
+            signals[key] = updated
+            changed = True
+        if ev:
+            events.append(ev)
+            append_alert_log(ev)
+
+    if changed:
+        st["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        save_lifecycle_state(st)
+    return events
+
+
 def ingest_new_cards(
     *,
     follow_all: bool | None = None,
@@ -770,11 +887,17 @@ __all__ = [
     "ingest_new_cards",
     "is_leader_symbol",
     "load_cursor",
+    "load_lifecycle_state",
     "load_seen",
     "load_watchlist",
+    "lifecycle_terminal_keys",
     "normalize_watch_symbol",
+    "advance_active_lifecycle",
     "post_webhook",
+    "post_webhooks",
     "pull_recent_cards",
+    "register_lifecycle_signal",
+    "webhook_endpoints",
     "save_cursor",
     "save_seen",
     "save_watchlist",
