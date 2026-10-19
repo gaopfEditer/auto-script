@@ -340,8 +340,11 @@ frpc -c frpc.ini
 cd discord-collector
 # 如需改可见页面，先编辑 .env.production 的 VITE_UI_PAGES
 pnpm run ui:build
+# 主站（如 op.c）：只同步 collector-ui
 rsync -avz --delete public/collector-ui/ user@your-server:/var/www/discord-collector-ui/
-rsync -avz --delete oi_mornitor/public/oi-dist/ user@your-server:/var/www/discord-collector-ui/oi-dist/
+# 独立 OI 站（如 op.b）：只同步 oi:ui:build 产物，勿把 collector-ui 拷进 oi-dist
+rsync -avz --delete oi_mornitor/public/oi-dist/ user@oi-server:/var/www/oi/
+# 主站 .env：OI_PUBLIC_EMBED_URL=https://op.b.ezcoin.ink（/oi iframe 用）
 # 浏览器强刷 https://ui.example.com/show
 ```
 

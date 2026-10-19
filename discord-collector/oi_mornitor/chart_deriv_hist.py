@@ -15,9 +15,17 @@ logger = logging.getLogger("OI_CHART_DERIV")
 _DERIV_PERIODS = frozenset(
     {"5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"}
 )
+_DERIV_PERIOD_ORDER = ("5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
+_COARSER_FALLBACK: dict[str, str] = {
+    "8h": "6h",
+    "1w": "1d",
+    "7d": "1d",
+    "3d": "1d",
+}
 
 
-def _norm_period(interval: str) -> str:
+def _norm_period(interval: str) -> str | None:
+    """映射到 Binance futures/data 支持的 period；无法对齐时返回 None（调用方应跳过并打日志）。"""
     s = (interval or "15m").strip().lower()
     if s in _DERIV_PERIODS:
         return s
@@ -25,7 +33,12 @@ def _norm_period(interval: str) -> str:
         return "1h"
     if s in ("240m", "240"):
         return "4h"
-    return "15m"
+    if s in _COARSER_FALLBACK:
+        mapped = _COARSER_FALLBACK[s]
+        logger.info("deriv 周期 %s 无直连接口，改用最近粗周期 %s", s, mapped)
+        return mapped
+    logger.warning("deriv 周期 %s 不支持，跳过 OI/多空比/Taker 拉取", s)
+    return None
 
 
 async def fetch_spot_net_taker_hist(
@@ -46,6 +59,8 @@ async def fetch_spot_net_taker_hist(
     if not sym:
         return []
     period = _norm_period(interval)
+    if not period:
+        return []
     cap = min(max(int(limit), 1), 1000)
     base = (spot_base_url or SPOT_BASE_URL).rstrip("/")
     url = f"{base}/api/v3/klines?symbol={sym}&interval={period}&limit={cap}"
@@ -96,6 +111,8 @@ async def fetch_futures_net_taker_hist(
     if not sym:
         return []
     period = _norm_period(interval)
+    if not period:
+        return []
     cap = min(max(int(limit), 1), 500)
     url = (
         f"{base_url.rstrip('/')}/futures/data/takerlongshortRatio"

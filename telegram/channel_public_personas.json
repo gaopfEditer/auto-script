@@ -1,0 +1,48 @@
+{
+  "_comment": "对外展示：alias=群名 senderAlias=气泡内 sender；与 channel_profiles 真名无任何字面关联",
+  "-1004346465376": {
+    "alias": "午后红茶局",
+    "senderAlias": "路人甲",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-a1b2c3&size=128"
+  },
+  "-1001766481463": {
+    "alias": "水泥罐贴息",
+    "senderAlias": "小卖哥",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-d4e5f6&size=128"
+  },
+  "-1003938902957": {
+    "alias": "深夜打卡处",
+    "senderAlias": "失眠选手",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-g7h8i9&size=128"
+  },
+  "-1001720924085": {
+    "alias": "胡同口大爷",
+    "senderAlias": "隔壁老王",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-j0k1l2&size=128"
+  },
+  "-1002666021235": {
+    "alias": "瓜子铺闲话",
+    "senderAlias": "掌柜小妹",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-m3n4o5&size=128"
+  },
+  "-1003962150986": {
+    "alias": "饭盒保温层",
+    "senderAlias": "团子",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-p6q7r8&size=128"
+  },
+  "-1001908181865": {
+    "alias": "霓虹倒影",
+    "senderAlias": "雾灯",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-s9t0u1&size=128"
+  },
+  "-1002355647897": {
+    "alias": "二楼茶水间",
+    "senderAlias": "续杯人",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-v2w3x4&size=128"
+  },
+  "-1002404948215": {
+    "alias": "天台吹风",
+    "senderAlias": "晚风",
+    "avatarUrl": "https://api.dicebear.com/9.x/avataaars/png?seed=tg-y5z6a7&size=128"
+  }
+}

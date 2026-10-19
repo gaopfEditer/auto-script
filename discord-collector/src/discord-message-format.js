@@ -107,6 +107,7 @@ export function extractAttachmentsForClient(rawJson) {
   const attachments = /** @type {Record<string, unknown>} */ (rawJson).attachments;
   /** @type {Array<{ url: string, proxyUrl?: string, filename: string, contentType: string, width?: number, height?: number }>} */
   const out = [];
+  const seen = new Set();
   if (Array.isArray(attachments)) {
     for (const item of attachments) {
       const a = asRecord(item);
@@ -114,10 +115,11 @@ export function extractAttachmentsForClient(rawJson) {
       const url = String(a.url ?? "").trim();
       const proxyUrl = String(a.proxy_url ?? a.proxyUrl ?? "").trim();
       const pick = url || proxyUrl;
-      if (!pick) continue;
+      if (!pick || seen.has(pick)) continue;
+      seen.add(pick);
       out.push({
-        url: pick,
-        proxyUrl: proxyUrl || undefined,
+        url: url || proxyUrl,
+        proxyUrl: proxyUrl && proxyUrl !== url ? proxyUrl : undefined,
         filename: String(a.filename ?? "").trim(),
         contentType: String(a.content_type ?? a.contentType ?? "").trim(),
         width: typeof a.width === "number" ? a.width : undefined,
@@ -125,7 +127,12 @@ export function extractAttachmentsForClient(rawJson) {
       });
     }
   }
-  return out.length ? out : extractEmbedImages(rawJson);
+  for (const img of extractEmbedImages(rawJson)) {
+    if (!img.url || seen.has(img.url)) continue;
+    seen.add(img.url);
+    out.push(img);
+  }
+  return out;
 }
 
 /**

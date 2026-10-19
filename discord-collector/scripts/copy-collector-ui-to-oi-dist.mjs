@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * 将 collector-ui-vue 构建产物同步到 public/oi-dist（与 ui:build / vite build 配套）。
+ * 已废弃：勿把 Vue 主站拷进 oi-dist（会覆盖 OI React 包，导致 op.b 嵌套 /oi）。
+ * 双域部署：collector-ui → op.c；oi_mornitor/public/oi-dist → op.b。
  */
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";

@@ -21,6 +21,7 @@ import {
   isLocalModuleEnabled,
   isOiModuleEnabled,
   isNewsModuleEnabled,
+  isTelegramModuleEnabled,
   UI_MODULES,
 } from "./lib/uiMode.js";
 
@@ -33,17 +34,21 @@ const brandTo = isDeployUi() ? getDefaultDeployPath() : "/";
 const showOiModule = isOiModuleEnabled();
 const showNewsModule = isNewsModuleEnabled();
 const showLocalModule = isLocalModuleEnabled();
+const showTelegramModule = isTelegramModuleEnabled();
 
 const activeModule = computed(() => getModuleFromPath(route.path));
 const isOi = computed(() => activeModule.value === "oi");
 const isNews = computed(() => activeModule.value === "news");
+const isTelegram = computed(() => activeModule.value === "telegram");
 const isLocal = computed(() => activeModule.value === "local");
-/** Discord / Local 共用二级导航；OI / 平台热点用 spacer */
-const showSubNav = computed(() => !isOi.value && !isNews.value);
+/** Discord / Local 二级导航；OI / 平台热点 / Telegram 顶栏模块用 spacer */
+const showSubNav = computed(() => !isOi.value && !isNews.value && !isTelegram.value);
 const navPages = computed(() =>
   getNavPages(isLocal.value ? "local" : "discord")
 );
-const showDebugToggle = computed(() => !isOi.value && !isNews.value && !isDeployUi());
+const showDebugToggle = computed(
+  () => !isOi.value && !isNews.value && !isTelegram.value && !isDeployUi(),
+);
 /** /content 独立全屏，不共用 Discord/OI 顶栏 */
 const isContentStandalone = computed(() => activeModule.value === "content");
 
@@ -105,6 +110,7 @@ const moduleLinks = computed(() => {
   let list = UI_MODULES;
   if (!showOiModule) list = list.filter((m) => m.id !== "oi");
   if (!showNewsModule) list = list.filter((m) => m.id !== "news");
+  if (!showTelegramModule) list = list.filter((m) => m.id !== "telegram");
   if (!showLocalModule) list = list.filter((m) => m.id !== "local");
   return list.map((m) => {
     if (m.id === "discord") {
@@ -159,7 +165,13 @@ async function toggleDebug() {
         <RouterLink v-for="p in navPages" :key="p.name" :to="p.path">{{ p.label }}</RouterLink>
       </nav>
       <div v-else class="oi-nav-spacer">
-        {{ isOi ? "OI Monitor · 形态 / 雷达" : "平台热点 · 金十/PANews · 多源热榜" }}
+        {{
+          isOi
+            ? "OI Monitor · 形态 / 雷达"
+            : isNews
+              ? "平台热点 · 金十/PANews · 多源热榜"
+              : "Telegram · 频道监听 / 置顶"
+        }}
       </div>
       <button
         type="button"
@@ -188,7 +200,11 @@ async function toggleDebug() {
         {{ debugMode ? "Debug 开" : "精简模式" }}
       </button>
     </header>
-    <div v-if="!isOi && !isNews && wsLongDisconnect" class="ws-down-banner" role="alert">
+    <div
+      v-if="!isOi && !isNews && wsLongDisconnect"
+      class="ws-down-banner"
+      role="alert"
+    >
       <span>实时通道已断开超过 {{ wsDownLabel }}，新消息可能收不到。已在自动重连。</span>
       <button type="button" class="ws-down-btn" @click="reconnectWs">立即重连</button>
     </div>
@@ -203,8 +219,8 @@ async function toggleDebug() {
         </KeepAlive>
       </RouterView>
     </main>
-    <OnboardingGuide v-if="(!isOi && !isNews) || onboardingState.open" />
-    <NewCardToastStack v-if="!isOi && !isNews" />
+    <OnboardingGuide v-if="(!isOi && !isNews && !isTelegram) || onboardingState.open" />
+    <NewCardToastStack v-if="!isOi && !isNews && !isTelegram" />
   </div>
 </template>
 

@@ -4,6 +4,7 @@ import mysql from "mysql2/promise";
 import { bufferToPlainPayloadText } from "./collect-ws-decode.js";
 import { bindCommunitySqliteToStore, openCommunitySqliteStore } from "./community-sqlite-store.js";
 import { config } from "./config.js";
+import { minDiscordSnowflakeId } from "./discord-show-history-cache.js";
 import { serializeRawJsonColumnForMysql } from "./mysql-json.js";
 
 /**
@@ -137,6 +138,17 @@ export async function openStore(cfg, log) {
       KEY idx_discord_channels_updated (updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  for (const col of [
+    "ADD COLUMN show_history_warmed_at DATETIME(3) NULL AFTER updated_at",
+    "ADD COLUMN show_history_oldest_message_id VARCHAR(32) NULL AFTER show_history_warmed_at",
+  ]) {
+    try {
+      await pool.query(`ALTER TABLE discord_channels ${col}`);
+    } catch {
+      /* 列已存在 */
+    }
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS discord_signal_cards (
@@ -401,10 +413,24 @@ export async function openStore(cfg, log) {
   `;
 
   const insertMsgSql = `
-    INSERT IGNORE INTO discord_messages (
+    INSERT INTO discord_messages (
       message_id, guild_id, guild_name, channel_id, channel_name, author_id, created_at_ms,
       content, author_username, author_global_name, author_avatar, event_type, source, raw_json, received_at
     ) VALUES ?
+    ON DUPLICATE KEY UPDATE
+      guild_id = IF(VALUES(guild_id) != '', VALUES(guild_id), guild_id),
+      guild_name = COALESCE(VALUES(guild_name), guild_name),
+      channel_id = IF(VALUES(channel_id) != '', VALUES(channel_id), channel_id),
+      channel_name = COALESCE(VALUES(channel_name), channel_name),
+      author_id = IF(VALUES(author_id) != '', VALUES(author_id), author_id),
+      content = VALUES(content),
+      author_username = COALESCE(VALUES(author_username), author_username),
+      author_global_name = COALESCE(VALUES(author_global_name), author_global_name),
+      author_avatar = COALESCE(VALUES(author_avatar), author_avatar),
+      event_type = VALUES(event_type),
+      source = VALUES(source),
+      raw_json = VALUES(raw_json),
+      received_at = VALUES(received_at)
   `;
 
   /**
@@ -751,6 +777,112 @@ export async function openStore(cfg, log) {
       params
     );
     return rows;
+  }
+
+  /**
+   * @param {string} channelId
+   * @param {{ fromMs?: number }} [opts]
+   */
+  /** @param {string} messageId */
+  async function getDiscordMessageRawJson(messageId) {
+    const mid = String(messageId ?? "").trim();
+    if (!mid) return null;
+    const [rows] = await pool.query(
+      `SELECT raw_json FROM discord_messages WHERE message_id = ? LIMIT 1`,
+      [mid]
+    );
+    const raw = rows[0]?.raw_json;
+    if (raw == null) return null;
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    }
+    return raw;
+  }
+
+  /**
+   * @param {string} channelId
+   * @param {{ fromMs?: number }} [opts]
+   */
+  async function getOldestDiscordMessageIdForChannel(channelId, opts = {}) {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return "";
+    const params = [cid];
+    let fromSql = "";
+    const fromMs = Number(opts.fromMs);
+    if (Number.isFinite(fromMs) && fromMs > 0) {
+      fromSql = " AND created_at_ms >= ?";
+      params.push(fromMs);
+    }
+    const [rows] = await pool.query(
+      `SELECT message_id FROM discord_messages
+       WHERE channel_id = ?${fromSql}
+       ORDER BY CAST(message_id AS UNSIGNED) ASC
+       LIMIT 1`,
+      params
+    );
+    return rows[0]?.message_id != null ? String(rows[0].message_id) : "";
+  }
+
+  /** @param {string} channelId */
+  async function getDiscordChannelShowHistoryCache(channelId) {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return { warmedAtMs: 0, oldestMessageId: "" };
+    const [rows] = await pool.query(
+      `SELECT show_history_warmed_at, show_history_oldest_message_id
+       FROM discord_channels WHERE channel_id = ? LIMIT 1`,
+      [cid]
+    );
+    const row = rows[0];
+    if (!row) return { warmedAtMs: 0, oldestMessageId: "" };
+    const warmedAt = row.show_history_warmed_at;
+    const warmedAtMs =
+      warmedAt instanceof Date
+        ? warmedAt.getTime()
+        : warmedAt
+          ? new Date(warmedAt).getTime()
+          : 0;
+    return {
+      warmedAtMs: Number.isFinite(warmedAtMs) ? warmedAtMs : 0,
+      oldestMessageId: String(row.show_history_oldest_message_id ?? "").trim(),
+    };
+  }
+
+  /**
+   * REST/CDP 采集后合并「已预热到多旧」标记（取更小 snowflake）。
+   * @param {string} channelId
+   * @param {{ oldestMessageId?: string, messageIds?: string[] }} patch
+   */
+  async function mergeDiscordChannelShowHistoryCache(channelId, patch = {}) {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return;
+    let candidate = String(patch.oldestMessageId ?? "").trim();
+    if (Array.isArray(patch.messageIds)) {
+      for (const id of patch.messageIds) {
+        candidate = minDiscordSnowflakeId(candidate, String(id ?? "").trim());
+      }
+    }
+    if (!candidate) return;
+
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const cur = await getDiscordChannelShowHistoryCache(cid);
+    const oldest = minDiscordSnowflakeId(cur.oldestMessageId, candidate);
+    await pool.execute(
+      `INSERT INTO discord_channels (channel_id, guild_id, name, channel_type, updated_at, show_history_warmed_at, show_history_oldest_message_id)
+       VALUES (?, '', '', 0, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         show_history_warmed_at = VALUES(show_history_warmed_at),
+         show_history_oldest_message_id = IF(
+           show_history_oldest_message_id IS NULL OR show_history_oldest_message_id = '',
+           VALUES(show_history_oldest_message_id),
+           LEAST(CAST(show_history_oldest_message_id AS UNSIGNED), CAST(VALUES(show_history_oldest_message_id) AS UNSIGNED))
+         ),
+         updated_at = VALUES(updated_at)`,
+      [cid, now, now, oldest]
+    );
   }
 
   async function listRecentFrames(limit = 120) {
@@ -2098,6 +2230,10 @@ export async function openStore(cfg, log) {
     listDiscordChannelsByGuild,
     listRecentFrames,
     listRecentMessages,
+    getDiscordMessageRawJson,
+    getOldestDiscordMessageIdForChannel,
+    getDiscordChannelShowHistoryCache,
+    mergeDiscordChannelShowHistoryCache,
     listChannelTextCaches,
     upsertChannelTextCache,
     listChannelMessageDedupCaches,
@@ -2230,6 +2366,10 @@ export function createOfflineStore() {
     listDiscordChannelsByGuild: async () => [],
     listRecentFrames: async () => [],
     listRecentMessages: async () => [],
+    getDiscordMessageRawJson: async () => null,
+    getOldestDiscordMessageIdForChannel: async () => "",
+    getDiscordChannelShowHistoryCache: async () => ({ warmedAtMs: 0, oldestMessageId: "" }),
+    mergeDiscordChannelShowHistoryCache: async () => {},
     listChannelTextCaches: async () => [],
     upsertChannelTextCache: async () => {},
     listChannelMessageDedupCaches: async () => [],

@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 TOP_N = int(os.environ.get("BINANCE_LEADERBOARD_TOP", "12"))
 REFRESH_SEC = int(os.environ.get("BINANCE_LEADERBOARD_REFRESH_SEC", "900"))
+# 雷达快照兜底：跟 OI 扫描走，不应占用 15min 死缓存
+RADAR_REFRESH_SEC = int(os.environ.get("BINANCE_LEADERBOARD_RADAR_REFRESH_SEC", "45"))
 OI_CANDIDATES = int(os.environ.get("BINANCE_LEADERBOARD_OI_CANDIDATES", "24"))
 
 
@@ -67,6 +69,10 @@ def _has_board_data(payload: dict[str, Any]) -> bool:
     if not isinstance(boards, dict):
         return False
     return any(isinstance(v, list) and len(v) > 0 for v in boards.values())
+
+
+def _is_radar_payload(payload: dict[str, Any]) -> bool:
+    return payload.get("fallback") == "radar_snapshot"
 
 
 def _parse_rows(tickers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -192,7 +198,7 @@ def boards_from_radar_snapshot(
         "source": "binance",
         "source_label": "Binance · 雷达快照兜底",
         "updated_at": int(time.time()),
-        "refresh_sec": REFRESH_SEC,
+        "refresh_sec": RADAR_REFRESH_SEC,
         "symbol_count": len(rows),
         "boards": boards,
         "error": None,
@@ -304,6 +310,34 @@ class BinanceLeaderboardsCache:
             fb["error"] = reason
         return fb
 
+    def _store_radar(
+        self,
+        radar_fallback: dict[str, Any] | None,
+        *,
+        reason: str = "",
+    ) -> dict[str, Any] | None:
+        fb = self._try_radar_fallback(radar_fallback, reason=reason)
+        if fb:
+            self._payload = fb
+            self._ts = time.time()
+        return fb
+
+    def _should_use_radar_live(
+        self,
+        *,
+        force: bool,
+        radar_fallback: dict[str, Any] | None,
+    ) -> bool:
+        if not radar_fallback:
+            return False
+        if http_backoff.is_cooling("binance"):
+            return True
+        if _is_radar_payload(self._payload):
+            return True
+        if force and not _has_board_data(self._payload):
+            return True
+        return False
+
     async def get(
         self,
         *,
@@ -311,29 +345,48 @@ class BinanceLeaderboardsCache:
         radar_fallback: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = time.time()
+        cooling = http_backoff.is_cooling("binance")
+
+        # 雷达兜底：每次 API 用最新 all_tickers 重算涨幅/跌幅（避免 15min 内币种与涨跌幅冻结）
+        if self._should_use_radar_live(force=force, radar_fallback=radar_fallback):
+            reason = ""
+            if cooling:
+                remain = http_backoff.cooldown_remaining("binance")
+                reason = f"Binance 冷却中（≈{remain / 60:.0f}min），雷达快照兜底"
+            elif self._payload.get("error"):
+                reason = str(self._payload.get("error") or "")
+            fb = self._store_radar(radar_fallback, reason=reason)
+            if fb:
+                return dict(fb)
+            if _has_board_data(self._payload):
+                stale = dict(self._payload)
+                if reason:
+                    stale["error"] = reason
+                return stale
+
         if (
             not force
             and _has_board_data(self._payload)
+            and not _is_radar_payload(self._payload)
             and now - self._ts < REFRESH_SEC
         ):
             return dict(self._payload)
+
         async with self._lock:
             now = time.time()
             if (
                 not force
                 and _has_board_data(self._payload)
+                and not _is_radar_payload(self._payload)
                 and now - self._ts < REFRESH_SEC
             ):
                 return dict(self._payload)
 
-            # 币安全局冷却中：勿阻塞 wait_global_cooldown，直接用雷达快照
-            if http_backoff.is_cooling("binance"):
+            if cooling:
                 remain = http_backoff.cooldown_remaining("binance")
                 reason = f"Binance 冷却中（≈{remain / 60:.0f}min），雷达快照兜底"
-                fb = self._try_radar_fallback(radar_fallback, reason=reason)
+                fb = self._store_radar(radar_fallback, reason=reason)
                 if fb:
-                    self._payload = fb
-                    self._ts = time.time()
                     return dict(fb)
                 if _has_board_data(self._payload):
                     stale = dict(self._payload)
@@ -345,16 +398,14 @@ class BinanceLeaderboardsCache:
                 self._ts = time.time()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Binance 榜单拉取失败: %s", exc)
+                fb = self._store_radar(radar_fallback, reason=str(exc))
+                if fb:
+                    return dict(fb)
                 if _has_board_data(self._payload):
                     stale = dict(self._payload)
                     stale["ok"] = False
                     stale["error"] = str(exc)
                     return stale
-                fb = self._try_radar_fallback(radar_fallback, reason=str(exc))
-                if fb:
-                    self._payload = fb
-                    self._ts = time.time()
-                    return dict(fb)
                 return _empty_payload(error=str(exc))
             return dict(self._payload)
 

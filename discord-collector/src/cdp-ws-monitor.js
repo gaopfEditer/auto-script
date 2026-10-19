@@ -110,6 +110,59 @@ async function injectDiscordVisibilityKeepalive(cdp, log, pageUrl = "") {
   }
 }
 
+/** @param {{ cdpSilentNavigation?: boolean }} monitorOpts */
+function isCdpSilentNavigation(monitorOpts) {
+  return monitorOpts.cdpSilentNavigation !== false;
+}
+
+/**
+ * 在已有标签内重载，避免 Playwright page.reload 激活 Chrome 标签抢焦点。
+ * @param {import('playwright').Page} page
+ * @param {{ cdp?: import('playwright').CDPSession, page: import('playwright').Page }[]} mounted
+ * @param {Logger} log
+ * @param {{ cdpSilentNavigation?: boolean }} monitorOpts
+ */
+async function reloadDiscordPageInPlace(page, mounted, log, monitorOpts) {
+  const wait = { timeout: 90_000 };
+  if (!isCdpSilentNavigation(monitorOpts)) {
+    await page.reload({ waitUntil: "domcontentloaded", ...wait });
+    return;
+  }
+  const entry = mounted.find((m) => m.page === page);
+  if (entry?.cdp) {
+    try {
+      await entry.cdp.send("Page.reload", { ignoreCache: false });
+      await page.waitForLoadState("domcontentloaded", wait).catch(() => {});
+      return;
+    } catch (e) {
+      log.warn(
+        `CDP 静默 Page.reload 失败，回退 location.reload: ${/** @type {Error} */ (e).message}`
+      );
+    }
+  }
+  await page.evaluate(() => window.location.reload()).catch(() => {});
+  await page.waitForLoadState("domcontentloaded", wait).catch(() => {});
+}
+
+/**
+ * 后台新建标签（CDP background:true），避免 ctx.newPage 抢焦点。
+ * @param {import('playwright').BrowserContext} ctx
+ * @param {string} url
+ * @returns {Promise<import('playwright').Page | null>}
+ */
+async function createDiscordTabInBackground(ctx, url) {
+  const anchor = ctx.pages().find((p) => !p.isClosed());
+  if (!anchor) return null;
+  const pagePromise = ctx.waitForEvent("page", { timeout: 120_000 });
+  const cdp = await ctx.newCDPSession(anchor);
+  await cdp.send("Target.createTarget", {
+    url,
+    background: true,
+    newWindow: false,
+  });
+  return pagePromise;
+}
+
 const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -1233,6 +1286,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *   pageReloadIntervalMs?: number,
  *   cdpAutoGoto?: boolean,
  *   cdpVisibilityKeepalive?: boolean,
+ *   cdpSilentNavigation?: boolean,
  *   networkTrace?: boolean,
  *   wsFrameTrace?: boolean,
  *   diagnosticSink?: (evt: Record<string, unknown>) => void,
@@ -1326,20 +1380,39 @@ export async function startCdpWebSocketMonitor(opts, log) {
       throw new Error("CDP 浏览器无可用 Context，无法新建 Discord 标签");
     }
     const ctx = contexts[0];
-    const page = await ctx.newPage();
-    log.info(`CDP 未找到 Discord 标签，新建 1 个 → ${shortenUrl(url, 200)}`);
+    /** @type {import('playwright').Page | null} */
+    let page = null;
+    if (isCdpSilentNavigation(opts)) {
+      try {
+        page = await createDiscordTabInBackground(ctx, url);
+        if (page) {
+          log.info(`CDP 后台新建 Discord 标签（不抢焦点）→ ${shortenUrl(url, 200)}`);
+        }
+      } catch (e) {
+        log.warn(
+          `CDP 后台新建标签失败，回退 newPage: ${/** @type {Error} */ (e).message}`
+        );
+      }
+    }
+    if (!page) {
+      page = await ctx.newPage();
+      log.info(`CDP 未找到 Discord 标签，新建 1 个 → ${shortenUrl(url, 200)}`);
+      try {
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      } catch (e) {
+        const msg = String(/** @type {Error} */ (e).message ?? e);
+        log.warn(`CDP 新建 Discord 标签 goto 异常（可能仍可用）: ${msg}`);
+        await page.waitForLoadState("domcontentloaded", { timeout: 90_000 }).catch(() => {});
+      }
+    } else {
+      await page.waitForLoadState("domcontentloaded", { timeout: 120_000 }).catch(() => {});
+    }
     opts.diagnosticSink?.({
       kind: "cdp_discord_tab_created",
       targetUrl: url,
       tabCount: countBrowserPages(br),
+      background: isCdpSilentNavigation(opts) && page != null,
     });
-    try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
-    } catch (e) {
-      const msg = String(/** @type {Error} */ (e).message ?? e);
-      log.warn(`CDP 新建 Discord 标签 goto 异常（可能仍可用）: ${msg}`);
-      await page.waitForLoadState("domcontentloaded", { timeout: 90_000 }).catch(() => {});
-    }
     await attachToPage(page);
     return page;
   }
@@ -1410,8 +1483,10 @@ export async function startCdpWebSocketMonitor(opts, log) {
       }
 
       if (navOpts.forceReload && already) {
-        log.info(`CDP 保活刷新已有标签 ${shortenUrl(url, 160)}`);
-        await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 });
+        log.info(
+          `CDP 保活${isCdpSilentNavigation(opts) ? "静默" : ""}刷新已有标签 ${shortenUrl(url, 160)}`
+        );
+        await reloadDiscordPageInPlace(page, mounted, log, opts);
       } else if (!already || navOpts.forceReload) {
         log.info(`CDP 在已有标签打开频道 ${shortenUrl(cur, 80)} → ${shortenUrl(url, 160)}`);
         try {
@@ -1424,7 +1499,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
             log.info(`CDP 已有标签正在跳转（${msg}）`);
           } else {
             log.warn(`CDP location.assign 失败，同一标签 reload: ${msg}`);
-            await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 });
+            await reloadDiscordPageInPlace(page, mounted, log, opts);
           }
         }
         await page.waitForLoadState("domcontentloaded", { timeout: 90_000 }).catch(() => {});
@@ -1616,7 +1691,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
       if (reloadMs > 0) {
         if (!isReconnect) {
           log.info(
-            `CDP 保活刷新已启用：每 ${Math.round(reloadMs / 1000)}s 在已有 Discord 标签上刷新 ${shortenUrl(keepUrl, 120)}（不会新开标签）`
+            `CDP 保活${isCdpSilentNavigation(opts) ? "静默" : ""}刷新已启用：每 ${Math.round(reloadMs / 1000)}s 在已有 Discord 标签上刷新 ${shortenUrl(keepUrl, 120)}（不会新开标签、不抢焦点）`
           );
         }
         reloadTimer = setInterval(() => {
@@ -1936,7 +2011,9 @@ export async function startCdpWebSocketMonitor(opts, log) {
       }
 
       const page = picked.page;
-      await page.bringToFront().catch(() => {});
+      if (!isCdpSilentNavigation(opts)) {
+        await page.bringToFront().catch(() => {});
+      }
 
       if (beforeMessageId) {
         await page

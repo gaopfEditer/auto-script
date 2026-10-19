@@ -7,7 +7,8 @@
  * - discord：Show / 卡片 / 评估 / 社区
  * - oi：OI Monitor（可切换；运行时探测 oi_mornitor 后嵌入）
  * - news：平台热点（金十宏观 + 币安/OKX 热榜，collect:ui 自动守护）
- * - local：本机工具（Telegram / 拉取 / 文稿 / Debug）——仅开发态，不进部署包
+ * - telegram：Telegram 频道监听（顶栏；deploy 可打包，展示用别名）
+ * - local：本机工具（手动统计 / 拉取 / 文稿 / Debug）——仅开发态，不进部署包
  *
  * 环境变量（discord-collector/.env*）：
  *   VITE_UI_MODE=local|deploy
@@ -17,12 +18,11 @@
  * 未设置 VITE_UI_MODE 时：开发 → local，生产构建 → deploy
  */
 
-/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" | "news" | "local" | "content" }} UiPageDef */
+/** @typedef {{ path: string, name: string, label: string, nav?: boolean, module?: "discord" | "oi" | "news" | "telegram" | "local" | "content" }} UiPageDef */
 
 /** 仅本机 Local 模块；deploy 构建一律剔除（即使误写进 VITE_UI_PAGES） */
 export const LOCAL_ONLY_PAGE_NAMES = Object.freeze([
   "manual-stats",
-  "telegram",
   "fetch",
   "archives",
   "debug",
@@ -36,7 +36,7 @@ export const ALL_UI_PAGES = [
   { path: "/eval", name: "eval", label: "评估", nav: true, module: "discord" },
   { path: "/community", name: "community", label: "社区", nav: true, module: "discord" },
   { path: "/local/manual-stats", name: "manual-stats", label: "手动统计", nav: true, module: "local" },
-  { path: "/telegram", name: "telegram", label: "Telegram", nav: true, module: "local" },
+  { path: "/telegram", name: "telegram", label: "Telegram", nav: false, module: "telegram" },
   { path: "/fetch", name: "fetch", label: "拉取", nav: true, module: "local" },
   { path: "/archives", name: "archives", label: "文稿", nav: true, module: "local" },
   { path: "/debug", name: "debug", label: "Debug", nav: true, module: "local" },
@@ -46,15 +46,16 @@ export const ALL_UI_PAGES = [
   { path: "/news", name: "news", label: "平台热点", nav: false, module: "news" },
 ];
 
-/** @type {{ id: "discord" | "oi" | "news" | "local", label: string, to: string }[]} */
+/** @type {{ id: "discord" | "oi" | "news" | "telegram" | "local", label: string, to: string }[]} */
 export const UI_MODULES = [
   { id: "discord", label: "专属频道", to: "/show" },
   { id: "oi", label: "实时信号", to: "/oi" },
   { id: "news", label: "平台热点", to: "/news" },
+  { id: "telegram", label: "Telegram", to: "/telegram" },
   { id: "local", label: "本地", to: "/local/manual-stats" },
 ];
 
-const DEFAULT_DEPLOY_PAGES = ["show", "cards", "eval", "community", "oi", "news"];
+const DEFAULT_DEPLOY_PAGES = ["show", "cards", "eval", "community", "oi", "news", "telegram"];
 
 /**
  * @returns {"local" | "deploy"}
@@ -83,6 +84,7 @@ export function getEnabledPageNames() {
     : DEFAULT_DEPLOY_PAGES;
   const normalized = list.map((s) => s.replace(/^\//, "").replace(/-/g, "_"));
   const set = new Set(normalized.length ? normalized : DEFAULT_DEPLOY_PAGES);
+  for (const name of DEFAULT_DEPLOY_PAGES) set.add(name);
   for (const name of LOCAL_ONLY_PAGE_NAMES) set.delete(name);
   return set;
 }
@@ -111,18 +113,17 @@ export function isLocalModuleEnabled() {
 
 /**
  * @param {string} path
- * @returns {"discord" | "oi" | "news" | "local" | "content"}
+ * @returns {"discord" | "oi" | "news" | "telegram" | "local" | "content"}
  */
 export function getModuleFromPath(path) {
   const p = String(path ?? "");
   if (p === "/content" || p.startsWith("/content/")) return "content";
   if (p === "/oi" || p.startsWith("/oi/")) return "oi";
   if (p === "/news" || p.startsWith("/news/")) return "news";
+  if (p === "/telegram" || p.startsWith("/telegram/")) return "telegram";
   if (
     p === "/local" ||
     p.startsWith("/local/") ||
-    p === "/telegram" ||
-    p.startsWith("/telegram/") ||
     p === "/fetch" ||
     p.startsWith("/fetch/") ||
     p === "/archives" ||
@@ -143,6 +144,11 @@ export function isOiModuleEnabled() {
 /** 平台热点模块 */
 export function isNewsModuleEnabled() {
   return isPageEnabled("news");
+}
+
+/** Telegram 顶栏模块 */
+export function isTelegramModuleEnabled() {
+  return isPageEnabled("telegram");
 }
 
 /** 部署版默认落地页 */

@@ -575,7 +575,11 @@ export async function fetchAlertStatsPage(opts: {
     assetClass: assetClassFilter,
   });
   if (symbol) params.set("symbol", symbol);
-  if (opts.mtfResonanceOnly) params.set("mtfResonance", "1");
+  if (opts.mtfResonanceOnly) {
+    params.set("mtfResonance", "1");
+  } else {
+    params.set("showAll", "1");
+  }
   const confTier = String(opts.confluenceMinTier || "all").trim() || "all";
   if (confTier !== "all") params.set("confluenceTier", confTier);
   const mcapF = String(opts.mcapTierFilter || "all").trim() || "all";

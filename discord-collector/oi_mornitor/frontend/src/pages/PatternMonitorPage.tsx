@@ -44,6 +44,10 @@ const MOONSHOT_CLASS: Record<string, string> = {
 
 export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const { snapshot, online, bootstrapping, patchPattern } = useRadarSSE();
+  const bootBlocking =
+    bootstrapping &&
+    !(snapshot.all_tickers?.length ?? 0) &&
+    !(snapshot.pattern?.watchlist?.length ?? 0);
   const [searchParams, setSearchParams] = useSearchParams();
   const pattern = snapshot.pattern;
   const [input, setInput] = useState("");
@@ -355,7 +359,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
       />
 
       <div className="pattern-app-body">
-        {bootstrapping ? (
+        {bootBlocking ? (
           <PageBootLoading
             message="连接 OI 信号…"
             hint="首次打开需拉取雷达快照与形态列表，可能需十数秒"

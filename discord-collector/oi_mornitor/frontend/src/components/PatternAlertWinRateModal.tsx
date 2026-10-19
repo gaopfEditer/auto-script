@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ALERT_SETTLE_RULES_SUMMARY,
@@ -212,42 +212,60 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   const canWriteStats = useMemo(() => isOiOperator(), []);
   const showCaptureToggle = canWriteStats && typeof onCaptureEnabledChange === "function";
 
-  const bump = (s?: AlertWinRateSummary) => {
-    onStatsChange?.(s ?? summary);
-  };
+  const loadSeqRef = useRef(0);
+  const pageRef = useRef(page);
+  pageRef.current = page;
 
-  const reloadPage = async (opts?: { page?: number }) => {
-    const nextPage = opts?.page ?? page;
-    setLoadingList(true);
-    try {
-      const res = await fetchAlertStatsPage({
-        page: nextPage,
-        pageSize: ALERT_STATS_PAGE_SIZE,
-        timeFilter: filter,
-        sessionFilter,
-        daytypeFilter,
-        typeFilter,
-        intervalFilter,
-        assetClassFilter,
-        mtfResonanceOnly: mtfOnly,
-        confluenceMinTier: confluenceTier,
-        mcapTierFilter,
-      });
-      setRows(res.items);
-      setSummary(res.summary);
-      setTypeOptions(res.typeOptions);
-      setIntervalOptions(res.intervalOptions ?? []);
-      setSessionOptions(res.sessionOptions ?? []);
-      setDaytypeOptions(res.daytypeOptions ?? []);
-      setMcapTierOptions(res.mcapTierOptions ?? []);
-      setTotal(res.total);
-      setPages(res.pages);
-      setPage(res.page);
-      bump();
-    } finally {
-      setLoadingList(false);
-    }
-  };
+  const reloadPage = useCallback(
+    async (opts?: { page?: number; syncTicker?: boolean }) => {
+      const nextPage = opts?.page ?? pageRef.current;
+      const seq = ++loadSeqRef.current;
+      setLoadingList(true);
+      try {
+        const res = await fetchAlertStatsPage({
+          page: nextPage,
+          pageSize: ALERT_STATS_PAGE_SIZE,
+          timeFilter: filter,
+          sessionFilter,
+          daytypeFilter,
+          typeFilter,
+          intervalFilter,
+          assetClassFilter,
+          mtfResonanceOnly: mtfOnly,
+          confluenceMinTier: confluenceTier,
+          mcapTierFilter,
+        });
+        if (seq !== loadSeqRef.current) return;
+        setRows(res.items);
+        setSummary(res.summary);
+        setTypeOptions(res.typeOptions);
+        setIntervalOptions(res.intervalOptions ?? []);
+        setSessionOptions(res.sessionOptions ?? []);
+        setDaytypeOptions(res.daytypeOptions ?? []);
+        setMcapTierOptions(res.mcapTierOptions ?? []);
+        setTotal(res.total);
+        setPages(res.pages);
+        setPage(res.page);
+        if (opts?.syncTicker !== false) {
+          onStatsChange?.(res.summary);
+        }
+      } finally {
+        if (seq === loadSeqRef.current) setLoadingList(false);
+      }
+    },
+    [
+      filter,
+      sessionFilter,
+      daytypeFilter,
+      typeFilter,
+      intervalFilter,
+      assetClassFilter,
+      mtfOnly,
+      confluenceTier,
+      mcapTierFilter,
+      onStatsChange,
+    ],
+  );
 
   const toggleHideYield = () => {
     setHideYield((prev) => {
@@ -262,22 +280,17 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      loadSeqRef.current += 1;
+      return;
+    }
     setSelected(new Set());
     setStatusNote("");
     setPendingCapture(null);
     setPage(1);
     void reloadPage({ page: 1 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 打开时拉第一页
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    setSelected(new Set());
-    setPage(1);
-    void reloadPage({ page: 1 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    open,
     filter,
     sessionFilter,
     daytypeFilter,
@@ -287,6 +300,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     mtfOnly,
     confluenceTier,
     mcapTierFilter,
+    reloadPage,
   ]);
 
   useEffect(() => {
@@ -356,7 +370,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     setRetrying(true);
     setStatusNote("正在重试失败项…");
     try {
-      await retryFailedAlertStats(() => bump());
+      await retryFailedAlertStats(() => onStatsChange?.());
       setStatusNote("失败项重试完成");
       setSelected(new Set());
       await reloadPage();
@@ -389,9 +403,9 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     const keys = [...selected];
     setRetrying(true);
     setStatusNote(`正在重拉 ${keys.length} 条…`);
-    bump();
+    onStatsChange?.();
     try {
-      await reverifyAlertStatsByKeys(keys, () => bump());
+      await reverifyAlertStatsByKeys(keys, () => onStatsChange?.());
       setStatusNote(`已重拉 ${keys.length} 条`);
       setSelected(new Set());
       await reloadPage();

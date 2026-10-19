@@ -11,7 +11,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 
 import { buildFrameChannelPayload, jsonWire } from "./collect-ws-decode.js";
-import { config } from "./config.js";
+import { applyDiscordGroupsChannelList, config } from "./config.js";
 import { startCdpWebSocketMonitor } from "./cdp-ws-monitor.js";
 import { startCdpChannelRotate } from "./cdp-channel-rotate.js";
 import { createShowLayoutStore } from "./show-layout-store.js";
@@ -74,8 +74,18 @@ import {
   setTradeOrderSizeUsdt,
   setTradePlatformToggles,
 } from "./trade-platform-toggles.js";
+import { isChannelShowHistoryFresh } from "./discord-show-history-cache.js";
+import { registerDiscordCdnProxyRoutes } from "./discord-cdn-proxy.js";
+import { extractAttachmentsForClient } from "./discord-message-format.js";
 
 /** 慢客户端：超过 soft 跳过 diag/frame；超过 hard 断开（防 WS 发送队列撑爆堆） */
+const showHistoryWarmInflight = new Map();
+
+/** @param {number} ms */
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 const WS_SEND_BUFFER_SOFT = 2 * 1024 * 1024;
 const WS_SEND_BUFFER_HARD = 16 * 1024 * 1024;
 
@@ -269,6 +279,8 @@ async function main() {
 
   app.use(express.json({ limit: "512kb" }));
 
+  registerDiscordCdnProxyRoutes(app, createLogger("discord-cdn"));
+
   registerDiscordSignalRoutes(app, store, signalCards, broadcast);
   registerBitgetRoutes(app, bitgetOrder, bitgetManual);
   registerWeexRoutes(app, weexOrder);
@@ -393,17 +405,20 @@ async function main() {
   app.get("/api/oi/status", async (_req, res) => {
     const apiBase = config.oiWebBaseUrl;
     const timeoutMs = Number.isFinite(config.oiHealthTimeoutMs) ? config.oiHealthTimeoutMs : 3_000;
-    /** 浏览器可访问的嵌入地址（上云时用公网 / frp 口，勿把 127.0.0.1 给访客） */
-    const publicEmbed =
-      config.oiPublicEmbedUrl || config.oiEmbedUrl || apiBase;
-    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, latencyMs?: number, error?: string, hint?: string, uiBuild?: string }} */
+    /** 浏览器 iframe 用公网 OI 站；勿回落到 127.0.0.1（访客浏览器不可达） */
+    const publicEmbed = (config.oiPublicEmbedUrl || config.oiEmbedUrl || "").replace(/\/$/, "");
+    const devEmbed = (config.oiEmbedUrl || apiBase).replace(/\/$/, "");
+    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, localEmbedUrl: string, latencyMs?: number, error?: string, hint?: string, uiBuild?: string }} */
     const out = {
       ok: true,
       active: false,
       apiBase,
       embedUrl: publicEmbed,
       publicEmbedUrl: publicEmbed,
-      hint: "oi_mornitor 由 collect:ui 自动守护；也可手动：pnpm run oi:start；上云需 OI_PUBLIC_EMBED_URL + frp 映射 8765",
+      localEmbedUrl: "",
+      hint: publicEmbed
+        ? undefined
+        : "主站 /oi 需 OI_PUBLIC_EMBED_URL（如 https://op.b.ezcoin.ink）；本机健康检查仍用 OI_WEB_BASE_URL",
     };
 
     /** @param {string} url */
@@ -430,10 +445,13 @@ async function main() {
       }
     }
 
-    /** 读 OI index.html 的 JS hash（服务端无 CORS；Python 未重启也能拿到） */
-    async function peekIndexAssetBuild(base) {
+    /**
+     * 拉公网 OI 嵌入站首页，判断是否误部署了 collector-ui 主站。
+     * @param {string} base
+     */
+    async function peekPublicEmbedPage(base) {
       const root = String(base || "").replace(/\/$/, "");
-      if (!root) return "";
+      if (!root) return { asset: "", isCollectorUi: false };
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
@@ -441,15 +459,22 @@ async function main() {
           signal: ctrl.signal,
           headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
         });
-        if (!r.ok) return "";
+        if (!r.ok) return { asset: "", isCollectorUi: false };
         const html = await r.text();
+        const isCollectorUi = /<title>\s*discord-collector\s*<\/title>/i.test(html);
         const m = html.match(/\/assets\/(index-[A-Za-z0-9_-]+\.js)/);
-        return m ? m[1] : "";
+        return { asset: m ? m[1] : "", isCollectorUi };
       } catch {
-        return "";
+        return { asset: "", isCollectorUi: false };
       } finally {
         clearTimeout(timer);
       }
+    }
+
+    /** @param {string} base */
+    async function peekIndexAssetBuild(base) {
+      const { asset } = await peekPublicEmbedPage(base);
+      return asset;
     }
 
     const t0 = Date.now();
@@ -468,12 +493,33 @@ async function main() {
       const assetBuild = await peekIndexAssetBuild(apiBase);
       const uiBuild = assetBuild || up.uiBuild || "";
       if (uiBuild) out.uiBuild = uiBuild;
-      // iframe 固定用 OI_WEB_BASE_URL；带 ?v= 打破浏览器对旧文档的强缓存
-      const embedBase = String(publicEmbed || apiBase).replace(/\/$/, "");
-      out.embedUrl = uiBuild
-        ? `${embedBase}/?v=${encodeURIComponent(uiBuild)}`
-        : `${embedBase}/`;
-      out.publicEmbedUrl = out.embedUrl;
+      const localBase = (config.oiEmbedUrl || devEmbed).replace(/\/$/, "");
+      const localWithCache = uiBuild
+        ? `${localBase}/?v=${encodeURIComponent(uiBuild)}`
+        : `${localBase}/`;
+      out.localEmbedUrl = localWithCache;
+
+      if (publicEmbed) {
+        const publicPage = await peekPublicEmbedPage(publicEmbed);
+        if (publicPage.isCollectorUi) {
+          out.embedDeployError = `公网 OI 地址 ${publicEmbed} 当前是 discord-collector 主站（title=discord-collector），不是 OI React。请在 op.b 仅部署 oi_mornitor/public/oi-dist，勿上传 public/collector-ui。`;
+          out.embedUrl = "";
+          out.publicEmbedUrl = "";
+          out.hint = out.embedDeployError;
+        } else {
+          const assetForPublic = publicPage.asset || uiBuild;
+          const withCacheBust = assetForPublic
+            ? `${publicEmbed}/?v=${encodeURIComponent(assetForPublic)}`
+            : `${publicEmbed}/`;
+          out.embedUrl = withCacheBust;
+          out.publicEmbedUrl = withCacheBust;
+        }
+      } else {
+        out.embedUrl = "";
+        out.publicEmbedUrl = "";
+        out.hint =
+          "未配置 OI_PUBLIC_EMBED_URL；访客浏览器请设为主站独立 OI 域名（如 https://op.b.ezcoin.ink）";
+      }
       res.json(out);
     } catch (e) {
       out.latencyMs = Date.now() - t0;
@@ -603,6 +649,9 @@ async function main() {
       enabled: tg.enabled,
       chatId: tg.chatId != null && tg.chatId !== "" ? String(tg.chatId) : null,
       sendUrl: tg.sendUrl || config.telegramSendUrl,
+      botTokenConfigured: Boolean(config.telegramBotToken),
+      hint:
+        "Discord→TG 走 TELEGRAM_SEND_URL；网关不通时 collect:ui 会回退 TELEGRAM_BOT_TOKEN。8000 被其它服务占用时请改端口或清空 SEND_URL 仅用 Bot。",
     });
   });
 
@@ -968,6 +1017,16 @@ async function main() {
     res.json({ ok: true, snapshot: discordIngest.context.snapshot() });
   });
 
+  app.get("/api/show/discord-groups", (_req, res) => {
+    const { channelIds, namesByChannelId } = config.discordGroups;
+    res.json({
+      ok: true,
+      filterEnabled: channelIds.length > 0,
+      channelIds,
+      namesByChannelId,
+    });
+  });
+
   app.get("/api/discord/cdp-active", (_req, res) => {
     res.json({ ok: true, ...discordIngest.getCdpPage() });
   });
@@ -997,7 +1056,7 @@ async function main() {
     try {
       const guildId = String(req.params.guildId ?? "").trim();
       const rows = await store.listDiscordChannelsByGuild(guildId);
-      const channels = rows.map((row) => ({
+      let channels = rows.map((row) => ({
         channelId: row.channel_id,
         guildId: row.guild_id,
         name: row.name,
@@ -1006,6 +1065,7 @@ async function main() {
         lastMessageAtMs: row.last_message_at_ms,
         updatedAt: row.updated_at,
       }));
+      channels = applyDiscordGroupsChannelList(channels, guildId, config.discordGroups);
       res.json({ ok: true, guildId, channels });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -1019,6 +1079,20 @@ async function main() {
       enriched.rawJson = undefined;
       return enriched;
     });
+  }
+
+  /**
+   * 按 channel 查库；带 guildId 无结果时去掉 guild 条件再查（历史行可能 guild_id 为空或与 Show 默认服不一致）。
+   * @param {number} limit
+   * @param {Record<string, unknown>} filters
+   * @param {{ includeRaw?: boolean }} [options]
+   */
+  async function listRecentMessagesRelaxed(limit, filters, options) {
+    let rows = await store.listRecentMessages(limit, filters, options);
+    const ch = String(filters.channelId ?? "").trim();
+    const gid = String(filters.guildId ?? "").trim();
+    if (rows.length > 0 || !ch || !gid) return rows;
+    return store.listRecentMessages(limit, { ...filters, guildId: "" }, options);
   }
 
   /** @param {import("express").Request} req */
@@ -1035,6 +1109,87 @@ async function main() {
     return undefined;
   }
 
+  /**
+   * @param {string} channelId
+   * @param {string} [beforeMessageId]
+   */
+  async function showHistoryCachePayload(channelId, beforeMessageId = "") {
+    const cid = String(channelId ?? "").trim();
+    if (!cid || typeof store.getDiscordChannelShowHistoryCache !== "function") return null;
+    const cache = await store.getDiscordChannelShowHistoryCache(cid);
+    const ttlMs = config.discordShowHistoryWarmTtlMs;
+    const before = String(beforeMessageId ?? "").trim();
+    const fresh = isChannelShowHistoryFresh(cache, { ttlMs, beforeMessageId: before });
+    return {
+      warmedAtMs: cache.warmedAtMs > 0 ? cache.warmedAtMs : null,
+      oldestMessageId: cache.oldestMessageId || null,
+      fresh,
+      ttlMs,
+    };
+  }
+
+  /**
+   * @param {string} guildId
+   * @param {string} channelId
+   * @param {number} maxPages
+   */
+  async function runDiscordShowHistoryWarm(guildId, channelId, maxPages) {
+    if (typeof scrollDiscordHistoryImpl !== "function") {
+      return { ok: false, error: "CDP 尚未就绪", pagesDone: 0 };
+    }
+    const fromMs = Date.now() - config.discordShowSnapshotDays * 86400000;
+    let pagesDone = 0;
+    for (let i = 0; i < maxPages; i += 1) {
+      const cache = await store.getDiscordChannelShowHistoryCache(channelId);
+      const oldest = await store.getOldestDiscordMessageIdForChannel(channelId, { fromMs });
+      if (
+        isChannelShowHistoryFresh(cache, {
+          ttlMs: config.discordShowHistoryWarmTtlMs,
+          beforeMessageId: oldest,
+        })
+      ) {
+        break;
+      }
+      const out = /** @type {{ ok?: boolean, error?: string }} */ (
+        await scrollDiscordHistoryImpl(guildId, channelId, {
+          beforeMessageId: oldest || undefined,
+        })
+      );
+      if (!out?.ok) {
+        return { ok: false, error: out?.error ?? "CDP 上滚失败", pagesDone };
+      }
+      pagesDone += 1;
+      await sleepMs(650);
+    }
+    return { ok: true, pagesDone };
+  }
+
+  app.get("/api/discord/messages/:messageId/attachments", async (req, res) => {
+    try {
+      const messageId = String(req.params.messageId ?? "").trim();
+      if (!messageId) {
+        res.status(400).json({ ok: false, error: "messageId required" });
+        return;
+      }
+      if (typeof store.getDiscordMessageRawJson !== "function") {
+        res.status(503).json({ ok: false, error: "store unavailable" });
+        return;
+      }
+      const rawJson = await store.getDiscordMessageRawJson(messageId);
+      if (!rawJson) {
+        res.status(404).json({ ok: false, error: "message not found" });
+        return;
+      }
+      res.json({
+        ok: true,
+        messageId,
+        attachments: extractAttachmentsForClient(rawJson),
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
   app.get("/api/discord/messages", async (req, res) => {
     try {
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
@@ -1044,7 +1199,7 @@ async function main() {
       const wantChronological = orderParam !== "desc";
       const beforeMessageId = String(req.query.before ?? req.query.before_message_id ?? "").trim();
       const fromMs = beforeMessageId ? undefined : parseMessageDaysFromMs(req);
-      let rows = await store.listRecentMessages(
+      let rows = await listRecentMessagesRelaxed(
         limit,
         {
           channelId,
@@ -1057,7 +1212,7 @@ async function main() {
       );
       let fallbackOlder = false;
       if (channelId && !beforeMessageId && fromMs != null && rows.length === 0) {
-        rows = await store.listRecentMessages(
+        rows = await listRecentMessagesRelaxed(
           limit,
           { channelId, guildId, order: "desc" },
           { includeRaw: true }
@@ -1066,12 +1221,16 @@ async function main() {
       }
       let clientRows = discordMessageRowsForClient(rows);
       if (wantChronological) clientRows = clientRows.reverse();
+      const showHistory = channelId
+        ? await showHistoryCachePayload(channelId, beforeMessageId)
+        : null;
       res.json({
         ok: true,
         debugMode: isDebugMode(),
         rows: clientRows,
         fromMs: fallbackOlder ? null : fromMs ?? null,
         fallbackOlder,
+        showHistory,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -1095,9 +1254,12 @@ async function main() {
       );
       const fromMs = Date.now() - days * 86400000;
       const channels = await store.listDiscordChannelsByGuild(guildId);
-      const channelIds = channels
+      let channelIds = channels
         .map((c) => String(c.channel_id ?? c.channelId ?? "").trim())
         .filter(Boolean);
+      if (config.discordGroups.channelIds.length) {
+        channelIds = config.discordGroups.channelIds;
+      }
       /** @type {Record<string, Record<string, unknown>[]>} */
       const byChannel = {};
       const concurrency = 6;
@@ -1105,13 +1267,13 @@ async function main() {
         const batch = channelIds.slice(i, i + concurrency);
         await Promise.all(
           batch.map(async (channelId) => {
-            let rows = await store.listRecentMessages(
+            let rows = await listRecentMessagesRelaxed(
               perChannel,
               { channelId, guildId, order: "desc", fromMs },
               { includeRaw: true }
             );
             if (!rows.length) {
-              rows = await store.listRecentMessages(
+              rows = await listRecentMessagesRelaxed(
                 perChannel,
                 { channelId, guildId, order: "desc" },
                 { includeRaw: true }
@@ -1220,6 +1382,65 @@ async function main() {
     }
   });
 
+  /**
+   * Show 切频道：服务端按库内缓存决定是否 CDP 上滚（多前端共享，已刷新则只读 MySQL）。
+   */
+  app.post("/api/discord/channels/show-history-warm", async (req, res) => {
+    const guildId = String(req.body?.guildId ?? "").trim();
+    const channelId = String(req.body?.channelId ?? "").trim();
+    const maxPages = Math.min(
+      8,
+      Math.max(1, Number(req.body?.maxPages) || config.discordShowHistoryWarmPages)
+    );
+    if (!guildId || !channelId) {
+      res.status(400).json({ ok: false, error: "缺少 guildId 或 channelId" });
+      return;
+    }
+    try {
+      const fromMs = Date.now() - config.discordShowSnapshotDays * 86400000;
+      const oldest = await store.getOldestDiscordMessageIdForChannel(channelId, { fromMs });
+      const showHistory = await showHistoryCachePayload(channelId, oldest);
+      if (showHistory?.fresh) {
+        res.json({
+          ok: true,
+          skipped: true,
+          reason: "cache_fresh",
+          pagesDone: 0,
+          showHistory,
+        });
+        return;
+      }
+
+      let inflight = showHistoryWarmInflight.get(channelId);
+      if (!inflight) {
+        inflight = runDiscordShowHistoryWarm(guildId, channelId, maxPages).finally(() => {
+          showHistoryWarmInflight.delete(channelId);
+        });
+        showHistoryWarmInflight.set(channelId, inflight);
+      }
+      const result = await inflight;
+      const showHistoryAfter = await showHistoryCachePayload(channelId, oldest);
+      if (result.ok) {
+        res.json({
+          ok: true,
+          skipped: result.pagesDone === 0 && showHistoryAfter?.fresh,
+          reason: result.pagesDone === 0 ? "cache_fresh" : "warmed",
+          pagesDone: result.pagesDone,
+          showHistory: showHistoryAfter,
+        });
+      } else {
+        res.status(500).json({
+          ok: false,
+          error: result.error ?? "预热失败",
+          pagesDone: result.pagesDone ?? 0,
+          showHistory: showHistoryAfter,
+        });
+      }
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
   /** Show 向上翻页：驱动 CDP 内 Discord 消息列表上滚，触发 /messages?before= 采集 */
   app.post("/api/cdp/discord-channel-scroll-up", async (req, res) => {
     const guildId = String(req.body?.guildId ?? req.query?.guild_id ?? "").trim();
@@ -1231,6 +1452,24 @@ async function main() {
     if (!guildId || !channelId) {
       res.status(400).json({ ok: false, error: "缺少 guildId 或 channelId" });
       return;
+    }
+    if (typeof store.getDiscordChannelShowHistoryCache === "function" && beforeMessageId) {
+      const cache = await store.getDiscordChannelShowHistoryCache(channelId);
+      if (
+        isChannelShowHistoryFresh(cache, {
+          ttlMs: config.discordShowHistoryWarmTtlMs,
+          beforeMessageId,
+        })
+      ) {
+        res.json({
+          ok: true,
+          skipped: true,
+          reason: "cache_fresh",
+          cdpSkipped: true,
+          ...tracePayload,
+        });
+        return;
+      }
     }
     if (typeof scrollDiscordHistoryImpl !== "function") {
       res.status(503).json({ ok: false, error: "CDP 尚未就绪" });
@@ -1346,7 +1585,9 @@ async function main() {
     `Discord Collector UI  http://127.0.0.1:${PORT}/  |  /cards  |  /fetch  |  /twitter  |  /archives  |  /debug  |  WS ws://127.0.0.1:${PORT}/ws`
   );
   if (mysqlOffline) {
-    log.warn("MySQL 离线 — 服务已启动但无持久化；修复数据库后请重启 collect:ui");
+    log.warn(
+      "MySQL 离线 — 信号卡不入库、卡片页/评估不可用；识别成功的 Discord 信号仍会尝试推 TELEGRAM_PUSH_CHAT_ID（无 cardId）。请修复 MYSQL_* 后重启 collect:ui"
+    );
   } else {
     cardPriceMonitor.start();
     if (store.migrateCoinActionPasteCards) {
@@ -1411,6 +1652,7 @@ async function main() {
     pageReloadIntervalMs: config.pageReloadIntervalMs,
     cdpAutoGoto: config.cdpAutoGoto,
     cdpVisibilityKeepalive: config.cdpVisibilityKeepalive,
+    cdpSilentNavigation: config.cdpSilentNavigation,
     networkTrace: config.collectNetworkTrace,
     wsFrameTrace: config.collectWsFrameTrace,
     diagnosticSink,

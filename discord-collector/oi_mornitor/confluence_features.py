@@ -47,6 +47,16 @@ FEATURE_DISPLAY: dict[str, str] = {
     "feat:kol_c": "KOL-C",
     "vegas_trend": "维加斯顺势",
     "vegas_trend_volume": "维加斯顺势放量",
+    "feat:cf_oi_flush_align": "OI骤降同向",
+    "feat:cf_funding_align": "费率同向",
+    "feat:cf_funding_against": "费率逆向",
+    "feat:cf_whale_align": "大户同向",
+    "feat:cf_quiet_accum": "吸筹",
+    "feat:cf_distribution": "派发",
+    "feat:cf_distribution_against": "派发逆多",
+    "feat:cf_liq_reclaim": "清算回收",
+    "feat:cf_oi_rebuild_align": "OI重建同向",
+    "feat:cf_oi_rebuild_penalty": "OI重建逆向",
 }
 
 
@@ -203,6 +213,13 @@ def extract_confluence_features(rec: dict[str, Any]) -> set[str]:
         rec.get("vol_ok") is True and "维加斯顺势" in lab
     ):
         feats.add("vegas_trend_volume")
+
+    cf = rec.get("capitalFlow")
+    if isinstance(cf, dict):
+        from oi_mornitor.capital_flow_features import confluence_feature_keys
+
+        side_s = side or _side(rec)
+        feats.update(confluence_feature_keys(cf, side_s))
 
     return feats
 

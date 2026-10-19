@@ -436,6 +436,22 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
 
     const result = await store.insertDiscordMessagesBatch(toPersist);
 
+    if (isRestBatch && typeof store.mergeDiscordChannelShowHistoryCache === "function") {
+      /** @type {Map<string, string[]>} */
+      const idsByChannel = new Map();
+      for (const r of toPersist) {
+        const cid = String(r.channelId ?? "").trim();
+        const mid = String(r.messageId ?? "").trim();
+        if (!cid || !mid) continue;
+        const bucket = idsByChannel.get(cid) ?? [];
+        bucket.push(mid);
+        idsByChannel.set(cid, bucket);
+      }
+      for (const [cid, ids] of idsByChannel) {
+        await store.mergeDiscordChannelShowHistoryCache(cid, { messageIds: ids });
+      }
+    }
+
     const pushRows = toPersist;
 
     /** @type {Map<string, { channelId: string, guildId: string, name: string, lastMessagePreview: string, lastMessageAtMs: number }>} */
@@ -457,11 +473,11 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
 
     const limit = isRestBatch ? toPersist.length : broadcastLimit;
     const pushCardApi = pushRows.some((r) => String(r.source ?? "") === "card_api");
-    // 仅新入库（或 card_api）推 Show；Gateway 重复帧不再刷 UI
+    // Gateway：仅新入库推 Show，避免重复帧刷屏。REST（CDP 点频道 / before 翻页）：有消息就推，否则切频道 inserted=0 时 UI 永远空白。
     const shouldPushUi =
       result.inserted > 0 ||
       pushCardApi ||
-      (isRestBatch && restQuery?.before && toPersist.length > 0);
+      (isRestBatch && toPersist.length > 0);
     if (pushRows.length && shouldPushUi) {
       pushDiscordMessageBatch({
         kind: "discord_message_batch",

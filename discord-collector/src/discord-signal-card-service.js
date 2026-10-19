@@ -958,6 +958,33 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       cardId = extractSignalCardRowId(cardRow?.id ?? cardRow?.ID);
     }
     if (!cardId) {
+      if (store.offline) {
+        log.warn(
+          `MySQL 离线 — 信号卡未入库，仍推 Telegram channel=${channelId} message=${messageId} symbol=${symbol || "-"}`
+        );
+        const telegramStyle = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";
+        const telegramText =
+          cardsByStyle[telegramStyle] ?? Object.values(cardsByStyle)[0] ?? content;
+        const tgResult = await sendSignalCardTelegram(
+          {
+            text: telegramText,
+            channelId,
+            channelName: chCfg.name,
+            messageId,
+            symbol,
+            telegramSentAt: null,
+            event: "create",
+          },
+          opts,
+        );
+        if (!opts.skipDedup) await dedup.remember(channelId, content);
+        return {
+          skipped: tgResult.skipped,
+          ok: tgResult.ok,
+          offline: true,
+          parsed,
+        };
+      }
       log.warn(`信号卡片入库后缺少 id channel=${channelId} message=${messageId}`);
       return { skipped: "insert_no_id" };
     }
