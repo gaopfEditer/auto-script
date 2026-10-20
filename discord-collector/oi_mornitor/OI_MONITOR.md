@@ -708,6 +708,8 @@ crypto mornitor 发出「二次预警」
 
 `text` 格式：`KOL二次预警｜15m｜Nine Call · GTCUSDT · 吞没（空） · 贴近EMA144（0.6%） · 放量1.9x`（无异常放量时省略放量段；柱体穿越 EMA 时写「触及EMA144」）。
 
+**大周期 EMA144 插针提示（2026-10-20）**：15m 形态候选时，另扫 `KOL_HTF_EMA_TFS`（默认 `1h,4h`）最近 `KOL_HTF_EMA_LOOKBACK`（默认 3）根**已收盘**柱：影线触及 EMA144（EMA 在影线内、实体外）或实体穿越记为插针/刺穿。命中则在 `payload.text` 追加醒目标签如 `⚠4h插针EMA144后`（优先 4h），并带结构化字段 `higher_tf_ema_touch` / `higher_tf_ema_touches`（`tf, bar_time, distance_pct, type=wick_touch|pierce`）。
+
 **冲突去重（2026-10-20）**：
 - **同柱唯一**：同一 `symbol+tf+已收盘柱` 若多形态同时命中，只推 1 条。择优：①异常放量优先 ②EMA144 触及或更近优先 ③仍平则吞没优先；射击之星 vs 倒锤子比影线/实体比（更大者胜）。落选写 `filtered_same_bar_conflict`。
 - **反向活跃抑制**：同币同周期已有非终态信号（`active_waiting_entry` / `active_entered`）且方向相反时，默认不推新反向信号（`filtered_conflict_opposite`）；仅当新信号「明显更强」（放量优势，或 EMA 明显更近/触及，或同档下形态秩更高）才替换推送。

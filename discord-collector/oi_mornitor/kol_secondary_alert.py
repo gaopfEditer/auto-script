@@ -650,6 +650,120 @@ def ema144_gate(bar: Mapping[str, Any], ema: float | None, *, near_pct: float) -
     }
 
 
+
+def htf_ema_tfs() -> list[str]:
+    raw = env_str("KOL_HTF_EMA_TFS", "1h,4h")
+    return [x.strip().lower() for x in raw.split(",") if x.strip()]
+
+
+def htf_ema_lookback() -> int:
+    return env_int("KOL_HTF_EMA_LOOKBACK", 3, min_val=1, max_val=12)
+
+
+def detect_bar_ema144_wick(
+    bar: Mapping[str, Any],
+    ema: float | None,
+) -> dict[str, Any] | None:
+    """大周期插针：影线触及/刺穿 EMA144（EMA 在影线内、实体外）。实体内触及不算插针。"""
+    if ema is None or ema <= 0:
+        return None
+    o = float(bar.get("open") or 0)
+    h = float(bar.get("high") or 0)
+    l = float(bar.get("low") or 0)
+    c = float(bar.get("close") or 0)
+    if h < l or not (l <= ema <= h):
+        return None
+    body_lo, body_hi = (o, c) if o <= c else (c, o)
+    dist = (c / ema - 1.0) * 100.0
+    body = abs(c - o) or 1e-12
+    if ema < body_lo - 1e-12:
+        wick = body_lo - l
+        return {
+            "type": "wick_touch",
+            "wick_side": "low",
+            "distance_pct": round(dist, 3),
+            "wick_ratio": round(wick / body, 3),
+            "ema": round(float(ema), 6),
+        }
+    if ema > body_hi + 1e-12:
+        wick = h - body_hi
+        return {
+            "type": "wick_touch",
+            "wick_side": "high",
+            "distance_pct": round(dist, 3),
+            "wick_ratio": round(wick / body, 3),
+            "ema": round(float(ema), 6),
+        }
+    # 实体穿越 EMA：记 pierce，也算「捅到 144」的强信号
+    if body_lo < ema < body_hi or (o - ema) * (c - ema) < 0:
+        return {
+            "type": "pierce",
+            "wick_side": "body",
+            "distance_pct": round(dist, 3),
+            "wick_ratio": 0.0,
+            "ema": round(float(ema), 6),
+        }
+    return None
+
+
+def scan_htf_ema144_wicks(
+    symbol: str,
+    *,
+    period: int = 144,
+    asof_bar_ts_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    """在 1h/4h 最近已收盘柱上找 EMA144 插针；返回按 4h>1h、再按时间新→旧 排序。"""
+    lookback = htf_ema_lookback()
+    hits: list[dict[str, Any]] = []
+    tf_rank = {"4h": 0, "1h": 1}
+    for htf in htf_ema_tfs():
+        limit = max(period + lookback + 20, env_int("KOL_KLINE_LIMIT", 200, min_val=50, max_val=1500))
+        try:
+            rows = fetch_klines_sync(symbol, htf, limit)
+        except Exception as exc:
+            logger.warning("HTF K线失败 %s %s: %s", symbol, htf, exc)
+            continue
+        bars = bars_from_ohlcv_rows(rows)
+        if len(bars) < max(period, lookback + 2):
+            continue
+        closes = [float(b.get("close") or 0) for b in bars]
+        emas = ema_series(closes, period)
+        # 排除未收盘末根
+        end = len(bars) - 1
+        start = max(period - 1, end - lookback)
+        for idx in range(start, end):
+            bar = bars[idx]
+            bar_ts = int(float(bar.get("open_time") or 0))
+            if asof_bar_ts_ms is not None and bar_ts > int(asof_bar_ts_ms):
+                continue
+            det = detect_bar_ema144_wick(bar, emas[idx] if idx < len(emas) else None)
+            if not det:
+                continue
+            hits.append(
+                {
+                    "tf": htf,
+                    "bar_ts": bar_ts,
+                    "bar_time": datetime.fromtimestamp(bar_ts / 1000.0, tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+                    "distance_pct": det["distance_pct"],
+                    "type": det["type"],
+                    "wick_side": det.get("wick_side"),
+                    "wick_ratio": det.get("wick_ratio"),
+                    "ema": det.get("ema"),
+                }
+            )
+    hits.sort(key=lambda h: (tf_rank.get(str(h.get("tf")), 9), -int(h.get("bar_ts") or 0)))
+    return hits
+
+
+def htf_ema_tag(hit: Mapping[str, Any] | None) -> str:
+    if not hit:
+        return ""
+    tf = str(hit.get("tf") or "")
+    return f"⚠{tf}插针EMA144后"
+
+
 def build_alert_text(alert: Mapping[str, Any]) -> str:
     """最终可直接转发的中文一行文案。"""
     side = str(alert.get("side") or "").lower()
@@ -668,6 +782,11 @@ def build_alert_text(alert: Mapping[str, Any]) -> str:
     v = alert.get("abnormal_volume") or {}
     if v.get("yes"):
         parts.append(f"放量{float(v.get('ratio') or 0):.1f}x")
+    tag = htf_ema_tag(alert.get("higher_tf_ema_touch"))
+    if not tag:
+        tag = str(alert.get("htf_ema_tag") or "")
+    if tag:
+        parts.append(tag)
     return f"KOL二次预警｜{alert.get('tf') or '15m'}｜" + " · ".join(parts)
 
 
@@ -945,6 +1064,8 @@ def evaluate_symbol(
         return []  # KOL 提及已过期 → 不列出、不告警
     primary_kol = kol_label(entry, symbol)
     last_mention = sources[-1].get("mentioned_at") if sources else None
+    # 大周期 EMA144 插针（1h/4h 最近已收盘柱）；形态发出时特别标出
+    htf_hits_all = scan_htf_ema144_wicks(symbol, period=ema_period)
 
     for idx in ordered:
         hits = scan_patterns_on_bar(bars, idx, allowed=allow)
@@ -1011,6 +1132,12 @@ def evaluate_symbol(
                 "sources": [{k: v for k, v in x.items() if k != "snippet"} for x in sources[-5:]],
                 "detected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
+            # 仅保留不晚于本 15m 形态柱的大周期插针
+            htf_ok = [h for h in htf_hits_all if int(h.get("bar_ts") or 0) <= bar_ts]
+            primary_htf = htf_ok[0] if htf_ok else None
+            alert["higher_tf_ema_touches"] = htf_ok[:5]
+            alert["higher_tf_ema_touch"] = primary_htf
+            alert["htf_ema_tag"] = htf_ema_tag(primary_htf)
             alert["timeframe"] = tf
             alert["text"] = build_alert_text(alert)
             candidates.append(alert)
@@ -1263,6 +1390,9 @@ def scan_watchlist_alerts() -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "scan_htf_ema144_wicks",
+    "detect_bar_ema144_wick",
+    "htf_ema_tag",
     "pick_best_alert",
     "filter_opposite_conflict",
     "clearly_stronger",
