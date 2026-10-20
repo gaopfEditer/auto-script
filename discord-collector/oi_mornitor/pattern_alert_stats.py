@@ -792,14 +792,17 @@ def list_alert_stats_page(
         )
     )
     if not tier_active:
-        from oi_mornitor.signal_confluence import (
-            attach_signal_confluence,
-            sort_records_by_confluence_score,
-        )
+        from oi_mornitor.signal_confluence import attach_signal_confluence
 
         attach_mtf_resonance(filtered)
         attach_signal_confluence(filtered)
-        filtered = sort_records_by_confluence_score(filtered)
+        # 默认按信号时间新→旧（形态信号列表要能看到「最新」）；
+        # 综合分仍写在字段上，开了 confluence/MTF 筛选时再按档位排序。
+        filtered = sorted(
+            filtered,
+            key=lambda r: int(r.get("signalAt") or 0),
+            reverse=True,
+        )
     mcap_opts = list_mcap_tier_options(
         _tier_rows(
             filter_alert_stats(
