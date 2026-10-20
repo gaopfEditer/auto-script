@@ -147,6 +147,8 @@ def new_lifecycle_record(alert: Mapping[str, Any], *, fired_at_ms: int | float |
         "pattern": enriched.get("pattern"),
         "bar_ts": enriched.get("bar_ts"),
         "side": lc["side"],
+        "abnormal_volume": dict(enriched.get("abnormal_volume") or {}),
+        "ema144": dict(enriched.get("ema144") or {}),
         "status": "active_waiting_entry",
         "entry_mode": "next_bar_open",
         "alert_fired_at_ms": int(

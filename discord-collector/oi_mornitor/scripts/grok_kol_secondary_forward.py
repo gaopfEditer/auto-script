@@ -66,6 +66,8 @@ def main() -> int:
         append_alert_log,
         data_dir,
         ingest_new_cards,
+        filter_opposite_conflict,
+        load_lifecycle_state,
         lifecycle_terminal_keys,
         load_seen,
         post_webhooks,
@@ -117,15 +119,30 @@ def main() -> int:
 
             terminal = lifecycle_terminal_keys()
             alerts = scan_watchlist_alerts()
-            fresh = []
+            candidates = []
             for a in alerts:
                 k = alert_key(a["symbol"], a["tf"], a["pattern"], a["bar_ts"])
                 if k in seen or k in terminal:
                     continue
-                seen[k] = time.time()
                 a = dict(a)
                 a["dedupe_key"] = k
-                fresh.append(a)
+                candidates.append(a)
+
+            # 反向活跃信号冲突：同币同周期已有多/空活跃时，默认不推反方向
+            # 注意：被抑制的 key 不写入 seen，待反向信号终态后仍可再评估
+            lc_state = load_lifecycle_state()
+            fresh = []
+            for a in candidates:
+                kept = filter_opposite_conflict(a, state=lc_state)
+                if kept is None:
+                    print(
+                        f"[kol-secondary] SKIP conflict {a.get('symbol')} {a.get('pattern_zh')} "
+                        f"side={a.get('side')} key={a.get('dedupe_key')}",
+                        flush=True,
+                    )
+                    continue
+                seen[str(kept.get("dedupe_key") or a["dedupe_key"])] = time.time()
+                fresh.append(kept)
 
             # prune 7d
             cutoff = time.time() - 7 * 86400

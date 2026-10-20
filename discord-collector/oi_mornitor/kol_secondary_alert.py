@@ -664,6 +664,168 @@ def build_alert_text(alert: Mapping[str, Any]) -> str:
     return f"KOL二次预警｜{alert.get('tf') or '15m'}｜" + " · ".join(parts)
 
 
+
+# 同柱多形态 / 反向活跃信号冲突策略（2026-10-20）
+# 同柱择一：①放量优先 ②EMA 触及或更近优先 ③仍平 → 吞没 > 射击之星/倒锤子；
+#           射击 vs 倒锤比经典强度（射击=上影/实体，倒锤=下影/实体，更大者胜）。
+# 反向门控：同 symbol+tf 已有非终态信号（active_waiting_entry / active_entered）且方向相反时，
+#           默认不推送；仅当新信号「明显更强」才替换推送（旧信号仍走生命周期至终态）。
+# 「明显更强」：放量且旧无放量；或放量档相同且（触及而旧未触及 / |距EMA| 至少近 0.3pp）；
+#           或以上相当且形态秩更高（吞没>射击=倒锤按强度）。
+
+_PATTERN_RANK = {"engulfing": 3, "shooting_star": 2, "inverted_hammer": 2}
+
+
+def _classic_strength(kind: str, bar: Mapping[str, Any] | None, prev: Mapping[str, Any] | None = None) -> float:
+    if not bar:
+        return 0.0
+    o, h, l, c = float(bar.get("open") or 0), float(bar.get("high") or 0), float(bar.get("low") or 0), float(bar.get("close") or 0)
+    body = abs(c - o)
+    if body <= 0:
+        return 0.0
+    uw = h - max(o, c)
+    lw = min(o, c) - l
+    if kind == "shooting_star":
+        return uw / body
+    if kind == "inverted_hammer":
+        return lw / body
+    if kind == "engulfing" and prev:
+        pb = abs(float(prev.get("close") or 0) - float(prev.get("open") or 0))
+        return body / pb if pb > 0 else body
+    return 0.0
+
+
+def alert_conflict_score(alert: Mapping[str, Any], *, bar: Mapping[str, Any] | None = None, prev: Mapping[str, Any] | None = None) -> tuple:
+    """越小越优（用于 min）。"""
+    vol = alert.get("abnormal_volume") or {}
+    vol_yes = 1 if vol.get("yes") else 0
+    e = alert.get("ema144") or {}
+    touch = 1 if e.get("touch") else 0
+    dist = e.get("distance_pct")
+    abs_dist = abs(float(dist)) if dist is not None else 99.0
+    kind = str(alert.get("pattern") or "")
+    rank = _PATTERN_RANK.get(kind, 0)
+    strength = float(alert.get("pattern_strength") or 0.0)
+    if strength <= 0 and bar is not None:
+        strength = _classic_strength(kind, bar, prev)
+    return (-vol_yes, -touch, abs_dist, -rank, -strength)
+
+
+def pick_best_alert(candidates: Sequence[Mapping[str, Any]], *, bar: Mapping[str, Any] | None = None, prev: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """同 symbol+tf+bar 多形态时择一。"""
+    if not candidates:
+        return None
+    best = min(candidates, key=lambda a: alert_conflict_score(a, bar=bar, prev=prev))
+    return dict(best)
+
+
+def clearly_stronger(new: Mapping[str, Any], old: Mapping[str, Any]) -> bool:
+    """新信号相对旧活跃反向信号是否明显更强。"""
+    sn, so = alert_conflict_score(new), alert_conflict_score(old)
+    # 元组更小 = 更强；要求至少在放量或 EMA 上赢，或同档但形态秩更高
+    if sn >= so:
+        return False
+    vol_n = 1 if (new.get("abnormal_volume") or {}).get("yes") else 0
+    vol_o = 1 if (old.get("abnormal_volume") or {}).get("yes") else 0
+    if vol_n > vol_o:
+        return True
+    en, eo = new.get("ema144") or {}, old.get("ema144") or {}
+    touch_n, touch_o = bool(en.get("touch")), bool(eo.get("touch"))
+    dn = abs(float(en["distance_pct"])) if en.get("distance_pct") is not None else 99.0
+    do = abs(float(eo["distance_pct"])) if eo.get("distance_pct") is not None else 99.0
+    if touch_n and not touch_o:
+        return True
+    if vol_n == vol_o and (dn + 0.3) <= do:
+        return True
+    rn = _PATTERN_RANK.get(str(new.get("pattern") or ""), 0)
+    ro = _PATTERN_RANK.get(str(old.get("pattern") or ""), 0)
+    if vol_n == vol_o and abs(dn - do) <= 0.15 and rn > ro:
+        return True
+    return False
+
+
+def active_opposite_records(
+    *,
+    symbol: str,
+    tf: str,
+    side: str,
+    state: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """同币同周期、非终态、方向相反的活跃 lifecycle 记录。"""
+    from oi_mornitor.kol_signal_lifecycle import is_terminal_status, normalize_trade_side
+
+    st = state if state is not None else load_lifecycle_state()
+    want = "short" if normalize_trade_side(side) == "long" else "long"
+    sym = str(symbol).upper()
+    tf_l = str(tf).lower()
+    out = []
+    for rec in (st.get("signals") or {}).values():
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("symbol") or "").upper() != sym:
+            continue
+        if str(rec.get("tf") or "").lower() != tf_l:
+            continue
+        if is_terminal_status(str(rec.get("status") or "")):
+            continue
+        if str(rec.get("status") or "") not in {"active_waiting_entry", "active_entered"}:
+            continue
+        if normalize_trade_side(str(rec.get("side") or "")) != want:
+            continue
+        out.append(rec)
+    return out
+
+
+def filter_opposite_conflict(alert: Mapping[str, Any], *, state: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """若存在反向活跃信号：默认抑制；明显更强则放行（返回 alert，并标注 conflict_replace）。
+    返回 None 表示应抑制。"""
+    opps = active_opposite_records(
+        symbol=str(alert.get("symbol") or ""),
+        tf=str(alert.get("tf") or "15m"),
+        side=str(alert.get("side") or ""),
+        state=state,
+    )
+    if not opps:
+        return dict(alert)
+    # 用 lifecycle 记录拼一个可比的旧 alert 视图
+    for old_rec in opps:
+        old_view = {
+            "pattern": old_rec.get("pattern"),
+            "side": old_rec.get("side"),
+            "abnormal_volume": {"yes": bool((old_rec.get("abnormal_volume") or {}).get("yes"))}
+            if isinstance(old_rec.get("abnormal_volume"), dict)
+            else {"yes": False},
+            "ema144": old_rec.get("ema144") or {},
+        }
+        # lifecycle 可能无 vol/ema：从原 alert 字段回退
+        if not old_view["ema144"] and isinstance(old_rec.get("alert"), dict):
+            old_view["ema144"] = (old_rec["alert"] or {}).get("ema144") or {}
+            old_view["abnormal_volume"] = (old_rec["alert"] or {}).get("abnormal_volume") or old_view["abnormal_volume"]
+        if clearly_stronger(alert, old_view):
+            out = dict(alert)
+            out["conflict_replace"] = old_rec.get("dedupe_key")
+            out["conflict_policy"] = "replace_stronger"
+            return out
+        try:
+            append_filtered_log({
+                "status": "filtered_conflict_opposite",
+                "symbol": alert.get("symbol"),
+                "tf": alert.get("tf"),
+                "pattern": alert.get("pattern"),
+                "side": alert.get("side"),
+                "bar_ts": alert.get("bar_ts"),
+                "blocked_by": old_rec.get("dedupe_key"),
+                "blocked_status": old_rec.get("status"),
+                "blocked_side": old_rec.get("side"),
+                "logged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            })
+        except Exception as exc:
+            logger.warning("conflict log fail: %s", exc)
+        return None
+    return dict(alert)
+
+
+
 def append_filtered_log(rec: Mapping[str, Any]) -> None:
     path = data_dir() / "filtered.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -787,11 +949,11 @@ def evaluate_symbol(
         ema = ema144_position(bars, idx, period=ema_period, near_pct=g_pct)
         gate = ema144_gate(bars[idx], ema.get("ema"), near_pct=g_pct)
         bar_ts = int(float(bars[idx].get("open_time") or 0))
-        for hit in hits:
-            kind = str(hit.get("kind") or "")
-            if kind in {"hammer", "大锤子"}:
-                continue
-            if not gate["pass"]:
+        if not gate["pass"]:
+            for hit in hits:
+                kind = str(hit.get("kind") or "")
+                if kind in {"hammer", "大锤子"}:
+                    continue
                 try:
                     append_filtered_log({
                         "status": "filtered_far_from_ema",
@@ -803,43 +965,68 @@ def evaluate_symbol(
                     })
                 except Exception as exc:
                     logger.warning("filtered log fail: %s", exc)
+            continue
+        bar = bars[idx]
+        prev_bar = bars[idx - 1] if idx >= 1 else None
+        candidates: list[dict[str, Any]] = []
+        for hit in hits:
+            kind = str(hit.get("kind") or "")
+            if kind in {"hammer", "大锤子"}:
                 continue
-            alert = (
-                {
-                    "type": "kol_secondary_alert",
-                    "kol_name": primary_kol or "未知",
-                    "symbol": symbol,
-                    "pattern": kind,
-                    "pattern_zh": PATTERN_ZH.get(kind, kind),
-                    "side": hit.get("side"),
-                    "abnormal_volume": {
-                        "yes": vol["yes"],
-                        "which": vol["which"],
-                        "ratio": vol["ratio"],
-                        "current_ratio": vol.get("current_ratio"),
-                        "prior_ratio": vol.get("prior_ratio"),
-                    },
-                    "ema144": {
-                        "side": ema["side"],
-                        "distance_pct": gate["distance_pct"],
-                        "touch": gate["touch"],
-                        "near_pct": g_pct,
-                        "value": ema.get("ema"),
-                    },
-                    "ema_gate": gate["reason"],
-                    "tf": tf,
-                    "bar_ts": bar_ts,
-                    "leader": leader,
-                    "kol_label": primary_kol,
-                    "mentioned_at": last_mention,
-                    "mention_max_age_hours": mention_max_age_hours(),
-                    "sources": [{k: v for k, v in x.items() if k != "snippet"} for x in sources[-5:]],
-                    "detected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                }
-            )
+            alert = {
+                "type": "kol_secondary_alert",
+                "kol_name": primary_kol or "未知",
+                "symbol": symbol,
+                "pattern": kind,
+                "pattern_zh": PATTERN_ZH.get(kind, kind),
+                "side": hit.get("side"),
+                "pattern_strength": round(_classic_strength(kind, bar, prev_bar), 3),
+                "abnormal_volume": {
+                    "yes": vol["yes"],
+                    "which": vol["which"],
+                    "ratio": vol["ratio"],
+                    "current_ratio": vol.get("current_ratio"),
+                    "prior_ratio": vol.get("prior_ratio"),
+                },
+                "ema144": {
+                    "side": ema["side"],
+                    "distance_pct": gate["distance_pct"],
+                    "touch": gate["touch"],
+                    "near_pct": g_pct,
+                    "value": ema.get("ema"),
+                },
+                "ema_gate": gate["reason"],
+                "tf": tf,
+                "bar_ts": bar_ts,
+                "leader": leader,
+                "kol_label": primary_kol,
+                "mentioned_at": last_mention,
+                "mention_max_age_hours": mention_max_age_hours(),
+                "sources": [{k: v for k, v in x.items() if k != "snippet"} for x in sources[-5:]],
+                "detected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
             alert["timeframe"] = tf
             alert["text"] = build_alert_text(alert)
-            alerts.append(alert)
+            candidates.append(alert)
+        if len(candidates) > 1:
+            for dropped in candidates:
+                best_tmp = pick_best_alert(candidates, bar=bar, prev=prev_bar)
+                if best_tmp and dropped.get("pattern") == best_tmp.get("pattern") and dropped.get("side") == best_tmp.get("side"):
+                    continue
+                try:
+                    append_filtered_log({
+                        "status": "filtered_same_bar_conflict",
+                        "symbol": symbol, "tf": tf, "pattern": dropped.get("pattern"),
+                        "side": dropped.get("side"), "bar_ts": bar_ts,
+                        "kept": (pick_best_alert(candidates, bar=bar, prev=prev_bar) or {}).get("pattern"),
+                        "logged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    })
+                except Exception as exc:
+                    logger.warning("same-bar conflict log fail: %s", exc)
+        chosen = pick_best_alert(candidates, bar=bar, prev=prev_bar)
+        if chosen:
+            chosen["conflict_policy"] = "same_bar_pick_best" if len(candidates) > 1 else "single"
+            alerts.append(chosen)
     return alerts
 
 
@@ -1070,6 +1257,9 @@ def scan_watchlist_alerts() -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "pick_best_alert",
+    "filter_opposite_conflict",
+    "clearly_stronger",
     "fresh_sources",
     "kol_label",
     "mention_is_genuine",
