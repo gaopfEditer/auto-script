@@ -612,15 +612,22 @@ def ema_series(closes: Sequence[float], period: int) -> list[float | None]:
 
 
 def ema144_near_pct(*, leader: bool = False) -> float:
-    """EMA144 门控阈值 %：KOL_EMA144_NEAR_PCT（兼容旧 KOL_EMA_NEAR_PCT），默认 1.5。
-    龙头可单独 KOL_EMA144_NEAR_PCT_LEADER，未设则同规则。"""
-    base = env_str("KOL_EMA144_NEAR_PCT", "") or env_str("KOL_EMA_NEAR_PCT", "") or "1.5"
+    """EMA144 门控阈值 %。
+
+    - 山寨等非龙头：KOL_EMA144_NEAR_PCT（兼容旧 KOL_EMA_NEAR_PCT），默认 **1.0%**（约 20x）。
+    - 龙头 BTC/ETH/QQQ：KOL_EMA144_NEAR_PCT_LEADER，默认 **0.2%**（约 100x）；未设则用 0.2，不回落到非龙头值。
+    柱体触及/穿越 EMA144 仍一律过门（与 near_pct 无关）。
+    """
     if leader:
-        base = env_str("KOL_EMA144_NEAR_PCT_LEADER", "") or base
+        raw = env_str("KOL_EMA144_NEAR_PCT_LEADER", "") or "0.2"
+        fallback = 0.2
+    else:
+        raw = env_str("KOL_EMA144_NEAR_PCT", "") or env_str("KOL_EMA_NEAR_PCT", "") or "1.0"
+        fallback = 1.0
     try:
-        v = float(base)
+        v = float(raw)
     except ValueError:
-        v = 1.5
+        v = fallback
     return min(max(v, 0.05), 20.0)
 
 
@@ -905,7 +912,6 @@ def evaluate_symbol(
     vol_lb = env_int("KOL_VOL_LOOKBACK", 20, min_val=5, max_val=200)
     vol_mult = env_float("KOL_VOL_MULT", 2.0, min_val=0.5, max_val=20.0)
     ema_period = env_int("KOL_EMA_PERIOD", 144, min_val=5, max_val=500)
-    near_pct = ema144_near_pct()
     limit = max(ema_period + vol_lb + 20, env_int("KOL_KLINE_LIMIT", 200, min_val=50, max_val=1500))
 
     try:

@@ -689,7 +689,7 @@ crypto mornitor 发出「二次预警」
 
 - `inverted_hammer` 或 `engulfing` 或 `shooting_star`
 
-形态命中后须过 **EMA144 硬门控（2026-10-20）**：形态柱 high–low **触及/穿越 EMA144**，或收盘距 EMA144 **≤ `KOL_EMA144_NEAR_PCT`（默认 1.5%）**，才告警。龙头（BTC/ETH/QQQ）默认同规则（可选 `KOL_EMA144_NEAR_PCT_LEADER` 单独覆盖）。未过门控 → 仅本地写 `data/kol_secondary/filtered.jsonl`（`status=filtered_far_from_ema`），**不推送**。异常放量仍仅作附加字段，不作门控。
+形态命中后须过 **EMA144 硬门控（2026-10-20）**：形态柱 high–low **触及/穿越 EMA144**，或收盘距 EMA144 ≤ 阈值，才告警。非龙头默认 **`KOL_EMA144_NEAR_PCT=1.0%`**（约 20x）；龙头 BTC/ETH/QQQ 默认 **`KOL_EMA144_NEAR_PCT_LEADER=0.2%`**（约 100x）。**柱体触及/穿越 EMA144 仍一律过门**，与距离阈值无关。未过门控 → 仅本地写 `data/kol_secondary/filtered.jsonl`（`status=filtered_far_from_ema`），**不推送**。异常放量仍仅作附加字段，不作门控。
 
 **有效期（2026-10 增补）**：告警发出后登记 `signal_lifecycle.json` 活跃信号。默认 **TTL 4h**（`KOL_SIGNAL_TTL_HOURS`，**下限 4h**）；入场计划为信号柱 **下一根周期开盘价**（`next_bar_open`，滑点 `KOL_ENTRY_SLIPPAGE_PCT`）。**TTL 内未入场** → `ignored_expired`；入场后 **SL/TP1 命中**（复用 `build_settle_plan` 价位）→ `ignored_sl` / `ignored_tp`。终态后不再推送/不再视为可跟单；状态事件默认只写本地 `alerts.jsonl`（`type=kol_secondary_lifecycle`），**不额外 spam webhook**。
 
@@ -759,8 +759,8 @@ crypto mornitor 发出「二次预警」
 | `KOL_ENTRY_SLIPPAGE_PCT` | 同 `OI_BT_SLIPPAGE_PCT` | 下一根开盘价入场滑点 |
 | `KOL_POLL_SEC` | `45` | 轮询间隔 |
 | `KOL_FOLLOW_ALL_RECENT` | `0` | `1`=任意频道提及都进列表（调试） |
-| `KOL_EMA144_NEAR_PCT` | `1.5` | **EMA144 硬门控**阈值 %（收盘距 EMA；或柱体触及即过）；兼容旧名 `KOL_EMA_NEAR_PCT` |
-| `KOL_EMA144_NEAR_PCT_LEADER` | （空=同上） | 龙头单独阈值（可选） |
+| `KOL_EMA144_NEAR_PCT` | `1.0` | 非龙头收盘距 EMA144 门控 %（约 20x）；柱体触及仍过；兼容旧名 `KOL_EMA_NEAR_PCT` |
+| `KOL_EMA144_NEAR_PCT_LEADER` | `0.2` | 龙头（BTC/ETH/QQQ）收盘距门控 %（约 100x）；柱体触及仍过 |
 | `KOL_MENTION_MAX_AGE_HOURS` | `48` | KOL→币 提及有效期（小时）；超期链接移出 watchlist、不在消息中列出；龙头仍走「龙头直通」 |
 | `KOL_ALERT_INCLUDE_FORMING` | `0` | `1`=含未收盘当根；默认只看**已收盘**倒数第二根 |
 
