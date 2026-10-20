@@ -200,8 +200,7 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
   `SHOOT/HAMMER_TREND_MIN_PCT=3`、`OI_CANDLE_VOL_BYPASS_CONTEXT=0`）
 - **1h** 射击之星 / 倒锤子额外要求 **4h 或 1d** 同向趋势背景（`OI_CANDLE_1H_HTF_*`）
 - **推送 / 胜率入库硬过滤**：`OI_PATTERN_PUSH_MTF_MIN`（默认 **2**）——同币同向同形态族在 4h 窗内
-  ≥2 个周期共振才推 TG、才 `record_alert_from_push`；列表 API 默认仅展示共振行（`mtfResonance=0` 或
-  `showAll=1` 看全量）
+  ≥2 个周期共振才扫描入库（`ingest_live_pattern_alert`）与推 TG；列表 API 默认全量（`mtfResonance=1` 才仅看多周期共振）
 - **signalAt**：入库取 `kline_close_time` 对齐下一根 5m（`pattern_signal_time.align_signal_at_ms`），
   `scan_ts` 仅写入 `scanTs` 元数据；去重 key=`type:symbol:kline_close_time:kind:side`
 - **结算 V2 SL 地板**：止损距离 ≥ max(结构 invalid、ATR×k、市值梯队最小 %)；山寨默认
