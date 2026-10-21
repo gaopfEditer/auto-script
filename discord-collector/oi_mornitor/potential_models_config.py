@@ -16,11 +16,11 @@ DEFAULTS: dict[str, Any] = {
         "fast_interval_sec": 900,
         "slow_interval_sec": 3600,
         "fast_models": [
-            "short_squeeze",
+            "quiet_oi_breakout",
             "relative_strength",
             "liquidity_sweep",
         ],
-        "slow_models": ["quiet_oi_breakout", "wyckoff_spring"],
+        "slow_models": ["wyckoff_spring"],
     },
     "export": {
         "score_push": 70,
@@ -31,7 +31,6 @@ DEFAULTS: dict[str, Any] = {
     },
     "models_enabled": [
         "quiet_oi_breakout",
-        "short_squeeze",
         "relative_strength",
         "wyckoff_spring",
         "liquidity_sweep",
@@ -43,15 +42,26 @@ DEFAULTS: dict[str, Any] = {
         "oi_chg_14d_min": 0.20,
         "oi_accel_min": 0.0,
         "atr_pctile_max": 0.40,
+        "volume_quiet_max": 0.72,
+        "volume_quiet_short_days": 7,
+        "volume_quiet_long_days": 30,
+        "spike_lookback_bars": 10,
+        "spike_volume_ratio_min": 2.8,
+        "sustain_bars_min": 2,
+        "sustain_volume_ratio_min": 1.25,
+        "volume_ratio_ma": 20,
         "volume_ratio_mild_min": 1.3,
         "volume_ratio_mild_max": 4.0,
         "volume_ratio_spike": 5.0,
         "lookback_range_bars": 60,
         "reclaim_ma": 20,
-        "score_hit_min": 55,
+        "score_hit_min": 58,
+        "require_sustain_for_hit": True,
     },
     "short_squeeze": {
         "tf_primary": "1h",
+        "enabled_by_default": False,
+        "funding_scores_enabled": False,
         "fund_mean_n": 3,
         "fund_extreme": -0.005,
         "fund_extreme_pctile": 0.10,
@@ -62,6 +72,7 @@ DEFAULTS: dict[str, Any] = {
         "basis_spot_premium_min": 0.0,
         "exit_fund_recover": -0.0005,
         "exit_oi_cliff_1d": -0.10,
+        "score_hit_min": 52,
     },
     "relative_strength_fast": {
         "tf_primary": "1h",
@@ -142,4 +153,13 @@ def load_potential_config() -> dict[str, Any]:
         cfg["universe"]["mcap_min"] = float(mcap_min)
     if mcap_max:
         cfg["universe"]["mcap_max"] = float(mcap_max)
+    inc_sq = os.environ.get("OI_POTENTIAL_INCLUDE_SHORT_SQUEEZE", "").strip().lower()
+    if inc_sq in ("1", "true", "yes"):
+        enabled = list(cfg.get("models_enabled") or [])
+        if "short_squeeze" not in enabled:
+            enabled.append("short_squeeze")
+        cfg["models_enabled"] = enabled
+    fund_score = os.environ.get("OI_POTENTIAL_FUNDING_SCORES", "").strip().lower()
+    if fund_score in ("1", "true", "yes"):
+        cfg.setdefault("short_squeeze", {})["funding_scores_enabled"] = True
     return cfg

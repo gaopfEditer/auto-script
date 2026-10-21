@@ -79,27 +79,34 @@ def model_score_reasons(r: ModelResult) -> list[str]:
         fr = m.get("funding_rate")
         rate = fm if fm is not None else fr
         if rate is not None:
-            lines.append(f"资金费率 {float(rate):.2%}（深度负费率 → 空头支付、轧空叙事偏多）")
+            lines.append(f"资金费率 {float(rate):.2%}（仅诊断，默认不计入得分）")
         oi1 = _pct(m.get("oi_change_1d_pct"))
         if oi1:
-            lines.append(f"OI 1 日 {oi1}（持仓变化，配合抗跌则加分）")
+            lines.append(f"OI 1 日 {oi1}（持仓抬升 + 价格抗跌突破才计分）")
         prem = m.get("spot_premium")
         if prem is not None:
-            lines.append(f"现货溢价 {float(prem):+.2%}（偏正则现货偏强）")
+            lines.append(f"现货溢价 {float(prem):+.2%}（弱上下文）")
     elif mid == "quiet_oi_breakout":
-        oq = m.get("oi_quiet_ratio")
-        if oq is not None:
-            lines.append(f"OI 沉寂比 {float(oq):.2f}（越低表示长期 OI 低位）")
-        oi7 = _pct(m.get("oi_change_7d_pct"))
-        oi14 = _pct(m.get("oi_change_14d_pct"))
-        if oi7 or oi14:
-            lines.append(f"OI 抬升 7d/14d {oi7 or '—'}/{oi14 or '—'}")
+        vq = m.get("volume_quiet_ratio")
+        if vq is not None:
+            lines.append(f"量沉寂比 {float(vq):.2f}（越低表示长期缩量）")
+        sp = m.get("volume_spike_bars_ago")
+        if sp is not None:
+            lines.append(f"放量距今 {int(sp)} 根 K（需明显量比突增）")
+        sb = m.get("volume_sustain_bars")
+        sr = m.get("volume_sustain_ret")
+        if sb is not None:
+            ret_s = _pct(sr) if sr is not None else "—"
+            lines.append(f"延续 {int(sb)} 根量能维持，价自放量 {ret_s}")
         vr = _num(m.get("volume_ratio"))
         if vr:
-            lines.append(f"量比 {vr}×MA20（温和放量加分，突破放量更高）")
+            lines.append(f"当前量比 {vr}×MA20")
         atr_p = m.get("atr_pctile")
         if atr_p is not None:
-            lines.append(f"ATR 分位 {float(atr_p):.0%}（波动收敛加分）")
+            lines.append(f"ATR 分位 {float(atr_p):.0%}（波动收敛）")
+        oq = m.get("oi_quiet_ratio")
+        if oq is not None:
+            lines.append(f"OI 沉寂比 {float(oq):.2f}（辅因子，非主路径）")
     elif mid == "relative_strength":
         vs = _pct(m.get("vs_btc_pct"), digits=1)
         if vs:
