@@ -152,7 +152,7 @@ POST_RETENTION_HOURS = int(os.getenv('POST_RETENTION_HOURS', '24').strip() or '2
 #   ollama:
 #     enabled: true
 #     base_url: "http://localhost:11434"
-#     model: "gemma-uncensored"
+#     model: "gemma4:latest"
 # 优先走 Ollama POST {base_url}/api/generate；不可用或失败时回退 LOCAL_CHAT（见 binance_posts_state）
 _PROMAT_DEFAULT_PROMPT = _REPO_ROOT / "prompts" / "binance_market_lists_selenium.txt"
 PROMAT_ANALYSIS = {
@@ -163,8 +163,8 @@ PROMAT_ANALYSIS = {
             "PROMAT_ANALYSIS_OLLAMA_BASE_URL", "http://localhost:11434"
         ).rstrip("/"),
         "model": (
-            os.getenv("PROMAT_ANALYSIS_OLLAMA_MODEL", "gemma-uncensored").strip()
-            or "gemma-uncensored"
+            os.getenv("PROMAT_ANALYSIS_OLLAMA_MODEL", "gemma4:latest").strip()
+            or "gemma4:latest"
         ),
         "timeout_sec": int(
             os.getenv("PROMAT_ANALYSIS_OLLAMA_TIMEOUT_SEC", "120").strip() or "120"
