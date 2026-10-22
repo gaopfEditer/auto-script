@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Protocol, Sequence
 
-from post_card.config import BACKTEST_MAX_HORIZON_SEC
+from post_card.env_defaults import BACKTEST_MAX_HORIZON_SEC
 from post_card.schema import TradeCard
 
 

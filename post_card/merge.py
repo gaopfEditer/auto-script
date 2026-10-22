@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-from post_card.config import MERGE_WINDOW_SEC
+from post_card.env_defaults import MERGE_WINDOW_SEC
 from post_card.dedupe import composite_dedupe_key, is_stronger_update
 from post_card.schema import TradeCard, TpslSource
 

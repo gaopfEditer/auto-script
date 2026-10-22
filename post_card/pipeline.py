@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Iterable
 
-from post_card.config import DEDUPE_WINDOW_SEC, MERGE_WINDOW_SEC
+from post_card.env_defaults import DEDUPE_WINDOW_SEC, MERGE_WINDOW_SEC
 from post_card.dedupe import (
     composite_dedupe_key,
     is_duplicate_message,

@@ -6,7 +6,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from post_card.config import DEFAULT_SL_PCT, DEFAULT_TP_PCT
+from post_card.env_defaults import DEFAULT_SL_PCT, DEFAULT_TP_PCT
 from post_card.schema import TradeCard
 
 # Reuse telegram numeric helpers when available
