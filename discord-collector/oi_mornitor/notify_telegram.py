@@ -390,9 +390,7 @@ def send_main_card_telegram(alert: dict[str, Any]) -> bool:
     if not _confluence_gate_or_observation(alert):
         return False
     text = _message_with_confluence(alert, format_candle_card_message(alert))
-    ok = _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
-    _after_candle_card_pushed(alert)
-    return ok
+    return _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
 
 
 def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
@@ -425,7 +423,6 @@ def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
     ok = _send_card_text_with_fallback(alert, text, primary) if primary else False
     if ok:
         _mirror_to_main_card(alert, text)
-    _after_candle_card_pushed(alert)
     return ok
 
 
@@ -455,7 +452,6 @@ def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     text = _message_with_confluence(alert, format_structure_card_message(alert))
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
     ok = _send_card_text_with_fallback(alert, text, primary) if primary else False
-    _after_candle_card_pushed(alert)
     return ok
 
 

@@ -19,10 +19,13 @@ def passes_pattern_card_emit_gate(
     peers: list[dict[str, Any]] | None = None,
 ) -> bool:
     """
-    基础门控（与 record_alert_from_push 前置条件对齐）：
+    胜率库 / ticker 入库基础门控（与 record_alert_from_push 前置条件对齐）：
     - signal_policy 停推类型与周期
-    - OI_PATTERN_PUSH_MTF_MIN 多周期共振
+    - 不含 OI_PATTERN_PUSH_MTF_MIN：多周期共振只挡 Telegram 推送，
+      否则单周期 144 均线形态会出现在顶部滚动条却进不了「形态信号列表」。
+    peers 保留以兼容旧调用方，入库路径忽略。
     """
+    _ = peers  # 兼容旧签名；MTF 见 telegram_push_allowed_or_record_observation
     if not isinstance(alert, dict):
         return False
     if is_blocked_stats_record(alert):
@@ -32,8 +35,6 @@ def passes_pattern_card_emit_gate(
         return False
     kind = str(alert.get("kind") or alert.get("signal_kind") or "").strip()
     if kind in ("破底翻确认", "spring_2b"):
-        return False
-    if not passes_push_mtf_gate(alert, peers):
         return False
     return True
 
@@ -50,7 +51,7 @@ def attach_confluence_on_alert(
 
 
 def record_confluence_observation_only(alert: dict[str, Any]) -> None:
-    """共振未达推送档：入库、正常结算，但不推 TG、不计头条胜率。"""
+    """综合分未达推送档：入库、正常结算，但不推 TG、不计头条胜率。"""
     try:
         from oi_mornitor.pattern_alert_stats import record_alert_from_push
 
@@ -71,21 +72,50 @@ def passes_confluence_tier_push_gate(alert: dict[str, Any]) -> bool:
     return passes_confluence_push_gate(conf)
 
 
+def ingest_live_pattern_alert(
+    alert: dict[str, Any],
+    peers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """
+    现网扫描命中后写入形态胜率库 + ticker（与 TG 开关/送达无关）。
+    口径与约定一致：基础门控 + MTF；B+ 正式条，C 档 confluence_observation_only。
+    """
+    if is_observation_record(alert):
+        return None
+    if not passes_pattern_card_emit_gate(alert, peers):
+        return None
+    attach_confluence_on_alert(alert, peers)
+    from oi_mornitor.pattern_alert_stats import record_alert_from_push
+
+    rec: dict[str, Any] | None
+    if passes_confluence_tier_push_gate(alert):
+        rec = record_alert_from_push(alert)
+    else:
+        record_confluence_observation_only(alert)
+        rec = None
+    try:
+        from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert
+
+        record_ticker_from_alert(alert)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("形态 ticker 入库失败: %s", exc)
+    return rec
+
+
 def telegram_push_allowed_or_record_observation(
     alert: dict[str, Any],
     peers: list[dict[str, Any]] | None = None,
 ) -> bool:
     """
-    TG 推送完整门控：基础门控 + OI_CONFLUENCE_PUSH_MIN_TIER。
-    False 时若仅共振不足，会写入 confluence_observation_only 胜率记录。
+    TG 推送完整门控：基础门控 + OI_PATTERN_PUSH_MTF_MIN + OI_CONFLUENCE_PUSH_MIN_TIER。
+    胜率入库请用 ingest_live_pattern_alert（扫描侧），此处仅判定是否发 TG。
     """
     if not passes_pattern_card_emit_gate(alert, peers):
         return False
+    if not passes_push_mtf_gate(alert, peers):
+        return False
     attach_confluence_on_alert(alert, peers)
-    if passes_confluence_tier_push_gate(alert):
-        return True
-    record_confluence_observation_only(alert)
-    return False
+    return passes_confluence_tier_push_gate(alert)
 
 
 def would_telegram_push(
@@ -94,6 +124,8 @@ def would_telegram_push(
 ) -> bool:
     """回测「实际会推 TG」判定（不发 TG、不写库）。"""
     if not passes_pattern_card_emit_gate(alert, peers):
+        return False
+    if not passes_push_mtf_gate(alert, peers):
         return False
     attach_confluence_on_alert(alert, peers)
     return passes_confluence_tier_push_gate(alert)

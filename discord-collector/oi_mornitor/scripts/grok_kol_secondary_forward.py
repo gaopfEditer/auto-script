@@ -61,20 +61,25 @@ def main() -> int:
         return 0
 
     from oi_mornitor.kol_secondary_alert import (
+        advance_active_lifecycle,
         alert_key,
         append_alert_log,
         data_dir,
         ingest_new_cards,
+        filter_opposite_conflict,
+        load_lifecycle_state,
+        lifecycle_terminal_keys,
         load_seen,
-        post_webhook,
+        post_webhooks,
+        register_lifecycle_signal,
         save_seen,
         scan_watchlist_alerts,
         seed_followed_kols,
+        webhook_endpoints,
     )
 
-    url = os.environ.get("KOL_GROK_WEBHOOK_URL", "").strip()
-    key = os.environ.get("KOL_GROK_WEBHOOK_KEY", "").strip()
-    dry = not (url and key)
+    endpoints = webhook_endpoints()
+    dry = not endpoints
     if os.environ.get("KOL_DRY_RUN", "").strip() in ("1", "true", "yes"):
         dry = True
     poll = float(os.environ.get("KOL_POLL_SEC", "45") or "45")
@@ -83,7 +88,7 @@ def main() -> int:
     state = load_seen()
     seen: dict = state.setdefault("seen", {})
 
-    mode = "dry-run→alerts.jsonl" if dry else "webhook"
+    mode = "dry-run→alerts.jsonl" if dry else f"webhook×{len(endpoints)}"
     print(
         f"[kol-secondary] start mode={mode} poll={poll}s data={data_dir()} env={env_path}",
         flush=True,
@@ -91,7 +96,7 @@ def main() -> int:
     if dry:
         print(
             "[kol-secondary] webhook URL/key 未配置或 KOL_DRY_RUN=1；"
-            "仍更新 watchlist，告警写入 data/kol_secondary/alerts.jsonl",
+            "仍更新 watchlist 与 signal_lifecycle，告警写入 data/kol_secondary/alerts.jsonl",
             flush=True,
         )
 
@@ -104,16 +109,40 @@ def main() -> int:
                 f"cursor={stats['last_card_id']}",
                 flush=True,
             )
+            lc_events = advance_active_lifecycle()
+            for ev in lc_events:
+                print(
+                    f"[kol-secondary] lifecycle {ev.get('symbol')} "
+                    f"{ev.get('lifecycle_status')} key={ev.get('dedupe_key')}",
+                    flush=True,
+                )
+
+            terminal = lifecycle_terminal_keys()
             alerts = scan_watchlist_alerts()
-            fresh = []
+            candidates = []
             for a in alerts:
                 k = alert_key(a["symbol"], a["tf"], a["pattern"], a["bar_ts"])
-                if k in seen:
+                if k in seen or k in terminal:
                     continue
-                seen[k] = time.time()
                 a = dict(a)
                 a["dedupe_key"] = k
-                fresh.append(a)
+                candidates.append(a)
+
+            # 反向活跃信号冲突：同币同周期已有多/空活跃时，默认不推反方向
+            # 注意：被抑制的 key 不写入 seen，待反向信号终态后仍可再评估
+            lc_state = load_lifecycle_state()
+            fresh = []
+            for a in candidates:
+                kept = filter_opposite_conflict(a, state=lc_state)
+                if kept is None:
+                    print(
+                        f"[kol-secondary] SKIP conflict {a.get('symbol')} {a.get('pattern_zh')} "
+                        f"side={a.get('side')} key={a.get('dedupe_key')}",
+                        flush=True,
+                    )
+                    continue
+                seen[str(kept.get("dedupe_key") or a["dedupe_key"])] = time.time()
+                fresh.append(kept)
 
             # prune 7d
             cutoff = time.time() - 7 * 86400
@@ -125,21 +154,24 @@ def main() -> int:
                     del seen[k]
 
             for a in fresh:
-                append_alert_log(a)
+                fired_ms = int(time.time() * 1000)
+                payload = register_lifecycle_signal(a, fired_at_ms=fired_ms)
+                append_alert_log(payload)
                 if not dry:
                     try:
-                        post_webhook(url, key, a)
+                        post_webhooks(payload)
                         print(
                             f"[kol-secondary] POST {a['symbol']} {a['pattern_zh']} "
+                            f"ttl={payload.get('ttl_hours')}h expires={payload.get('expires_at')} "
                             f"vol={a['abnormal_volume']['which']} ema={a['ema144']['side']}",
                             flush=True,
                         )
                     except Exception as exc:
                         print(f"[kol-secondary] POST fail: {exc}", flush=True)
-                        # still keep seen to avoid storm; log only
                 else:
                     print(
                         f"[kol-secondary] DRY {a['symbol']} {a.get('pattern_zh')} "
+                        f"ttl={payload.get('ttl_hours')}h expires={payload.get('expires_at')} "
                         f"vol={a['abnormal_volume'].get('which')} "
                         f"ema={a['ema144'].get('side')} "
                         f"kol={a.get('kol_name')} key={a.get('dedupe_key')}",
@@ -147,7 +179,7 @@ def main() -> int:
                     )
 
             save_seen(state)
-            if not fresh:
+            if not fresh and not lc_events:
                 print("[kol-secondary] no new pattern alerts", flush=True)
         except Exception as e:
             print(f"[kol-secondary] error: {type(e).__name__}: {e}", flush=True)

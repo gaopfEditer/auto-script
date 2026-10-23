@@ -250,6 +250,11 @@ export const config = {
     if (/discord\.com\/channels\//i.test(collectStart.url)) return 5 * 60_000;
     return 0;
   })(),
+  /** 附加 CDP 时 Chrome 标签数上限；≥ 该值时保活/恢复只在末页刷新，不再 newPage（默认 10） */
+  cdpMaxBrowserTabs: Math.min(
+    50,
+    Math.max(1, Number(process.env.COLLECTOR_CDP_MAX_BROWSER_TABS ?? 10) || 10)
+  ),
   collectNetworkTrace: ["1", "true", "yes", "on"].includes(
     String(process.env.COLLECTOR_NETWORK_TRACE ?? "0").toLowerCase()
   ),

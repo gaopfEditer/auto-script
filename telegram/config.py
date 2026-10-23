@@ -575,7 +575,7 @@ def get_ollama_generate_url() -> str:
 
 
 def get_ollama_model() -> str:
-    return os.environ.get("OLLAMA_MODEL", "gemma4:26b").strip() or "gemma4:26b"
+    return os.environ.get("OLLAMA_MODEL", "gemma4:latest").strip() or "gemma4:latest"
 
 
 def get_ollama_generate_timeout_sec() -> int:

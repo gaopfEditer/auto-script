@@ -565,7 +565,7 @@ OI 异动候选 (5m/15m, OI_PUMP|OI_DUMP)
 | 5 | **KOL 二次预警**（直播逻辑，见 §13）：卡片打「关注」标签的 KOL → 币进关注列表 → 列表币出现约定形态时由 **crypto mornitor** 发二次预警 | 接线中（2026-10-19）：`kol_secondary_alert.py` + `scripts/grok_kol_secondary_forward.py`；关注名单暂用临时种子；webhook 未配则 dry-run→`alerts.jsonl` |
 | 6 | **龙头直通**：`BTC` / `ETH` / `QQQ`（及对应交易对如 BTCUSDT 等）被任一 KOL 提到 → **直接进关注列表**，同样走二次预警 | ✅ 已在 `kol_secondary_alert` 实现（`KOL_LEADER_SYMBOLS`） |
 | 7 | **回测数据源未验证前禁止用未经验证数据报胜率** | ✅ 门禁见 §11.5 |
-| 8 | **形态列表（二次预警）**：**倒垂子（inverted_hammer）/ 吞没（engulfing）/ 射击之星（shooting_star）**；**大锤子（hammer）已从列表移除** | ✅ 以本章为准 |
+| 8 | **形态列表（二次预警）**：**倒锤子（inverted_hammer）/ 吞没（engulfing）/ 射击之星（shooting_star）**；**大锤子（hammer）已从列表移除** | ✅ 以本章为准 |
 
 **恢复 OI 推送**：删 `DISABLED` → 重启 forwarder → `resume` 例程 folder `oi`（须用户明确要求）。
 
@@ -582,7 +582,7 @@ OI 异动候选 (5m/15m, OI_PUMP|OI_DUMP)
 |---------|------|----------|----------|
 | `A_pure_oi` | 全市场 OI 异动 | OI 信号即入场（不做形态等待） | 信号数、胜率、期望 |
 | `B_oi_pattern` | 同 A | OI 后经 §10 L1/L2，再等形态确认（§10 L3 allowlist） | 同上 |
-| `C_kol_pattern` | KOL 关注名单提到的币（+ 龙头直通，见 §13） | 关注列表币出现 **倒垂子 / 吞没 / 射击之星** 之一（**不含大锤子**） | 同上 |
+| `C_kol_pattern` | KOL 关注名单提到的币（+ 龙头直通，见 §13） | 关注列表币出现 **倒锤子 / 吞没 / 射击之星** 之一（**不含大锤子**） | 同上 |
 
 > **口径对齐（2026-10-19 晚通话）**：C 臂与 §13 二次预警形态一致 = `inverted_hammer,engulfing,shooting_star`。此前试跑曾用 `hammer,engulfing`（已过时）；重跑时须改 `KOL_PATTERNS` 并更新 §12。
 
@@ -666,7 +666,7 @@ OI 异动候选 (5m/15m, OI_PUMP|OI_DUMP)
 龙头直通：BTC / ETH / QQQ（含 *USDT 等交易对映射）被任意 KOL 提到 → 直接进关注列表
         ↓
 关注列表中的币，K 线出现下列形态之一：
-  • 倒垂子 inverted_hammer
+  • 倒锤子 inverted_hammer
   • 吞没 engulfing
   • 射击之星 shooting_star
   （大锤子 hammer：已移除，不要再加回）
@@ -685,9 +685,13 @@ crypto mornitor 发出「二次预警」
 
 ### 13.3 二次预警触发与内容
 
-**触发**：关注列表内 symbol，在约定周期（建议与形态监控一致：15m/1h，可配置）收出或确认：
+**触发**：关注列表内 symbol，在约定周期（默认 **15m**，`KOL_ALERT_TF`）对**已收盘**最后一根 K（默认倒数第二根；`KOL_ALERT_INCLUDE_FORMING=1` 才含未收盘当根）检出：
 
 - `inverted_hammer` 或 `engulfing` 或 `shooting_star`
+
+形态命中后须过 **EMA144 硬门控（2026-10-20）**：形态柱 high–low **触及/穿越 EMA144**，或收盘距 EMA144 ≤ 阈值，才告警。非龙头默认 **`KOL_EMA144_NEAR_PCT=1.0%`**（约 20x）；龙头 BTC/ETH/QQQ 默认 **`KOL_EMA144_NEAR_PCT_LEADER=0.2%`**（约 100x）。**柱体触及/穿越 EMA144 仍一律过门**，与距离阈值无关。未过门控 → 仅本地写 `data/kol_secondary/filtered.jsonl`（`status=filtered_far_from_ema`），**不推送**。异常放量仍仅作附加字段，不作门控。
+
+**有效期（2026-10 增补）**：告警发出后登记 `signal_lifecycle.json` 活跃信号。默认 **TTL 4h**（`KOL_SIGNAL_TTL_HOURS`，**下限 4h**）；入场计划为信号柱 **下一根周期开盘价**（`next_bar_open`，滑点 `KOL_ENTRY_SLIPPAGE_PCT`）。**TTL 内未入场** → `ignored_expired`；入场后 **SL/TP1 命中**（复用 `build_settle_plan` 价位）→ `ignored_sl` / `ignored_tp`。终态后不再推送/不再视为可跟单；状态事件默认只写本地 `alerts.jsonl`（`type=kol_secondary_lifecycle`），**不额外 spam webhook**。
 
 **消息字段（必填）**：
 
@@ -695,11 +699,24 @@ crypto mornitor 发出「二次预警」
 |------|------|
 | KOL 名 | 带入关注列表的来源 KOL（龙头直通可写「龙头直通」+ 提及者） |
 | 币种 | symbol |
-| 形态 | 倒垂子 / 吞没 / 射击之星 |
+| 形态 | 倒锤子 / 吞没 / 射击之星 |
 | 异常放量 | **前一根或当根**相对近期均量是否异常放量（阈值可配置；须写明用的是前根还是当根） |
 | EMA144 位置 | 现价相对 EMA144：上方 / 下方 / 附近（附距离% 更佳） |
 
-可选：周期、K 线时间、卡片链接。
+| 周期 | `tf` / `timeframe`（默认 15m），**必填** |
+| `text` | 代码生成的**最终中文一行文案**，例程原样转发 |
+
+`text` 格式：`KOL二次预警｜15m｜Nine Call · GTCUSDT · 吞没（空） · 贴近EMA144（0.6%） · 放量1.9x`（无异常放量时省略放量段；柱体穿越 EMA 时写「触及EMA144」）。
+
+**大周期 EMA144 插针提示（2026-10-20）**：15m 形态候选时，另扫 `KOL_HTF_EMA_TFS`（默认 `1h,4h`）最近 `KOL_HTF_EMA_LOOKBACK`（默认 3）根**已收盘**柱：影线触及 EMA144（EMA 在影线内、实体外）或实体穿越记为插针/刺穿。命中则在 `payload.text` 追加醒目标签如 `⚠4h插针EMA144后`（优先 4h），并带结构化字段 `higher_tf_ema_touch` / `higher_tf_ema_touches`（`tf, bar_time, distance_pct, type=wick_touch|pierce`）。
+
+**冲突去重（2026-10-20）**：
+- **同柱唯一**：同一 `symbol+tf+已收盘柱` 若多形态同时命中，只推 1 条。择优：①异常放量优先 ②EMA144 触及或更近优先 ③仍平则吞没优先；射击之星 vs 倒锤子比影线/实体比（更大者胜）。落选写 `filtered_same_bar_conflict`。
+- **反向活跃抑制**：同币同周期已有非终态信号（`active_waiting_entry` / `active_entered`）且方向相反时，默认不推新反向信号（`filtered_conflict_opposite`）；仅当新信号「明显更强」（放量优势，或 EMA 明显更近/触及，或同档下形态秩更高）才替换推送。
+
+**提及新鲜度与归因（2026-10-20）**：仅 `KOL_MENTION_MAX_AGE_HOURS`（默认 48h）内的**真实提及**计入；原文须以整词 / `$TICKER` / `#TICKER` / `TICKERUSDT` 出现（防子串误匹配）。消息只列新鲜 KOL，并带提及日期（北京时间）：`KOL二次预警｜15m｜Nine Call（10/19提及） · NOMUSDT · 吞没（空） · 贴近EMA144（0.6%）`。
+
+可选：K 线时间、卡片链接。
 
 ### 13.4 与 OI 热钱推送的隔离
 
@@ -738,12 +755,18 @@ crypto mornitor 发出「二次预警」
 | `KOL_ALERT_TF` | `15m` | 形态周期 |
 | `KOL_VOL_LOOKBACK` / `KOL_VOL_MULT` | 如 20 / 2.0 | 异常放量：当根或前根 vs 均量 |
 | `KOL_EMA_PERIOD` | `144` | EMA 位置 |
-| `KOL_GROK_WEBHOOK_URL` / `KOL_GROK_WEBHOOK_KEY` | （空=dry-run） | crypto mornitor 例程 webhook |
+| `KOL_GROK_WEBHOOK_URL` / `KOL_GROK_WEBHOOK_KEY` | （空=dry-run） | crypto mornitor 主 webhook |
+| `KOL_GROK_WEBHOOK_URL_2` / `KOL_GROK_WEBHOOK_KEY_2` | （可选） | 备 webhook，与主路同 payload |
+| `KOL_SIGNAL_TTL_HOURS` | `4` | 信号有效期（小时，**≥4**）；超时未入场作废 |
+| `KOL_ENTRY_SLIPPAGE_PCT` | 同 `OI_BT_SLIPPAGE_PCT` | 下一根开盘价入场滑点 |
 | `KOL_POLL_SEC` | `45` | 轮询间隔 |
 | `KOL_FOLLOW_ALL_RECENT` | `0` | `1`=任意频道提及都进列表（调试） |
-| `KOL_EMA_NEAR_PCT` | `1.5` | EMA「附近」阈值 % |
+| `KOL_EMA144_NEAR_PCT` | `1.0` | 非龙头收盘距 EMA144 门控 %（约 20x）；柱体触及仍过；兼容旧名 `KOL_EMA_NEAR_PCT` |
+| `KOL_EMA144_NEAR_PCT_LEADER` | `0.2` | 龙头（BTC/ETH/QQQ）收盘距门控 %（约 100x）；柱体触及仍过 |
+| `KOL_MENTION_MAX_AGE_HOURS` | `48` | KOL→币 提及有效期（小时）；超期链接移出 watchlist、不在消息中列出；龙头仍走「龙头直通」 |
+| `KOL_ALERT_INCLUDE_FORMING` | `0` | `1`=含未收盘当根；默认只看**已收盘**倒数第二根 |
 
-**实现文件（2026-10-19）**：`oi_mornitor/kol_secondary_alert.py`、`oi_mornitor/scripts/grok_kol_secondary_forward.py`、`~/.grokbot/kol-secondary/config.env`、`oi_mornitor/data/kol_secondary/`。
+**实现文件（2026-10-19）**：`oi_mornitor/kol_secondary_alert.py`、`oi_mornitor/kol_signal_lifecycle.py`、`oi_mornitor/scripts/grok_kol_secondary_forward.py`、`~/.grokbot/kol-secondary/config.env`（例：`oi_mornitor/docs/kol-secondary-config.env.example`）、`oi_mornitor/data/kol_secondary/`（含 `signal_lifecycle.json`）。
 
 ---
 

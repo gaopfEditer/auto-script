@@ -1482,10 +1482,12 @@ class PatternMonitorEngine:
             n_vp_stats = 0
             if vp_alerts:
                 try:
-                    from oi_mornitor.pattern_alert_stats import record_alert_from_push
+                    from oi_mornitor.pattern_emit_gate import ingest_live_pattern_alert
 
                     for va in vp_alerts:
-                        if record_alert_from_push(va):
+                        if va.get("observation_only") or not va.get("vp_formal"):
+                            continue
+                        if ingest_live_pattern_alert(va):
                             n_vp_stats += 1
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("量价信号胜率入库失败: %s", exc)
@@ -1743,6 +1745,9 @@ class PatternMonitorEngine:
 
                 if not passes_push_mtf_gate(alert):
                     continue
+                from oi_mornitor.pattern_emit_gate import ingest_live_pattern_alert
+
+                ingest_live_pattern_alert(alert)
                 out.append(alert)
                 logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 card_vol_ok = bool(alert.get("card_vol_ok", True))
@@ -1756,10 +1761,6 @@ class PatternMonitorEngine:
                 else:
                     try:
                         ok = await send_main_card_telegram_async(alert)
-                        if ok:
-                            from oi_mornitor.notify_telegram import _after_candle_card_pushed
-
-                            _after_candle_card_pushed(alert)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("Telegram MAIN 形态卡片失败 %s: %s", sym, exc)
                         ok = False
@@ -1850,6 +1851,9 @@ class PatternMonitorEngine:
 
                 if not passes_push_mtf_gate(alert):
                     continue
+                from oi_mornitor.pattern_emit_gate import ingest_live_pattern_alert
+
+                ingest_live_pattern_alert(alert)
                 out.append(alert)
                 logger.info("📩 结构卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 try:
@@ -2050,6 +2054,9 @@ class PatternMonitorEngine:
                     "scan_ts": scan_ts,
                     "kline_close_time": close_ts * 1000,
                 }
+                from oi_mornitor.pattern_emit_gate import ingest_live_pattern_alert
+
+                ingest_live_pattern_alert(alert)
                 out.append(alert)
                 logger.info("📐 144均线 MAIN %s %s %s @%s", sym, type_label, iv, close_ts)
                 try:

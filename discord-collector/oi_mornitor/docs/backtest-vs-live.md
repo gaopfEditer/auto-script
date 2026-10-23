@@ -87,7 +87,7 @@ python scripts/compare_backtest_live_stats.py \
 
 - 全量信号：`job.summary`（通过基础门控 + 已结算）
 - **实际会推 TG**：`job.pushed_summary`（`confluenceWouldPush`，门槛 `OI_CONFLUENCE_PUSH_MIN_TIER`，默认 B+）
-- 门控统一在 `pattern_emit_gate.telegram_push_allowed_or_record_observation`
+- 胜率入库：`pattern_emit_gate.ingest_live_pattern_alert`（扫描侧）；TG 推送：`would_telegram_push` / `telegram_push_allowed_or_record_observation`
 
 ## 已知残余偏差
 
