@@ -1653,6 +1653,7 @@ async function main() {
     cdpAutoGoto: config.cdpAutoGoto,
     cdpVisibilityKeepalive: config.cdpVisibilityKeepalive,
     cdpSilentNavigation: config.cdpSilentNavigation,
+    cdpMaxBrowserTabs: config.cdpMaxBrowserTabs,
     networkTrace: config.collectNetworkTrace,
     wsFrameTrace: config.collectWsFrameTrace,
     diagnosticSink,

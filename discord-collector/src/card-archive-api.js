@@ -100,6 +100,7 @@ export function normalizeOpenCardInput(body) {
   const signalAt = b.signalAt ?? b.time ?? b.createdAt ?? b["时间"] ?? null;
   const authorKey = String(b.authorKey ?? b.author_key ?? b.sender ?? b.authorId ?? b.author_id ?? "").trim();
   const sender = String(b.sender ?? "").trim();
+  const externalId = String(b.id ?? "").trim();
   const prevParsed =
     b.parsedJson && typeof b.parsedJson === "object" && !Array.isArray(b.parsedJson)
       ? /** @type {Record<string, unknown>} */ (b.parsedJson)
@@ -112,11 +113,12 @@ export function normalizeOpenCardInput(body) {
         : undefined;
 
   return {
+    externalId: externalId || undefined,
     messageId: b.messageId,
     channelId,
     guildId: b.guildId,
     sourceType: normalizeCardSourceType(b.source ?? b.sourceType ?? "api"),
-    sourceRef: b.sourceRef ?? b.externalId,
+    sourceRef: b.sourceRef ?? b.externalId ?? (externalId || undefined),
     rawContent,
     channelName: channelName || undefined,
     channelAvatar: channelAvatar || undefined,
@@ -739,6 +741,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
         input.rawContent
       );
       const card = await archiveService.archiveCard({
+        externalId: input.externalId,
         messageId: input.messageId,
         channelId: input.channelId,
         guildId: input.guildId,
@@ -770,6 +773,17 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
             sourceRef: input.sourceRef ? String(input.sourceRef) : "",
           }),
         );
+      }
+      if (card?.skipped) {
+        const { skipped, skipReason, ...pure } = card;
+        void skipped;
+        return res.status(200).json({
+          ok: true,
+          skipped: true,
+          reason: skipReason ?? "duplicate_id",
+          card: pure,
+          channelMessage: null,
+        });
       }
       listCache.onClientCardChanged(card);
       res.status(201).json({

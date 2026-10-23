@@ -154,16 +154,20 @@ curl -s -X POST "http://127.0.0.1:3851/api/v1/cards" \
     "targets": ["98000", "100000"],
     "stopLoss": "92000",
     "signalAt": "2026-08-21T10:00:00.000Z",
-    "note": "外部推送"
+    "note": "外部推送",
+    "id": "ext-signal-001"
   }'
 ```
 
 成功：`201` → `{ "ok": true, "card": { ... }, "channelMessage": null }`
 
+重复 `id`（与已有卡片的 `source` + `id` 相同）：`200` → `{ "ok": true, "skipped": true, "reason": "duplicate_id", "card": { ... } }`（不更新、不重复推 TG/OI）
+
 ### 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
+| `id` | string | **外部唯一 id**；同 `source` 下再次 POST 相同 `id` 时忽略（返回已有 `card`） |
 | `channelId` | string | 频道 id（默认 `api`） |
 | `channelName` | string | 频道名称 |
 | `channelAvatar` | string | 频道头像 URL |

@@ -368,6 +368,18 @@ export function shouldPushArchivedCardToTelegram(sourceType) {
   return platform === "telegram" || platform === "api";
 }
 
+/** 开放 API `id` → 稳定 message_id（表 uk；同 id 重复 POST 直接忽略） */
+export function externalCardMessageId(sourceType, externalId) {
+  const t = String(sourceType ?? "api").trim() || "api";
+  const id = String(externalId ?? "").trim();
+  if (!id) return "";
+  const prefix = `${t}:ext:`;
+  const room = 64 - prefix.length;
+  if (room < 8) return `${prefix}${signalTextHash(id).slice(0, 8)}`;
+  if (id.length <= room) return prefix + id;
+  return `${prefix}${signalTextHash(id).slice(0, room)}`;
+}
+
 /**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
@@ -901,6 +913,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
    *   channelName?: string,
    *   channelAvatar?: string,
    *   images?: string[],
+   *   externalId?: string,
    * }} input
    */
   async function archiveCard(input) {
@@ -909,6 +922,19 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       throw new Error(`invalid sourceType: ${sourceType}`);
     }
     const sourceProject = resolveSourceProject(sourceType);
+    const externalId = String(input.externalId ?? "").trim();
+
+    if (externalId && store.getSignalCardByMessageId) {
+      const stableMid = externalCardMessageId(sourceType, externalId);
+      const existing = await store.getSignalCardByMessageId(stableMid);
+      if (existing) {
+        const clientCard = archiveCardToClient(existing);
+        log.info(
+          `开放建卡跳过重复 id=${externalId} source=${sourceType} → #${clientCard.id ?? "?"}`
+        );
+        return Object.assign(clientCard, { skipped: true, skipReason: "duplicate_id" });
+      }
+    }
 
     const execution = normalizeExecution(input.execution ?? input.executionJson ?? input, input.parsedJson);
     const symbol = normalizeSymbol(input.symbol ?? execution.symbol ?? extractSymbolFromPayload(input.parsedJson, execution));
@@ -940,6 +966,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       ...(channelNameIn ? { channelName: channelNameIn } : {}),
       ...(channelAvatarIn ? { channelAvatar: channelAvatarIn } : {}),
       ...(imagesIn.length ? { images: imagesIn } : {}),
+      ...(externalId ? { externalId } : {}),
     };
 
     const cardFields =
@@ -951,9 +978,10 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
             note: input.note,
           });
 
-    const messageId =
-      String(input.messageId ?? "").trim() ||
-      `${sourceType}-${input.sourceRef || Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const messageId = externalId
+      ? externalCardMessageId(sourceType, externalId)
+      : String(input.messageId ?? "").trim() ||
+        `${sourceType}-${input.sourceRef || Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
     const channelId = String(input.channelId ?? input.sourceRef ?? sourceType).trim() || sourceType;
     const textHash = signalTextHash(rawContent || JSON.stringify(cardFields));

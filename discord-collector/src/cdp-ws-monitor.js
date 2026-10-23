@@ -557,6 +557,54 @@ function hasLiveDiscordMountedPage(mounted) {
   return false;
 }
 
+/** @param {import('playwright').Browser} br @param {{ page?: import('playwright').Page }[]} [mounted] */
+function pickLastDiscordPage(br, mounted = []) {
+  /** @type {import('playwright').Page | null} */
+  let last = null;
+  const consider = (/** @type {import('playwright').Page} */ page) => {
+    if (!page || page.isClosed()) return;
+    try {
+      if (isDiscordPageUrl(page.url())) last = page;
+    } catch {
+      /* ignore */
+    }
+  };
+  for (const entry of mounted) {
+    if (entry?.page) consider(entry.page);
+  }
+  try {
+    for (const ctx of br.contexts()) {
+      for (const page of ctx.pages()) consider(page);
+    }
+  } catch {
+    /* disconnected */
+  }
+  return last;
+}
+
+/** @param {import('playwright').Browser} br */
+function pickLastBrowserPage(br) {
+  /** @type {import('playwright').Page | null} */
+  let last = null;
+  try {
+    for (const ctx of br.contexts()) {
+      for (const page of ctx.pages()) {
+        if (!page.isClosed()) last = page;
+      }
+    }
+  } catch {
+    /* disconnected */
+  }
+  return last;
+}
+
+/** @param {number | undefined} raw */
+function resolveCdpMaxBrowserTabs(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 10;
+  return Math.min(50, Math.max(1, Math.floor(n)));
+}
+
 /** Document / API / WS 升级请求，便于判断页面是否真的在拉接口 */
 const NET_TRACE_RESOURCE_TYPES = new Set([
   "Document",
@@ -1277,7 +1325,8 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  * - **无头模式**（未设置 `cdpConnectUrl`）：Playwright 自启 Chromium，`goto(startUrl)`，可选定时 reload。
  * - **附加模式**（设置 `CDP_CONNECT_URL`）：`connectOverCDP` 连接你已打开的 Chrome（需带 `--remote-debugging-port`），
  *   对已有标签页 + 之后新开的标签页挂载 Network 监听；保活/切频道优先复用 discord.com 标签，
- *   若尚无任何 discord.com 页且 COLLECTOR_CDP_AUTO_GOTO≠0，则在同一 Context 内 newPage 打开 1 个。
+ *   若尚无任何 discord.com 页且 COLLECTOR_CDP_AUTO_GOTO≠0，则在同一 Context 内 newPage 打开 1 个；
+ *   标签数已达 cdpMaxBrowserTabs（默认 10）时只在最后一页刷新，不再 newPage。
  *
  * @param {{
  *   startUrl: string,
@@ -1287,6 +1336,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  *   cdpAutoGoto?: boolean,
  *   cdpVisibilityKeepalive?: boolean,
  *   cdpSilentNavigation?: boolean,
+ *   cdpMaxBrowserTabs?: number,
  *   networkTrace?: boolean,
  *   wsFrameTrace?: boolean,
  *   diagnosticSink?: (evt: Record<string, unknown>) => void,
@@ -1375,6 +1425,13 @@ export async function startCdpWebSocketMonitor(opts, log) {
     if (!url || !/discord\.com/i.test(url)) {
       throw new Error("targetUrl 须为 discord.com 频道链接");
     }
+    const maxTabs = resolveCdpMaxBrowserTabs(opts.cdpMaxBrowserTabs);
+    const tabCount = countBrowserPages(br);
+    if (tabCount >= maxTabs) {
+      throw new Error(
+        `CDP 标签已达 ${tabCount} 个（上限 ${maxTabs}），禁止新建（请用末页刷新）`
+      );
+    }
     const contexts = br.contexts();
     if (!contexts.length) {
       throw new Error("CDP 浏览器无可用 Context，无法新建 Discord 标签");
@@ -1439,6 +1496,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
       let reusedTab = true;
 
       if (!picked) {
+        const maxTabs = resolveCdpMaxBrowserTabs(opts.cdpMaxBrowserTabs);
         const tabCount = countBrowserPages(br);
         const tabs = summarizeBrowserTabsForLog(br, mounted);
         const autoGoto = opts.cdpAutoGoto !== false;
@@ -1448,13 +1506,42 @@ export async function startCdpWebSocketMonitor(opts, log) {
           log.warn(`CDP ${msg}`);
           throw new Error(msg);
         }
-        if (discordTabCount > 0) {
+        if (tabCount >= maxTabs) {
+          const fallback = pickLastDiscordPage(br, mounted) ?? pickLastBrowserPage(br);
+          if (!fallback) {
+            const msg = `CDP 标签 ${tabCount} 个已达上限 ${maxTabs}，且无可用页可刷新（${tabs}）`;
+            log.warn(msg);
+            throw new Error(msg);
+          }
+          let fallbackUrl = "";
+          try {
+            fallbackUrl = fallback.url();
+          } catch {
+            fallbackUrl = "";
+          }
           log.warn(
-            `CDP 未找到可操作的 Discord 标签，但可见 ${discordTabCount} 个 discord.com 页（可能已关或 Playwright 未映射；Chrome ${tabCount} 个标签；${tabs}）— 将新建 1 个标签恢复采集`
+            `CDP 标签 ${tabCount} 个已达上限 ${maxTabs}，在最后一页刷新 ${shortenUrl(fallbackUrl, 120)} → ${shortenUrl(url, 120)}（不再新开标签）`
           );
+          opts.diagnosticSink?.({
+            kind: "cdp_tab_cap_refresh",
+            tabCount,
+            maxTabs,
+            fallbackUrl,
+            targetUrl: url,
+          });
+          page = fallback;
+          await attachToPage(page);
+          reusedTab = true;
+          navOpts = { ...navOpts, forceReload: true };
+        } else {
+          if (discordTabCount > 0) {
+            log.warn(
+              `CDP 未找到可操作的 Discord 标签，但可见 ${discordTabCount} 个 discord.com 页（可能已关或 Playwright 未映射；Chrome ${tabCount} 个标签；${tabs}）— 将新建 1 个标签恢复采集`
+            );
+          }
+          page = await openNewDiscordTab(br, url);
+          reusedTab = false;
         }
-        page = await openNewDiscordTab(br, url);
-        reusedTab = false;
       } else {
         page = picked.page;
         await attachToPage(page);
