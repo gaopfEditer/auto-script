@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MercuHeader } from "../components/MercuHeader";
+import { TelegramBackfillTab } from "./TelegramBackfillTab";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useSpecialFocus } from "../hooks/useSpecialFocus";
 import { displaySymbol } from "../utils/symbol";
@@ -475,6 +476,7 @@ export function BacktestPage() {
   const { symbols: focusSymbols, entries: focusEntries, remove: removeFocus } = useSpecialFocus();
   const initSaved = useMemo(() => loadSavedPrefs(), []);
   const initDates = useMemo(() => defaultDateLocals(), []);
+  const [localTab, setLocalTab] = useState<"structure" | "telegram">("structure");
 
   const [kindOptions, setKindOptions] = useState<KindOption[]>([]);
   const [intervals, setIntervals] = useState<string[]>(
@@ -1165,6 +1167,25 @@ export function BacktestPage() {
         focusEntries={focusEntries}
         onRemoveFocus={(sym) => void removeFocus(sym)}
       />
+      <nav className="bt-local-tabs" aria-label="本地回测视图">
+        <button
+          type="button"
+          className={`bt-local-tab${localTab === "structure" ? " on" : ""}`}
+          onClick={() => setLocalTab("structure")}
+        >
+          结构回测
+        </button>
+        <button
+          type="button"
+          className={`bt-local-tab${localTab === "telegram" ? " on" : ""}`}
+          onClick={() => setLocalTab("telegram")}
+        >
+          Telegram 回溯
+        </button>
+      </nav>
+      {localTab === "telegram" ? (
+        <TelegramBackfillTab />
+      ) : (
       <div className="bt-page">
         <aside className="bt-sidebar">
           <h1 className="bt-title">结构形态回测</h1>
@@ -1938,6 +1959,7 @@ export function BacktestPage() {
           </section>
         </main>
       </div>
+      )}
     </div>
   );
 }

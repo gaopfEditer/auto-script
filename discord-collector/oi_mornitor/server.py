@@ -634,6 +634,63 @@ async def handle_pattern_alert_ticker_post(request: web.Request) -> web.Response
     return _json_response({"ok": True, "items": items})
 
 
+async def handle_telegram_backfill_options(_request: web.Request) -> web.Response:
+    from oi_mornitor.telegram_backfill import backfill_options
+
+    return _json_response(backfill_options())
+
+
+async def handle_telegram_backfill_start(request: web.Request) -> web.Response:
+    from oi_mornitor.telegram_backfill import job_to_dict, start_telegram_backfill
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        job = await start_telegram_backfill(body)
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Telegram 回溯启动失败")
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response({"ok": True, **job_to_dict(job, page=1, page_size=100)})
+
+
+async def handle_telegram_backfill_get(request: web.Request) -> web.Response:
+    from oi_mornitor.telegram_backfill import get_backfill_job, job_to_dict
+
+    job_id = str(request.match_info.get("job_id") or "").strip()
+    if not job_id:
+        return _json_response({"ok": False, "error": "missing job_id"}, status=400)
+    job = get_backfill_job(job_id)
+    if job is None:
+        return _json_response({"ok": False, "error": "job not found"}, status=404)
+    q = request.query
+    page = int(q.get("page") or "1") if str(q.get("page") or "1").isdigit() else 1
+    page_size = int(q.get("pageSize") or "100") if str(q.get("pageSize") or "100").isdigit() else 100
+    return _json_response({"ok": True, **job_to_dict(job, page=page, page_size=page_size)})
+
+
+async def handle_telegram_backfill_latest(_request: web.Request) -> web.Response:
+    from oi_mornitor.telegram_backfill import get_latest_backfill_job, job_to_dict
+
+    job = get_latest_backfill_job()
+    if job is None:
+        return _json_response({"ok": True, "job": None})
+    return _json_response({"ok": True, "job": job_to_dict(job, page=1, page_size=100)})
+
+
+async def handle_telegram_backfill_jobs(request: web.Request) -> web.Response:
+    from oi_mornitor.telegram_backfill import list_backfill_jobs
+
+    q = request.query
+    limit = int(q.get("limit") or "20") if str(q.get("limit") or "20").isdigit() else 20
+    return _json_response({"ok": True, "jobs": list_backfill_jobs(limit)})
+
+
 async def handle_telegram_push_toggles_get(_request: web.Request) -> web.Response:
     from oi_mornitor.telegram_push_toggles import get_telegram_push_toggles
 
@@ -1227,6 +1284,12 @@ def create_app() -> web.Application:
     app.router.add_get("/api/pattern-alert-ticker", handle_pattern_alert_ticker_get)
     app.router.add_post("/api/pattern-alert-ticker", handle_pattern_alert_ticker_post)
     app.router.add_put("/api/pattern-alert-ticker", handle_pattern_alert_ticker_post)
+
+    app.router.add_get("/api/telegram-backfill/options", handle_telegram_backfill_options)
+    app.router.add_post("/api/telegram-backfill", handle_telegram_backfill_start)
+    app.router.add_get("/api/telegram-backfill/latest", handle_telegram_backfill_latest)
+    app.router.add_get("/api/telegram-backfill/jobs", handle_telegram_backfill_jobs)
+    app.router.add_get("/api/telegram-backfill/{job_id}", handle_telegram_backfill_get)
 
     app.router.add_get("/api/telegram-push-toggles", handle_telegram_push_toggles_get)
     app.router.add_post("/api/telegram-push-toggles", handle_telegram_push_toggles_post)
