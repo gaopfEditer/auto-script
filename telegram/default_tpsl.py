@@ -1,4 +1,4 @@
-"""Telegram 信号缺止盈/止损时：默认 ±5% 止损 + 5%/8%/12% 三档止盈（分批 30/30/40）。"""
+"""Telegram 信号缺止盈/止损时：默认 5% 止损 + 10% 止盈（可通过环境变量覆盖比例）。"""
 from __future__ import annotations
 
 import re
@@ -7,9 +7,12 @@ from typing import Any
 
 from trade_signal_detect import TradeSignal, _has_numeric_price
 
-DEFAULT_SL_PCT = 0.05
-DEFAULT_TP_PCTS = (0.05, 0.08, 0.12)
-DEFAULT_TP_SIZE_PCTS = (30, 30, 40)
+import os
+
+DEFAULT_SL_PCT = float(os.environ.get("POST_CARD_DEFAULT_SL_PCT", os.environ.get("TELEGRAM_DEFAULT_SL_PCT", "0.05")))
+_DEFAULT_TP_RAW = os.environ.get("POST_CARD_DEFAULT_TP_PCT", os.environ.get("TELEGRAM_DEFAULT_TP_PCT", "0.10"))
+DEFAULT_TP_PCTS = (float(_DEFAULT_TP_RAW),)
+DEFAULT_TP_SIZE_PCTS = (100,)
 DEFAULT_SL_TRAIL = ("entry", "tp1")
 
 
@@ -83,7 +86,7 @@ def build_default_exit_plan() -> dict[str, Any]:
 
 def apply_default_tpsl_if_needed(sig: TradeSignal) -> tuple[TradeSignal, bool, dict[str, Any] | None]:
     """
-    缺数值化止盈或止损时，按 5% SL + 5/8/12% 三档 TP 补全。
+    缺数值化止盈或止损时，按 5% SL + 10% TP（单档）补全。
     返回 (signal, changed, exit_plan)。
     """
     if sig.direction not in ("多", "空"):

@@ -97,7 +97,7 @@ def signal_to_card_payload(
     body = strip_promotional_lines(refined_raw or formatted)
     note_parts = []
     if defaulted:
-        note_parts.append("默认TP/SL(5/8/12%+5%止损·30/30/40)")
+        note_parts.append("默认TP/SL(10%止盈+5%止损)")
     if sig.is_prom:
         note_parts.append("#prom")
     if sig.note:
