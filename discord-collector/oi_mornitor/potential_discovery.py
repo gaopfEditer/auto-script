@@ -25,8 +25,8 @@ MODEL_CATALOG: list[dict[str, Any]] = [
         }
     )
     for mid, _s in [
-        ("quiet_oi_breakout", "小市值 · OI 长期偏低后抬升 · 波动收敛 · 量配合"),
-        ("short_squeeze", "费率深度为负 · OI 增价抗跌 · 可选现货溢价"),
+        ("quiet_oi_breakout", "长期缩量沉寂 · 突发放量 · 多根量能延续（主路径）"),
+        ("short_squeeze", "OI 增 + 价抗跌突破（费率仅诊断，默认关闭）"),
         ("relative_strength", "BTC 弱时抗跌 · 企稳后率先突破"),
         ("wyckoff_spring", "箱体震荡 · Spring 假破收回 · 缩量测试"),
         ("liquidity_sweep", "EH/EL 流动性池 · SFP 插针收回"),
