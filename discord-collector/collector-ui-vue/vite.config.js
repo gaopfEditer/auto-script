@@ -106,6 +106,14 @@ export default defineConfig(({ mode }) => {
         allow: [collectorRoot, path.resolve(collectorRoot, "..")],
       },
       proxy: {
+        "/news-embed": {
+          target: (env.NEWS_WEB_BASE_URL || "http://127.0.0.1:8770").replace(/\/$/, ""),
+          changeOrigin: true,
+        },
+        "/api/ai-judge": {
+          target: (env.OI_WEB_BASE_URL || "http://127.0.0.1:8765").replace(/\/$/, ""),
+          changeOrigin: true,
+        },
         "/api": { target: apiTarget, changeOrigin: true },
         "/community-avatars": { target: apiTarget, changeOrigin: true },
         "/telegram-avatars": { target: apiTarget, changeOrigin: true },

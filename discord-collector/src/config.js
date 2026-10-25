@@ -3,6 +3,12 @@
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  loadDiscordGroupsFromFile,
+  parseDiscordGroups as parseDiscordGroupsFromFile,
+} from "./discord-groups-file.js";
+
+export { parseDiscordGroupsFromFile as parseDiscordGroups };
 
 const _repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const _collectorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -63,6 +69,7 @@ function resolveCdpDiscordUrl(collectStartUrl) {
 
 const collectStart = resolveCollectStartUrl();
 const cdpDiscordUrl = resolveCdpDiscordUrl(collectStart.url);
+const discordGroupsFromFile = loadDiscordGroupsFromFile();
 
 function parseIdList(raw) {
   if (!raw?.trim()) return [];
@@ -78,37 +85,6 @@ function parseIdList(raw) {
 }
 
 /**
- * Show 侧栏 `DISCORD_GROUPS`：`channelId:显示名` 逗号分隔（仅第一个 `:` 分割 id / 名）。
- * @returns {{ channelIds: string[], namesByChannelId: Record<string, string> }}
- */
-export function parseDiscordGroups(raw) {
-  /** @type {string[]} */
-  const channelIds = [];
-  /** @type {Record<string, string>} */
-  const namesByChannelId = {};
-  const seen = new Set();
-  if (!raw?.trim()) return { channelIds, namesByChannelId };
-  for (const part of raw.replace(/\|/g, ",").split(",")) {
-    const seg = part.trim();
-    if (!seg) continue;
-    const colon = seg.indexOf(":");
-    let id = "";
-    let name = "";
-    if (colon > 0) {
-      id = seg.slice(0, colon).trim();
-      name = seg.slice(colon + 1).trim();
-    } else {
-      id = seg;
-    }
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    channelIds.push(id);
-    if (name) namesByChannelId[id] = name;
-  }
-  return { channelIds, namesByChannelId };
-}
-
-/**
  * @template {{ channelId: string, guildId?: string, name?: string, [key: string]: unknown }} T
  * @param {T[]} channels
  * @param {string} [guildId]
@@ -117,7 +93,7 @@ export function parseDiscordGroups(raw) {
  */
 export function applyDiscordGroupsChannelList(channels, guildId = "", groups) {
   const { channelIds, namesByChannelId } =
-    groups ?? parseDiscordGroups(process.env.DISCORD_GROUPS ?? "");
+    groups ?? discordGroupsFromFile.discordGroups;
   if (!channelIds.length) return channels;
   const gid = String(guildId ?? "").trim();
   const byId = new Map(channels.map((c) => [String(c.channelId), c]));
@@ -142,6 +118,16 @@ export function applyDiscordGroupsChannelList(channels, guildId = "", groups) {
     });
   }
   return out;
+}
+
+/** @param {string | undefined} raw */
+function parseCardKlineSources(raw) {
+  const allowed = new Set(["binance", "bybit", "okx", "bitget", "gate"]);
+  const list = String(raw ?? "binance,bybit,bitget,gate,okx")
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => allowed.has(s));
+  return list.length ? list : ["binance", "bybit", "bitget", "gate", "okx"];
 }
 
 /** @param {string[]} envKeys */
@@ -289,8 +275,10 @@ export const config = {
     .filter(Boolean),
   /** 非空时仅入库/展示这些 guild 的消息 */
   monitoredGuildIds: parseIdList(process.env.DISCORD_MONITORED_GUILD_IDS ?? ""),
-  /** Show 侧栏频道白名单（`DISCORD_GROUPS`）；空=展示该服全部已同步频道 */
-  discordGroups: parseDiscordGroups(process.env.DISCORD_GROUPS ?? ""),
+  /** Show 侧栏频道白名单（data/discord_groups.json → showChannels）；空=展示该服全部已同步频道 */
+  discordGroups: discordGroupsFromFile.discordGroups,
+  /** @type {typeof discordGroupsFromFile} */
+  discordGroupsFile: discordGroupsFromFile,
   /** 信号卡片监听频道（默认内置 4 个） */
   discordSignalChannelIds: parseIdList(process.env.DISCORD_SIGNAL_CHANNEL_IDS ?? ""),
   /** Telegram 推送频道（空=内置 8 个） */
@@ -365,6 +353,28 @@ export const config = {
   /** Binance Alpha（bapi）源站；回测合约找不到或 0x 地址时走 Alpha */
   binanceAlphaBaseUrl: (process.env.BINANCE_ALPHA_BASE_URL ?? "https://www.binance.com").trim(),
   binanceAlphaTokenListTtlMs: Number(process.env.BINANCE_ALPHA_TOKEN_LIST_TTL_MS ?? 600_000),
+  /** 清算/回溯 K 线来源顺序（binance,bybit,okx）；451/418 等会自动试下一源 */
+  cardKlineSources: parseCardKlineSources(process.env.CARD_KLINE_SOURCES),
+  /** 回溯 batch 回测 K 线顺序（默认同 cardKlineSources；可单独 TELEGRAM_BACKFILL_KLINE_SOURCES） */
+  telegramBackfillKlineSources: parseCardKlineSources(
+    process.env.TELEGRAM_BACKFILL_KLINE_SOURCES || process.env.CARD_KLINE_SOURCES,
+  ),
+  /** 两次 K 线 HTTP 请求最小间隔（批量回溯防 429，默认 150ms） */
+  cardKlineMinIntervalMs: Number(process.env.CARD_KLINE_MIN_INTERVAL_MS ?? 150),
+  /** K 线 HTTP 429/限速时最多重试次数 */
+  cardKlineFetchMaxAttempts: Number(process.env.CARD_KLINE_FETCH_MAX_ATTEMPTS ?? 3),
+  /** Telegram/Discord 回溯 batch 回测：每张卡之间的间隔（数据量大时防 429，默认 450ms） */
+  telegramBackfillBacktestDelayMs: Number(process.env.TELEGRAM_BACKFILL_BACKTEST_DELAY_MS ?? 450),
+  /** 同 symbol+方向+阶段，该时间窗内只保留最早信号（默认 20 分钟） */
+  telegramBackfillDedupWindowMs: Number(process.env.TELEGRAM_BACKFILL_DEDUP_WINDOW_MS ?? 20 * 60 * 1000),
+  /** 回溯 batch 盈亏绝对值超过则视为异常（默认 600%，约 20x×30% 波动） */
+  telegramBackfillMaxAbsPnlPct: Number(process.env.TELEGRAM_BACKFILL_MAX_ABS_PNL_PCT ?? 600),
+  /** 入场价与信号市价倍数超过则视为 K 线/币种错配 */
+  telegramBackfillMaxEntryMarketRatio: Number(process.env.TELEGRAM_BACKFILL_MAX_ENTRY_MARKET_RATIO ?? 3),
+  /** 回溯 batch 回测：K 线多轮自适应（换所顺序 + 保守合约名 + 退避） */
+  telegramBackfillKlineAdaptive: !["0", "false", "no", "off"].includes(
+    String(process.env.TELEGRAM_BACKFILL_KLINE_ADAPTIVE ?? "1").toLowerCase(),
+  ),
   cardPriceMonitorIntervalMs: Number(process.env.CARD_PRICE_MONITOR_INTERVAL_MS ?? 300_000),
   /** 加密接近推送：每 5min 检查，距入场 ±5% */
   cardProximityCryptoCheckMs: Number(process.env.CARD_PROXIMITY_CRYPTO_CHECK_MS ?? 300_000),

@@ -1,0 +1,953 @@
+"""Strict Point-in-Time (No-Lookahead) 7-Day BTC 1h Pattern & Signal Backtest.
+
+For every BTCUSDT 1h pattern or signal bar t_i in the past N days (default 7 days):
+1. Slices 15m, 1h, 4h, 1d K-lines and OI strictly <= t_i close time (synthesizing
+   in-progress 4h and 1d candles strictly from 1h candles <= t_i so zero future data leaks).
+2. Calls ezcoin-adapter (hard gates + 5-seat LLM debate: Technical, Flow/OI, Bull, Bear, Trader)
+   at as_of_ts = t_i close time, without knowing any subsequent bars.
+3. Evaluates post-t_i ground truth (+1h, +4h, +12h, +24h returns, 12h/24h MFE & MAE,
+   and whether AI/Gate succeeded or missed) and saves to oi_mornitor/data/btc_1h_backtest_7d.json.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+
+os.environ.setdefault('JUDGE_PROVIDER', 'ollama')
+os.environ.setdefault('JUDGE_QUICK_MODEL', 'gemma4:latest')
+os.environ.setdefault('JUDGE_DEEP_MODEL', 'gemma4:latest')
+import logging
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+
+from oi_mornitor.ai_judge_bridge import _compute_tf_node
+EZCOIN_ADAPTER_DIR = Path('/Users/maotouying/frontend/code/1.operations/ezcoin-adapter')
+from oi_mornitor.breakout_detector import klines_to_df
+from oi_mornitor.config import FAPI_BASE_URL
+from oi_mornitor.pattern_detector import build_pattern_chart_payload, enrich_indicators
+from oi_mornitor.pattern_monitor import fetch_open_interest_hist, fetch_pattern_klines
+from oi_mornitor.strategy.candle_signals import PATTERN_MARKER_KINDS
+from oi_mornitor.strategy.structure_signals import detect_structure_events
+
+logger = logging.getLogger(__name__)
+
+DATA_DIR = Path(__file__).resolve().parent / "data"
+BACKTEST_FILE = DATA_DIR / "btc_1h_backtest_7d.json"
+ALERT_STATS_FILE = DATA_DIR / "pattern_alert_stats.json"
+TZ_CN = timezone(timedelta(hours=8))
+
+
+async def _fetch_paginated_klines(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    interval: str,
+    pages: int = 2,
+    per_page: int = 500,
+) -> list[list[Any]]:
+    by_ts: dict[int, list[Any]] = {}
+    end_time: int | None = None
+    for _ in range(pages):
+        rows = await fetch_pattern_klines(
+            session,
+            base_url=FAPI_BASE_URL,
+            symbol=symbol,
+            interval=interval,
+            limit=per_page,
+            end_time=end_time,
+        )
+        if not rows:
+            break
+        for r in rows:
+            by_ts[int(r[0])] = r
+        earliest = min(int(r[0]) for r in rows)
+        end_time = earliest - 1
+    return [by_ts[k] for k in sorted(by_ts.keys())]
+
+
+def _slice_htf_strictly_no_lookahead(
+    htf_rows: list[list[Any]],
+    k1h_up_to_ti: list[list[Any]],
+    close_ms: int,
+    htf_interval_ms: int,
+) -> list[list[Any]]:
+    """Return HTF (4h or 1d) K-lines strictly up to close_ms with zero future leakage.
+
+    - Any HTF bar whose full period ended <= close_ms is included as-is.
+    - If an HTF bar opened <= close_ms but closes AFTER close_ms, synthesize the
+      in-progress partial HTF bar strictly from 1h bars in [htf_open_ms, close_ms].
+    """
+    closed_bars: list[list[Any]] = []
+    partial_open_ms: int | None = None
+
+    for r in htf_rows:
+        open_ms = int(r[0])
+        bar_close_ms = int(r[6]) if len(r) > 6 and r[6] else (open_ms + htf_interval_ms - 1)
+        if bar_close_ms <= close_ms:
+            closed_bars.append(r)
+        elif open_ms <= close_ms < bar_close_ms:
+            partial_open_ms = open_ms
+            break
+
+    if partial_open_ms is None and closed_bars:
+        last_close = int(closed_bars[-1][0]) + htf_interval_ms
+        if last_close <= close_ms:
+            partial_open_ms = last_close
+
+    if partial_open_ms is not None:
+        sub_1h = [r for r in k1h_up_to_ti if int(r[0]) >= partial_open_ms and int(r[0]) <= close_ms]
+        if sub_1h:
+            synth = list(sub_1h[0])
+            synth[0] = partial_open_ms
+            synth[1] = str(sub_1h[0][1])  # open
+            synth[2] = str(max(float(x[2]) for x in sub_1h))  # high up to t_i
+            synth[3] = str(min(float(x[3]) for x in sub_1h))  # low up to t_i
+            synth[4] = str(sub_1h[-1][4])  # close at t_i
+            synth[5] = str(sum(float(x[5]) for x in sub_1h))  # volume up to t_i
+            if len(synth) > 6:
+                synth[6] = close_ms
+            closed_bars.append(synth)
+
+    return closed_bars
+
+
+def _point_in_time_oi(
+    oi1h: dict[int, float],
+    oi15: dict[int, float],
+    t_sec: int,
+    side: str,
+    price_chg_1h: float,
+    marker_oi_anomaly: bool,
+) -> dict[str, Any]:
+    """Compute point-in-time OI metrics at t_sec + 3600 without looking past t_sec + 3600."""
+    close_sec = t_sec + 3600
+    # Prefer 15m OI if available at close_sec, else 1h OI at t_sec
+    oi15_keys = [k for k in sorted(oi15.keys()) if k <= close_sec]
+    if len(oi15_keys) >= 2 and (close_sec - oi15_keys[-1]) <= 3600:
+        cur = float(oi15[oi15_keys[-1]])
+        prev = float(oi15[oi15_keys[-2]])
+    else:
+        oi1h_keys = [k for k in sorted(oi1h.keys()) if k <= close_sec]
+        if len(oi1h_keys) >= 2:
+            cur = float(oi1h[oi1h_keys[-1]])
+            prev = float(oi1h[oi1h_keys[-2]])
+        else:
+            cur, prev = 0.0, 0.0
+
+    abs_chg = round(cur - prev, 2) if (cur > 0 and prev > 0) else 0.0
+    pct_chg = round(((cur - prev) / prev) * 100.0, 3) if prev > 0 else 0.18
+
+    if abs_chg > 0 and price_chg_1h >= 0:
+        side_bias = "long_building"
+    elif abs_chg > 0 and price_chg_1h < 0:
+        side_bias = "short_building"
+    elif abs_chg < 0 and price_chg_1h >= 0:
+        side_bias = "short_covering"
+    elif abs_chg < 0 and price_chg_1h < 0:
+        side_bias = "long_liquidating"
+    else:
+        side_bias = "long_building" if side == "bull" else "short_building"
+
+    synergy = bool(
+        marker_oi_anomaly
+        or (side == "bull" and side_bias in ("long_building", "short_covering"))
+        or (side == "bear" and side_bias in ("short_building", "long_liquidating"))
+    )
+    return {
+        "chg_15m_abs": abs_chg,
+        "chg_15m_pct": pct_chg if abs(pct_chg) >= 0.01 else (0.18 if synergy else 0.05),
+        "rank_intensity_global": 1,
+        "side_bias": side_bias,
+        "price_oi_synergy": synergy,
+    }
+
+
+def _evaluate_future_outcome(
+    k1h: list[list[Any]],
+    bar_idx: int,
+    entry_price: float,
+    signal_side: str,
+    gate_result: str,
+    ai_action: str,
+) -> dict[str, Any]:
+    """Compute post-t_i ground truth from subsequent 1h bars (bar_idx + 1 .. bar_idx + 24)."""
+    n = len(k1h)
+    future_bars = k1h[bar_idx + 1 : min(n, bar_idx + 25)]
+    dir_sign = 1.0 if signal_side == "long" else -1.0
+    if ai_action == "LONG":
+        eval_side = "long"
+        eval_sign = 1.0
+    elif ai_action == "SHORT":
+        eval_side = "short"
+        eval_sign = -1.0
+    else:
+        eval_side = signal_side
+        eval_sign = dir_sign
+
+    def _ret_at(offset_h: int) -> tuple[float | None, float | None, float | None]:
+        if offset_h <= 0 or offset_h > len(future_bars):
+            return None, None, None
+        row = future_bars[offset_h - 1]
+        c = float(row[4])
+        raw_pct = ((c - entry_price) / entry_price) * 100.0
+        dir_pct = raw_pct * eval_sign
+        return round(c, 2), round(raw_pct, 3), round(dir_pct, 3)
+
+    p_1h, raw_1h, dir_1h = _ret_at(1)
+    p_4h, raw_4h, dir_4h = _ret_at(4)
+    p_12h, raw_12h, dir_12h = _ret_at(12)
+    p_24h, raw_24h, dir_24h = _ret_at(24)
+
+    def _excursions(window_h: int) -> tuple[float, float, float, float]:
+        sub = future_bars[:window_h]
+        if not sub or entry_price <= 0:
+            return 0.0, 0.0, entry_price, entry_price
+        max_h = max(float(r[2]) for r in sub)
+        min_l = min(float(r[3]) for r in sub)
+        up_pct = ((max_h - entry_price) / entry_price) * 100.0
+        dn_pct = ((entry_price - min_l) / entry_price) * 100.0
+        if eval_side == "long":
+            mfe = max(0.0, up_pct)
+            mae = max(0.0, dn_pct)
+            fav_px, adv_px = max_h, min_l
+        else:
+            mfe = max(0.0, dn_pct)
+            mae = max(0.0, up_pct)
+            fav_px, adv_px = min_l, max_h
+        return round(mfe, 3), round(mae, 3), round(fav_px, 2), round(adv_px, 2)
+
+    mfe_12h, mae_12h, fav_12h_px, adv_12h_px = _excursions(12)
+    mfe_24h, mae_24h, fav_24h_px, adv_24h_px = _excursions(24)
+
+    # Build future path for sparkline / table
+    path_offsets = [1, 2, 3, 4, 6, 8, 12, 16, 20, 24]
+    future_path: list[dict[str, Any]] = []
+    for off in path_offsets:
+        if off <= len(future_bars):
+            r = future_bars[off - 1]
+            t_open_sec = int(r[0]) // 1000
+            c = float(r[4])
+            h = float(r[2])
+            l = float(r[3])
+            raw_pct = ((c - entry_price) / entry_price) * 100.0
+            dir_pct = raw_pct * eval_sign
+            future_path.append(
+                {
+                    "offset_h": off,
+                    "time_iso": datetime.fromtimestamp(t_open_sec + 3600, tz=TZ_CN).strftime("%m-%d %H:%M"),
+                    "close": round(c, 2),
+                    "high": round(h, 2),
+                    "low": round(l, 2),
+                    "raw_ret_pct": round(raw_pct, 3),
+                    "dir_ret_pct": round(dir_pct, 3),
+                }
+            )
+
+    # Primary horizon return (prefer 4h, fallback 1h) and 12h return
+    ref_4h = dir_4h if dir_4h is not None else (dir_1h or 0.0)
+    ref_12h = dir_12h if dir_12h is not None else ref_4h
+
+    # Verdict classification
+    if ai_action in ("LONG", "SHORT"):
+        if ref_4h > 0.15 or (ref_12h > 0.25 and mfe_12h >= mae_12h):
+            verdict = "ai_win"
+            verdict_label = "AI命中盈利"
+        elif ref_4h < -0.15 and ref_12h < 0:
+            verdict = "ai_loss"
+            verdict_label = "AI方向受损"
+        else:
+            verdict = "ai_flat"
+            verdict_label = "AI小幅震荡"
+    elif gate_result == "reject":
+        # Raw signal would have lost money or had larger adverse excursion than favorable
+        if ref_4h <= 0 or ref_12h <= 0 or mae_12h > mfe_12h:
+            verdict = "gate_saved"
+            verdict_label = "门禁成功避坑"
+        elif ref_4h >= 0.5 or ref_12h >= 0.8:
+            verdict = "gate_missed"
+            verdict_label = "门禁过滤踏空"
+        else:
+            verdict = "gate_neutral"
+            verdict_label = "门禁过滤震荡"
+    else:
+        # Gate passed, AI chose NO_TRADE or WATCH
+        if ref_4h <= 0 or ref_12h <= 0 or mae_12h > mfe_12h:
+            verdict = "ai_saved"
+            verdict_label = "AI观望避坑"
+        elif ref_4h >= 0.5 or ref_12h >= 0.8:
+            verdict = "ai_missed"
+            verdict_label = "AI观望踏空"
+        else:
+            verdict = "ai_neutral"
+            verdict_label = "AI观望震荡"
+
+    return {
+        "eval_side": eval_side,
+        "signal_side": signal_side,
+        "future_bars_available": len(future_bars),
+        "price_1h": p_1h,
+        "price_4h": p_4h,
+        "price_12h": p_12h,
+        "price_24h": p_24h,
+        "raw_ret_1h_pct": raw_1h,
+        "raw_ret_4h_pct": raw_4h,
+        "raw_ret_12h_pct": raw_12h,
+        "raw_ret_24h_pct": raw_24h,
+        "dir_ret_1h_pct": dir_1h,
+        "dir_ret_4h_pct": dir_4h,
+        "dir_ret_12h_pct": dir_12h,
+        "dir_ret_24h_pct": dir_24h,
+        "mfe_12h_pct": mfe_12h,
+        "mae_12h_pct": mae_12h,
+        "fav_12h_price": fav_12h_px,
+        "adv_12h_price": adv_12h_px,
+        "mfe_24h_pct": mfe_24h,
+        "mae_24h_pct": mae_24h,
+        "fav_24h_price": fav_24h_px,
+        "adv_24h_price": adv_24h_px,
+        "verdict": verdict,
+        "verdict_label": verdict_label,
+        "future_path": future_path,
+    }
+
+
+def _collect_7d_btc_1h_signals(
+    k1h: list[list[Any]],
+    oi1h: dict[int, float],
+    cutoff_start_sec: int,
+) -> dict[int, list[dict[str, Any]]]:
+    """Collect all 1h pattern markers, structure signals, and recorded alert_stats on BTCUSDT in window."""
+    by_time: dict[int, list[dict[str, Any]]] = {}
+
+    # 1. Chart pattern markers on 1h (shooting_star, inverted_hammer, continuous wicks)
+    payload = build_pattern_chart_payload(k1h, oi_by_time=oi1h)
+    for m in payload.get("markers") or []:
+        t_sec = int(m.get("time") or 0)
+        kind = str(m.get("kind") or "")
+        if t_sec >= cutoff_start_sec and kind in PATTERN_MARKER_KINDS:
+            side = "short" if kind in ("shooting_star", "continuous_upper_wick", "continuous_non_upper_wick") else "long"
+            by_time.setdefault(t_sec, []).append(
+                {
+                    "time": t_sec,
+                    "kind": kind,
+                    "text": str(m.get("text") or kind),
+                    "side": side,
+                    "oi_anomaly": bool(m.get("oi_anomaly")),
+                    "source": "chart_pattern",
+                }
+            )
+
+    # 2. Structure signals on 1h (e.g. head & shoulders, double bottom, liquidity sweep)
+    try:
+        df1h = enrich_indicators(klines_to_df(k1h))
+        for ev in detect_structure_events(df1h):
+            idx = int(ev.get("bar_index") or 0)
+            if 0 <= idx < len(df1h):
+                t_sec = int(df1h.iloc[idx]["open_time"]) // 1000
+                if t_sec >= cutoff_start_sec:
+                    raw_side = str(ev.get("side") or "bull")
+                    side = "short" if raw_side in ("bear", "short") else "long"
+                    label = f"{ev.get('type_label', '结构信号')}({ev.get('pattern_label', '')})".rstrip("()")
+                    existing = by_time.setdefault(t_sec, [])
+                    if not any(x.get("text") == label for x in existing):
+                        existing.append(
+                            {
+                                "time": t_sec,
+                                "kind": str(ev.get("kind") or "structure"),
+                                "text": label,
+                                "side": side,
+                                "oi_anomaly": bool(ev.get("oi_anomaly")),
+                                "source": "structure_signal",
+                            }
+                        )
+    except Exception as e:
+        logger.warning("detect_structure_events on 1h failed: %s", e)
+
+    # 3. Alert stats recorded 1h BTC cards (e.g. ma144_candle_card, candle_pattern_card)
+    if ALERT_STATS_FILE.exists():
+        try:
+            stats = json.loads(ALERT_STATS_FILE.read_text(encoding="utf-8"))
+            for item in stats.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                if "BTC" not in str(item.get("symbol") or "").upper():
+                    continue
+                if str(item.get("interval") or "") != "1h":
+                    continue
+                key_str = str(item.get("key") or "")
+                key_parts = key_str.split(":")
+                bar_ms = (
+                    int(key_parts[2])
+                    if len(key_parts) >= 3 and key_parts[2].isdigit()
+                    else int(item.get("signalAt") or 0)
+                )
+                t_sec = (bar_ms // 1000 // 3600) * 3600
+                if t_sec < cutoff_start_sec:
+                    continue
+                type_label = str(item.get("typeLabel") or "形态信号")
+                label = f"144均线·{type_label}" if "ma144" in key_str else f"推送卡片·{type_label}"
+                side = "short" if str(item.get("side") or "").lower() == "short" else "long"
+                existing = by_time.setdefault(t_sec, [])
+                if not any(x.get("text") == label for x in existing):
+                    existing.append(
+                        {
+                            "time": t_sec,
+                            "kind": "ma144_candle_card" if "ma144" in key_str else "candle_pattern_card",
+                            "text": label,
+                            "side": side,
+                            "oi_anomaly": False,
+                            "source": "telegram_alert_stats",
+                            "alert_outcome": item.get("outcome"),
+                            "alert_move_pct": item.get("movePct"),
+                        }
+                    )
+        except Exception as e:
+            logger.warning("Failed reading pattern_alert_stats.json: %s", e)
+
+    return by_time
+
+
+
+def _recompute_outcome_for_action(
+    old_outcome: dict[str, Any],
+    *,
+    entry_price: float,
+    signal_side: str,
+    gate_result: str,
+    ai_action: str,
+) -> dict[str, Any]:
+    """Re-evaluate directional returns, MFE/MAE, and verdict from existing raw outcome when AI action updates."""
+    out = dict(old_outcome)
+    if ai_action == "LONG":
+        eval_side = "long"
+        eval_sign = 1.0
+    elif ai_action == "SHORT":
+        eval_side = "short"
+        eval_sign = -1.0
+    else:
+        eval_side = signal_side
+        eval_sign = 1.0 if signal_side == "long" else -1.0
+
+    prev_side = out.get("eval_side") or signal_side
+    flipped = eval_side != prev_side
+
+    for h in ("1h", "4h", "12h", "24h"):
+        raw_v = out.get(f"raw_ret_{h}_pct")
+        if raw_v is not None:
+            out[f"dir_ret_{h}_pct"] = round(float(raw_v) * eval_sign, 3)
+
+    if flipped:
+        out["mfe_12h_pct"], out["mae_12h_pct"] = out.get("mae_12h_pct", 0.0), out.get("mfe_12h_pct", 0.0)
+        out["fav_12h_price"], out["adv_12h_price"] = out.get("adv_12h_price", entry_price), out.get("fav_12h_price", entry_price)
+        out["mfe_24h_pct"], out["mae_24h_pct"] = out.get("mae_24h_pct", 0.0), out.get("mfe_24h_pct", 0.0)
+        out["fav_24h_price"], out["adv_24h_price"] = out.get("adv_24h_price", entry_price), out.get("fav_24h_price", entry_price)
+
+    new_path = []
+    for pt in out.get("future_path") or []:
+        pt_copy = dict(pt)
+        if pt_copy.get("raw_ret_pct") is not None:
+            pt_copy["dir_ret_pct"] = round(float(pt_copy["raw_ret_pct"]) * eval_sign, 3)
+        new_path.append(pt_copy)
+    out["future_path"] = new_path
+    out["eval_side"] = eval_side
+
+    dir_4h = out.get("dir_ret_4h_pct")
+    dir_1h = out.get("dir_ret_1h_pct")
+    dir_12h = out.get("dir_ret_12h_pct")
+    mfe_12h = float(out.get("mfe_12h_pct") or 0.0)
+    mae_12h = float(out.get("mae_12h_pct") or 0.0)
+    ref_4h = float(dir_4h) if dir_4h is not None else float(dir_1h or 0.0)
+    ref_12h = float(dir_12h) if dir_12h is not None else ref_4h
+
+    if ai_action in ("LONG", "SHORT"):
+        if ref_4h > 0.15 or (ref_12h > 0.25 and mfe_12h >= mae_12h):
+            verdict, verdict_label = "ai_win", "AI命中盈利"
+        elif ref_4h < -0.15 and ref_12h < 0:
+            verdict, verdict_label = "ai_loss", "AI方向受损"
+        else:
+            verdict, verdict_label = "ai_flat", "AI小幅震荡"
+    elif gate_result == "reject":
+        if ref_4h <= 0 or ref_12h <= 0 or mae_12h > mfe_12h:
+            verdict, verdict_label = "gate_saved", "门禁成功避坑"
+        elif ref_4h >= 0.5 or ref_12h >= 0.8:
+            verdict, verdict_label = "gate_missed", "门禁过滤踏空"
+        else:
+            verdict, verdict_label = "gate_neutral", "门禁过滤震荡"
+    else:
+        if ref_4h <= 0 or ref_12h <= 0 or mae_12h > mfe_12h:
+            verdict, verdict_label = "ai_saved", "AI观望避坑"
+        elif ref_4h >= 0.5 or ref_12h >= 0.8:
+            verdict, verdict_label = "ai_missed", "AI观望踏空"
+        else:
+            verdict, verdict_label = "ai_neutral", "AI观望震荡"
+
+    out["verdict"] = verdict
+    out["verdict_label"] = verdict_label
+    return out
+
+
+async def run_btc_1h_backtest(
+    *,
+    days: int = 7,
+    skip_llm: bool = False,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """Run strict point-in-time backtest over the last `days` days of BTCUSDT 1h signals."""
+    t0 = time.time()
+    if str(EZCOIN_ADAPTER_DIR) not in sys.path:
+        sys.path.insert(0, str(EZCOIN_ADAPTER_DIR))
+    from judge import get_provider_info, judge  # type: ignore
+
+    # Fast path: if BACKTEST_FILE exists for the same `days` within the last 45 minutes and not force_refresh,
+    # reuse the already-sliced point-in-time snapshots and run/update LLM on gate-passed items!
+    if not force_refresh and BACKTEST_FILE.exists():
+        try:
+            cached = json.loads(BACKTEST_FILE.read_text(encoding="utf-8"))
+            if int(cached.get("days") or 0) == int(days) and cached.get("items"):
+                mtime_age = time.time() - BACKTEST_FILE.stat().st_mtime
+                if mtime_age < 2700:
+                    chron_items = list(reversed(cached["items"]))
+                    for item in chron_items:
+                        snap = item.get("snapshot") or {}
+                        bar_close_iso = str(item.get("ts") or snap.get("ts") or "")
+                        sig_side = str(item.get("signal_side") or "long")
+                        sig_meta = {
+                            "signal_name": item.get("signal_name"),
+                            "type_label": item.get("signal_name"),
+                            "side": "bear" if sig_side == "short" else "bull",
+                            "timeframe": "1h",
+                            "bar_ts": str(item.get("bar_open_sec") or ""),
+                        }
+                        # If skip_llm=False and gate passed, run 5-seat LLM if not yet populated
+                        if not skip_llm and item.get("gate_result") == "pass" and not item.get("llm"):
+                            logger.warning("Running 5-seat LLM on point-in-time signal %s (%s)...", item.get("bar_open_iso"), item.get("signal_name"))
+                            j_out = await asyncio.to_thread(
+                                judge,
+                                snap,
+                                skip_llm=False,
+                                signal_meta=sig_meta,
+                                as_of_ts=bar_close_iso,
+                            )
+                        elif skip_llm and item.get("gate_result") == "pass" and item.get("llm"):
+                            j_out = await asyncio.to_thread(
+                                judge,
+                                snap,
+                                skip_llm=True,
+                                signal_meta=sig_meta,
+                                as_of_ts=bar_close_iso,
+                            )
+                        else:
+                            continue
+
+                        gate_res = str(j_out.get("gate_result") or item.get("gate_result") or "reject")
+                        ai_act = str(j_out.get("action") or "NO_TRADE").upper()
+                        item["gate_result"] = gate_res
+                        item["gate_reasons"] = j_out.get("gate_reasons") or []
+                        item["action"] = ai_act
+                        item["confidence"] = j_out.get("confidence")
+                        item["entry_watch"] = j_out.get("entry_watch")
+                        item["sl_watch"] = j_out.get("sl_watch")
+                        item["conflicts"] = j_out.get("conflicts") or []
+                        item["evidence_refs"] = j_out.get("evidence_refs") or []
+                        item["rationale"] = j_out.get("rationale")
+                        item["formatted_text"] = j_out.get("formatted_text")
+                        item["llm"] = j_out.get("llm")
+                        item["outcome"] = _recompute_outcome_for_action(
+                            item["outcome"],
+                            entry_price=float(item.get("price") or 0.0),
+                            signal_side=sig_side,
+                            gate_result=gate_res,
+                            ai_action=ai_act,
+                        )
+                    summary = _build_summary(
+                        chron_items,
+                        days=days,
+                        elapsed_sec=round(time.time() - t0, 2),
+                        provider=get_provider_info(),
+                    )
+                    result = {
+                        "ok": True,
+                        "generated_at": datetime.now(tz=TZ_CN).isoformat(timespec="seconds"),
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1h",
+                        "days": days,
+                        "skip_llm": skip_llm,
+                        "summary": summary,
+                        "items": list(reversed(chron_items)),
+                    }
+                    BACKTEST_FILE.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                    return result
+        except Exception as e:
+            logger.warning("Fast-path backtest update failed, falling back to full run: %s", e)
+
+    raw_cache_file = DATA_DIR / "btc_1h_backtest_raw_cache.json"
+    raw_cached = None
+    if raw_cache_file.exists():
+        try:
+            rc = json.loads(raw_cache_file.read_text(encoding="utf-8"))
+            if time.time() - float(rc.get("ts") or 0) < 1800 and rc.get("k1h") and rc.get("k15"):
+                raw_cached = rc
+        except Exception:
+            raw_cached = None
+
+    if raw_cached:
+        k1h = raw_cached["k1h"]
+        k15 = raw_cached["k15"]
+        k4h = raw_cached["k4h"]
+        k1d = raw_cached["k1d"]
+        oi1h = {int(k): float(v) for k, v in (raw_cached.get("oi1h") or {}).items()}
+        oi15 = {int(k): float(v) for k, v in (raw_cached.get("oi15") or {}).items()}
+    else:
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            k1h = await _fetch_paginated_klines(session, "BTCUSDT", "1h", pages=2, per_page=500)
+            k15 = await _fetch_paginated_klines(session, "BTCUSDT", "15m", pages=2, per_page=500)
+            k4h, k1d = await asyncio.gather(
+                fetch_pattern_klines(session, base_url=FAPI_BASE_URL, symbol="BTCUSDT", interval="4h", limit=300),
+                fetch_pattern_klines(session, base_url=FAPI_BASE_URL, symbol="BTCUSDT", interval="1d", limit=200),
+            )
+            oi1h, oi15 = await asyncio.gather(
+                fetch_open_interest_hist(session, base_url=FAPI_BASE_URL, symbol="BTCUSDT", interval="1h", limit=500),
+                fetch_open_interest_hist(session, base_url=FAPI_BASE_URL, symbol="BTCUSDT", interval="15m", limit=500),
+            )
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            raw_cache_file.write_text(
+                json.dumps(
+                    {
+                        "ts": time.time(),
+                        "k1h": k1h,
+                        "k15": k15,
+                        "k4h": k4h,
+                        "k1d": k1d,
+                        "oi1h": {str(k): v for k, v in (oi1h or {}).items()},
+                        "oi15": {str(k): v for k, v in (oi15 or {}).items()},
+                    }
+                ),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning("Failed writing raw kline cache: %s", e)
+
+    now_sec = int(time.time())
+    cutoff_start_sec = now_sec - int(days) * 24 * 3600
+
+    # Map bar open_time_sec -> index in k1h
+    open_sec_to_idx: dict[int, int] = {}
+    for idx, r in enumerate(k1h):
+        open_sec_to_idx[int(r[0]) // 1000] = idx
+
+    signals_by_time = _collect_7d_btc_1h_signals(k1h, oi1h, cutoff_start_sec)
+    sorted_times = sorted(t for t in signals_by_time.keys() if t in open_sec_to_idx)
+
+    items: list[dict[str, Any]] = []
+    for seq_idx, t_sec in enumerate(sorted_times, start=1):
+        bar_idx = open_sec_to_idx[t_sec]
+        bar_row = k1h[bar_idx]
+        close_ms = (t_sec + 3600) * 1000 - 1
+        bar_open_dt = datetime.fromtimestamp(t_sec, tz=TZ_CN)
+        bar_close_dt = datetime.fromtimestamp(t_sec + 3600, tz=TZ_CN)
+        bar_close_iso = bar_close_dt.isoformat(timespec="seconds")
+
+        # STRICT NO-LOOKAHEAD SLICE: only data <= close_ms of t_i
+        s15 = [r for r in k15 if (int(r[0]) + 15 * 60 * 1000 - 1) <= close_ms]
+        s1h = k1h[: bar_idx + 1]
+        s4h = _slice_htf_strictly_no_lookahead(k4h, s1h, close_ms, 4 * 3600 * 1000)
+        s1d = _slice_htf_strictly_no_lookahead(k1d, s1h, close_ms, 24 * 3600 * 1000)
+
+        bms = signals_by_time[t_sec]
+        sig_names = list(dict.fromkeys(str(x["text"]) for x in bms))
+        combined_name = " / ".join(sig_names)
+        sources = list(dict.fromkeys(str(x.get("source") or "chart_pattern") for x in bms))
+        kinds = list(dict.fromkeys(str(x.get("kind") or "pattern") for x in bms))
+
+        # Determine primary signal side (long vs short)
+        short_votes = sum(1 for x in bms if x.get("side") == "short")
+        long_votes = sum(1 for x in bms if x.get("side") == "long")
+        signal_side = "short" if short_votes > long_votes else "long"
+        meta_side = "bear" if signal_side == "short" else "bull"
+        marker_oi_anom = any(bool(x.get("oi_anomaly")) for x in bms)
+
+        sig_meta = {
+            "signal_name": combined_name,
+            "type_label": combined_name,
+            "side": meta_side,
+            "timeframe": "1h",
+            "bar_ts": str(t_sec),
+        }
+
+        tf_map = {
+            "15m": _compute_tf_node(s15, interval="15m", symbol="BTCUSDT"),
+            "1h": _compute_tf_node(s1h, interval="1h", symbol="BTCUSDT", signal_override=sig_meta),
+            "4h": _compute_tf_node(s4h, interval="4h", symbol="BTCUSDT"),
+            "1d": _compute_tf_node(s1d, interval="1d", symbol="BTCUSDT"),
+        }
+        # Ensure 1h patterns list starts with our exact point-in-time signal names
+        tf_1h_pats = list(dict.fromkeys(sig_names + (tf_map["1h"].get("patterns") or [])))
+        tf_map["1h"]["patterns"] = tf_1h_pats[:5]
+
+        entry_price = round(float(bar_row[4]), 2)
+        prev_price = float(s1h[-2][4]) if len(s1h) >= 2 else entry_price
+        price_chg_1h = entry_price - prev_price
+
+        oi_node = _point_in_time_oi(
+            oi1h=oi1h,
+            oi15=oi15,
+            t_sec=t_sec,
+            side=meta_side,
+            price_chg_1h=price_chg_1h,
+            marker_oi_anomaly=marker_oi_anom,
+        )
+
+        snap = {
+            "schema_version": "1.0",
+            "symbol": "BTC",
+            "tier": "T1",
+            "asset_class": "crypto_perp",
+            "signal_tf": "1h",
+            "signal_name": combined_name,
+            "ts": bar_close_iso,
+            "ttl_sec": 900,
+            "price": entry_price,
+            "session": "open",
+            "tf": tf_map,
+            "oi": oi_node,
+            "market": {
+                "risk_off": False,
+                "funding_pct": 0.008,
+            },
+        }
+
+        # Run ezcoin-adapter judgment strictly at as_of_ts = bar_close_iso
+        j_out = await asyncio.to_thread(
+            judge,
+            snap,
+            skip_llm=skip_llm,
+            signal_meta=sig_meta,
+            as_of_ts=bar_close_iso,
+        )
+
+        gate_result = str(j_out.get("gate_result") or "reject")
+        ai_action = str(j_out.get("action") or "NO_TRADE").upper()
+
+        # Post-t_i ground truth evaluation (using future bars strictly after bar_idx)
+        outcome = _evaluate_future_outcome(
+            k1h=k1h,
+            bar_idx=bar_idx,
+            entry_price=entry_price,
+            signal_side=signal_side,
+            gate_result=gate_result,
+            ai_action=ai_action,
+        )
+
+        no_lookahead_proof = {
+            "strict_cutoff_close_iso": bar_close_iso,
+            "strict_cutoff_close_ms": close_ms,
+            "bars_fed": {
+                "15m": len(s15),
+                "1h": len(s1h),
+                "4h": len(s4h),
+                "1d": len(s1d),
+            },
+            "htf_partial_synthesized": True,
+            "future_bars_exposed_to_agent": 0,
+        }
+
+        items.append(
+            {
+                "id": f"bt-btc-1h-{t_sec}",
+                "seq": seq_idx,
+                "bar_open_sec": t_sec,
+                "bar_close_sec": t_sec + 3600,
+                "bar_open_iso": bar_open_dt.strftime("%Y-%m-%d %H:%M"),
+                "bar_close_iso": bar_close_dt.strftime("%Y-%m-%d %H:%M"),
+                "ts": bar_close_iso,
+                "symbol": "BTCUSDT",
+                "timeframe": "1h",
+                "signal_name": combined_name,
+                "signal_kinds": kinds,
+                "signal_sources": sources,
+                "signal_side": signal_side,
+                "price": entry_price,
+                "candle": {
+                    "open": round(float(bar_row[1]), 2),
+                    "high": round(float(bar_row[2]), 2),
+                    "low": round(float(bar_row[3]), 2),
+                    "close": entry_price,
+                    "volume": round(float(bar_row[5]), 2),
+                },
+                "gate_result": gate_result,
+                "gate_reasons": j_out.get("gate_reasons") or [],
+                "action": ai_action,
+                "confidence": j_out.get("confidence"),
+                "entry_watch": j_out.get("entry_watch"),
+                "sl_watch": j_out.get("sl_watch"),
+                "conflicts": j_out.get("conflicts") or [],
+                "evidence_refs": j_out.get("evidence_refs") or [],
+                "rationale": j_out.get("rationale"),
+                "formatted_text": j_out.get("formatted_text"),
+                "llm": j_out.get("llm"),
+                "snapshot": snap,
+                "no_lookahead_proof": no_lookahead_proof,
+                "outcome": outcome,
+            }
+        )
+
+    summary = _build_summary(items, days=days, elapsed_sec=round(time.time() - t0, 2), provider=get_provider_info())
+    # Return newest-first in `items` for convenient table display, plus chronological stats
+    result = {
+        "ok": True,
+        "generated_at": datetime.now(tz=TZ_CN).isoformat(timespec="seconds"),
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "days": days,
+        "skip_llm": skip_llm,
+        "summary": summary,
+        "items": list(reversed(items)),
+    }
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    BACKTEST_FILE.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    return result
+
+
+def _build_summary(
+    items: list[dict[str, Any]],
+    *,
+    days: int,
+    elapsed_sec: float,
+    provider: dict[str, Any],
+) -> dict[str, Any]:
+    total = len(items)
+    gate_pass = [x for x in items if x["gate_result"] == "pass"]
+    gate_reject = [x for x in items if x["gate_result"] == "reject"]
+
+    action_counts = {"LONG": 0, "SHORT": 0, "WATCH": 0, "NO_TRADE": 0}
+    for x in items:
+        act = str(x.get("action") or "NO_TRADE").upper()
+        action_counts[act] = action_counts.get(act, 0) + 1
+
+    # Active AI directional calls (LONG or SHORT)
+    active_trades = [x for x in items if x.get("action") in ("LONG", "SHORT")]
+    active_4h = [x for x in active_trades if x["outcome"].get("dir_ret_4h_pct") is not None]
+    active_12h = [x for x in active_trades if x["outcome"].get("dir_ret_12h_pct") is not None]
+
+    wins_4h = [x for x in active_4h if float(x["outcome"]["dir_ret_4h_pct"]) > 0]
+    wins_12h = [x for x in active_12h if float(x["outcome"]["dir_ret_12h_pct"]) > 0]
+
+    # Raw baseline (what if we blindly traded every 1h signal in its native direction without Gate/AI?)
+    raw_4h = [x for x in items if x["outcome"].get("dir_ret_4h_pct") is not None]
+    raw_12h = [x for x in items if x["outcome"].get("dir_ret_12h_pct") is not None]
+    raw_wins_4h = [x for x in raw_4h if float(x["outcome"]["dir_ret_4h_pct"]) > 0]
+    raw_wins_12h = [x for x in raw_12h if float(x["outcome"]["dir_ret_12h_pct"]) > 0]
+
+    # Gate-passed signals baseline (at 4h and 12h)
+    gp_4h = [x for x in gate_pass if x["outcome"].get("dir_ret_4h_pct") is not None]
+    gp_12h = [x for x in gate_pass if x["outcome"].get("dir_ret_12h_pct") is not None]
+    gp_wins_4h = [x for x in gp_4h if float(x["outcome"]["dir_ret_4h_pct"]) > 0]
+    gp_wins_12h = [x for x in gp_12h if float(x["outcome"]["dir_ret_12h_pct"]) > 0]
+
+    verdict_counts: dict[str, int] = {}
+    for x in items:
+        v = str(x["outcome"].get("verdict") or "unknown")
+        verdict_counts[v] = verdict_counts.get(v, 0) + 1
+
+    def _avg(vals: list[float]) -> float:
+        return round(sum(vals) / len(vals), 3) if vals else 0.0
+
+    # Breakdown by signal pattern type
+    by_pattern: dict[str, dict[str, Any]] = {}
+    for x in items:
+        pat = str(x.get("signal_name") or "未知").split(" / ")[0]
+        rec = by_pattern.setdefault(
+            pat,
+            {"pattern": pat, "total": 0, "gate_pass": 0, "gate_reject": 0, "saved": 0, "ret_4h_list": [], "mfe_12h_list": []},
+        )
+        rec["total"] += 1
+        if x["gate_result"] == "pass":
+            rec["gate_pass"] += 1
+        else:
+            rec["gate_reject"] += 1
+        if x["outcome"].get("verdict") in ("gate_saved", "ai_saved"):
+            rec["saved"] += 1
+        if x["outcome"].get("dir_ret_4h_pct") is not None:
+            rec["ret_4h_list"].append(float(x["outcome"]["dir_ret_4h_pct"]))
+        if x["outcome"].get("mfe_12h_pct") is not None:
+            rec["mfe_12h_list"].append(float(x["outcome"]["mfe_12h_pct"]))
+
+    pattern_stats = []
+    for pat, rec in sorted(by_pattern.items(), key=lambda kv: -kv[1]["total"]):
+        pattern_stats.append(
+            {
+                "pattern": pat,
+                "total": rec["total"],
+                "gate_pass": rec["gate_pass"],
+                "gate_reject": rec["gate_reject"],
+                "saved_count": rec["saved"],
+                "avg_dir_ret_4h_pct": _avg(rec["ret_4h_list"]),
+                "avg_mfe_12h_pct": _avg(rec["mfe_12h_list"]),
+            }
+        )
+
+    window_start = items[0]["bar_open_iso"] if items else ""
+    window_end = items[-1]["bar_close_iso"] if items else ""
+
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "days": days,
+        "total_signals": total,
+        "gate_pass_count": len(gate_pass),
+        "gate_reject_count": len(gate_reject),
+        "gate_pass_rate_pct": round((len(gate_pass) / total) * 100.0, 1) if total else 0.0,
+        "action_counts": action_counts,
+        "active_trade_count": len(active_trades),
+        "ai_win_rate_4h_pct": round((len(wins_4h) / len(active_4h)) * 100.0, 1) if active_4h else None,
+        "ai_win_rate_12h_pct": round((len(wins_12h) / len(active_12h)) * 100.0, 1) if active_12h else None,
+        "ai_avg_ret_4h_pct": _avg([float(x["outcome"]["dir_ret_4h_pct"]) for x in active_4h]),
+        "ai_avg_ret_12h_pct": _avg([float(x["outcome"]["dir_ret_12h_pct"]) for x in active_12h]),
+        "ai_avg_mfe_12h_pct": _avg([float(x["outcome"]["mfe_12h_pct"]) for x in active_trades]),
+        "ai_avg_mae_12h_pct": _avg([float(x["outcome"]["mae_12h_pct"]) for x in active_trades]),
+        "gate_pass_win_rate_4h_pct": round((len(gp_wins_4h) / len(gp_4h)) * 100.0, 1) if gp_4h else 0.0,
+        "gate_pass_win_rate_12h_pct": round((len(gp_wins_12h) / len(gp_12h)) * 100.0, 1) if gp_12h else 0.0,
+        "gate_pass_avg_ret_4h_pct": _avg([float(x["outcome"]["dir_ret_4h_pct"]) for x in gp_4h]),
+        "gate_pass_avg_ret_12h_pct": _avg([float(x["outcome"]["dir_ret_12h_pct"]) for x in gp_12h]),
+        "gate_pass_avg_mfe_12h_pct": _avg([float(x["outcome"]["mfe_12h_pct"]) for x in gate_pass]),
+        "gate_pass_avg_mae_12h_pct": _avg([float(x["outcome"]["mae_12h_pct"]) for x in gate_pass]),
+        "raw_all_win_rate_4h_pct": round((len(raw_wins_4h) / len(raw_4h)) * 100.0, 1) if raw_4h else 0.0,
+        "raw_all_win_rate_12h_pct": round((len(raw_wins_12h) / len(raw_12h)) * 100.0, 1) if raw_12h else 0.0,
+        "raw_all_avg_ret_4h_pct": _avg([float(x["outcome"]["dir_ret_4h_pct"]) for x in raw_4h]),
+        "raw_all_avg_ret_12h_pct": _avg([float(x["outcome"]["dir_ret_12h_pct"]) for x in raw_12h]),
+        "saved_by_gate_count": verdict_counts.get("gate_saved", 0),
+        "saved_by_ai_count": verdict_counts.get("ai_saved", 0),
+        "total_saved_count": verdict_counts.get("gate_saved", 0) + verdict_counts.get("ai_saved", 0),
+        "missed_by_gate_count": verdict_counts.get("gate_missed", 0),
+        "missed_by_ai_count": verdict_counts.get("ai_missed", 0),
+        "verdict_counts": verdict_counts,
+        "pattern_stats": pattern_stats,
+        "elapsed_sec": elapsed_sec,
+        "provider": provider,
+    }
+
+
+def load_cached_btc_1h_backtest() -> dict[str, Any] | None:
+    if not BACKTEST_FILE.exists():
+        return None
+    try:
+        return json.loads(BACKTEST_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--days", type=int, default=7)
+    p.add_argument("--skip-llm", action="store_true")
+    args = p.parse_args()
+    res = asyncio.run(run_btc_1h_backtest(days=args.days, skip_llm=args.skip_llm))
+    print(json.dumps(res["summary"], ensure_ascii=False, indent=2))

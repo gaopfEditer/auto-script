@@ -404,7 +404,7 @@ async function runBatchBacktestSelected() {
       `批量回溯：处理 ${j.processed ?? 0}`,
       `跳过 ${j.skipped ?? 0}`,
       `失败 ${j.failed ?? 0}`,
-      "（固定 5% 止损 + 7/10/20% 止盈 · 卡片策略 · 12h 标记 · 直至 TP/SL）",
+      "（M7 分段利润保护止损 + 卡片 TP/SL · 12h 标记 · 直至触线）",
     ].join(" · ");
     await reload();
   } catch (e) {
@@ -610,7 +610,7 @@ onUnmounted(() => {
             <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
           </span>
           <span class="grid-count-rules" data-onboard="cards-rules">
-            清算：100x/20x 杠杆 · 缺 TP/SL 时默认 ±5%。批量回溯：双策略（5% 止损+7/10/20% 止盈 vs 卡片 TP/SL）· 未写入场=信号时市价，限价=触价入场 · 默认每 12h 标记盈亏 · 超过 12h 仍续跑直至 TP/SL
+            清算：100x/20x 杠杆 · 缺 TP/SL 时默认 ±5%。批量回溯：双策略（M≥7% 分段利润保护止损 vs 卡片 TP/SL）· 未写入场=信号时市价，限价=触价入场 · 默认每 12h 标记盈亏 · 超过 12h 仍续跑直至触线
           </span>
         </span>
         <div v-if="canManageCards" class="grid-head-actions">

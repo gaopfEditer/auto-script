@@ -1,5 +1,5 @@
 /**
- * 卡片批量回溯：双策略（固定 5% 止损 + 7/10/20% 止盈 vs 卡片自带 TP/SL）、
+ * 卡片批量回溯：双策略（fixed：M≥7% 分段利润保护止损 + 初始 -5% vs 卡片自带 TP/SL）、
  * 市价/限价入场、默认每 12h 标记盈亏；超过 12h 仍续跑直至触达止盈/止损。
  */
 import { calcLeveragePnl, fetchKlinesForCard } from "./card-price-fetch.js";
@@ -99,7 +99,7 @@ function attachPeriodicSettlements(base, klines, endMs) {
 /**
  * @param {ReturnType<typeof archiveCardToClient>} card
  * @param {Array<{ ts?: number, high: number, low: number, close?: number, open?: number }>} klines
- * @param {{ signalMs: number, profile: BatchBacktestProfileId, endMs?: number }} opts
+ * @param {{ signalMs: number, profile: BatchBacktestProfileId, endMs?: number, forceMarketEntry?: boolean }} opts
  */
 export function evaluateProfileBacktest(card, klines, opts) {
   const signalMs = Number(opts.signalMs);
@@ -108,22 +108,11 @@ export function evaluateProfileBacktest(card, klines, opts) {
     ? Math.min(Number(opts.endMs), signalMs + batchBacktestMaxMs())
     : Math.min(Date.now(), signalMs + batchBacktestMaxMs());
 
-  /** @type {{ tps: number[], sl: number } | undefined} */
-  let fixedLevels;
-  if (profile === BATCH_PROFILES.FIXED) {
-    const ex = normalizeExecution(card.execution);
-    const isShort = String(ex.direction ?? "").toLowerCase().includes("short");
-    const entryProbe = evaluateLiquidation(card, klines, { signalMs, maxEndMs: endMs });
-    const entry = entryProbe.entryPriceUsed ?? entryProbe.marketAtSignal;
-    if (entry != null && Number.isFinite(Number(entry))) {
-      fixedLevels = buildFixed5071020Levels(Number(entry), isShort);
-    }
-  }
-
   const base = evaluateLiquidation(card, klines, {
     signalMs,
     maxEndMs: endMs,
-    fixedLevels,
+    profitProtectionM7: profile === BATCH_PROFILES.FIXED,
+    forceMarketEntry: Boolean(opts.forceMarketEntry),
   });
   const { periodicSettlements } =
     base.outcome === "pending" || base.outcome === "take_profit"
@@ -157,7 +146,7 @@ export function evaluateProfileBacktest(card, klines, opts) {
 
 /**
  * @param {ReturnType<typeof archiveCardToClient>} card
- * @param {{ profiles?: BatchBacktestProfileId[], force?: boolean }} [opts]
+ * @param {{ profiles?: BatchBacktestProfileId[], force?: boolean, forceMarketEntry?: boolean, adaptiveKlines?: boolean }} [opts]
  */
 export async function runCardBatchBacktest(card, opts = {}) {
   const skip = shouldSkipBatchBacktest(card, opts);
@@ -183,7 +172,8 @@ export async function runCardBatchBacktest(card, opts = {}) {
     plan.assetClass,
     signalMs,
     endMs,
-    plan.window?.klineInterval ?? "5m"
+    plan.window?.klineInterval ?? "5m",
+    { adaptiveKlines: opts.adaptiveKlines !== false },
   );
 
   const profiles = (opts.profiles?.length ? opts.profiles : [BATCH_PROFILES.FIXED, BATCH_PROFILES.CARD]).filter(
@@ -193,7 +183,12 @@ export async function runCardBatchBacktest(card, opts = {}) {
   /** @type {Record<string, unknown>} */
   const byProfile = {};
   for (const profile of profiles) {
-    byProfile[profile] = evaluateProfileBacktest(card, klines, { signalMs, profile, endMs });
+    byProfile[profile] = evaluateProfileBacktest(card, klines, {
+      signalMs,
+      profile,
+      endMs,
+      forceMarketEntry: Boolean(opts.forceMarketEntry),
+    });
   }
 
   const primary =

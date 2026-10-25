@@ -1502,6 +1502,70 @@ class PatternMonitorEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态 ticker 落盘失败: %s", exc)
 
+        try:
+            from oi_mornitor.ai_judge_bridge import trigger_btc_signal_auto_judge
+            from oi_mornitor.radar import get_service
+            from oi_mornitor.strategy.tight_sl_15m import (
+                enrich_tight_sl_df,
+                evaluate_bar_15m_tight_sl,
+            )
+
+            svc_ref = get_service()
+            candidates = list(self._last_alerts or []) + list(locals().get("vp_alerts") or [])
+
+            # Also scan dedicated BTC & ETH 15m tight stop-loss resonance on last closed 15m bar
+            now_ms_scan = int(self._last_scan_ts * 1000) if getattr(self, "_last_scan_ts", None) else int(time.time() * 1000)
+            for t_sym in ("BTCUSDT", "ETHUSDT"):
+                kl_15 = (klines_map or {}).get(t_sym)
+                if not kl_15 or len(kl_15) < 32:
+                    continue
+                try:
+                    df_t15 = enrich_tight_sl_df(klines_to_df(kl_15))
+                    # Pick last closed bar (if last row's close_time > now_ms, use -2)
+                    last_close_ms = int(kl_15[-1][6]) if len(kl_15[-1]) > 6 else 0
+                    eval_idx = len(df_t15) - 2 if (last_close_ms > now_ms_scan and len(df_t15) >= 32) else len(df_t15) - 1
+                    ev_15 = evaluate_bar_15m_tight_sl(df_t15, eval_idx, symbol=t_sym)
+                    if ev_15 and ev_15.get("should_enter") and int(ev_15.get("confidence_pct") or 0) >= 75:
+                        candidates.append(
+                            {
+                                "symbol": t_sym,
+                                "interval": "15m",
+                                "kind": "tight_sl_15m",
+                                "type": "tight_sl_15m",
+                                "type_label": f"15m小止损（{ev_15.get('resonance_summary')}）",
+                                "signal_name": f"15m小止损（{ev_15.get('resonance_summary')}）",
+                                "side": "bull" if ev_15.get("side") == "long" else "bear",
+                                "price": ev_15.get("entry"),
+                                "vol_ratio": ev_15.get("vol_ratio"),
+                                "kline_open_time": ev_15.get("bar_open_sec"),
+                                "kline_close_time": ev_15.get("bar_close_sec"),
+                                "tight_sl_strategy": ev_15,
+                            }
+                        )
+                except Exception as inner_e:  # noqa: BLE001
+                    logger.debug("15m小止损扫描 %s 异常: %s", t_sym, inner_e)
+
+            for btc_al in candidates:
+                if not isinstance(btc_al, dict) or btc_al.get("observation_only"):
+                    continue
+                b_sym = str(btc_al.get("symbol") or "").strip().upper()
+                b_iv = str(btc_al.get("interval") or "15m").strip().lower()
+                if b_sym in ("BTCUSDT", "BTC", "ETHUSDT", "ETH") and b_iv in ("15m", "1h", "4h", "1d"):
+                    kind_l = str(btc_al.get("kind") or btc_al.get("type") or "").lower()
+                    # 15m 小止损走量化评分（skip_llm），避免 DeepSeek 401 刷「不做」；其它周期仍可走 LLM
+                    use_skip_llm = ("tight_sl" in kind_l) or (
+                        b_iv == "15m" and isinstance(btc_al.get("tight_sl_strategy"), dict)
+                        and bool((btc_al.get("tight_sl_strategy") or {}).get("matched"))
+                    )
+                    await trigger_btc_signal_auto_judge(
+                        svc_ref,
+                        btc_al,
+                        push_telegram=False,
+                        skip_llm=use_skip_llm,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("BTC/ETH 15m/1h/4h/1d 自动 AI 研判触发异常: %s", exc)
+
         return alerts
 
     async def _scan_candle_oi_combos(

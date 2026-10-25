@@ -2,13 +2,43 @@ import { memo, useCallback, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import type { OiTimeframe } from "../types";
 import type { MatrixRow } from "../types";
-import { fmtMk, fmtPct } from "../utils/format";
+import { fmtMk, fmtPct, fmtStr } from "../utils/format";
 import { patternsPathForSymbol } from "../utils/patternNav";
 import { displaySymbol } from "../utils/symbol";
 import { CoinAvatar } from "./CoinAvatar";
 import { MercuTimeframes } from "./MercuTimeframes";
 
-type ValueMode = "pct" | "mk";
+const TICK_TF_LABELS = ["5m", "15m", "30m", "1h", "4h", "1d"] as const;
+
+function TickMarks({ ticks, side }: { ticks?: number[]; side?: "up" | "down" }) {
+  const vals = Array.isArray(ticks) && ticks.length ? ticks : [0.25, 0.25, 0.25, 0.25, 0.25, 0.25];
+  const title = TICK_TF_LABELS.map((lab, i) => `${lab}:${Number(vals[i] ?? 0).toFixed(2)}`).join(" · ");
+  return (
+    <div className="res-ticks" aria-hidden title={title}>
+      {vals.slice(0, 6).map((t, i) => (
+        <span
+          key={TICK_TF_LABELS[i] ?? i}
+          className={`res-tick ${Number(t) >= 0.35 ? "on" : ""} ${side === "down" ? "down" : side === "up" ? "up" : ""}`}
+          style={{ height: `${Math.max(2, Math.round(Number(t) * 10))}px` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ResDots({ resonance, resonanceLong }: { resonance?: string[]; resonanceLong?: string[] }) {
+  const winDots = [...(resonance || []), ...(resonanceLong || [])].slice(0, 6);
+  if (!winDots.length) return null;
+  return (
+    <span className="res-dots" title={`共振: ${winDots.join(" · ")}`}>
+      {winDots.map((w) => (
+        <i key={w} className="res-dot" data-w={w} />
+      ))}
+    </span>
+  );
+}
+
+type ValueMode = "pct" | "mk" | "str";
 
 interface RankListProps {
   title: string;
@@ -29,6 +59,7 @@ function barValue(row: MatrixRow): number {
 
 function formatValue(v: number, mode: ValueMode): string {
   if (mode === "pct") return fmtPct(v);
+  if (mode === "str") return fmtStr(v);
   return fmtMk(v);
 }
 
@@ -79,7 +110,11 @@ const RankList = memo(function RankList({
               >
                 <span className="rank-badge">{row.matrix_rank}</span>
                 <CoinAvatar symbol={row.symbol} variant="rank" />
-                <span className="rank-symbol">${displaySymbol(row.symbol)}</span>
+                <div className="rank-sym-cell">
+                  <span className="rank-symbol">${displaySymbol(row.symbol)}</span>
+                  <ResDots resonance={row.resonance} resonanceLong={row.resonanceLong} />
+                </div>
+                <TickMarks ticks={row.ticks} side={row.side ?? (negativeBoard ? "down" : "up")} />
                 <span className={`rank-value ${negativeBoard ? "neg" : "pos"}`}>
                   {formatValue(v, valueMode)}
                 </span>
@@ -180,8 +215,8 @@ export const MarketMatrixGrid = memo(function MarketMatrixGrid({
         <div className="matrix-quadrant-grid">
           <RankList title="持仓增" subtitle={`${timeframe} · 量级`} rows={oi.posMagnitude} valueMode="mk" {...listProps} />
           <RankList title="持仓减" subtitle={`${timeframe} · 量级`} rows={oi.negMagnitude} valueMode="mk" negativeBoard {...listProps} />
-          <RankList title="持仓增" subtitle={`${timeframe} · 强度`} rows={oi.posStrength} valueMode="pct" {...listProps} />
-          <RankList title="持仓减" subtitle={`${timeframe} · 强度`} rows={oi.negStrength} valueMode="pct" negativeBoard {...listProps} />
+          <RankList title="持仓增" subtitle={`${timeframe} · 强度`} rows={oi.posStrength} valueMode="str" {...listProps} />
+          <RankList title="持仓减" subtitle={`${timeframe} · 强度`} rows={oi.negStrength} valueMode="str" negativeBoard {...listProps} />
         </div>
 
         <div className="matrix-quadrant-grid">

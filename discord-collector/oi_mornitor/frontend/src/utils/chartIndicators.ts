@@ -115,12 +115,10 @@ export function buildChartFromCandles(
     });
   }
 
-  const ema: Record<ChartEmaKey, Pt[]> = {
-    e13: [],
-    e33: [],
-    e99: [],
-    e144: [],
-  };
+  const ema = Object.fromEntries(CHART_EMA_LINES.map(({ key }) => [key, [] as Pt[]])) as Record<
+    ChartEmaKey,
+    Pt[]
+  >;
   const emaByPeriod = CHART_EMA_LINES.map(({ key, period }) => ({
     key,
     series: emaSeries(closes, period),

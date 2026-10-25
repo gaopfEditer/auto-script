@@ -4,6 +4,7 @@ import { RadarSSEProvider } from "./hooks/useRadarSSE";
 import { RadarPage } from "./pages/RadarPage";
 import { PatternMonitorPage } from "./pages/PatternMonitorPage";
 import { BacktestPage } from "./pages/BacktestPage";
+import { BtcBacktestPage } from "./pages/BtcBacktestPage";
 import { TrainEntryPage } from "./pages/TrainEntryPage";
 import { TrainReviewPage } from "./pages/TrainReviewPage";
 import { TrainSessionPage } from "./pages/TrainSessionPage";
@@ -15,6 +16,7 @@ const router = createHashRouter(
   [
     { index: true, element: <RadarPage /> },
     { path: "patterns", element: <PatternMonitorPage /> },
+    { path: "btc-backtest", element: <BtcBacktestPage /> },
     { path: "backtest", element: <BacktestPage /> },
     {
       path: "train",

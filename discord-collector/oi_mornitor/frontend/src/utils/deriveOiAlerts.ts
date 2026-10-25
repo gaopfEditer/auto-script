@@ -77,6 +77,34 @@ function windowRank(window: OiAlertWindow): number {
   return window === "15m" ? 2 : 1;
 }
 
+function windowSec(window: OiAlertWindow): number {
+  return window === "5m" ? 300 : 900;
+}
+
+/** 扫描时刻所在 OI/价格测量窗口的结束时间（unix 秒，向下对齐 K 线边界） */
+export function alignOiWindowEndSec(scanSec: number, window: OiAlertWindow): number {
+  if (!Number.isFinite(scanSec) || scanSec <= 0) return 0;
+  const bucket = windowSec(window);
+  return Math.floor(scanSec / bucket) * bucket;
+}
+
+/**
+ * 卡片展示用「信号发生时间」（unix 秒）：
+ * - 优先后端 alert_ts（首次触发时刻，冷却内不变）
+ * - 否则用当前扫描所在 5m/15m 窗口结束时刻，不用「刷新/入库」的 scanTs 原值
+ */
+export function resolveOiAlertSignalTs(
+  row: TickerRow,
+  window: OiAlertWindow,
+  scanTs: number,
+): number {
+  const alertTs = Number(row.alert_ts);
+  if (Number.isFinite(alertTs) && alertTs > 0) return alertTs;
+  const aligned = alignOiWindowEndSec(scanTs, window);
+  if (aligned > 0) return aligned;
+  return scanTs > 0 ? scanTs : 0;
+}
+
 function pricePct(row: TickerRow, window: OiAlertWindow): number {
   if (window === "5m") return Number(row.pct_price_5m) || 0;
   const fromMap = row.price_by_tf?.["15m"]?.pct;
@@ -163,12 +191,7 @@ export function deriveOiAlerts(
       const inTrig = trigWins.includes(w.window);
       const isSuppressed = inRaw && !inTrig;
 
-      const alertTs =
-        Number(row.alert_ts) > 0
-          ? Number(row.alert_ts)
-          : Number(scanTs) > 0
-            ? Number(scanTs)
-            : 0;
+      const alertTs = resolveOiAlertSignalTs(row, w.window, scanTs);
 
       items.push({
         id: `oi-${row.symbol}-${w.window}`,
@@ -200,7 +223,7 @@ export function deriveOiAlerts(
         pct,
         isPump: pct > 0,
         isSuppressed: false,
-        alertTs: Number(scanTs) > 0 ? Number(scanTs) : 0,
+        alertTs: resolveOiAlertSignalTs(row, window, scanTs),
         tags: tagsFor(row, "price", maps),
       });
     }

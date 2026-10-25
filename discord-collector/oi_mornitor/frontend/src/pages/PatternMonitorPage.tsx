@@ -15,6 +15,8 @@ import { CoinAvatar } from "../components/CoinAvatar";
 import { MercuHeader } from "../components/MercuHeader";
 import { PatternChartPanel } from "../components/PatternChartPanel";
 import { PatternAlertTicker } from "../components/PatternAlertTicker";
+import { BtcAiSignalsBanner } from "../components/BtcAiSignalsBanner";
+import { BtcBacktestView } from "../components/BtcBacktestView";
 import { PageBootLoading } from "../components/PageBootLoading";
 import { PotentialDiscoveryPanel } from "../components/PotentialDiscoveryPanel";
 import { CardLifecyclePanel } from "../components/CardLifecyclePanel";
@@ -59,7 +61,7 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
   const [chartTfNonce, setChartTfNonce] = useState(0);
   /** 形态信号列表点开时，在 K 线上标出入场点 */
   const [chartAlertFocus, setChartAlertFocus] = useState<ChartAlertEntryFocus | null>(null);
-  const [mainTab, setMainTab] = useState<"potential" | "alerts">("potential");
+  const [mainTab, setMainTab] = useState<"potential" | "alerts" | "btc_backtest">("potential");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; symbol: string } | null>(null);
   /** 本页是否已做过「进入默认选中」；用户手动关掉图表后不再强选 */
   const didAutoSelectRef = useRef(false);
@@ -598,6 +600,18 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               </button>
               <button
                 type="button"
+                className={`pattern-main-tab${mainTab === "btc_backtest" && !selectedSymbol ? " active" : ""}`}
+                role="tab"
+                aria-selected={mainTab === "btc_backtest" && !selectedSymbol}
+                onClick={() => {
+                  setMainTab("btc_backtest");
+                  setSelectedSymbol(null);
+                }}
+              >
+                📊 多币种AI回测
+              </button>
+              <button
+                type="button"
                 className="pattern-random-btn"
                 onClick={() => setCardLifeOpen(true)}
               >
@@ -622,6 +636,18 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
             </span>
           </div>
 
+          <BtcAiSignalsBanner
+            onOpenBtcChart={(tf) => {
+              setSelectedSymbol("BTCUSDT");
+              setChartPreferredTf(tf);
+              setChartTfNonce((n) => n + 1);
+            }}
+            onOpenBacktest={() => {
+              setSelectedSymbol(null);
+              setMainTab("btc_backtest");
+            }}
+          />
+
           {selectedSymbol ? (
             <PatternChartPanel
               key={selectedSymbol}
@@ -641,6 +667,14 @@ export const PatternMonitorPage = memo(function PatternMonitorPage() {
               inWatchlist={watchSet.has(selectedSymbol.toUpperCase())}
               addWatchBusy={busy}
               onAddToWatchlist={(sym) => void addSymbol(sym)}
+            />
+          ) : mainTab === "btc_backtest" ? (
+            <BtcBacktestView
+              onOpenChartAt={(sym, tf) => {
+                setSelectedSymbol(sym);
+                setChartPreferredTf(tf);
+                setChartTfNonce((n) => n + 1);
+              }}
             />
           ) : mainTab === "potential" ? (
             <PotentialDiscoveryPanel

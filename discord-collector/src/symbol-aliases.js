@@ -7,6 +7,44 @@ const QUOTE_RE = /(?:USDT|USDC|BUSD|USD)$/i;
 /** 较长前缀优先 */
 const MULTIPLIER_PREFIX_RE = /^(1000000|100000|10000|1000|1M)/i;
 
+/** 主流币不做 1000/1M 前缀猜测（Bybit 等会对不存在合约返回 403） */
+const NO_MULTIPLIER_BASES = new Set([
+  "BTC",
+  "ETH",
+  "SOL",
+  "BNB",
+  "XRP",
+  "DOGE",
+  "ADA",
+  "AVAX",
+  "LINK",
+  "DOT",
+  "MATIC",
+  "POL",
+  "LTC",
+  "BCH",
+  "ETC",
+  "TRX",
+  "TON",
+  "NEAR",
+  "FIL",
+  "APT",
+  "ARB",
+  "OP",
+  "SUI",
+  "SEI",
+  "TIA",
+  "INJ",
+  "ATOM",
+  "XLM",
+  "UNI",
+  "AAVE",
+  "MKR",
+  "WBTC",
+  "USDC",
+  "USDT",
+]);
+
 /** @param {string} symbol */
 export function stripQuote(symbol) {
   return String(symbol ?? "")
@@ -35,6 +73,11 @@ export function humanUsdtSymbol(symbol) {
   return base ? `${base}USDT` : "";
 }
 
+/** 主流 U 本位永续：不走 Binance Alpha 兜底 */
+export function isMainstreamFuturesBase(symbol) {
+  return NO_MULTIPLIER_BASES.has(humanBaseAsset(symbol));
+}
+
 /** @param {string} symbol @returns {string} 规范为 *USDT */
 export function toUsdtSymbol(symbol) {
   const s = String(symbol ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -49,17 +92,28 @@ export function toUsdtSymbol(symbol) {
  * 人类名会额外尝试 1000/1M 前缀（KORU → 1000KORUSDT）。
  * @param {string} symbol
  * @param {"binance"|"bybit"|"okx"|"bitget"|"gate"|string} [venue]
+ * @param {{ conservative?: boolean }} [opts]
  */
-export function symbolLookupCandidates(symbol, venue = "binance") {
+export function symbolLookupCandidates(symbol, venue = "binance", opts = {}) {
   const raw = toUsdtSymbol(symbol);
   const human = humanUsdtSymbol(raw);
   const preferHuman = venue === "okx" || venue === "bitget" || venue === "gate";
+  const conservative = Boolean(opts.conservative);
   /** @type {string[]} */
   const multis = [];
   const base = humanBaseAsset(raw);
   const alreadyMulti = MULTIPLIER_PREFIX_RE.test(stripQuote(raw));
-  if (base && !alreadyMulti) {
-    for (const p of ["1000", "10000", "100000", "1000000", "1M"]) {
+  if (base && !alreadyMulti && !NO_MULTIPLIER_BASES.has(base)) {
+    /** OKX/Bitget/Gate 用人类名；Binance/Bybit 不试 1M/1000000（大量 Invalid Symbol） */
+    let prefixes = [];
+    if (!preferHuman) {
+      if (conservative || base.length <= 5) {
+        prefixes = ["1000"];
+      } else {
+        prefixes = ["1000", "10000", "100000"];
+      }
+    }
+    for (const p of prefixes) {
       multis.push(`${p}${base}USDT`);
     }
   }

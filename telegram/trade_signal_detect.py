@@ -153,6 +153,39 @@ _RECAP_PROMO = re.compile(
     re.I,
 )
 _RECAP_TP_HIT = re.compile(r"TP\s*\d?\s*[+＋]\s*\d", re.I)
+_USDT_PAIR_MENTION = re.compile(r"#?([A-Z0-9]{2,12})USDT\b", re.I)
+_MIXED_PROMO_HINT = re.compile(
+    r"VIP|内部群|內部群|涨幅榜|漲幅榜|"
+    r"长期共赢|長期共贏|"
+    r"每单精确|每單精確|从不模糊喊单|從不模糊喊單|"
+    r"193[,.]?\d+\s*%|🚀|💵|📉",
+    re.I,
+)
+
+
+def mentioned_usdt_bases(text: str) -> set[str]:
+    """消息里出现的 *USDT 基础资产（大写），不含稳定币。"""
+    bases: set[str] = set()
+    for m in _USDT_PAIR_MENTION.finditer(_t2s(text or "")):
+        b = str(m.group(1) or "").strip().upper()
+        if b and b not in ("USDT", "USDC", "BUSD", "USD"):
+            bases.add(b)
+    return bases
+
+
+def is_mixed_symbol_promo_message(text: str) -> bool:
+    """一条消息里混多个合约，或营销话术夹带其它币种战绩（回溯应跳过）。"""
+    t = _t2s(strip_promotional_lines(text or ""))
+    if not t.strip():
+        return False
+    bases = mentioned_usdt_bases(t)
+    if len(bases) >= 2:
+        return True
+    if _MIXED_PROMO_HINT.search(t) and (len(bases) >= 1 or bool(_USDT_PAIR_MENTION.search(t))):
+        return True
+    if re.search(r"[+＋]\s*\d+(?:\.\d+)?\s*%", t) and len(bases) >= 1 and not _looks_like_trade_message_inner(t):
+        return True
+    return False
 # 结构化信号行（币种/方向/进场/止盈止损/#prom 等）
 _STRUCTURE_LINE = re.compile(
     r"(?:"
@@ -552,6 +585,8 @@ def is_spam_or_recap_message(text: str) -> bool:
     """营销话术、历史战绩回顾等非开仓消息。"""
     t = _t2s(strip_promotional_lines(text))
     if not t.strip():
+        return True
+    if is_mixed_symbol_promo_message(t):
         return True
     if _RECAP_PROMO.search(t) and not _looks_like_trade_message_inner(t):
         return True

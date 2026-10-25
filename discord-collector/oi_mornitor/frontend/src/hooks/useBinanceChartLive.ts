@@ -45,6 +45,7 @@ export function useBinanceChartLive(
       streamKeyRef.current = streamKey;
       downSinceRef.current = 0;
       didFirstSilentRef.current = false;
+      setMarkPrice(null);
     }
 
     let ws: WebSocket | null = null;
@@ -102,6 +103,9 @@ export function useBinanceChartLive(
           return;
         }
         if (parsed.candle.time > 0) {
+          if (parsed.candle.close > 0) {
+            setMarkPrice(parsed.candle.close);
+          }
           onKlineRef.current?.(parsed);
         }
       };

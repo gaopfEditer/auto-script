@@ -1,8 +1,15 @@
 import type { CapitalBiasItem, MatrixRow, OiTimeframe, RankDomain, TickerRow } from "../types";
-import { getFlowWindow, getOiWindow, getRankMetric, getSpotFlowWindow } from "./timeframe";
+import { getOiWindow, getRankMetric } from "./timeframe";
 import { fmtNum } from "./format";
 
 const TOP = 7;
+
+/** 与 mercu / smart.b 对齐的多周期轴（ticks 一格一期） */
+const TICK_TFS: OiTimeframe[] = ["5m", "15m", "30m", "1h", "4h", "1d"];
+const SHORT_RES: OiTimeframe[] = ["5m", "15m", "30m", "1h", "4h"];
+const LONG_RES: OiTimeframe[] = ["1d"];
+
+type RankMode = "magnitude" | "strength";
 
 function toMatrixRow(
   row: TickerRow,
@@ -11,6 +18,7 @@ function toMatrixRow(
   barScore: number,
   category: string,
   tf: OiTimeframe,
+  extra?: Pick<MatrixRow, "side" | "resonance" | "resonanceLong" | "ticks">,
 ): MatrixRow {
   const win = getOiWindow(row, tf);
   return {
@@ -30,6 +38,10 @@ function toMatrixRow(
     pct_15m: win.pct,
     global_intensity_rank: row.global_intensity_rank,
     global_volume_rank: row.global_volume_rank,
+    side: extra?.side,
+    resonance: extra?.resonance,
+    resonanceLong: extra?.resonanceLong,
+    ticks: extra?.ticks,
   };
 }
 
@@ -45,8 +57,12 @@ function pctFromRate(rate: number): number {
 function displayScore(
   m: ReturnType<typeof getRankMetric>,
   positive: boolean,
-  unit: "pct" | "mk",
+  unit: "pct" | "mk" | "str",
 ): number {
+  if (unit === "str") {
+    const s = Math.abs(m.intensity_score);
+    return positive ? s : -s;
+  }
   if (unit === "pct") return pctFromRate(m.change_rate);
   const abs = Math.abs(m.magnitude_usd);
   return positive ? abs : -abs;
@@ -54,9 +70,88 @@ function displayScore(
 
 function absRankScore(
   m: ReturnType<typeof getRankMetric>,
-  unit: "pct" | "mk",
+  unit: "pct" | "mk" | "str",
 ): number {
+  if (unit === "str") return Math.abs(m.intensity_score);
   return unit === "pct" ? Math.abs(pctFromRate(m.change_rate)) : Math.abs(m.magnitude_usd);
+}
+
+function sameSide(m: ReturnType<typeof getRankMetric>, positive: boolean): boolean {
+  return positive ? m.change_rate > 0 : m.change_rate < 0;
+}
+
+function sortKey(
+  row: TickerRow,
+  tf: OiTimeframe,
+  domain: RankDomain,
+  positive: boolean,
+  mode: RankMode,
+  unit: "pct" | "mk" | "str",
+): number {
+  const m = getRankMetric(row, tf, domain);
+  if (mode === "strength") return Math.abs(m.intensity_score);
+  return absRankScore(m, unit);
+}
+
+/** 各周期同侧 TOP 集合，用于跨周期共振 */
+function buildTopSets(
+  rows: TickerRow[],
+  domain: RankDomain,
+  positive: boolean,
+  mode: RankMode,
+  unit: "pct" | "mk" | "str",
+): Record<OiTimeframe, Set<string>> {
+  const pool = eligible(rows);
+  const out = {} as Record<OiTimeframe, Set<string>>;
+  for (const tf of TICK_TFS) {
+    const picked = pool
+      .filter((r) => sameSide(getRankMetric(r, tf, domain), positive))
+      .sort(
+        (a, b) =>
+          sortKey(b, tf, domain, positive, mode, unit) -
+          sortKey(a, tf, domain, positive, mode, unit),
+      )
+      .slice(0, TOP)
+      .map((r) => r.symbol);
+    out[tf] = new Set(picked);
+  }
+  return out;
+}
+
+function buildTicks(
+  row: TickerRow,
+  domain: RankDomain,
+  positive: boolean,
+  topSets: Record<OiTimeframe, Set<string>>,
+): number[] {
+  return TICK_TFS.map((w) => {
+    const m = getRankMetric(row, w, domain);
+    if (!sameSide(m, positive)) return 0.18;
+    const inTop = topSets[w]?.has(row.symbol);
+    const inten = Number(m.intensity_score) || 0;
+    // intensity 常见 0~100；无强度时用上榜/同侧占位
+    let t = inten > 1 ? inten / 100 : inten > 0 ? inten : inTop ? 0.72 : 0.42;
+    t = Math.max(0.22, Math.min(0.95, t));
+    // 同侧但未进 TOP 时略压暗，仍可 >=0.35 点亮
+    if (!inTop) t = Math.min(t, 0.48);
+    return Number(t.toFixed(2));
+  });
+}
+
+function resonanceFields(
+  row: TickerRow,
+  tf: OiTimeframe,
+  domain: RankDomain,
+  positive: boolean,
+  topSets: Record<OiTimeframe, Set<string>>,
+): Pick<MatrixRow, "side" | "resonance" | "resonanceLong" | "ticks"> {
+  const sym = row.symbol;
+  return {
+    side: positive ? "up" : "down",
+    resonance: SHORT_RES.filter((w) => w !== tf && topSets[w]?.has(sym)),
+    resonanceLong: LONG_RES.filter((w) => w !== tf && topSets[w]?.has(sym)),
+    ticks: buildTicks(row, domain, positive, topSets),
+  };
 }
 
 function deriveMagnitudeList(
@@ -65,13 +160,11 @@ function deriveMagnitudeList(
   domain: RankDomain,
   category: string,
   positive: boolean,
-  unit: "pct" | "mk",
+  unit: "pct" | "mk" | "str",
 ): MatrixRow[] {
+  const topSets = buildTopSets(rows, domain, positive, "magnitude", unit);
   const picked = eligible(rows)
-    .filter((r) => {
-      const m = getRankMetric(r, tf, domain);
-      return positive ? m.change_rate > 0 : m.change_rate < 0;
-    })
+    .filter((r) => sameSide(getRankMetric(r, tf, domain), positive))
     .sort((a, b) => absRankScore(getRankMetric(b, tf, domain), unit) - absRankScore(getRankMetric(a, tf, domain), unit))
     .slice(0, TOP);
 
@@ -79,7 +172,7 @@ function deriveMagnitudeList(
     const m = getRankMetric(r, tf, domain);
     const display = displayScore(m, positive, unit);
     const bar = absRankScore(m, unit);
-    return toMatrixRow(r, i + 1, display, bar, category, tf);
+    return toMatrixRow(r, i + 1, display, bar, category, tf, resonanceFields(r, tf, domain, positive, topSets));
   });
 }
 
@@ -89,32 +182,23 @@ function deriveStrengthList(
   domain: RankDomain,
   category: string,
   positive: boolean,
-  unit: "pct" | "mk",
+  unit: "pct" | "mk" | "str",
 ): MatrixRow[] {
+  const topSets = buildTopSets(rows, domain, positive, "strength", unit);
   const picked = eligible(rows)
-    .filter((r) => {
-      const m = getRankMetric(r, tf, domain);
-      return positive ? m.change_rate > 0 : m.change_rate < 0;
-    })
-    .sort((a, b) => {
-      if (positive) {
-        return (
-          getRankMetric(b, tf, domain).intensity_score -
-          getRankMetric(a, tf, domain).intensity_score
-        );
-      }
-      return (
-        absRankScore(getRankMetric(b, tf, domain), unit) -
-        absRankScore(getRankMetric(a, tf, domain), unit)
-      );
-    })
+    .filter((r) => sameSide(getRankMetric(r, tf, domain), positive))
+    .sort(
+      (a, b) =>
+        Math.abs(getRankMetric(b, tf, domain).intensity_score) -
+        Math.abs(getRankMetric(a, tf, domain).intensity_score),
+    )
     .slice(0, TOP);
 
   return picked.map((r, i) => {
     const m = getRankMetric(r, tf, domain);
     const display = displayScore(m, positive, unit);
-    const bar = positive ? m.intensity_score : absRankScore(m, unit);
-    return toMatrixRow(r, i + 1, display, bar, category, tf);
+    const bar = Math.abs(m.intensity_score) || absRankScore(m, unit);
+    return toMatrixRow(r, i + 1, display, bar, category, tf, resonanceFields(r, tf, domain, positive, topSets));
   });
 }
 
@@ -136,7 +220,7 @@ export function deriveLosersStrength(rows: TickerRow[], tf: OiTimeframe) {
   return deriveStrengthList(rows, tf, "price", "losers_strength", false, "pct");
 }
 
-// ── 持仓（量级 M/K，强度 %）──
+// ── 持仓（量级 M/K，强度 Str，与 smart.b 一致）──
 
 export function deriveOiPumps(rows: TickerRow[], tf: OiTimeframe) {
   return deriveMagnitudeList(rows, tf, "oi", "oi_pumps", true, "mk");
@@ -147,11 +231,11 @@ export function deriveOiDumps(rows: TickerRow[], tf: OiTimeframe) {
 }
 
 export function deriveOiPumpStrength(rows: TickerRow[], tf: OiTimeframe) {
-  return deriveStrengthList(rows, tf, "oi", "oi_pump_strength", true, "pct");
+  return deriveStrengthList(rows, tf, "oi", "oi_pump_strength", true, "str");
 }
 
 export function deriveOiDumpStrength(rows: TickerRow[], tf: OiTimeframe) {
-  return deriveStrengthList(rows, tf, "oi", "oi_dump_strength", false, "pct");
+  return deriveStrengthList(rows, tf, "oi", "oi_dump_strength", false, "str");
 }
 
 // ── 合约流向（M/K）──

@@ -21,6 +21,7 @@ import {
   sessionNeedsExtend,
 } from "../train/extendSession";
 import { canAdvanceTf, candlesForTf, tfVisibleBarIndex } from "../train/multiTf";
+import { confirmLeaveRunningTrain } from "../train/confirmLeave";
 import { clearActiveSessionId, getSession, upsertSession } from "../train/storage";
 import type { Bias, MarketState, SimTrade, TrainDisplayTf, TrainSession } from "../train/types";
 
@@ -258,11 +259,23 @@ export function TrainSessionPage() {
   return (
     <div className="train-session">
       <header className="train-session-head">
-        <div>
-          <strong>{symLabel}</strong>
-          <span className="train-muted">
-            {chartTf} · bar {bar + 1}/{tfCandles.length || session.candles.length}
-          </span>
+        <div className="train-session-head-left">
+          <button
+            type="button"
+            className="ghost train-session-back"
+            onClick={() => {
+              if (!confirmLeaveRunningTrain()) return;
+              nav("/");
+            }}
+          >
+            ← 返回
+          </button>
+          <div>
+            <strong>{symLabel}</strong>
+            <span className="train-muted">
+              {chartTf} · bar {bar + 1}/{tfCandles.length || session.candles.length}
+            </span>
+          </div>
         </div>
         <div className="train-head-actions">
           <Link to="/train?new=1" className="ghost">

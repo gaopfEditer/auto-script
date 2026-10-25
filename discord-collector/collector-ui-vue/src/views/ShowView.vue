@@ -143,7 +143,7 @@ let pendingWsBatchMeta = null;
 
 const selectedGuild = computed(() => guilds.value.find((g) => g.guildId === selectedGuildId.value) ?? null);
 
-/** Show 侧栏白名单（`DISCORD_GROUPS`）；由 collect:ui 下发 */
+/** Show 侧栏白名单（data/discord_groups.json → showChannels）；由 collect:ui 下发 */
 const showGroupsFilterEnabled = ref(false);
 const showGroupsChannelIds = ref(/** @type {string[]} */ ([]));
 const showGroupsNames = reactive(/** @type {Record<string, string>} */ ({}));

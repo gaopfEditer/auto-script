@@ -22,6 +22,72 @@ TOP_N = int(os.environ.get("BINANCE_LEADERBOARD_TOP", "12"))
 REFRESH_SEC = int(os.environ.get("BINANCE_LEADERBOARD_REFRESH_SEC", "900"))
 # 雷达快照兜底：跟 OI 扫描走，不应占用 15min 死缓存
 RADAR_REFRESH_SEC = int(os.environ.get("BINANCE_LEADERBOARD_RADAR_REFRESH_SEC", "45"))
+SMARTB_LEADERBOARD_ENABLED = os.environ.get("SMARTB_LEADERBOARD_ENABLED", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+SMARTB_LEADERBOARD_BASE = (
+    os.environ.get("SMARTB_RADAR_BASE_URL")
+    or os.environ.get("SMARTB_LEADERBOARD_BASE_URL")
+    or "https://smart.b.ezcoin.ink"
+).strip().rstrip("/")
+SMARTB_LEADERBOARD_REFRESH_SEC = int(
+    os.environ.get("SMARTB_LEADERBOARD_REFRESH_SEC")
+    or os.environ.get("SMARTB_RADAR_REFRESH_SEC")
+    or "20"
+)
+
+
+def _tone_from_side(side: str) -> str:
+    return "up" if side == "up" else "down" if side == "down" else "neutral"
+
+
+async def _fetch_boards_from_smartb() -> dict[str, Any]:
+    """用 smart.b 1h 涨跌/热度榜填充顶栏（本机打不通 fapi 时的主路径）。"""
+    timeout = aiohttp.ClientTimeout(total=12)
+    url = f"{SMARTB_LEADERBOARD_BASE}/api/v1/hot-boards?window=1h"
+    async with make_http_session() as session:
+        async with session.get(url, timeout=timeout) as resp:
+            resp.raise_for_status()
+            data = await resp.json(content_type=None)
+    boards_in = {b.get("key"): b for b in (data.get("boards") or []) if isinstance(b, dict)}
+
+    def rows_of(*keys: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for k in keys:
+            b = boards_in.get(k) or {}
+            for i, r in enumerate(b.get("rows") or [], start=1):
+                sym = str(r.get("symbol") or "").upper()
+                if not sym or sym in seen:
+                    continue
+                seen.add(sym)
+                badge = str(r.get("display") or r.get("value") or "")
+                side = str(r.get("side") or "")
+                pair = sym if sym.endswith("USDT") else f"{sym}USDT"
+                out.append(_item(pair, i, badge, _tone_from_side(side)))
+                if len(out) >= TOP_N:
+                    return out
+        return out
+
+    boards = {
+        "gainers": rows_of("gainers_value", "gainers_strength"),
+        "losers": rows_of("losers_value", "losers_strength"),
+        "hot": rows_of("gainers_strength", "oi_up_strength", "perp_in_strength"),
+        "volume": rows_of("perp_in_value", "oi_up_value", "gainers_value"),
+        "contract": rows_of("oi_up_value", "oi_down_value"),
+    }
+    meta = data.get("meta") or {}
+    return {
+        "ok": True,
+        "source": "smartb",
+        "source_label": "smart.b EzRadar",
+        "updated_at": time.time(),
+        "refresh_sec": SMARTB_LEADERBOARD_REFRESH_SEC,
+        "boards": boards,
+        "error": None,
+        "smartb_meta": meta,
+    }
+
 OI_CANDIDATES = int(os.environ.get("BINANCE_LEADERBOARD_OI_CANDIDATES", "24"))
 
 
@@ -368,7 +434,7 @@ class BinanceLeaderboardsCache:
             not force
             and _has_board_data(self._payload)
             and not _is_radar_payload(self._payload)
-            and now - self._ts < REFRESH_SEC
+            and now - self._ts < (SMARTB_LEADERBOARD_REFRESH_SEC if self._payload.get("source") == "smartb" else REFRESH_SEC)
         ):
             return dict(self._payload)
 
@@ -378,7 +444,7 @@ class BinanceLeaderboardsCache:
                 not force
                 and _has_board_data(self._payload)
                 and not _is_radar_payload(self._payload)
-                and now - self._ts < REFRESH_SEC
+                and now - self._ts < (SMARTB_LEADERBOARD_REFRESH_SEC if self._payload.get("source") == "smartb" else REFRESH_SEC)
             ):
                 return dict(self._payload)
 
@@ -394,6 +460,13 @@ class BinanceLeaderboardsCache:
                     return stale
 
             try:
+                if SMARTB_LEADERBOARD_ENABLED:
+                    try:
+                        self._payload = await _fetch_boards_from_smartb()
+                        self._ts = time.time()
+                        return dict(self._payload)
+                    except Exception as sb_exc:  # noqa: BLE001
+                        logger.warning("smart.b 顶栏榜单失败，回退币安/雷达: %s", sb_exc)
                 self._payload = await _fetch_boards()
                 self._ts = time.time()
             except Exception as exc:  # noqa: BLE001

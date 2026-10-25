@@ -84,6 +84,14 @@ export interface MatrixRow {
   pct_15m: number;
   global_intensity_rank: number | null;
   global_volume_rank: number | null;
+  /** 榜单方向：up=涨/流入，down=跌/流出 */
+  side?: "up" | "down";
+  /** 短周期同侧上榜共振（不含当前周期） */
+  resonance?: OiTimeframe[];
+  /** 长周期同侧上榜共振 */
+  resonanceLong?: OiTimeframe[];
+  /** 多周期强度条 0~1，对应 ALL 周期顺序 */
+  ticks?: number[];
 }
 
 export interface MarketMatrix {
@@ -704,12 +712,9 @@ export interface PatternChartData {
     b1?: { time: number; value: number }[];
     b2?: { time: number; value: number }[];
   };
-  ema?: {
-    e13?: { time: number; value: number }[];
-    e33?: { time: number; value: number }[];
-    e99?: { time: number; value: number }[];
-    e144?: { time: number; value: number }[];
-  };
+  ema?: Partial<
+    Record<"e13" | "e33" | "e99", { time: number; value: number }[]>
+  >;
   macd?: {
     line?: { time: number; value: number }[];
     signal?: { time: number; value: number }[];

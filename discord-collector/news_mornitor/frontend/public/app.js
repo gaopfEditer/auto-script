@@ -1,4 +1,31 @@
 (() => {
+  /**
+   * 仅「主站静态 /news-embed/」为 true。
+   * 本机开发 iframe 为 http://127.0.0.1:8770/（pathname /）→ false → 永远 /api/v1。
+   */
+  function isNewsEmbedHost() {
+    const p = String(location.pathname || "").replace(/\/index\.html$/i, "").replace(/\/$/, "");
+    return p === "/news-embed" || p.endsWith("/news-embed");
+  }
+  const NEWS_EMBED = isNewsEmbedHost();
+
+  /**
+   * 线上：/api/news/feed/* 与 Show 一样走主站 location /api/ → collect:ui → :8770。
+   * 勿用 /news-embed/api/v1（Nginx 静态目录通常不接这条）。
+   */
+  function useMainSiteFeedApi() {
+    if (!NEWS_EMBED) return false;
+    const port = String(location.port || "");
+    if (port === "8770") return false;
+    return true;
+  }
+
+  function newsApi(path) {
+    const tail = (path.startsWith("/") ? path : `/${path}`).replace(/^\/+/, "");
+    if (useMainSiteFeedApi()) return `/api/news/feed/${tail}`;
+    return `/api/v1/${tail}`;
+  }
+
   const timeline = document.getElementById("timeline");
   const boards = document.getElementById("boards");
   const macroHint = document.getElementById("macroHint");
@@ -355,8 +382,18 @@
 
   async function loadMacro(refresh) {
     const q = refresh ? "?refresh=1&channel=all" : "?channel=all";
-    const res = await fetch(`/api/v1/macro/timeline${q}`);
-    const data = await res.json();
+    const res = await fetch(`${newsApi("/macro/timeline")}${q}`);
+    if (!res.ok) {
+      timeline.innerHTML = `<p class="err">宏观 HTTP ${res.status}（检查 collect:ui / news :8770）</p>`;
+      return;
+    }
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      timeline.innerHTML = `<p class="err">宏观响应非 JSON（多为 /api 未反代到 collect:ui）</p>`;
+      return;
+    }
     if (!data.ok) {
       timeline.innerHTML = `<p class="err">${esc(data.error || "宏观加载失败")}</p>`;
       return;
@@ -373,8 +410,22 @@
 
   async function loadHot(refresh) {
     const q = refresh ? "?refresh=1" : "";
-    const res = await fetch(`/api/v1/hotlists${q}`);
-    const data = await res.json();
+    const res = await fetch(`${newsApi("/hotlists")}${q}`);
+    if (!res.ok) {
+      const hint =
+        res.status === 404 && NEWS_EMBED
+          ? "collect:ui 未部署 /api/news/feed 反代，请重启 collect:ui 并确认已更新 server"
+          : "检查 collect:ui / news :8770";
+      boards.innerHTML = `<p class="err">热榜 HTTP ${res.status}（${hint}）</p>`;
+      return;
+    }
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      boards.innerHTML = `<p class="err">热榜响应非 JSON（多为 /api 未反代到 collect:ui）</p>`;
+      return;
+    }
     if (!data.ok) {
       boards.innerHTML = `<p class="err">${esc(data.error || "热榜加载失败")}</p>`;
       return;
@@ -389,7 +440,7 @@
     statusEl.textContent = doFetch ? "刷新中…" : "加载中…";
     try {
       if (doFetch) {
-        await fetch("/api/v1/refresh", { method: "POST" });
+        await fetch(newsApi("/refresh"), { method: "POST" });
       }
       // 生产端永不带 refresh=1，只读落盘缓存
       await Promise.all([loadMacro(false), loadHot(false)]);
@@ -417,7 +468,7 @@
   async function loadToggleState() {
     if (!newsOperator) return;
     try {
-      const res = await fetch("/api/v1/fetch/status");
+      const res = await fetch(newsApi("/fetch/status"));
       const json = await res.json();
       autoRefresh = json.auto_refresh ?? true;
     } catch (_) {
@@ -431,7 +482,7 @@
     btnToggle.disabled = true;
     statusEl.textContent = "切换中…";
     try {
-      const res = await fetch("/api/v1/fetch/toggle", { method: "POST" });
+      const res = await fetch(newsApi("/fetch/toggle"), { method: "POST" });
       const json = await res.json();
       if (json.ok) {
         autoRefresh = json.auto_refresh;

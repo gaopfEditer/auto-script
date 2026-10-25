@@ -671,11 +671,13 @@ button {
 .matrix-quadrant-grid .rank-item {
   position: relative;
   display: grid;
-  grid-template-columns: 18px 24px minmax(0, 1fr) auto;
-  gap: 4px;
-  padding: 4px 6px;
+  grid-template-columns: 16px 20px minmax(0, 1fr) 34px auto;
+  gap: 3px;
+  padding: 3px 5px;
   overflow: hidden;
   isolation: isolate;
+  align-items: center;
+  min-height: 22px;
 }
 
 .rank-item-bg::before {
@@ -760,7 +762,7 @@ button {
 
 .rank-item {
   display: grid;
-  grid-template-columns: 22px 26px 52px 1fr auto;
+  grid-template-columns: 22px 26px minmax(48px, 1fr) 40px auto;
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
@@ -862,6 +864,70 @@ button {
 
 .pos { color: var(--green); }
 .neg { color: var(--red); }
+
+
+.rank-sym-cell {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.rank-sym-cell .rank-symbol {
+  min-width: 0;
+}
+
+.res-dots {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 2px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.res-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #5b8def;
+  opacity: 0.9;
+  display: inline-block;
+}
+
+.res-ticks {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 12px;
+  min-width: 0;
+}
+
+.res-tick {
+  flex: 1;
+  min-width: 2px;
+  max-width: 5px;
+  border-radius: 1px 1px 0 0;
+  background: #243147;
+  opacity: 0.75;
+}
+
+.res-tick.on.up {
+  background: var(--green, #00e676);
+  opacity: 1;
+}
+
+.res-tick.on.down {
+  background: var(--red, #ff5252);
+  opacity: 1;
+}
+
+.matrix-quadrant-grid .res-ticks {
+  height: 10px;
+}
+
+.matrix-quadrant-grid .res-tick {
+  max-width: 4px;
+}
 
 /* ── Global panel (right) ── */
 .global-panel {
@@ -5169,6 +5235,26 @@ button {
   font-size: 13px;
   color: var(--muted);
   text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.train-back-radar:hover {
+  color: var(--text);
+}
+
+.train-session-head-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.train-session-back {
+  flex-shrink: 0;
 }
 
 .train-main {

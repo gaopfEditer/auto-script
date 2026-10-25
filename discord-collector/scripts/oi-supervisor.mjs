@@ -206,6 +206,11 @@ export function startOiSupervisor(opts = {}) {
             return "8765";
           }
         })(),
+      // 实时 TG 推送默认关（.env 已关；此处覆盖 collect:ui 父进程残留的旧 env）
+      AI_JUDGE_TELEGRAM_PUSH: process.env.AI_JUDGE_TELEGRAM_PUSH ?? "0",
+      OI_CANDLE_CARD_TELEGRAM: process.env.OI_CANDLE_CARD_TELEGRAM ?? "0",
+      OI_STRUCTURE_CARD_TELEGRAM: process.env.OI_STRUCTURE_CARD_TELEGRAM ?? "0",
+      OI_PATTERN_OI_COMBO_TELEGRAM: process.env.OI_PATTERN_OI_COMBO_TELEGRAM ?? "0",
     };
     child = spawn(pythonBin, args, {
       cwd: ROOT,

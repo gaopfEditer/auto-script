@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ColorType,
   CrosshairMode,
@@ -32,6 +32,7 @@ import {
 } from "../utils/mcapTier";
 import { alignPriceToReference, displaySymbol, toUsdtSymbol } from "../utils/symbol";
 import { CoinAvatar } from "./CoinAvatar";
+import { AiJudgePanel } from "./AiJudgePanel";
 import type { TickerRow } from "../types";
 import { useBinanceChartLive } from "../hooks/useBinanceChartLive";
 import type { LiveKlineUpdate } from "../utils/binanceWs";
@@ -599,6 +600,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     times: number[];
   } | null>(null);
   const [alertOverlayCount, setAlertOverlayCount] = useState(0);
+  /** 与 K 线同量级的最新价（供 pattern-chart-meta，勿用未对齐的快照价） */
+  const [headlineClose, setHeadlineClose] = useState<number | null>(null);
   layersRef.current = layers;
 
   const clearPriceLines = useCallback(() => {
@@ -845,6 +848,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         candlesRef.current = sortedCandles;
         setCandleCount(sortedCandles.length);
         setLastCandleTime(sortedCandles.at(-1)?.time ?? null);
+        const lastClosePx = sortedCandles.at(-1)?.close;
+        if (lastClosePx != null && lastClosePx > 0) setHeadlineClose(lastClosePx);
 
         if (prevRange && prepended > 0) {
           // 只平移视口，保持用户当前看到的 K 线不动；不因缩全图把 from 钉在 0 去连环续载
@@ -1055,6 +1060,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         setCandleCount(candlesRef.current.length);
       }
       setLastCandleTime(candle.time);
+      if (candle.close > 0) setHeadlineClose(candle.close);
 
       if (closed) refreshLatestRef.current();
 
@@ -1140,9 +1146,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     [applyLayerVisibility],
   );
 
+  const streamSymbol =
+    chartSymbolKey(String(data?.symbol || "")) || chartSymbolKey(symbol) || symbol;
   const wsEnabled = !loading && !err && Boolean(data?.candles?.length);
   const { markPrice, connected: wsConnected } = useBinanceChartLive(
-    symbol,
+    streamSymbol,
     timeframe,
     wsEnabled,
     useCallback(
@@ -1283,6 +1291,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     setLoadingMore(false);
     setLastCandleTime(null);
     setCandleCount(0);
+    setHeadlineClose(null);
 
     // 阶段 1：拉轻量 K 线端点 → 立刻渲染图表，不等待形态分析
     const loadCandles = async () => {
@@ -1720,8 +1729,43 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const deriv = analysis?.derivatives;
   const mtf = deriv?.mtf;
   const ticker = data?.ticker;
-  const lastPrice =
-    markPrice ?? liveTicker?.last_price ?? ticker?.last_price ?? analysis?.last_price;
+  const chartRefClose =
+    headlineClose ??
+    (candleCount > 0 ? candlesRef.current.at(-1)?.close : undefined) ??
+    data?.candles?.at(-1)?.close ??
+    null;
+  const lastPrice = useMemo(() => {
+    if (chartRefClose != null && chartRefClose > 0) return chartRefClose;
+    const ref =
+      data?.candles?.at(-1)?.close ??
+      ticker?.last_price ??
+      liveTicker?.last_price ??
+      0;
+    for (const raw of [
+      markPrice,
+      ticker?.last_price,
+      liveTicker?.last_price,
+      analysis?.last_price,
+    ]) {
+      if (raw == null || !(Number(raw) > 0)) continue;
+      if (ref > 0) return alignPriceToReference(Number(raw), ref);
+      return Number(raw);
+    }
+    return null;
+  }, [
+    chartRefClose,
+    markPrice,
+    ticker?.last_price,
+    liveTicker?.last_price,
+    analysis?.last_price,
+    data?.candles,
+    candleCount,
+  ]);
+  const alignedAlertEntry = useMemo(() => {
+    if (!alertFocus || !(alertFocus.entry > 0)) return null;
+    const ref = chartRefClose ?? alertFocus.entry;
+    return alignPriceToReference(alertFocus.entry, ref);
+  }, [alertFocus, chartRefClose]);
   const pct = liveTicker?.price_change_pct_24h ?? ticker?.price_change_pct_24h;
   const oiUsd = liveTicker?.current_oi_usd ?? ticker?.current_oi_usd;
   const quoteVol = liveTicker?.quote_volume ?? ticker?.quote_volume;
@@ -2384,12 +2428,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                     className={`pattern-chart-alert-focus${
                       alertFocus.side === "short" || alertFocus.dir === "空" ? " short" : ""
                     }`}
-                    title={`${alertFocus.typeLabel || "形态信号"} · 入场 ${fmtMetaPrice(alertFocus.entry)}`}
+                    title={`${alertFocus.typeLabel || "形态信号"} · 入场 ${fmtMetaPrice(alignedAlertEntry ?? alertFocus.entry)}`}
                   >
                     入场 {alertFocus.dir || (alertFocus.side === "short" ? "空" : "多")}
                     {alertFocus.typeLabel ? ` · ${alertFocus.typeLabel}` : ""}
                     {alertFocus.interval ? ` · ${alertFocus.interval}` : ""}
-                    {` @${fmtMetaPrice(alertFocus.entry)}`}
+                    {` @${fmtMetaPrice(alignedAlertEntry ?? alertFocus.entry)}`}
                   </span>
                 ) : null}
               </div>
@@ -2452,6 +2496,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
               {!analysisLoading && (
                 <>
                   <p className="pattern-analysis-msg">{analysis?.message || "—"}</p>
+                  <AiJudgePanel
+                    symbol={symbol}
+                    timeframe={timeframe}
+                    signalName={alertFocus?.typeLabel || statusLabel}
+                  />
               <ul className="pattern-marker-legend">
                 {MARKER_LEGEND.filter(
                   (m) =>

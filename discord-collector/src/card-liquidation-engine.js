@@ -20,6 +20,7 @@ import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { archiveCardToClient, normalizeCardSourceType } from "./card-archive-service.js";
 import { archiveCardMatchesSourceTypes } from "./card-archive-list-cache.js";
 import { detectAssetClass } from "./card-verify-policy.js";
+import { runM7ProfitProtectionLiquidation } from "./profit-protection-m7.js";
 
 export const LIQUIDATION_ENTRY_TOLERANCE_PCT = 0.5;
 export const LIQUIDATION_DEFAULT_TP_SL_PCT = 5;
@@ -350,7 +351,10 @@ export function evaluateLiquidation(card, klines, opts) {
   /** @type {number | null} */
   let entryPriceUsed = null;
 
-  if (marketHint || plannedEntry == null) {
+  if (opts.forceMarketEntry) {
+    entryHitAt = new Date(signalMs).toISOString();
+    entryPriceUsed = marketAtSignal;
+  } else if (marketHint || plannedEntry == null) {
     entryHitAt = new Date(signalMs).toISOString();
     entryPriceUsed = marketAtSignal;
   } else {
@@ -398,6 +402,21 @@ export function evaluateLiquidation(card, klines, opts) {
       marketAtSignal,
       plannedEntry: plannedEntry ?? null,
       isShort,
+    });
+  }
+
+  if (opts.profitProtectionM7) {
+    const maxEndMs = Number(opts.maxEndMs);
+    return runM7ProfitProtectionLiquidation({
+      sorted,
+      entryHitAt,
+      entryPriceUsed,
+      isShort,
+      leverage,
+      marketAtSignal,
+      plannedEntry: plannedEntry ?? null,
+      maxEndMs,
+      nowIso,
     });
   }
 

@@ -59,6 +59,7 @@ from oi_mornitor.capital_bias import (
 )
 from oi_mornitor.oi_entry_filter import annotate_alert_row
 from oi_mornitor.market_matrix import MarketMatrixCache
+from oi_mornitor.smartb_radar_source import get_smartb_source
 from oi_mornitor.matrix_breakout import MatrixBreakoutEngine
 from oi_mornitor.pattern_monitor import PatternMonitorEngine
 from oi_mornitor.cards import CardEngine
@@ -1326,6 +1327,7 @@ class RadarService:
     def __init__(self) -> None:
         self.radar = BinanceOIRadar()
         self.matrix = MarketMatrixCache()
+        self.smartb = get_smartb_source()
         self.breakout_engine = MatrixBreakoutEngine()
         self.pattern_engine = PatternMonitorEngine()
         self.pullback_engine = PullbackStrategyEngine(self.pattern_engine)
@@ -1557,6 +1559,12 @@ class RadarService:
             return
         self._running = True
         await self._ensure_session()
+        try:
+            self.smartb.start_background()
+            # 立刻拉一版，避免 SSE 先推空的本地慢扫描
+            await self.smartb.refresh_once()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("smart.b 雷达桥启动失败: %s", exc)
         px = proxy_url()
         if px:
             logger.info("Binance REST 代理: %s", px)
@@ -1710,14 +1718,29 @@ class RadarService:
             self._equity_stats,
         )
         return {
-            "scan_ts": self.radar.last_scan_ts,
+            "scan_ts": (self.smartb.last_ts if self.smartb.enabled and self.smartb.last_rows else self.radar.last_scan_ts),
             "meta": self.radar.last_global_meta,
             "pool_meta": pool_meta,
             "equity_pool": list(self._equity_pool),
             "equity_scan_ts": self._equity_scan_ts,
-            "hot_tickers": self.radar.last_hot_tickers,
-            "all_tickers": self.radar.last_all_rows,
+            "hot_tickers": (
+                self.smartb.last_hot
+                if self.smartb.enabled and self.smartb.last_rows
+                else self.radar.last_hot_tickers
+            ),
+            "all_tickers": (
+                self.smartb.last_rows
+                if self.smartb.enabled and self.smartb.last_rows
+                else self.radar.last_all_rows
+            ),
             "market_matrix": self.matrix.last_matrix,
+            "radar_source": (
+                "smartb"
+                if self.smartb.enabled and self.smartb.last_rows
+                else "local"
+            ),
+            "radar_source_meta": dict(self.smartb.last_meta) if self.smartb.enabled else None,
+            "radar_source_error": self.smartb.last_error if self.smartb.enabled else None,
             "breakout_alerts": self.breakout_engine.last_alerts,
             "pattern": {
                 **self.pattern_engine.get_payload(

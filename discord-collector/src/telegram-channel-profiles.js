@@ -11,7 +11,7 @@ const TELEGRAM_DIR = path.resolve(__dirname, "..", "..", "telegram");
 export const CHANNEL_PROFILES_FILE = path.join(TELEGRAM_DIR, "channel_profiles.json");
 
 /** @type {ReadonlySet<string>} */
-export const CHANNEL_PROFILE_RESERVED_KEYS = new Set(["send"]);
+export const CHANNEL_PROFILE_RESERVED_KEYS = new Set(["send", "placeAnOrder", "_personas"]);
 
 /** @param {string} chatId */
 export function normalizeTelegramChatIdKey(chatId) {
@@ -44,12 +44,31 @@ function isChannelProfileEntry(raw) {
  *   error?: string,
  *   sendChatIds: string[],
  *   sendSet: Set<string>,
+ *   placeAnOrderChatIds: string[],
+ *   placeAnOrderSet: Set<string>,
  *   channels: Array<{ chatId: string, name: string, avatar: string, main: string }>,
  * }}
  */
+function readChatIdList(raw, /** @type {unknown} */ field) {
+  /** @type {string[]} */
+  const out = [];
+  const arr = field === "send" ? raw?.send : field === "placeAnOrder" ? raw?.placeAnOrder : null;
+  if (!Array.isArray(arr)) return out;
+  const seen = new Set();
+  for (const item of arr) {
+    const id = normalizeTelegramChatIdKey(item);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 export function readTelegramChannelProfiles() {
   /** @type {string[]} */
   const sendChatIds = [];
+  /** @type {string[]} */
+  const placeAnOrderChatIds = [];
   /** @type {Array<{ chatId: string, name: string, avatar: string, main: string }>} */
   const channels = [];
   try {
@@ -60,6 +79,8 @@ export function readTelegramChannelProfiles() {
         error: "channel_profiles.json 不存在",
         sendChatIds,
         sendSet: new Set(),
+        placeAnOrderChatIds,
+        placeAnOrderSet: new Set(),
         channels,
       };
     }
@@ -71,20 +92,16 @@ export function readTelegramChannelProfiles() {
         error: "profiles 格式无效",
         sendChatIds,
         sendSet: new Set(),
+        placeAnOrderChatIds,
+        placeAnOrderSet: new Set(),
         channels,
       };
     }
 
-    const sendRaw = /** @type {unknown} */ (raw.send);
-    if (Array.isArray(sendRaw)) {
-      const seen = new Set();
-      for (const item of sendRaw) {
-        const id = normalizeTelegramChatIdKey(item);
-        if (!id || seen.has(id)) continue;
-        seen.add(id);
-        sendChatIds.push(id);
-      }
-    }
+    sendChatIds.push(...readChatIdList(/** @type {Record<string, unknown>} */ (raw), "send"));
+    placeAnOrderChatIds.push(
+      ...readChatIdList(/** @type {Record<string, unknown>} */ (raw), "placeAnOrder"),
+    );
 
     for (const [chatId, meta] of Object.entries(raw)) {
       if (CHANNEL_PROFILE_RESERVED_KEYS.has(chatId)) continue;

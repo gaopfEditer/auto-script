@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { confirmLeaveRunningTrain } from "../../train/confirmLeave";
 
 const NAV = [
   { to: "/train?new=1", label: "新一局", end: false },
@@ -7,6 +8,13 @@ const NAV = [
 ] as const;
 
 export function TrainShell() {
+  const nav = useNavigate();
+
+  const leaveToRadar = () => {
+    if (!confirmLeaveRunningTrain()) return;
+    nav("/");
+  };
+
   return (
     <div className="mercu-app train-app">
       <header className="train-topbar">
@@ -25,9 +33,9 @@ export function TrainShell() {
             ))}
           </nav>
         </div>
-        <NavLink to="/" className="train-back-radar">
+        <button type="button" className="train-back-radar" onClick={leaveToRadar}>
           返回雷达
-        </NavLink>
+        </button>
       </header>
       <main className="train-main">
         <Outlet />

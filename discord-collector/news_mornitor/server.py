@@ -991,6 +991,8 @@ def index() -> FileResponse:
 
 if STATIC.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+    # 与主站 /news-embed/static/* 同源（index 绝对路径 + collect:ui 反代）
+    app.mount("/news-embed/static", StaticFiles(directory=str(STATIC)), name="news_embed_static")
 
 
 def main(host: str | None = None, port: int | None = None) -> None:

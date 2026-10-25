@@ -18,6 +18,36 @@ load_dotenv(_REPO_ROOT / ".env")
 load_dotenv(_PKG_ROOT / ".env")
 load_dotenv()
 
+# 实时 Telegram 推送开关：以仓库 .env 为准，覆盖 collect:ui 父进程残留的旧值
+def _force_env_from_dotenv(keys: tuple[str, ...]) -> None:
+    import os as _os
+    from pathlib import Path as _Path
+    for env_path in (_REPO_ROOT / ".env", _PKG_ROOT / ".env"):
+        if not env_path.is_file():
+            continue
+        try:
+            for raw in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                if k in keys:
+                    _os.environ[k] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+
+_force_env_from_dotenv(
+    (
+        "AI_JUDGE_TELEGRAM_PUSH",
+        "OI_CANDLE_CARD_TELEGRAM",
+        "OI_STRUCTURE_CARD_TELEGRAM",
+        "OI_PATTERN_OI_COMBO_TELEGRAM",
+        "OI_STATS_SETTLE_TELEGRAM",
+        "CARD_PROXIMITY_TELEGRAM",
+    )
+)
+
 from oi_mornitor.env_parse import env_bool, env_bool_off, env_float, env_int, env_str
 
 # 币安 U 本位永续 REST
@@ -193,11 +223,11 @@ PATTERN_CHART_MAX_LIMIT = int(os.getenv("OI_PATTERN_CHART_MAX_LIMIT", "1500"))
 PATTERN_CHART_LOAD_CHUNK = int(os.getenv("OI_PATTERN_CHART_LOAD_CHUNK", "300"))
 # 形态+OI 同现 → Toast + Telegram 推荐短线（默认开；开了卡片推送后 combo 不再发旧文案）
 PATTERN_OI_COMBO_TELEGRAM = os.getenv(
-    "OI_PATTERN_OI_COMBO_TELEGRAM", "1"
+    "OI_PATTERN_OI_COMBO_TELEGRAM", "0"
 ).strip().lower() in ("1", "true", "yes", "on")
 # 射击之星 / OI异动倒锤子 → Telegram 卡片（多周期规则，默认开）
 CANDLE_CARD_TELEGRAM = os.getenv(
-    "OI_CANDLE_CARD_TELEGRAM", "1"
+    "OI_CANDLE_CARD_TELEGRAM", "0"
 ).strip().lower() in ("1", "true", "yes", "on")
 # 卡片推送群（默认指定形态卡片群；可改 OI_CANDLE_CARD_TELEGRAM_CHAT_ID）
 CANDLE_CARD_TELEGRAM_CHAT_ID = os.getenv(
@@ -298,7 +328,7 @@ for _iv, _sec in _CANDLE_CARD_REFRESH_DEFAULTS.items():
     )
 # 顶部/底部结构（头肩+Vegas、二次探底、2B、流动性掠夺）→ 同群 Telegram
 STRUCTURE_CARD_TELEGRAM = os.getenv(
-    "OI_STRUCTURE_CARD_TELEGRAM", "1"
+    "OI_STRUCTURE_CARD_TELEGRAM", "0"
 ).strip().lower() in ("1", "true", "yes", "on")
 STRUCTURE_KLINE_LIMIT = int(os.getenv("OI_STRUCTURE_KLINE_LIMIT", "250"))
 
@@ -370,6 +400,26 @@ TELEGRAM_PUSH_CHAT_ID = (
 ).strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+# AI 实时信号 Telegram 群推送（是否入场 / 止盈止损 / 信心程度 / 简单解析）
+# AI_JUDGE_TELEGRAM_PUSH=1 开启；默认关闭（用户要求停实时推送）。凭据缺失时只打日志不崩溃。
+AI_JUDGE_TELEGRAM_PUSH = os.getenv("AI_JUDGE_TELEGRAM_PUSH", "0").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+# 专属 AI 信号群；空则回退 MAIN/CANDLE/TELEGRAM_* 群
+AI_JUDGE_TELEGRAM_CHAT_ID = os.getenv("AI_JUDGE_TELEGRAM_CHAT_ID", "").strip()
+# 默认只推可执行入场 LONG/SHORT，避免「不做/观望」刷屏；可设 AI_JUDGE_TELEGRAM_ACTIONS=* 全推
+AI_JUDGE_TELEGRAM_ACTIONS = tuple(
+    x.strip().upper()
+    for x in os.getenv(
+        "AI_JUDGE_TELEGRAM_ACTIONS", "LONG,SHORT"
+    ).split(",")
+    if x.strip()
+)
+# 同币种+周期+方向+信号棒 最短推送间隔（秒）；默认 15 分钟，挡住 3~4 分钟扫线重复
+AI_JUDGE_TG_COOLDOWN_SEC = int(os.getenv("AI_JUDGE_TG_COOLDOWN_SEC", "900"))
 PATTERN_CHART_INTERVALS = tuple(
     x.strip()
     for x in os.getenv("OI_PATTERN_CHART_INTERVALS", "5m,15m,30m,1h,4h,1d").split(",")

@@ -44,6 +44,13 @@ import { startContentSupervisor } from "../scripts/content-supervisor.mjs";
 import { startNewsSupervisor } from "../scripts/news-supervisor.mjs";
 import { startTelegramSupervisor } from "../scripts/telegram-supervisor.mjs";
 import { registerContentBoardProxy } from "./content-board-proxy.js";
+import { registerNewsEmbedProxy, NEWS_EMBED_MOUNT } from "./news-embed-proxy.js";
+import {
+  registerNewsFeedProxy,
+  NEWS_FEED_MOUNT,
+  NEWS_FEED_ROUTES_VERSION,
+} from "./news-feed-proxy.js";
+import { isTrapMainSiteNewsEmbed, sanitizePublicNewsEmbedUrl } from "./news-embed-url.js";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
 import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
@@ -55,6 +62,8 @@ import { registerCardEvalRoutes } from "./card-eval-api.js";
 import { registerCardValidateRoutes } from "./card-validate-api.js";
 import { registerTelegramPromRoutes } from "./telegram-prom-api.js";
 import { registerTelegramLiveRoutes } from "./telegram-live-api.js";
+import { registerTelegramBackfillRoutes } from "./telegram-backfill-api.js";
+import { registerDiscordBackfillRoutes } from "./discord-backfill-api.js";
 import { registerCommunityRoutes } from "./community-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
 import { createCardExternalSink } from "./card-external-sink.js";
@@ -139,6 +148,10 @@ async function main() {
   registerContentBoardProxy(app, {
     baseUrl: config.contentBoardBaseUrl,
     log: createLogger("content-proxy"),
+  });
+  registerNewsEmbedProxy(app, {
+    baseUrl: config.newsWebBaseUrl,
+    log: createLogger("news-embed-proxy"),
   });
 
   const wss = new WebSocketServer({ server, path: "/ws" });
@@ -292,6 +305,7 @@ async function main() {
   /** @type {() => Record<string, unknown>} */
   let getTelegramListenStatus = () => ({ running: null, managed: false });
   registerTelegramLiveRoutes(app, broadcast, { getListenStatus: () => getTelegramListenStatus() });
+  registerTelegramBackfillRoutes(app);
   registerTwitterCdpRoutes(app, twitterCdp);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
@@ -317,6 +331,11 @@ async function main() {
   let navigateDiscordImpl = null;
   /** @type {((guildId: string, channelId: string, traceCtx?: { clientTraceId?: string }) => Promise<unknown>) | null} */
   let scrollDiscordHistoryImpl = null;
+  registerDiscordBackfillRoutes(app, {
+    store,
+    getScrollImpl: () => scrollDiscordHistoryImpl,
+    getNavigateImpl: () => navigateDiscordImpl,
+  });
   /** @type {{ state: 'disabled' | 'pending' | 'ready' | 'error', attempt: number, error?: string }} */
   let cdpBoot = { state: config.cdpConnectUrl ? "pending" : "disabled", attempt: 0 };
 
@@ -528,41 +547,85 @@ async function main() {
     }
   });
 
+  // 与 /api/news/status 同区注册，避免线上只更 status 漏掉 feed
+  registerNewsFeedProxy(app, {
+    baseUrl: config.newsWebBaseUrl,
+    log: createLogger("news-feed-proxy"),
+  });
+
   /** 平台热点（news_mornitor）：探测后端并返回 iframe 嵌入地址 */
-  app.get("/api/news/status", async (_req, res) => {
+  app.get("/api/news/status", async (req, res) => {
     const apiBase = config.newsWebBaseUrl;
     const timeoutMs = Number.isFinite(config.newsHealthTimeoutMs)
       ? config.newsHealthTimeoutMs
       : 3_000;
-    const publicEmbed = config.newsPublicEmbedUrl || config.newsEmbedUrl || apiBase;
-    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, latencyMs?: number, error?: string, hint?: string, uiBuild?: string, service?: string }} */
+    const configuredRaw = String(
+      config.newsPublicEmbedUrl || config.newsEmbedUrl || "",
+    ).trim();
+    const localProxyEmbed = `${NEWS_EMBED_MOUNT}/`;
+    const configuredPublic = configuredRaw
+      ? sanitizePublicNewsEmbedUrl(configuredRaw, localProxyEmbed).replace(/\/$/, "")
+      : "";
+    if (configuredRaw && isTrapMainSiteNewsEmbed(configuredRaw)) {
+      /** @type {{ ok: boolean, active: boolean, embedDeployError: string, hint: string }} */
+      const bad = {
+        ok: true,
+        active: false,
+        embedDeployError: `NEWS_PUBLIC_EMBED_URL 指向主站路由（${configuredRaw}），已忽略；请留空或改为 ${NEWS_EMBED_MOUNT}/`,
+        hint: `生产 iframe 只用 ${NEWS_EMBED_MOUNT}/ 或独立域名，勿填 /show、/news`,
+      };
+      res.json({
+        ...bad,
+        apiBase,
+        embedUrl: localProxyEmbed,
+        publicEmbedUrl: localProxyEmbed,
+        localEmbedUrl: `${String(apiBase).replace(/\/$/, "")}/`,
+      });
+      return;
+    }
+    /** @type {{ ok: boolean, active: boolean, apiBase: string, embedUrl: string, publicEmbedUrl: string, localEmbedUrl?: string, latencyMs?: number, error?: string, hint?: string, uiBuild?: string, service?: string, embedDeployError?: string }} */
     const out = {
       ok: true,
       active: false,
       apiBase,
-      embedUrl: publicEmbed,
-      publicEmbedUrl: publicEmbed,
+      embedUrl: configuredPublic || localProxyEmbed,
+      publicEmbedUrl: configuredPublic || localProxyEmbed,
+      localEmbedUrl: `${String(apiBase).replace(/\/$/, "")}/`,
       hint: "news_mornitor（金十+PANews）由 collect:ui 自动守护；也可：pnpm run news:start",
     };
 
-    /** @param {string} root */
-    async function peekNewsUiBuild(root) {
+    /**
+     * @param {string} root 可访问的 news 首页（本机 :8770 或公网独立站）
+     * @returns {Promise<{ uiBuild: string, isCollectorUi: boolean, wrongService: boolean }>}
+     */
+    async function peekNewsPage(root) {
+      const base = String(root || "").replace(/\/$/, "");
+      if (!base) return { uiBuild: "", isCollectorUi: false, wrongService: false };
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
-        const r = await fetch(`${root}/?_=${Date.now()}`, {
+        const r = await fetch(`${base}/?_=${Date.now()}`, {
           signal: ctrl.signal,
           headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
         });
-        if (!r.ok) return "";
+        if (!r.ok) return { uiBuild: "", isCollectorUi: false, wrongService: false };
         const html = await r.text();
-        if (/华尔街见闻|CryptoPulse|AkShare/i.test(html)) {
-          return "WRONG_CRYPTOPULSE";
+        if (/<title>\s*discord-collector\s*<\/title>/i.test(html)) {
+          return { uiBuild: "", isCollectorUi: true, wrongService: false };
         }
-        const m = html.match(/\/static\/app\.js\?v=([^"'&\s]+)/);
-        return m ? m[1] : "";
+        if (/华尔街见闻|CryptoPulse|AkShare/i.test(html)) {
+          return { uiBuild: "", isCollectorUi: false, wrongService: true };
+        }
+        const m =
+          html.match(/static\/app\.js\?v=([^"'&\s]+)/) ||
+          html.match(/\/static\/app\.js\?v=([^"'&\s]+)/);
+        return {
+          uiBuild: m ? m[1] : "",
+          isCollectorUi: false,
+          wrongService: false,
+        };
       } catch {
-        return "";
+        return { uiBuild: "", isCollectorUi: false, wrongService: false };
       } finally {
         clearTimeout(timer);
       }
@@ -589,21 +652,63 @@ async function main() {
         res.json(out);
         return;
       }
-      const embedBase = String(publicEmbed || apiBase).replace(/\/$/, "");
-      const uiBuild = await peekNewsUiBuild(embedBase || apiBase);
-      if (uiBuild === "WRONG_CRYPTOPULSE") {
+      const backendPage = await peekNewsPage(apiBase);
+      if (backendPage.wrongService) {
         out.error =
           "嵌入页仍是 CryptoPulse（华尔街见闻），币圈日历 tab 不会出现；请重启 collect:ui 让守护换回本仓 news_mornitor";
         res.json(out);
         return;
       }
+
+      let browserBase = configuredPublic || localProxyEmbed;
+      if (!configuredPublic) {
+        const host = String(req.get("x-forwarded-host") || req.get("host") || "").split(",")[0].trim();
+        const proto = String(req.get("x-forwarded-proto") || req.protocol || "https").split(",")[0].trim();
+        if (host) {
+          const probeRoot = `${proto}://${host}${NEWS_EMBED_MOUNT}`;
+          const edgePage = await peekNewsPage(probeRoot);
+          if (edgePage.isCollectorUi) {
+            out.embedDeployError = `${NEWS_EMBED_MOUNT} 仍落到主站 SPA（iframe 会跳到 /show）。请 ui:build 同步 news-embed 静态，且 Nginx 勿对 ${NEWS_EMBED_MOUNT} 单独 try_files 到 index.html`;
+            out.error = out.embedDeployError;
+            out.active = false;
+            out.embedUrl = localProxyEmbed;
+            out.publicEmbedUrl = localProxyEmbed;
+            res.json(out);
+            return;
+          }
+        }
+      }
+      if (configuredPublic) {
+        const publicPage = await peekNewsPage(configuredPublic);
+        if (publicPage.isCollectorUi) {
+          out.embedDeployError = `NEWS_PUBLIC_EMBED_URL（${configuredPublic}）当前是 discord-collector 主站，不是平台热点页；请改为独立域名或删除该配置以使用 ${NEWS_EMBED_MOUNT}/ 反代`;
+          out.error = out.embedDeployError;
+          out.embedUrl = "";
+          out.publicEmbedUrl = "";
+          res.json(out);
+          return;
+        }
+        if (publicPage.wrongService) {
+          out.error = "公网嵌入地址仍是 CryptoPulse，不是本仓 news_mornitor";
+          res.json(out);
+          return;
+        }
+      }
+
       out.active = true;
       out.hint = undefined;
+      const uiBuild = backendPage.uiBuild || "";
       if (uiBuild) out.uiBuild = uiBuild;
-      out.embedUrl = uiBuild
-        ? `${embedBase}/?v=${encodeURIComponent(uiBuild)}`
-        : `${embedBase}/`;
-      out.publicEmbedUrl = out.embedUrl;
+      const withCache = uiBuild
+        ? `${browserBase.replace(/\/$/, "")}/?v=${encodeURIComponent(uiBuild)}`
+        : browserBase.endsWith("/")
+          ? browserBase
+          : `${browserBase}/`;
+      out.embedUrl = withCache;
+      out.publicEmbedUrl = withCache;
+      out.feedApiPrefix = NEWS_FEED_MOUNT;
+      out.feedHotlistsPath = `${NEWS_FEED_MOUNT}/hotlists`;
+      out.feedRoutesVersion = NEWS_FEED_ROUTES_VERSION;
       res.json(out);
     } catch (e) {
       out.latencyMs = Date.now() - t0;
@@ -1024,6 +1129,7 @@ async function main() {
       filterEnabled: channelIds.length > 0,
       channelIds,
       namesByChannelId,
+      groupsFile: config.discordGroupsFile?.filePath ?? null,
     });
   });
 
@@ -1519,6 +1625,7 @@ async function main() {
     if (req.path.startsWith("/community-avatars")) return next();
     if (req.path.startsWith("/telegram-avatars")) return next();
     if (req.path.startsWith("/telegram-media")) return next();
+    if (req.path.startsWith(NEWS_EMBED_MOUNT)) return next();
     if (/\.\w+$/.test(req.path)) return next();
     res.sendFile(path.join(publicDir, "index.html"), (err) => (err ? next(err) : undefined));
   });

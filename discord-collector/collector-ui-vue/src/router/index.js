@@ -96,8 +96,24 @@ function buildRoutes() {
   if (__UI_PAGE_MANUAL_STATS__) {
     routes.push({
       path: "/local/manual-stats",
-      name: "manual-stats",
-      component: () => import("../views/ManualStatsView.vue"),
+      component: () => import("../views/ManualStatsLayout.vue"),
+      children: [
+        {
+          path: "",
+          name: "manual-stats",
+          component: () => import("../views/ManualStatsView.vue"),
+        },
+        {
+          path: "telegram-backfill",
+          name: "manual-stats-telegram-backfill",
+          component: () => import("../components/TelegramBackfillPanel.vue"),
+        },
+        {
+          path: "discord-backfill",
+          name: "manual-stats-discord-backfill",
+          component: () => import("../components/DiscordBackfillPanel.vue"),
+        },
+      ],
     });
     routes.push({ path: "/local", redirect: "/local/manual-stats" });
   }
@@ -133,6 +149,13 @@ function buildRoutes() {
   if (__UI_PAGE_SHOW__) {
     routes.push({ path: "/messages", redirect: "/show" });
   }
+
+  // /news-embed 若被 try_files 误回落到 index.html，勿 redirect 到 /show（iframe 会嵌成 Show）
+  routes.push({
+    path: "/news-embed/:pathMatch(.*)*",
+    name: "news-embed-spa-guard",
+    component: () => import("../views/NewsEmbedSpaGuard.vue"),
+  });
 
   routes.push({
     path: "/:pathMatch(.*)*",

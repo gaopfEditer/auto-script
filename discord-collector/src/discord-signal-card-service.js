@@ -4,7 +4,7 @@
 import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
 import { createChannelTextDedup, normalizeSignalText, signalTextHash } from "./discord-signal-dedup.js";
 import { generateCardsByStyles, extractSignalWithAi } from "./discord-signal-ai.js";
-import { JUNZHANG_SL_LINK_MS, parseSignalText } from "./discord-signal-parsers.js";
+import { JUNZHANG_SL_LINK_MS, parseSignalText, parseSignalTexts } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
 import { executionFromParsed, formatManualRawContent, normalizeExecution } from "./discord-signal-execution.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
@@ -603,7 +603,27 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       return { skipped: "duplicate_text" };
     }
 
-    let parsed = parseSignalText(content, chCfg.parser);
+    if (chCfg.parser === "junzhang" && !opts.junzhangMultiPart) {
+      const list = parseSignalTexts(content, chCfg.parser);
+      if (list.length > 1) {
+        /** @type {Awaited<ReturnType<typeof onMessage>> | undefined} */
+        let last;
+        for (let i = 0; i < list.length; i += 1) {
+          last = await onMessage(row, {
+            ...opts,
+            skipDedup: i > 0 ? true : opts.skipDedup,
+            junzhangMultiPart: i + 1,
+            forcedParsed: list[i],
+          });
+        }
+        return last ?? { skipped: "parse_failed" };
+      }
+    }
+
+    let parsed =
+      opts.forcedParsed && typeof opts.forcedParsed === "object"
+        ? /** @type {Record<string, unknown>} */ (opts.forcedParsed)
+        : parseSignalText(content, chCfg.parser);
     if (!parsed && config.ollamaEnabled && !opts.debugSimulate) {
       parsed = await extractSignalWithAi(content, chCfg.parser, chCfg.name, {
         debug: (s) => log.debug(s),

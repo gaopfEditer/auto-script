@@ -4,6 +4,7 @@ import mysql from "mysql2/promise";
 import { bufferToPlainPayloadText } from "./collect-ws-decode.js";
 import { bindCommunitySqliteToStore, openCommunitySqliteStore } from "./community-sqlite-store.js";
 import { config } from "./config.js";
+import { resolveDiscordMessageCreatedAtMs } from "./discord-gateway.js";
 import { minDiscordSnowflakeId } from "./discord-show-history-cache.js";
 import { serializeRawJsonColumnForMysql } from "./mysql-json.js";
 
@@ -430,7 +431,12 @@ export async function openStore(cfg, log) {
       event_type = VALUES(event_type),
       source = VALUES(source),
       raw_json = VALUES(raw_json),
-      received_at = VALUES(received_at)
+      received_at = VALUES(received_at),
+      created_at_ms = CASE
+        WHEN COALESCE(created_at_ms, 0) <= 0 AND COALESCE(VALUES(created_at_ms), 0) > 0 THEN VALUES(created_at_ms)
+        WHEN COALESCE(VALUES(created_at_ms), 0) > COALESCE(created_at_ms, 0) THEN VALUES(created_at_ms)
+        ELSE created_at_ms
+      END
   `;
 
   /**
@@ -508,7 +514,11 @@ export async function openStore(cfg, log) {
       r.channelId ?? "",
       r.channelName ?? null,
       r.authorId ?? "",
-      Number(r.createdAtMs) || 0,
+      resolveDiscordMessageCreatedAtMs({
+        createdAtMs: r.createdAtMs,
+        messageId: r.messageId,
+        rawMessage: r.rawJson,
+      }),
       r.content ?? "",
       r.authorUsername ?? null,
       r.authorGlobalName ?? null,
@@ -526,7 +536,11 @@ export async function openStore(cfg, log) {
     const channelMap = new Map();
     for (const r of valid) {
       if (!r.channelId) continue;
-      const atMs = Number(r.createdAtMs) || 0;
+      const atMs = resolveDiscordMessageCreatedAtMs({
+        createdAtMs: r.createdAtMs,
+        messageId: r.messageId,
+        rawMessage: r.rawJson,
+      });
       const key = r.channelId;
       if (!channelMap.has(key) || atMs > channelMap.get(key).atMs) {
         channelMap.set(key, {
@@ -808,8 +822,17 @@ export async function openStore(cfg, log) {
    * @param {{ fromMs?: number }} [opts]
    */
   async function getOldestDiscordMessageIdForChannel(channelId, opts = {}) {
+    const row = await getOldestDiscordMessageRowForChannel(channelId, opts);
+    return row?.message_id != null ? String(row.message_id) : "";
+  }
+
+  /**
+   * @param {string} channelId
+   * @param {{ fromMs?: number }} [opts]
+   */
+  async function getOldestDiscordMessageRowForChannel(channelId, opts = {}) {
     const cid = String(channelId ?? "").trim();
-    if (!cid) return "";
+    if (!cid) return null;
     const params = [cid];
     let fromSql = "";
     const fromMs = Number(opts.fromMs);
@@ -818,13 +841,84 @@ export async function openStore(cfg, log) {
       params.push(fromMs);
     }
     const [rows] = await pool.query(
-      `SELECT message_id FROM discord_messages
+      `SELECT message_id, created_at_ms FROM discord_messages
        WHERE channel_id = ?${fromSql}
        ORDER BY CAST(message_id AS UNSIGNED) ASC
        LIMIT 1`,
       params
     );
-    return rows[0]?.message_id != null ? String(rows[0].message_id) : "";
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      message_id: String(row.message_id ?? ""),
+      created_at_ms: Number(row.created_at_ms) || 0,
+    };
+  }
+
+  /**
+   * @param {string} channelId
+   * @param {number} fromMs
+   * @param {number} toMs
+   * @param {number} [limit]
+   */
+  /**
+   * 将 created_at_ms=0 的历史行按 message_id / raw_json.timestamp 补全。
+   * @param {string} channelId
+   */
+  async function repairDiscordMessageCreatedAtForChannel(channelId) {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return { updated: 0 };
+    const [rows] = await pool.query(
+      `SELECT message_id, created_at_ms, raw_json FROM discord_messages
+       WHERE channel_id = ? AND COALESCE(created_at_ms, 0) <= 0
+       LIMIT 8000`,
+      [cid],
+    );
+    if (!rows?.length) return { updated: 0 };
+    let updated = 0;
+    for (const row of rows) {
+      const ms = resolveDiscordMessageCreatedAtMs({
+        created_at_ms: row.created_at_ms,
+        messageId: row.message_id,
+        raw_json: row.raw_json,
+      });
+      if (!ms) continue;
+      await pool.execute(
+        `UPDATE discord_messages SET created_at_ms = ? WHERE message_id = ? AND COALESCE(created_at_ms, 0) <= 0`,
+        [ms, String(row.message_id)],
+      );
+      updated += 1;
+    }
+    return { updated };
+  }
+
+  async function listDiscordMessagesInTimeRange(channelId, fromMs, toMs, limit = 15000) {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return [];
+    const lim = Math.min(25000, Math.max(1, Number(limit) || 15000));
+    const f = Number(fromMs);
+    const t = Number(toMs);
+    /** @type {unknown[]} */
+    const params = [cid];
+    const where = ["channel_id = ?"];
+    if (Number.isFinite(f) && f > 0) {
+      where.push("created_at_ms >= ?");
+      params.push(f);
+    }
+    if (Number.isFinite(t) && t > 0) {
+      where.push("created_at_ms <= ?");
+      params.push(t);
+    }
+    const [rows] = await pool.query(
+      `SELECT message_id, guild_id, guild_name, channel_id, channel_name, author_id, created_at_ms, content,
+              author_username, author_global_name, event_type, source, raw_json
+       FROM discord_messages
+       WHERE ${where.join(" AND ")}
+       ORDER BY created_at_ms ASC, CAST(message_id AS UNSIGNED) ASC
+       LIMIT ${lim}`,
+      params
+    );
+    return rows;
   }
 
   /** @param {string} channelId */
@@ -2232,6 +2326,9 @@ export async function openStore(cfg, log) {
     listRecentMessages,
     getDiscordMessageRawJson,
     getOldestDiscordMessageIdForChannel,
+    getOldestDiscordMessageRowForChannel,
+    listDiscordMessagesInTimeRange,
+    repairDiscordMessageCreatedAtForChannel,
     getDiscordChannelShowHistoryCache,
     mergeDiscordChannelShowHistoryCache,
     listChannelTextCaches,
@@ -2368,6 +2465,9 @@ export function createOfflineStore() {
     listRecentMessages: async () => [],
     getDiscordMessageRawJson: async () => null,
     getOldestDiscordMessageIdForChannel: async () => "",
+    getOldestDiscordMessageRowForChannel: async () => null,
+    listDiscordMessagesInTimeRange: async () => [],
+    repairDiscordMessageCreatedAtForChannel: async () => ({ updated: 0 }),
     getDiscordChannelShowHistoryCache: async () => ({ warmedAtMs: 0, oldestMessageId: "" }),
     mergeDiscordChannelShowHistoryCache: async () => {},
     listChannelTextCaches: async () => [],

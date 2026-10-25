@@ -100,12 +100,15 @@ export function useHeaderRankBoards() {
 
   useEffect(() => {
     const sec = meta.refreshSec;
+    const label = meta.sourceLabel || "";
+    const isSmartb = label.includes("smart.b") || label.includes("EzRadar");
     const isRadar =
       meta.error?.includes("雷达快照") ||
       meta.error?.includes("冷却") ||
-      meta.sourceLabel.includes("雷达");
-    const next = isRadar
-      ? HEADER_FETCH_MS
+      label.includes("雷达");
+    // smart.b / 雷达兜底：跟 refresh_sec（默认 20s）；币安官方直连仍用长间隔
+    const next = isSmartb || isRadar
+      ? Math.max(HEADER_FETCH_MS, (sec > 0 ? sec : 20) * 1000)
       : sec >= HEADER_FETCH_MS_DIRECT_BINANCE / 1000
         ? HEADER_FETCH_MS_DIRECT_BINANCE
         : Math.max(HEADER_FETCH_MS, sec * 1000);

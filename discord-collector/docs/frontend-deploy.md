@@ -199,6 +199,12 @@ server {
     root /var/www/discord-collector-ui;
     index index.html;
 
+    # 平台热点 iframe（/news 页嵌入 /news-embed/）；勿让 /news-embed 走主站 index.html（否则会 redirect → /show）
+    # 平台热点数据走 /api/news/feed/*（与 /api 同反代即可）；/news-embed/ 只需静态 HTML/JS/CSS
+    location ^~ /news-embed/ {
+        try_files $uri $uri/ /news-embed/index.html;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }
@@ -273,7 +279,13 @@ pnpm run ui:build
 ```
 public/collector-ui/
 ├── index.html
-└── assets/
+├── assets/
+└── news-embed/          # ui:build 同步，供 /news 页 iframe
+    ├── index.html
+    └── static/          # styles.css、app.js（须在此目录，勿只放根下）
+```
+
+**平台热点 `/news`**：iframe 指向同源 `/news-embed/`（不是 `/show` 或 `/news/index.html`）。构建后需包含 `news-embed/` 目录；`NEWS_PUBLIC_EMBED_URL` 勿填主站任意路由。
 ```
 
 临时打「全功能」静态包（少见）：

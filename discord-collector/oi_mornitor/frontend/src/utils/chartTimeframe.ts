@@ -1,7 +1,7 @@
 import type { PatternCandle, PatternChartData, PatternState } from "../types";
 import { fetchBinanceFuturesKlines } from "./binanceKlines";
 import { buildChartFromCandles } from "./chartIndicators";
-import { type ChartEmaKey } from "./chartLayers";
+import { CHART_EMA_LINES, type ChartEmaKey } from "./chartLayers";
 
 export const CHART_TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h", "1d"] as const;
 export type ChartTimeframe = (typeof CHART_TIMEFRAMES)[number];
@@ -127,7 +127,7 @@ export function mergeEmaMap(
   existing: Partial<Record<ChartEmaKey, { time: number; value: number }[]>> | undefined,
   incoming: Partial<Record<ChartEmaKey, { time: number; value: number }[]>> | undefined,
 ): Record<ChartEmaKey, { time: number; value: number }[]> {
-  const keys: ChartEmaKey[] = ["e13", "e33", "e99", "e144"];
+  const keys: ChartEmaKey[] = CHART_EMA_LINES.map((line) => line.key);
   const out = {} as Record<ChartEmaKey, { time: number; value: number }[]>;
   for (const k of keys) {
     out[k] = mergeBbSeries(existing?.[k] ?? [], incoming?.[k] ?? []);

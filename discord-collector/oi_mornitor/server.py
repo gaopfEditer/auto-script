@@ -1130,7 +1130,14 @@ async def handle_stream(request: web.Request) -> web.StreamResponse:
 
             await resp.write(f"data: {data}\n\n".encode())
 
-            await asyncio.sleep(max(5, SCAN_INTERVAL_SEC))
+            # smart.b 桥开启时 ~10–20s 推快照；否则跟本地慢扫描
+            try:
+                from oi_mornitor.smartb_radar_source import get_smartb_source, SMARTB_RADAR_REFRESH_SEC
+                _sb = get_smartb_source()
+                _push = int(min(max(SMARTB_RADAR_REFRESH_SEC, 10), 20)) if _sb.enabled else int(SCAN_INTERVAL_SEC)
+            except Exception:
+                _push = int(SCAN_INTERVAL_SEC)
+            await asyncio.sleep(max(5, _push))
 
     except (asyncio.CancelledError, ConnectionResetError):
 
@@ -1139,6 +1146,377 @@ async def handle_stream(request: web.Request) -> web.StreamResponse:
     return resp
 
 
+
+
+
+
+
+async def handle_ai_judge_health(_request: web.Request) -> web.Response:
+    """探活 ezcoin-adapter (127.0.0.1:5179) 与 BTC 自动信号队列。"""
+    import aiohttp
+    from oi_mornitor.ai_judge_bridge import ADAPTER_BASE_URL, get_btc_signals_feed
+
+    adapter_status: dict[str, Any] = {"ok": False}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as session:
+            async with session.get(f"{ADAPTER_BASE_URL}/health") as resp:
+                if resp.status == 200:
+                    adapter_status = await resp.json()
+    except Exception as exc:  # noqa: BLE001
+        adapter_status = {"ok": False, "error": str(exc)}
+    btc_items = get_btc_signals_feed(limit=10)
+    return _json_response({
+        "ok": True,
+        "adapter_url": ADAPTER_BASE_URL,
+        "adapter": adapter_status,
+        "btc_signal_count": len(btc_items),
+        "latest_btc_signal": btc_items[0] if btc_items else None,
+    })
+
+
+async def handle_ai_judge_snapshot(request: web.Request) -> web.Response:
+    """导出指定币种的 ezcoin 结构化多周期 snapshot JSON（15m/1h/4h/1d）。"""
+    from oi_mornitor.ai_judge_bridge import build_ezcoin_snapshot
+
+    symbol = str(request.query.get("symbol") or "BTCUSDT").strip().upper()
+    interval = str(request.query.get("interval") or request.query.get("tf") or "15m").strip().lower()
+    svc = get_service()
+    snap = await build_ezcoin_snapshot(svc, symbol, signal_tf=interval)
+    return _json_response({"ok": True, "snapshot": snap})
+
+
+async def handle_ai_judge_latest(request: web.Request) -> web.Response:
+    """查询指定币种最近一次 AI 研判结论。"""
+    from oi_mornitor.ai_judge_bridge import fetch_adapter_latest, get_btc_signals_feed, normalize_pair_and_short
+
+    symbol = str(request.query.get("symbol") or "BTCUSDT").strip().upper()
+    _, short_sym = normalize_pair_and_short(symbol)
+    rec = await fetch_adapter_latest(symbol)
+    btc_signals = get_btc_signals_feed(limit=20) if short_sym == "BTC" else []
+    if not rec:
+        return _json_response({
+            "ok": False,
+            "symbol": short_sym,
+            "judgment": None,
+            "btc_signals": btc_signals,
+        })
+    return _json_response({
+        "ok": True,
+        "symbol": short_sym,
+        "snapshot": rec.get("snapshot"),
+        "judgment": rec.get("judgment"),
+        "updated_at": rec.get("updated_at"),
+        "btc_signals": btc_signals,
+    })
+
+
+async def handle_ai_judge_run(request: web.Request) -> web.Response:
+    """手动或前端按钮触发指定币种 AI 研判（支持 skip_llm 仅测门禁，支持 push_telegram）。"""
+    from oi_mornitor.ai_judge_bridge import (
+        build_ezcoin_snapshot,
+        call_adapter_judge,
+        push_judgment_to_telegram,
+    )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    symbol = str(body.get("symbol") or request.query.get("symbol") or "BTCUSDT").strip().upper()
+    interval = str(body.get("interval") or body.get("timeframe") or request.query.get("interval") or "15m").strip().lower()
+    skip_llm = bool(body.get("skip_llm") or body.get("gates_only"))
+    push_tg = bool(body.get("push_telegram"))
+    signal_meta = body.get("signal_meta") if isinstance(body.get("signal_meta"), dict) else {}
+    if interval and not signal_meta.get("timeframe"):
+        signal_meta["timeframe"] = interval
+
+    svc = get_service()
+    if isinstance(body.get("snapshot"), dict):
+        snap = body["snapshot"]
+    else:
+        snap = await build_ezcoin_snapshot(svc, symbol, signal_tf=interval, signal_meta=signal_meta)
+
+    res = await call_adapter_judge(
+        snap,
+        skip_llm=skip_llm,
+        signal_meta=signal_meta,
+        auto_btc_signal=bool(body.get("auto_btc_signal")),
+        force=bool(body.get("force")),
+    )
+    pushed = False
+    if push_tg and res.get("formatted_text"):
+        pushed = await asyncio.to_thread(push_judgment_to_telegram, str(res["formatted_text"]))
+
+    return _json_response({
+        "ok": bool(res.get("ok", True)),
+        "symbol": snap.get("symbol"),
+        "raw_symbol": snap.get("raw_symbol") or symbol,
+        "interval": interval,
+        "pushed_telegram": pushed,
+        "snapshot": snap,
+        "judgment": res,
+        **res,
+    })
+
+
+async def handle_ai_judge_btc_signals_get(request: web.Request) -> web.Response:
+    """获取 BTC/ETH 15m/1h/4h/1d 专属信号自动研判历史流。"""
+    from oi_mornitor.ai_judge_bridge import get_btc_signals_feed
+
+    limit = int(request.query.get("limit") or 30)
+    tf = str(request.query.get("timeframe") or request.query.get("interval") or "").strip().lower()
+    sym = str(request.query.get("symbol") or "").strip().upper()
+    items = get_btc_signals_feed(limit=limit, timeframe=tf, symbol=sym)
+    return _json_response({"ok": True, "count": len(items), "items": items})
+
+
+async def handle_ai_judge_btc_signal_post(request: web.Request) -> web.Response:
+    """触发或测试 BTC 15m/1h/4h/1d 专属信号自动研判与推送（带去重，支持 force=true 强制重跑）。"""
+    from oi_mornitor.ai_judge_bridge import trigger_btc_signal_auto_judge
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    iv = str(body.get("interval") or body.get("timeframe") or "15m").strip().lower()
+    if iv not in ("15m", "1h", "4h", "1d"):
+        return _json_response({"ok": False, "error": "BTC 专属信号仅支持 15m / 1h / 4h / 1d"}, status=400)
+
+    raw_sym = str(body.get("symbol") or (body.get("alert") or {}).get("symbol") or "BTCUSDT").strip().upper()
+    if raw_sym in ("BTC", "ETH"):
+        raw_sym = f"{raw_sym}USDT"
+    short_s = raw_sym[:-4] if raw_sym.endswith("USDT") else raw_sym
+    alert_dict = body.get("alert") if isinstance(body.get("alert"), dict) else {
+        "symbol": raw_sym,
+        "interval": iv,
+        "kind": body.get("kind") or body.get("signal_kind") or f"manual_{short_s.lower()}_signal",
+        "type_label": body.get("signal_name") or body.get("type_label") or f"{short_s} {iv} 信号触发",
+        "side": body.get("side") or "bull",
+        "kline_close_time": body.get("bar_ts") or body.get("kline_close_time") or int(asyncio.get_event_loop().time()),
+        "vol_ratio": body.get("vol_ratio"),
+    }
+    alert_dict["symbol"] = raw_sym
+    alert_dict["interval"] = iv
+
+    skip_llm = bool(body.get("skip_llm") or body.get("gates_only"))
+    push_tg = bool(body.get("push_telegram", False))
+    force = bool(body.get("force", False))
+
+    svc = get_service()
+    item = await trigger_btc_signal_auto_judge(
+        svc,
+        alert_dict,
+        skip_llm=skip_llm,
+        push_telegram=push_tg,
+        force=force,
+    )
+    if not item:
+        return _json_response({"ok": False, "error": "BTC auto judge returned empty"}, status=500)
+    return _json_response({"ok": True, "item": item, **item})
+
+
+async def handle_ai_judge_btc_signal_sync(request: web.Request) -> web.Response:
+    """接收 ezcoin-adapter (:5179/signal-btc) 外部直推过来的 BTC 信号结论并同步到本机与 TG。"""
+    from oi_mornitor.ai_judge_bridge import sync_btc_signal_from_adapter
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        return _json_response({"ok": False, "error": "invalid payload"}, status=400)
+    push_tg = bool(body.get("push_telegram", False))
+    item = await asyncio.to_thread(sync_btc_signal_from_adapter, body, push_telegram=push_tg)
+    return _json_response({"ok": True, "item": item})
+
+async def handle_ai_judge_backtest_btc_get(request: web.Request) -> web.Response:
+    """获取多币种/多周期严格无未来数据回测结果（优先缓存；支持 query 过滤提示）。"""
+    from oi_mornitor.btc_1h_backtest import load_cached_btc_backtest, run_btc_backtest
+
+    cached = load_cached_btc_backtest()
+    if cached:
+        return _json_response(cached)
+    res = await run_btc_backtest(symbol="BTCUSDT", timeframes=["1h"], days=7, skip_llm=True)
+    return _json_response(res)
+
+
+async def handle_ai_judge_backtest_btc_run(request: web.Request) -> web.Response:
+    """重新运行多币种/多周期严格无未来数据 AI 回测。
+
+    Body/query 支持:
+      - symbol / symbols: BTC / ETH / QQQ / SNDK / DOGE / UNI / NEAR 或任意可交易对
+      - timeframes: ["15m","1h","4h","1d"] 或多选字符串
+      - start / end: Asia/Shanghai ISO 时间；或 days 回退
+      - skip_llm / force_refresh
+      - llm_mode: trader_only|full（默认 trader_only，回测更快且必有做/不做结论）
+      - max_llm_signals / soft_ai_top_n
+      - sync: true → 旧同步阻塞直到全部完成（脚本用）；默认 false → 立即返回 job_id，按币种渐进
+    """
+    from oi_mornitor.ai_btc_backtest_jobs import job_to_dict, start_ai_backtest_job
+    from oi_mornitor.btc_1h_backtest import run_btc_backtest
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    q = request.rel_url.query
+    symbols_raw = body.get("symbols")
+    if isinstance(symbols_raw, str) and symbols_raw.strip():
+        symbols_list = [x.strip() for x in symbols_raw.replace("|", ",").split(",") if x.strip()]
+    elif isinstance(symbols_raw, list):
+        symbols_list = [str(x).strip() for x in symbols_raw if str(x).strip()]
+    else:
+        symbols_list = None
+    symbol = (
+        body.get("symbol")
+        or (symbols_list[0] if symbols_list else None)
+        or q.get("symbol")
+        or "BTCUSDT"
+    )
+    timeframes = body.get("timeframes") or body.get("tfs") or q.get("timeframes") or ["1h"]
+    start = body.get("start") or q.get("start")
+    end = body.get("end") or q.get("end")
+    days_raw = body.get("days") if body.get("days") is not None else q.get("days")
+    days = int(days_raw) if days_raw not in (None, "") else (7 if not start else None)
+    if days is not None:
+        days = max(1, min(int(days), 30))
+    skip_llm = bool(body.get("skip_llm", False))
+    force_refresh = bool(body.get("force_refresh", False))
+    llm_mode = str(body.get("llm_mode") or q.get("llm_mode") or "trader_only").strip() or "trader_only"
+    try:
+        max_llm_signals = int(body.get("max_llm_signals") if body.get("max_llm_signals") is not None else (q.get("max_llm_signals") or 12))
+    except Exception:
+        max_llm_signals = 12
+    max_llm_signals = max(0, min(max_llm_signals, 50))
+    try:
+        soft_ai_top_n = int(body.get("soft_ai_top_n") if body.get("soft_ai_top_n") is not None else (q.get("soft_ai_top_n") or 0))
+    except Exception:
+        soft_ai_top_n = 0
+    soft_ai_top_n = max(0, min(soft_ai_top_n, 20))
+    include_tight_sl_signals = bool(
+        body.get("include_tight_sl_signals")
+        if body.get("include_tight_sl_signals") is not None
+        else (q.get("include_tight_sl_signals") in ("1", "true", "yes", "True"))
+    )
+    sync_flag = body.get("sync")
+    if sync_flag is None:
+        sync_flag = q.get("sync")
+    if isinstance(sync_flag, str):
+        sync_mode = sync_flag.strip().lower() in ("1", "true", "yes", "sync")
+    else:
+        sync_mode = bool(sync_flag)
+
+    logger.info(
+        "backtest-btc/run start sync=%s symbols=%s tfs=%s start=%s end=%s skip_llm=%s force=%s llm_mode=%s max_llm=%s tight_sl=%s",
+        sync_mode,
+        symbols_list or symbol,
+        timeframes,
+        start,
+        end,
+        skip_llm,
+        force_refresh,
+        llm_mode,
+        max_llm_signals,
+        include_tight_sl_signals,
+    )
+
+    if not sync_mode:
+        try:
+            job = await start_ai_backtest_job(
+                symbol=str(symbol),
+                symbols=symbols_list,
+                timeframes=timeframes,
+                days=days,
+                start=start,
+                end=end,
+                skip_llm=skip_llm,
+                force_refresh=force_refresh,
+                llm_mode=llm_mode,
+                max_llm_signals=max_llm_signals,
+                soft_ai_top_n=soft_ai_top_n,
+                include_tight_sl_signals=include_tight_sl_signals,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("backtest-btc/run start job failed")
+            return _json_response(
+                {"ok": False, "error": f"启动回测任务失败: {e}", "items": [], "summary": {}},
+                status=500,
+            )
+        payload = job_to_dict(job)
+        logger.info("backtest-btc/run job_id=%s status=%s", job.id, job.status)
+        return _json_response(payload)
+
+    # Legacy sync path (scripts / curl with sync:true)
+    try:
+        res = await run_btc_backtest(
+            symbol=str(symbol),
+            symbols=symbols_list,
+            timeframes=timeframes,
+            days=days,
+            start=start,
+            end=end,
+            skip_llm=skip_llm,
+            force_refresh=force_refresh,
+            llm_mode=llm_mode,
+            max_llm_signals=max_llm_signals,
+            soft_ai_top_n=soft_ai_top_n,
+            include_tight_sl_signals=include_tight_sl_signals,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("backtest-btc/run failed")
+        return _json_response(
+            {
+                "ok": False,
+                "error": f"回测异常: {e}",
+                "items": [],
+                "summary": {},
+                "errors": [{"symbol": "*", "error": str(e)}],
+            },
+            status=500,
+        )
+    if not isinstance(res, dict):
+        return _json_response({"ok": False, "error": "invalid backtest result", "items": []}, status=500)
+    status = 200 if res.get("ok") or res.get("items") else 500
+    n = len(res.get("items") or [])
+    logger.info(
+        "backtest-btc/run done ok=%s items=%s errors=%s partial=%s",
+        res.get("ok"),
+        n,
+        res.get("errors") or res.get("summary", {}).get("symbol_errors"),
+        res.get("partial"),
+    )
+    return _json_response(res, status=status)
+
+
+async def handle_ai_judge_backtest_btc_job(request: web.Request) -> web.Response:
+    """Poll progressive AI backtest job state (per-symbol accumulation)."""
+    from oi_mornitor.ai_btc_backtest_jobs import get_ai_backtest_job, job_to_dict
+
+    job_id = str(request.match_info.get("job_id") or "").strip()
+    if not job_id:
+        return _json_response({"ok": False, "error": "missing job_id"}, status=400)
+    job = get_ai_backtest_job(job_id)
+    if job is None:
+        return _json_response({"ok": False, "error": f"job not found: {job_id}", "done": True}, status=404)
+    return _json_response(job_to_dict(job))
+
+
+# Backward-compatible aliases
+async def handle_ai_judge_backtest_btc_1h_get(request: web.Request) -> web.Response:
+    return await handle_ai_judge_backtest_btc_get(request)
+
+
+async def handle_ai_judge_backtest_btc_1h_run(request: web.Request) -> web.Response:
+    return await handle_ai_judge_backtest_btc_run(request)
 
 
 
@@ -1252,6 +1630,20 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/stream", handle_stream)
     app.router.add_get("/api/scan/status", handle_scan_status)
+    app.router.add_get("/api/ai-judge/health", handle_ai_judge_health)
+    app.router.add_get("/api/ai-judge/snapshot", handle_ai_judge_snapshot)
+    app.router.add_get("/api/ai-judge/latest", handle_ai_judge_latest)
+    app.router.add_post("/api/ai-judge/run", handle_ai_judge_run)
+    app.router.add_get("/api/ai-judge/btc-signals", handle_ai_judge_btc_signals_get)
+    app.router.add_post("/api/ai-judge/btc-signal", handle_ai_judge_btc_signal_post)
+    app.router.add_post("/api/ai-judge/btc-signal-sync", handle_ai_judge_btc_signal_sync)
+    app.router.add_get("/api/ai-judge/backtest-btc", handle_ai_judge_backtest_btc_get)
+    app.router.add_post("/api/ai-judge/backtest-btc/run", handle_ai_judge_backtest_btc_run)
+    app.router.add_get("/api/ai-judge/backtest-btc/job/{job_id}", handle_ai_judge_backtest_btc_job)
+    app.router.add_get("/api/ai-judge/backtest-btc-1h", handle_ai_judge_backtest_btc_1h_get)
+    app.router.add_post("/api/ai-judge/backtest-btc-1h/run", handle_ai_judge_backtest_btc_1h_run)
+    app.router.add_get("/btc-backtest", handle_index)
+
     app.router.add_post("/api/scan/restart", handle_scan_restart)
 
     # Discord 卡片外送：WS /ws/cards · POST /api/cards

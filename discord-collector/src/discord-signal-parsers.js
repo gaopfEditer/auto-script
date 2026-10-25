@@ -151,10 +151,14 @@ const SIGNAL_PATTERN_SETS = {
   ],
   /** 军长：现价开多/空 + 参考价 + 止损；TP 按 3%/6%/10% 推算 */
   junzhang: [
-    /现价开/,
+    /现价\s*开/,
+    /挂\s*个?[多空]/,
+    /(比特|以太).*(?:现价|挂)/,
     /(多单|空单|做多|做空|[多空])/,
     /参考价格|[A-Z0-9]+[：:]\s*[\d.]+/i,
-    /止损\s*[\d.]/,
+    /止损\s*[：:\s]*[\d.]/,
+    /入场\s*[：:]/,
+    /【卡片】/,
     /\d+\.\d+/,
   ],
   generic: [
@@ -723,6 +727,260 @@ function priceAtPctFromEntry(entry, pct, isLong) {
 /** 军长：止损常单独补发，关联窗口约 2 分钟 */
 export const JUNZHANG_SL_LINK_MS = 2 * 60 * 1000;
 
+/** @type {Record<string, string>} */
+const JUNZHANG_CN_ASSET = {
+  比特: "BTC",
+  比特币: "BTC",
+  以太: "ETH",
+  以太坊: "ETH",
+  以太币: "ETH",
+};
+
+/** @param {string} raw */
+function junzhangCnToSymbol(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  if (JUNZHANG_CN_ASSET[s]) return JUNZHANG_CN_ASSET[s];
+  if (/^比特/.test(s)) return "BTC";
+  if (/^以太/.test(s)) return "ETH";
+  return s.replace(/USDT$/i, "").toUpperCase();
+}
+
+/** @param {string} text */
+function foldJunzhangText(text) {
+  return String(text ?? "")
+    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/\u3000/g, " ");
+}
+
+/** 军长模板尾部的「BTC：65228 / 比特：65228」 */
+/** @param {string} joined */
+function parseJunzhangRefPrices(joined) {
+  /** @type {Record<string, string>} */
+  const map = {};
+  for (const m of joined.matchAll(
+    /(?:^|[\s，,；;]|[^A-Za-z0-9\u4e00-\u9fff])(BTC|ETH|[A-Z][A-Z0-9]{1,14}|比特(?:币)?|以太(?:币)?(?:坊)?)\s*[：:]\s*([\d.]+)/gi,
+  )) {
+    const sym = junzhangCnToSymbol(String(m[1] ?? ""));
+    const px = String(m[2] ?? "").trim();
+    if (sym && px) map[sym] = px;
+  }
+  return map;
+}
+
+/** @param {string} joined */
+function parseJunzhangStopLoss(joined) {
+  return (
+    matchLine(joined, /止损\s*[：:]?\s*([\d.]+)/i) ||
+    matchLine(joined, /止[損损]\s*[：:]?\s*([\d.]+)/i)
+  );
+}
+
+/**
+ * @param {{
+ *   symbol: string;
+ *   direction: string;
+ *   entry?: string;
+ *   stopLoss?: string;
+ *   joined: string;
+ *   orderMode?: string;
+ * }} p
+ */
+function buildJunzhangOpenCard(p) {
+  const { symbol, direction, joined } = p;
+  const entry = String(p.entry ?? "").trim();
+  const stopLoss = String(p.stopLoss ?? parseJunzhangStopLoss(joined) ?? "").trim();
+  const isLong = direction === "做多";
+  /** @type {string[]} */
+  let takeProfits = [];
+  if (entry) {
+    takeProfits = [
+      priceAtPctFromEntry(entry, 0.03, isLong),
+      priceAtPctFromEntry(entry, 0.06, isLong),
+      priceAtPctFromEntry(entry, 0.1, isLong),
+    ].filter(Boolean);
+    if (!takeProfits.length) return null;
+  }
+  const hasMarketOpen = /现价\s*开/.test(joined.replace(/\s/g, ""));
+  if (!entry && !hasMarketOpen && p.orderMode !== "limit") return null;
+
+  const lev = matchLine(joined, /(\d+)\s*倍(?:杠[杆干]|杠杆)?/i);
+  const planNote = matchLine(joined, /(?:，|,)([^，,\n]{4,80})/)?.trim() ?? "";
+  const tpNote = isLong
+    ? "TP1 +3% 平30%；TP2 +6% 平30%；TP3 +10% 全平"
+    : "TP1 -3% 平30%；TP2 -6% 平30%；TP3 -10% 全平";
+  const noteParts = [
+    entry ? tpNote : `${tpNote}（无参考价，回溯按信号时刻市价入场）`,
+    lev ? `${lev}倍杠杆` : "",
+    planNote,
+  ].filter(Boolean);
+  const hasSl = Boolean(stopLoss);
+  return {
+    parser: "junzhang",
+    symbol,
+    asset: symbol,
+    direction,
+    entry: entry || "",
+    stopLoss: stopLoss || "",
+    takeProfits,
+    targets: takeProfits,
+    orderMode: p.orderMode ?? (entry ? "limit" : "market"),
+    signalPhase: hasSl ? "full" : "open",
+    awaitingTpsl: !hasSl,
+    tpPartialRatios: entry ? [0.3, 0.3, 1] : [1, 1, 1],
+    note: noteParts.join(" · "),
+    title: `${symbol} · 军长`,
+  };
+}
+
+/** 例：比特与以太现价开一层多单 */
+/** @param {string} joined */
+function parseJunzhangChineseMarketOpens(joined) {
+  const compact = joined.replace(/\s/g, "");
+  if (!/现价开/.test(compact)) return [];
+  if (/[A-Za-z][A-Za-z0-9]{1,14}(?:USDT)?现价开/.test(compact)) return [];
+
+  const isLong = /现价开(?:个)?(?:一层)?多(?:单)?/.test(compact);
+  const isShort = /现价开(?:个)?(?:一层)?空(?:单)?/.test(compact);
+  if (!isLong && !isShort) return [];
+  const direction = isLong ? "做多" : "做空";
+
+  const hasBtc = /比特(?:币)?/.test(joined);
+  const hasEth = /以太(?:币)?(?:坊)?/.test(joined);
+  /** @type {string[]} */
+  const syms = [];
+  if (hasBtc && hasEth) syms.push("BTC", "ETH");
+  else if (hasBtc) syms.push("BTC");
+  else if (hasEth) syms.push("ETH");
+  if (!syms.length) return [];
+
+  const refs = parseJunzhangRefPrices(joined);
+  const stopLoss = parseJunzhangStopLoss(joined);
+  /** @type {Array<Record<string, unknown>>} */
+  const out = [];
+  for (const symbol of syms) {
+    const card = buildJunzhangOpenCard({
+      symbol,
+      direction,
+      entry: refs[symbol] || "",
+      stopLoss,
+      joined,
+      orderMode: "market",
+    });
+    if (card) out.push(card);
+  }
+  return out;
+}
+
+/** 例：比特63500挂个多，以太1810挂个空 */
+/** @param {string} joined */
+function parseJunzhangLimitOrders(joined) {
+  /** @type {Array<Record<string, unknown>>} */
+  const out = [];
+  const patterns = [
+    /(比特(?:币)?|以太(?:币)?(?:坊)?|[A-Za-z][A-Za-z0-9]{1,14})\s*([\d][\d.]*)\s*挂\s*个?\s*(?:一层\s*)?([多空])(?:单)?/gi,
+    /([A-Za-z][A-Za-z0-9]{1,14})\s*在\s*([\d.]+)\s*挂\s*个?\s*(?:一层\s*)?([多空])(?:单)?/gi,
+  ];
+  for (const re of patterns) for (const m of joined.matchAll(re)) {
+    const symbol = junzhangCnToSymbol(String(m[1] ?? ""));
+    const entry = String(m[2] ?? "").trim();
+    const direction = String(m[3] ?? "") === "空" ? "做空" : "做多";
+    if (!symbol || !entry) continue;
+    const card = buildJunzhangOpenCard({
+      symbol,
+      direction,
+      entry,
+      joined,
+      orderMode: "limit",
+    });
+    if (card) out.push(card);
+  }
+  return out;
+}
+
+const JUNZHANG_LATIN_OPEN_RE =
+  /(?:💰\s*)?[#$]?\s*([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?\s*(?:现货(?:买入)?或\s*)?现\s*价\s*开(?:个\s*)?(?:一层\s*)?([多空])(?:单)?/i;
+
+const JUNZHANG_LATIN_OPEN_GLOBAL_RE =
+  /(?:💰\s*)?[#$]?\s*[A-Za-z][A-Za-z0-9]{1,14}(?:USDT)?\s*(?:现货(?:买入)?或\s*)?现\s*价\s*开(?:个\s*)?(?:一层\s*)?[多空](?:单)?/gi;
+
+/**
+ * 简体卡片行（Telegram/Show 镜像）：📈 SYMBOL 做多 + 入场/止盈/止损。
+ * @param {string} text
+ */
+export function parseCnBriefStructured(text) {
+  const joined = lines(text).join("\n");
+  if (!/入场\s*[：:]/i.test(joined) && !/入場\s*[：:]/i.test(joined)) return null;
+
+  const head =
+    joined.match(/^[📈📉📌]?\s*#?([A-Z0-9]{2,15})(USDT)?\s*(做多|做空|多|空)/im) ||
+    joined.match(/(?:^|\n)\s*#?([A-Z0-9]{2,15})(USDT)?\s*(做多|做空|多|空)/im) ||
+    joined.match(/【卡片】[^\n]*?\b([A-Z0-9]{2,15})\b[^\n]*(做多|做空|多|空)/im);
+  let symbol = head?.[1] ? String(head[1]).toUpperCase() : "";
+  if (symbol && !symbol.endsWith("USDT")) symbol = `${symbol}USDT`;
+  let dirToken = head?.[3] ? String(head[3]) : "";
+  if (!dirToken) {
+    if (/做空|空单|\bshort\b/i.test(joined) && !/做多|多单|\blong\b/i.test(joined)) dirToken = "空";
+    else if (/做多|多单|\blong\b/i.test(joined)) dirToken = "多";
+  }
+  const direction =
+    dirToken === "空" || /short/i.test(dirToken) ? "做空" : dirToken === "多" || /long/i.test(dirToken) ? "做多" : "";
+
+  const entry =
+    matchLine(joined, /入场\s*[：:]\s*([\d.]+)/i) ||
+    matchLine(joined, /入場\s*[：:]\s*([\d.]+)/i) ||
+    matchLine(joined, /Entry\s*[：:]\s*([\d.]+)/i);
+  const stopLoss =
+    matchLine(joined, /止损\s*[：:]\s*([\d.]+)/i) ||
+    matchLine(joined, /止[損损]\s*[：:]\s*([\d.]+)/i) ||
+    matchLine(joined, /Stop\s*[：:]\s*([\d.]+)/i);
+  const tpRaw =
+    matchLine(joined, /止盈\s*[：:]\s*([^\n]+)/i) ||
+    matchLine(joined, /止[盈盈]\s*[：:]\s*([^\n]+)/i) ||
+    matchLine(joined, /Target\s*[：:]\s*([^\n]+)/i);
+  const takeProfits = tpRaw
+    ? tpRaw
+        .split(/[,，/\s·]+/)
+        .map((x) => x.trim())
+        .filter((x) => /^[\d.]/.test(x))
+    : [];
+
+  if (!symbol && entry) {
+    const symLine = joined.match(/\b([A-Z0-9]{2,15})USDT\b/i);
+    if (symLine) symbol = String(symLine[1]).toUpperCase() + "USDT";
+  }
+  if (!symbol || !direction || !entry) return null;
+
+  const hasSl = Boolean(stopLoss);
+  const isLong = direction === "做多";
+  const targets =
+    takeProfits.length > 0
+      ? takeProfits
+      : [
+          priceAtPctFromEntry(entry, 0.03, isLong),
+          priceAtPctFromEntry(entry, 0.06, isLong),
+          priceAtPctFromEntry(entry, 0.1, isLong),
+        ].filter(Boolean);
+
+  if (!targets.length) return null;
+
+  return {
+    parser: "junzhang",
+    symbol,
+    asset: symbol.replace(/USDT$/i, ""),
+    direction,
+    entry,
+    stopLoss: stopLoss || "",
+    takeProfits: targets,
+    targets,
+    orderMode: "market",
+    signalPhase: hasSl ? "full" : "open",
+    awaitingTpsl: !hasSl,
+    tpPartialRatios: [0.3, 0.3, 1],
+    title: `${symbol.replace(/USDT$/i, "")} · 卡片`,
+  };
+}
+
 /**
  * 军长频道：现价开仓 + 参考价；TP1/2/3 = ±3%/6%/10%。
  * 止损可同条，或约 2 分钟内另条 `止损0.0065` 合并。
@@ -730,14 +988,10 @@ export const JUNZHANG_SL_LINK_MS = 2 * 60 * 1000;
  * @param {string} text
  */
 export function parseJunzhang(text) {
-  const joined = lines(text).join("\n");
-  const stopLoss =
-    matchLine(joined, /止损\s*[：:]?\s*([\d.]+)/i) ||
-    matchLine(joined, /止[損损]\s*[：:]?\s*([\d.]+)/i);
+  const joined = lines(foldJunzhangText(text)).join("\n");
+  const stopLoss = parseJunzhangStopLoss(joined);
 
-  const openM =
-    joined.match(/([A-Z][A-Z0-9]{1,14})\s*现价开个?([多空])(?:单)?/i) ||
-    joined.match(/💰\s*([A-Z][A-Z0-9]{1,14})\s*现价开个?([多空])(?:单)?/i);
+  const openM = joined.match(JUNZHANG_LATIN_OPEN_RE);
   let symbol = openM?.[1] ? String(openM[1]).toUpperCase() : "";
   let dirChar = openM?.[2] ? String(openM[2]) : "";
 
@@ -746,9 +1000,9 @@ export function parseJunzhang(text) {
     if (refSym) symbol = String(refSym[1]).toUpperCase();
   }
   if (!dirChar) {
-    if (/现价开个?空|空单|做空/.test(joined) && !/现价开个?多|多单|做多/.test(joined)) {
+    if (/现价开(?:一层)?(?:个)?空|空单|做空/.test(joined) && !/现价开(?:一层)?(?:个)?多|多单|做多/.test(joined)) {
       dirChar = "空";
-    } else if (/现价开个?多|多单|做多|开个多/.test(joined)) {
+    } else if (/现价开(?:一层)?(?:个)?多|多单|做多|开个多/.test(joined)) {
       dirChar = "多";
     }
   }
@@ -772,10 +1026,11 @@ export function parseJunzhang(text) {
     }
   }
 
-  const hasOpen = Boolean(symbol && direction && entry);
+  const hasMarketOpen = Boolean(symbol && direction && /现价\s*开/.test(joined.replace(/\s/g, "")));
+  const hasOpen = Boolean(symbol && direction && (entry || hasMarketOpen));
 
   // 仅止损补充（常约 2 分钟内另发）
-  if (stopLoss && !hasOpen && !/现价开/.test(joined)) {
+  if (stopLoss && !hasOpen && !/现价\s*开/.test(joined.replace(/\s/g, ""))) {
     return {
       parser: "junzhang",
       symbol: symbol || "",
@@ -793,47 +1048,100 @@ export function parseJunzhang(text) {
 
   if (!hasOpen) return null;
 
-  const isLong = direction === "做多";
-  const takeProfits = [
-    priceAtPctFromEntry(entry, 0.03, isLong),
-    priceAtPctFromEntry(entry, 0.06, isLong),
-    priceAtPctFromEntry(entry, 0.1, isLong),
-  ].filter(Boolean);
-
-  if (!takeProfits.length) return null;
-
-  const hasSl = Boolean(stopLoss);
-  return {
-    parser: "junzhang",
+  return buildJunzhangOpenCard({
     symbol,
-    asset: symbol,
     direction,
     entry,
-    stopLoss: stopLoss || "",
-    takeProfits,
-    targets: takeProfits,
-    orderMode: "market",
-    signalPhase: hasSl ? "full" : "open",
-    awaitingTpsl: !hasSl,
-    tpPartialRatios: [0.3, 0.3, 1],
-    note: isLong
-      ? "TP1 +3% 平30%；TP2 +6% 平30%；TP3 +10% 全平"
-      : "TP1 -3% 平30%；TP2 -6% 平30%；TP3 -10% 全平",
-    title: `${symbol} · 军长`,
+    stopLoss,
+    joined,
+    orderMode: entry ? "limit" : "market",
+  });
+}
+
+/**
+ * 一条 Discord 消息内可能有多段「XXX现价开…」，逐段解析。
+ * @param {string} text
+ * @returns {Array<Record<string, unknown>>}
+ */
+export function parseJunzhangSignals(text) {
+  const t = foldJunzhangText(String(text ?? "").trim());
+  if (!t) return [];
+
+  /** @type {Array<Record<string, unknown>>} */
+  const out = [];
+  const pushUnique = (/** @type {Record<string, unknown>} */ card) => {
+    const sym = String(card.symbol ?? "").toUpperCase();
+    const dir = String(card.direction ?? "");
+    const ent = String(card.entry ?? "").trim() || "mkt";
+    const key = `${sym}|${dir}|${ent}`;
+    if (out.some((c) => `${String(c.symbol ?? "").toUpperCase()}|${String(c.direction ?? "")}|${String(c.entry ?? "").trim() || "mkt"}` === key)) {
+      return;
+    }
+    out.push(card);
   };
+
+  const matches = [...t.matchAll(JUNZHANG_LATIN_OPEN_GLOBAL_RE)];
+  if (matches.length) {
+    for (let i = 0; i < matches.length; i += 1) {
+      const start = matches[i].index ?? 0;
+      const end = i + 1 < matches.length ? (matches[i + 1].index ?? t.length) : t.length;
+      const slice = t.slice(start, end).trim();
+      const r = parseJunzhang(slice);
+      if (r) pushUnique(r);
+    }
+  } else {
+    const one = parseJunzhang(t);
+    if (one) pushUnique(one);
+  }
+
+  for (const card of parseJunzhangChineseMarketOpens(t)) pushUnique(card);
+  for (const card of parseJunzhangLimitOrders(t)) pushUnique(card);
+
+  return out;
+}
+
+/**
+ * @param {string} text
+ * @param {import("./discord-signal-config.js").ParserKind} kind
+ * @returns {Array<Record<string, unknown>>}
+ */
+export function parseSignalTexts(text, kind) {
+  const t = String(text ?? "").trim();
+  if (!t) return [];
+
+  if (kind === "junzhang") {
+    if (/现价\s*开|挂\s*个?[多空]|参考价格|止损\s*[：:\s]*[\d.]/.test(t)) {
+      const multi = parseJunzhangSignals(t);
+      if (multi.length) return multi;
+    }
+    if (/入场\s*[：:]|入場\s*[：:]|【卡片】/.test(t)) {
+      const brief = parseCnBriefStructured(t);
+      if (brief) return [brief];
+    }
+    return [];
+  }
+
+  const one = parseSignalTextInner(t, kind);
+  return one ? [one] : [];
 }
 
 /**
  * @param {string} text
  * @param {import("./discord-signal-config.js").ParserKind} kind
  */
-export function parseSignalText(text, kind) {
-  const t = String(text ?? "").trim();
+function parseSignalTextInner(text, kind) {
+  const t = foldJunzhangText(String(text ?? "").trim());
   if (!t) return null;
 
-  if (kind === "junzhang" && /现价开|参考价格|止损\s*[\d.]/.test(t)) {
-    const r = parseJunzhang(t);
-    if (r) return r;
+  if (kind === "junzhang") {
+    if (/现价\s*开|挂\s*个?[多空]|参考价格|止损\s*[：:\s]*[\d.]/.test(t)) {
+      const multi = parseJunzhangSignals(t);
+      if (multi.length) return multi[0];
+    }
+    if (/入场\s*[：:]|入場\s*[：:]|【卡片】/.test(t)) {
+      const brief = parseCnBriefStructured(t);
+      if (brief) return brief;
+    }
   }
   if (kind === "altcoin_king" && (isMarketOpenText(t) || /#[A-Z0-9]+/i.test(t))) {
     const r = parseAltcoinKing(t);
@@ -852,6 +1160,14 @@ export function parseSignalText(text, kind) {
   }
 
   if (!looksLikeSignal(t, kind)) return null;
+  return parseSignalTextSwitch(t, kind);
+}
+
+/**
+ * @param {string} t
+ * @param {import("./discord-signal-config.js").ParserKind} kind
+ */
+function parseSignalTextSwitch(t, kind) {
   switch (kind) {
     case "binance_killers":
       return parseBinanceKillers(t);
@@ -894,6 +1210,10 @@ export function parseSignalText(text, kind) {
         parseBinanceKillers(t)
       );
   }
+}
+
+export function parseSignalText(text, kind) {
+  return parseSignalTextInner(String(text ?? "").trim(), kind);
 }
 
 /**

@@ -1,0 +1,12 @@
+{
+  "_doc": "复制为 backfill_groups.json 并维护需要回溯的群；与 channel_profiles.json 的 send 列表可不同（用于发现新群）。",
+  "groups": [
+    {
+      "chatId": "-1002404948215",
+      "name": "Fly-幣圈頭號玩家",
+      "avatar": "avatar/1002404948215.png",
+      "enabled": true,
+      "note": "示例：后续在此追加 chatId"
+    }
+  ]
+}

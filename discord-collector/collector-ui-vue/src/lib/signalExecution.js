@@ -652,7 +652,12 @@ export function backtestSummaryLines(card) {
     if (profiles) {
       for (const [key, row] of Object.entries(profiles)) {
         if (!row || typeof row !== "object") continue;
-        const label = key === "fixed_5_7_10_20" ? "固定 5%+7/10/20%" : key === "card" ? "卡片 TP/SL" : key;
+        const label =
+          key === "fixed_5_7_10_20"
+            ? "M7利润保护止损"
+            : key === "card"
+              ? "卡片 TP/SL"
+              : key;
         const entered = row.entered ? "已入场" : "未入场";
         const oc = String(row.outcome ?? "pending");
         const pnl = row.pnlLabel ?? (Number.isFinite(Number(row.pnlPct)) ? `${row.pnlPct}%` : "—");

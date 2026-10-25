@@ -1,7 +1,7 @@
 /** 顶栏 mercu-header-focus 榜单类型（数据来自 /api/binance/leaderboards） */
 
 /** 顶栏榜单轮询（雷达兜底时服务端约 45s 重算；直连 Binance 时服务端缓存 15min） */
-export const HEADER_FETCH_MS = 60 * 1000;
+export const HEADER_FETCH_MS = 20 * 1000;
 export const HEADER_FETCH_MS_DIRECT_BINANCE = 15 * 60 * 1000;
 
 export type HeaderBoardId =

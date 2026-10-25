@@ -156,7 +156,7 @@ export async function liquidateArchiveCards(opts = {}) {
 }
 
 /**
- * 批量回溯（双策略：固定 5% 止损 + 7/10/20% 止盈 vs 卡片 TP/SL；4h 标记、3 天截止）
+ * 批量回溯（双策略：M7 分段利润保护止损 vs 卡片 TP/SL；12h 标记直至触线）
  * @param {{ cardIds?: number[], profileMode?: 'both'|'fixed'|'card', force?: boolean, limit?: number, channelId?: string, symbol?: string, days?: number, from?: string, to?: string, sources?: string[] }} [opts]
  */
 export async function batchBacktestArchiveCards(opts = {}) {

@@ -9,8 +9,57 @@ export function snowflakeToMs(snowflake) {
     const id = BigInt(String(snowflake));
     return Number((id >> 22n) + 1420070400000n);
   } catch {
-    return Date.now();
+    return 0;
   }
+}
+
+/**
+ * 消息时间：REST/Gateway 的 timestamp → 雪花 id → 0。
+ * @param {{
+ *   createdAtMs?: number;
+ *   created_at_ms?: number;
+ *   messageId?: string;
+ *   message_id?: string;
+ *   rawMessage?: unknown;
+ *   rawJson?: unknown;
+ *   raw_json?: unknown;
+ * }} parts
+ */
+export function resolveDiscordMessageCreatedAtMs(parts) {
+  const direct = Number(parts.createdAtMs ?? parts.created_at_ms ?? 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  /** @param {Record<string, unknown>} m */
+  const fromRecord = (m) => {
+    for (const key of ["timestamp", "edited_timestamp"]) {
+      const raw = m[key];
+      if (raw == null || raw === "") continue;
+      const ms = Date.parse(String(raw));
+      if (Number.isFinite(ms)) return ms;
+    }
+    return 0;
+  };
+
+  let raw = parts.rawMessage ?? parts.rawJson ?? parts.raw_json;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  const rec = asRecord(raw);
+  if (rec) {
+    const fromTs = fromRecord(rec);
+    if (fromTs > 0) return fromTs;
+  }
+
+  const mid = String(parts.messageId ?? parts.message_id ?? "").trim();
+  if (mid && /^\d{5,}$/.test(mid)) {
+    const ms = snowflakeToMs(mid);
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+  return 0;
 }
 
 /**
@@ -132,7 +181,7 @@ export function normalizeDiscordMessage(data, eventType, source = "gateway_ws") 
     guildId: m.guild_id != null ? String(m.guild_id) : "",
     channelId: m.channel_id != null ? String(m.channel_id) : "",
     authorId: author?.id != null ? String(author.id) : "",
-    createdAtMs: snowflakeToMs(id),
+    createdAtMs: resolveDiscordMessageCreatedAtMs({ messageId: id, rawMessage: m }),
     content: extractDiscordMessageContent(m),
     authorUsername: author?.username != null ? String(author.username) : null,
     authorGlobalName: author?.global_name != null ? String(author.global_name) : null,

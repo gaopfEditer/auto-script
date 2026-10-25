@@ -10,7 +10,6 @@ import {
 } from "../lib/cardArchiveApi.js";
 import { outcomeLabel, resolveCardPnlPct } from "../lib/signalExecution.js";
 import BloggerCombobox from "../components/BloggerCombobox.vue";
-
 defineOptions({ name: "ManualStatsView" });
 
 const DRAFT_CACHE_KEY = "manual-stats-draft-rows-v2";

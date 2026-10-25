@@ -663,6 +663,7 @@ def _detect_liquidity_sweep(df: pd.DataFrame) -> list[dict[str, Any]]:
         if i in used:
             continue
         mid = float(row["vegas_mid"]) if pd.notna(row.get("vegas_mid")) else float(row["close"])
+        oi_on = bool(row.get("oi_anomaly")) if "oi_anomaly" in row else False
         out.append({
             "kind": "liquidity_sweep",
             "side": "bear",

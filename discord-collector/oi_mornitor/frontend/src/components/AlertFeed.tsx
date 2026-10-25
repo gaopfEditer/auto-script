@@ -4,6 +4,7 @@ import type { TickerRow } from "../types";
 import {
   deriveOiAlerts,
   isPlausibleOiAlert,
+  resolveOiAlertSignalTs,
   type AlertThresholds,
   type OiAlertItem,
 } from "../utils/deriveOiAlerts";
@@ -22,8 +23,8 @@ interface Props {
 /** 异动流本地缓存时长 */
 const ALERT_FEED_TTL_MS = 2 * 60 * 60_000;
 const ALERT_FEED_MAX = 80;
-/** v2：丢掉旧缓存里 5m OI +100% 这类脏点 */
-const ALERT_FEED_CACHE_KEY = "oi_alert_feed_v2";
+/** v3：alertTs 以信号时刻为准，丢弃 v2 里误写为 scanTs 的时间 */
+const ALERT_FEED_CACHE_KEY = "oi_alert_feed_v3";
 
 type AlertFeedCachePayload = {
   items: OiAlertItem[];
@@ -31,7 +32,22 @@ type AlertFeedCachePayload = {
 
 function formatClock(ts: number): string {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleTimeString("zh-CN", {
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) {
+    return d.toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  }
+  return d.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -74,12 +90,14 @@ function loadAlertFeedCache(): OiAlertItem[] {
   try {
     const raw =
       localStorage.getItem(ALERT_FEED_CACHE_KEY) ||
+      localStorage.getItem("oi_alert_feed_v2") ||
       localStorage.getItem("oi_alert_feed_v1");
     if (!raw) return [];
     const parsed = JSON.parse(raw) as AlertFeedCachePayload;
     const items = Array.isArray(parsed?.items) ? parsed.items.filter(isAlertItem) : [];
     const pruned = pruneAlertItems(items);
     localStorage.setItem(ALERT_FEED_CACHE_KEY, JSON.stringify({ items: pruned }));
+    localStorage.removeItem("oi_alert_feed_v2");
     localStorage.removeItem("oi_alert_feed_v1");
     return pruned;
   } catch {
@@ -96,7 +114,7 @@ function saveAlertFeedCache(items: OiAlertItem[]) {
   }
 }
 
-/** 合并本轮派生与缓存：同 id 保留首次出现时间，刷新数值与标签 */
+/** 合并缓存：数值跟 live，时间跟「信号发生」— 取更早的合法 signalTs，纠正误缓存的 scanTs */
 function mergeAlertFeed(
   cached: OiAlertItem[],
   live: OiAlertItem[],
@@ -105,15 +123,23 @@ function mergeAlertFeed(
   const byId = new Map<string, OiAlertItem>();
   for (const it of cached) byId.set(it.id, it);
 
-  const fallbackTs = scanTs > 0 ? scanTs : Date.now() / 1000;
   for (const item of live) {
     const prev = byId.get(item.id);
-    const alertTs =
-      prev && Number(prev.alertTs) > 0
-        ? Number(prev.alertTs)
-        : Number(item.alertTs) > 0
-          ? Number(item.alertTs)
-          : fallbackTs;
+    const liveSignalTs = resolveOiAlertSignalTs(item.row, item.window, scanTs);
+    const itemTs = Number(item.alertTs) > 0 ? Number(item.alertTs) : liveSignalTs;
+    const prevTs = prev && Number(prev.alertTs) > 0 ? Number(prev.alertTs) : 0;
+
+    let alertTs = itemTs;
+    if (prevTs > 0 && itemTs > 0) {
+      alertTs = Math.min(prevTs, itemTs);
+      // 旧缓存若把某次刷新时间当成信号时间（≈scanTs 且晚于真实 alert_ts），用更早的
+      if (scanTs > 0 && prevTs >= scanTs - 30 && itemTs < prevTs - 60) {
+        alertTs = itemTs;
+      }
+    } else if (prevTs > 0) {
+      alertTs = prevTs;
+    }
+
     byId.set(item.id, { ...item, alertTs });
   }
 
@@ -139,7 +165,9 @@ const AlertCard = memo(function AlertCard({
       role={onSelect ? "button" : undefined}
     >
       <div className="alert-card-row">
-        <time className="alert-ts">{timeLabel}</time>
+        <time className="alert-ts" dateTime={item.alertTs ? new Date(item.alertTs * 1000).toISOString() : undefined}>
+          {timeLabel}
+        </time>
         <div className="alert-card-body">
           <div className="alert-card-head">
             <div className="alert-coin">

@@ -47,6 +47,12 @@ export function fmtPct(n: number | null | undefined): string {
   return `${sign}${v.toFixed(2)}%`;
 }
 
+/** smart.b / mercu 强度分（Str），不带 % */
+export function fmtStr(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return `${Math.round(Math.abs(Number(n)))}`;
+}
+
 /** pattern-chart-meta 价格有效数字位数（与头部价格展示一致） */
 export const META_PRICE_SIGFIGS = 5;
 

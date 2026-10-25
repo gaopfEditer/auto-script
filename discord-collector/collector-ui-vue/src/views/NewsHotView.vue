@@ -1,5 +1,11 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from "vue";
+import { isLocalClient } from "../lib/localClient.js";
+import {
+  NEWS_EMBED_MOUNT,
+  isTrapMainSiteNewsEmbed,
+  pickNewsIframeEmbedUrl,
+} from "../lib/newsEmbedUrl.js";
 
 defineOptions({ name: "NewsHotView" });
 
@@ -8,23 +14,19 @@ const loading = ref(true);
 const embedUrl = ref("");
 const error = ref("");
 const hint = ref("");
+const embedDeployError = ref("");
 const latencyMs = ref(null);
 const iframeReady = ref(false);
 
 let pollTimer = null;
 
-/**
- * 根据当前页面 URL 判断：
- * - http://localhost/* → 嵌本机 news (http://127.0.0.1:8770/)
- * - https://* → 生产同源 /news/index.html
- * @param {Record<string, unknown>} j
- */
-function pickEmbedUrl(j) {
-  const protocol = String(typeof location !== "undefined" ? location.protocol : "https:");
-  if (protocol === "http:") {
-    return "http://127.0.0.1:8770/";
+/** @param {Record<string, unknown>} [status] */
+function pickEmbedUrl(status) {
+  if (isLocalClient()) {
+    const local = String(status?.localEmbedUrl ?? "http://127.0.0.1:8770/").trim();
+    return local.endsWith("/") ? local : `${local}/`;
   }
-  return "/news/index.html";
+  return pickNewsIframeEmbedUrl(status);
 }
 
 const iframeSrc = embedUrl;
@@ -41,18 +43,23 @@ async function refreshStatus() {
       );
     }
     const j = JSON.parse(text);
-    embedUrl.value = pickEmbedUrl(j);
+    embedDeployError.value = j.embedDeployError ? String(j.embedDeployError) : "";
+    if (!iframeReady.value) {
+      const next = pickEmbedUrl(j);
+      if (next && !isTrapMainSiteNewsEmbed(next)) embedUrl.value = next;
+      else if (!isLocalClient()) embedUrl.value = `${NEWS_EMBED_MOUNT}/`;
+    }
     active.value = Boolean(j.active);
     error.value = j.error ? String(j.error) : "";
     hint.value = j.hint ? String(j.hint) : "";
     latencyMs.value = Number.isFinite(j.latencyMs) ? j.latencyMs : null;
-    iframeReady.value = Boolean(j.active);
+    iframeReady.value = Boolean(j.active) && Boolean(embedUrl.value) && !embedDeployError.value;
   } catch (e) {
     active.value = false;
     iframeReady.value = false;
     error.value = String(e?.message ?? e);
     hint.value = "collect:ui 未响应；平台热点由 collect:ui 自动守护 :8770";
-    if (!embedUrl.value) embedUrl.value = pickEmbedUrl({});
+    if (!embedUrl.value && isLocalClient()) embedUrl.value = pickEmbedUrl({});
   } finally {
     loading.value = false;
   }
@@ -65,7 +72,6 @@ async function restartAndRefresh() {
   } catch {
     /* ignore — let refreshStatus show result */
   }
-  // 延迟等进程拉起
   await new Promise((r) => setTimeout(r, 3000));
   await refreshStatus();
 }
@@ -88,11 +94,12 @@ onUnmounted(() => {
         <p class="lead">金十+PANews · 币安 · OKX · Foresight · CoinDesk · BlockBeats</p>
         <p v-if="loading" class="muted">探测中…</p>
         <p v-else class="warn">未激活{{ error ? `：${error}` : "" }}</p>
+        <p v-if="embedDeployError" class="warn">{{ embedDeployError }}</p>
         <p v-if="hint" class="hint">{{ hint }}</p>
         <ol>
           <li>确认已运行 <code>pnpm run collect:ui</code>（会自动守护 news）</li>
-          <li>不要同时跑 <code>auto-deal-eth</code> 的 CryptoPulse（同占 :8770，会变成华尔街见闻且没有币圈 tab）</li>
-          <li>或手动：<code>pnpm run news:start</code></li>
+          <li>生产 iframe 使用 <code>{{ NEWS_EMBED_MOUNT }}/</code> 反代 :8770，勿用 <code>/news/index.html</code>（会嵌成主站）</li>
+          <li>不要同时跑 <code>auto-deal-eth</code> 的 CryptoPulse（同占 :8770）</li>
         </ol>
         <p class="muted">
           嵌入地址：<code>{{ iframeSrc || embedUrl || "—" }}</code>
