@@ -7,6 +7,7 @@ import {
   resolveOiAlertSignalTs,
   type AlertThresholds,
   type OiAlertItem,
+  type RadarSource,
 } from "../utils/deriveOiAlerts";
 import { fmtDelta, fmtPct } from "../utils/format";
 import { patternsPathForSymbol } from "../utils/patternNav";
@@ -18,13 +19,14 @@ interface Props {
   scanTs: number;
   poolSize: number;
   thresholds: AlertThresholds;
+  radarSource?: RadarSource;
 }
 
 /** 异动流本地缓存时长 */
 const ALERT_FEED_TTL_MS = 2 * 60 * 60_000;
 const ALERT_FEED_MAX = 80;
-/** v3：alertTs 以信号时刻为准，丢弃 v2 里误写为 scanTs 的时间 */
-const ALERT_FEED_CACHE_KEY = "oi_alert_feed_v3";
+/** v4：alertTs 首次出现冻结，不再跟随后续 scan_ts 刷新 */
+const ALERT_FEED_CACHE_KEY = "oi_alert_feed_v6";
 
 type AlertFeedCachePayload = {
   items: OiAlertItem[];
@@ -88,17 +90,23 @@ function isAlertItem(v: unknown): v is OiAlertItem {
 
 function loadAlertFeedCache(): OiAlertItem[] {
   try {
-    const raw =
-      localStorage.getItem(ALERT_FEED_CACHE_KEY) ||
-      localStorage.getItem("oi_alert_feed_v2") ||
-      localStorage.getItem("oi_alert_feed_v1");
-    if (!raw) return [];
+    const raw = localStorage.getItem(ALERT_FEED_CACHE_KEY);
+    if (!raw) {
+      for (const legacy of [
+        "oi_alert_feed_v5",
+        "oi_alert_feed_v4",
+        "oi_alert_feed_v3",
+        "oi_alert_feed_v2",
+        "oi_alert_feed_v1",
+      ]) {
+        localStorage.removeItem(legacy);
+      }
+      return [];
+    }
     const parsed = JSON.parse(raw) as AlertFeedCachePayload;
     const items = Array.isArray(parsed?.items) ? parsed.items.filter(isAlertItem) : [];
     const pruned = pruneAlertItems(items);
     localStorage.setItem(ALERT_FEED_CACHE_KEY, JSON.stringify({ items: pruned }));
-    localStorage.removeItem("oi_alert_feed_v2");
-    localStorage.removeItem("oi_alert_feed_v1");
     return pruned;
   } catch {
     return [];
@@ -114,7 +122,7 @@ function saveAlertFeedCache(items: OiAlertItem[]) {
   }
 }
 
-/** 合并缓存：数值跟 live，时间跟「信号发生」— 取更早的合法 signalTs，纠正误缓存的 scanTs */
+/** 合并缓存：数值跟 live；alertTs 只在卡片首次出现时写入，之后冻结（=信号出现时刻） */
 function mergeAlertFeed(
   cached: OiAlertItem[],
   live: OiAlertItem[],
@@ -125,21 +133,13 @@ function mergeAlertFeed(
 
   for (const item of live) {
     const prev = byId.get(item.id);
-    const liveSignalTs = resolveOiAlertSignalTs(item.row, item.window, scanTs);
-    const itemTs = Number(item.alertTs) > 0 ? Number(item.alertTs) : liveSignalTs;
     const prevTs = prev && Number(prev.alertTs) > 0 ? Number(prev.alertTs) : 0;
-
-    let alertTs = itemTs;
-    if (prevTs > 0 && itemTs > 0) {
-      alertTs = Math.min(prevTs, itemTs);
-      // 旧缓存若把某次刷新时间当成信号时间（≈scanTs 且晚于真实 alert_ts），用更早的
-      if (scanTs > 0 && prevTs >= scanTs - 30 && itemTs < prevTs - 60) {
-        alertTs = itemTs;
-      }
-    } else if (prevTs > 0) {
-      alertTs = prevTs;
-    }
-
+    const bornTs =
+      Number(item.alertTs) > 0
+        ? Number(item.alertTs)
+        : resolveOiAlertSignalTs(item.row, item.window, scanTs, item.kind) ||
+          Math.floor(Date.now() / 1000);
+    const alertTs = prevTs > 0 ? prevTs : bornTs;
     byId.set(item.id, { ...item, alertTs });
   }
 
@@ -208,13 +208,14 @@ export const AlertFeed = memo(function AlertFeed({
   scanTs,
   poolSize,
   thresholds,
+  radarSource = "local",
 }: Props) {
   const navigate = useNavigate();
   const [items, setItems] = useState<OiAlertItem[]>(() => loadAlertFeedCache());
 
   const liveAlerts = useMemo(
-    () => deriveOiAlerts(rows, thresholds, 60, scanTs),
-    [rows, thresholds, scanTs],
+    () => deriveOiAlerts(rows, thresholds, 60, scanTs, radarSource),
+    [rows, thresholds, scanTs, radarSource],
   );
 
   useEffect(() => {
@@ -247,7 +248,7 @@ export const AlertFeed = memo(function AlertFeed({
           异动监控
           <span
             className="alert-feed-info"
-            title="OI 暴增/暴跌 + 价格暴涨/暴跌（5m/15m）；本地缓存约 2 小时，刷新不丢"
+            title="价格/OI 短窗均来自本机币安扫描（现价 vs 5/15 分钟前）；时间=首次检出时刻；缓存约 2 小时"
           >
             ⓘ
           </span>

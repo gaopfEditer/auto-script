@@ -134,19 +134,20 @@ def _apply_board_row(
 
     if domain == "price":
         # 本地 change_rate 为小数；smart.b pct 为百分数。
-        # strength 榜的 value 常是 Str 分数，不能当涨跌幅。
-        if _kind == "value" or abs(pct) > 1e-12:
-            rate = (pct if abs(pct) > 1e-12 else value) / 100.0
+        # strength 榜的 value/strength 是 Str 分数，绝不能写入涨跌幅（曾误报 ARC -11% 类「价格暴跌」）。
+        str_score = strength if strength else (abs(value) if _kind == "strength" else 0.0)
+        m["intensity_score"] = max(m["intensity_score"], str_score)
+        if _kind == "value":
+            rate_src = pct if abs(pct) > 1e-12 else value
+            rate = float(rate_src) / 100.0
             if not positive and rate > 0:
                 rate = -rate
             if positive and rate < 0:
                 rate = abs(rate)
-            # 仅在尚无有效涨跌幅，或本行是 value 榜时写入
-            if _kind == "value" or abs(float(m.get("change_rate") or 0)) < 1e-12:
-                m["change_rate"] = rate
-            if _kind == "value":
-                m["magnitude_usd"] = abs(impact) if impact else abs(rate) * max(float(row.get("quoteVolume") or 0), 1e6)
-        m["intensity_score"] = max(m["intensity_score"], strength if strength else (value if _kind == "strength" else 0))
+            m["change_rate"] = rate
+            m["magnitude_usd"] = abs(impact) if impact else abs(rate) * max(
+                float(row.get("quoteVolume") or 0), 1e6
+            )
     elif domain == "oi":
         # smart.b OI 榜通常无 oiPct：value=金额或 Str，auxDisplay=±$金额
         oi_pct = float(row.get("oiPct") or row.get("oi_pct") or row.get("pct") or 0.0)
@@ -211,14 +212,15 @@ def _apply_board_row(
                 fmap[local_tf] = {"net_usd": m["magnitude_usd"], "volume_usd": mag}
         m["intensity_score"] = max(m["intensity_score"], strength if strength else (value if _kind == "strength" else 0))
 
-    # 价格窗口
-    if domain == "price":
+    # 价格窗口（仅 value 榜；5m 本地槽位实际映射 smart.b 15m 窗口）
+    if domain == "price" and _kind == "value" and abs(float(m.get("change_rate") or 0)) > 1e-12:
+        signed_pct = float(m["change_rate"]) * 100.0
         pmap = bucket.setdefault("price_by_tf", {})
-        pmap[local_tf] = {"pct": abs(m["change_rate"]) * 100.0 * (1 if positive else -1)}
+        pmap[local_tf] = {"pct": signed_pct}
         if local_tf == "5m":
-            bucket["pct_price_5m"] = pmap[local_tf]["pct"]
+            bucket["pct_price_5m"] = signed_pct
         if local_tf == "15m":
-            bucket["pct_price_15m"] = pmap[local_tf]["pct"]
+            bucket["pct_price_15m"] = signed_pct
 
     slot[domain] = m
     rank_tf[local_tf] = slot

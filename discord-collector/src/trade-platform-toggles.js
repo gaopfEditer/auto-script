@@ -1,6 +1,6 @@
 /**
  * 交易平台开关：Debug 页 localStorage 同步到服务端，信号建卡时决定是否向 Bitget / WEEX 下单。
- * 频道白名单：BITGET_AUTO_TRADE_CHANNEL_IDS（Discord）+ telegram/channel_profiles.json `send`（Telegram 来源群）。
+ * 频道白名单：BITGET_AUTO_TRADE_CHANNEL_IDS（Discord）+ telegram/channel_profiles.json `placeAnOrder`。
  * 主流币种 BTC/ETH 不参与自动交易。
  */
 import { config } from "./config.js";
@@ -31,9 +31,9 @@ export function setTradeOrderSizeUsdt(v) {
 /** @returns {string[]} */
 export function getAutoTradeChannelIds() {
   const discord = [...config.bitgetAutoTradeChannelIds];
-  const { sendChatIds } = readTelegramChannelProfiles();
+  const { placeAnOrderChatIds } = readTelegramChannelProfiles();
   const out = [...discord];
-  for (const id of sendChatIds) {
+  for (const id of placeAnOrderChatIds) {
     if (!out.includes(id)) out.push(id);
   }
   return out;

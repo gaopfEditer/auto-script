@@ -37,7 +37,9 @@ import {
 import { isStagedTradeSignal } from "./discord-signal-staged-trade.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import {
+  isTelegramAutoTradeChannel,
   prepareAutoTradeForOrder,
+  reinforceTelegramStopLossBeforeOrder,
   telegramTradeRequiresTpsl,
 } from "./telegram-auto-trade.js";
 
@@ -376,7 +378,9 @@ export function createBitgetOrderService(store, log) {
     let parsed = { ...(input.parsed ?? {}) };
     let executionJson = input.executionJson;
     const ex0 = normalizeExecution(executionJson, parsed);
-    const prepared = await prepareAutoTradeForOrder(parsed, ex0, autoTradeSym);
+    const prepared = isTelegramAutoTradeChannel(input.channelId)
+      ? await reinforceTelegramStopLossBeforeOrder(parsed, ex0, autoTradeSym)
+      : await prepareAutoTradeForOrder(parsed, ex0, autoTradeSym);
     parsed = prepared.parsed;
     executionJson = prepared.execution;
     input = { ...input, parsed, executionJson };

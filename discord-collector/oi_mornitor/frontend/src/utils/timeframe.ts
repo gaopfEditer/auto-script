@@ -41,11 +41,9 @@ export function getOiWindow(row: TickerRow, tf: OiTimeframe): { delta_usd: numbe
 
 export function getPriceWindow(row: TickerRow, tf: OiTimeframe): PriceWindowSnapshot {
   const fromMap = row.price_by_tf?.[tf];
-  if (fromMap) return fromMap;
+  if (fromMap != null && Number.isFinite(fromMap.pct)) return fromMap;
   if (tf === "5m") return { pct: row.pct_price_5m ?? 0 };
-  if (tf === "15m" || tf === "30m") {
-    return { pct: row.pct_price_15m ?? row.pct_price_5m ?? 0 };
-  }
+  if (tf === "15m") return { pct: row.pct_price_15m ?? 0 };
   return EMPTY_PRICE;
 }
 
@@ -57,12 +55,75 @@ export function getSpotFlowWindow(row: TickerRow, tf: OiTimeframe): FlowWindowSn
   return row.spot_flow_by_tf?.[tf] ?? EMPTY_FLOW;
 }
 
+function rankMetricFromWindows(
+  row: TickerRow,
+  tf: OiTimeframe,
+  domain: RankDomain,
+): RankMetricSnapshot | null {
+  if (domain === "price") {
+    const pct = getPriceWindow(row, tf).pct;
+    if (!Number.isFinite(pct) || pct === 0) return null;
+    const oiUsd = row.current_oi_usd ?? 0;
+    return {
+      magnitude_usd: Math.abs(pct / 100) * oiUsd,
+      change_rate: pct / 100,
+      z_score: 0,
+      intensity_score: 0,
+    };
+  }
+  if (domain === "oi") {
+    const w = getOiWindow(row, tf);
+    if (!w.delta_usd && !w.pct) return null;
+    return {
+      magnitude_usd: Math.abs(w.delta_usd),
+      change_rate: w.pct / 100,
+      z_score: 0,
+      intensity_score: 0,
+    };
+  }
+  if (domain === "contract_flow") {
+    const f = getFlowWindow(row, tf);
+    if (!f.net_usd && !f.volume_usd) return null;
+    const rate = f.volume_usd > 1e-9 ? f.net_usd / f.volume_usd : 0;
+    return {
+      magnitude_usd: f.net_usd,
+      change_rate: rate,
+      z_score: 0,
+      intensity_score: 0,
+    };
+  }
+  if (domain === "spot_flow") {
+    const f = getSpotFlowWindow(row, tf);
+    if (!f.net_usd && !f.volume_usd) return null;
+    const rate = f.volume_usd > 1e-9 ? f.net_usd / f.volume_usd : 0;
+    return {
+      magnitude_usd: f.net_usd,
+      change_rate: rate,
+      z_score: 0,
+      intensity_score: 0,
+    };
+  }
+  return null;
+}
+
+/** smart.b 榜单字段不可信时，用 price_by_tf / oi_by_tf 真差分覆盖 price/oi 展示 */
 export function getRankMetric(
   row: TickerRow,
   tf: OiTimeframe,
   domain: RankDomain,
 ): RankMetricSnapshot {
-  return row.rank_by_tf?.[tf]?.[domain] ?? EMPTY_RANK;
+  const fromRank = row.rank_by_tf?.[tf]?.[domain];
+  const fromWindows = rankMetricFromWindows(row, tf, domain);
+  if (row.data_source === "smartb" && fromWindows) {
+    return {
+      ...fromWindows,
+      intensity_score: fromRank?.intensity_score ?? fromWindows.intensity_score,
+    };
+  }
+  if (fromRank && (fromRank.change_rate !== 0 || fromRank.magnitude_usd !== 0)) {
+    return fromRank;
+  }
+  return fromWindows ?? fromRank ?? EMPTY_RANK;
 }
 
 /** 强度榜：取 OI % 与价格 % 中绝对值更大者（保留正负号）。 */

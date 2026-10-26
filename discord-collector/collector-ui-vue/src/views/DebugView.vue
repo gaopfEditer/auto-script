@@ -41,6 +41,7 @@ const simHistory = ref(
   /** @type {Array<{ ts: number; content: string; skipped?: string; cardId?: number; ok: boolean }>} */ ([])
 );
 const telegramSendChannels = ref(/** @type {Array<{ id: string; name: string }>} */ ([]));
+const telegramPlaceAnOrderChannels = ref(/** @type {Array<{ id: string; name: string }>} */ ([]));
 const simSendLoadError = ref("");
 const exampleSignal = ref("");
 
@@ -242,10 +243,13 @@ async function loadTelegramSendChannels() {
       const res = await fetch(url);
       const data = await res.json();
       list = normalizeSendChannelList(data.telegramSendChannels);
+      const orderList = normalizeSendChannelList(data.telegramPlaceAnOrderChannels);
+      if (orderList.length) telegramPlaceAnOrderChannels.value = orderList;
       if (list.length) {
         telegramSendChannels.value = list;
-        return;
+        if (orderList.length) return;
       }
+      if (orderList.length) return;
       if (data.channelProfilesError) {
         simSendLoadError.value = String(data.channelProfilesError);
       }
@@ -601,10 +605,15 @@ function isDiscordRow(row) {
             WEEX {{ simWeex?.dryRun ? "Dry-run" : simWeex?.enabled ? "实盘" : "关" }}
           </span>
         </div>
-        <div v-if="telegramSendChannels.length" class="sim-send-groups">
-          <span class="sim-send-title">send 白名单</span>
+        <div v-if="telegramPlaceAnOrderChannels.length" class="sim-send-groups">
+          <span class="sim-send-title">placeAnOrder 自动开单</span>
           <div class="sim-send-chips">
-            <span v-for="ch in telegramSendChannels" :key="ch.id" class="sim-send-chip" :title="ch.id">
+            <span
+              v-for="ch in telegramPlaceAnOrderChannels"
+              :key="ch.id"
+              class="sim-send-chip"
+              :title="ch.id"
+            >
               {{ ch.name }}
               <em>{{ ch.id.slice(-6) }}</em>
             </span>
@@ -613,9 +622,18 @@ function isDiscordRow(row) {
         <p v-else class="sim-send-empty">
           {{
             simSendLoadError ||
-              "未读到 send 白名单（请确认 telegram/channel_profiles.json 含 send 数组，并重启 collect:ui）"
+              "未读到 placeAnOrder（telegram/channel_profiles.json → placeAnOrder，重启 collect:ui）"
           }}
         </p>
+        <div v-if="telegramSendChannels.length" class="sim-send-groups">
+          <span class="sim-send-title">send · CDP 转发</span>
+          <div class="sim-send-chips">
+            <span v-for="ch in telegramSendChannels" :key="'send-' + ch.id" class="sim-send-chip muted" :title="ch.id">
+              {{ ch.name }}
+              <em>{{ ch.id.slice(-6) }}</em>
+            </span>
+          </div>
+        </div>
         <div class="sim-trade-grid">
           <div class="sim-trade-block">
             <span class="sim-block-title">推送平台</span>

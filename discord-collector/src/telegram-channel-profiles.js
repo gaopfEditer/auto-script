@@ -49,10 +49,11 @@ function isChannelProfileEntry(raw) {
  *   channels: Array<{ chatId: string, name: string, avatar: string, main: string }>,
  * }}
  */
-function readChatIdList(raw, /** @type {unknown} */ field) {
+/** @param {Record<string, unknown>} obj @param {string} key */
+function readChatIdList(obj, key) {
   /** @type {string[]} */
   const out = [];
-  const arr = field === "send" ? raw?.send : field === "placeAnOrder" ? raw?.placeAnOrder : null;
+  const arr = obj[key];
   if (!Array.isArray(arr)) return out;
   const seen = new Set();
   for (const item of arr) {
@@ -118,7 +119,16 @@ export function readTelegramChannelProfiles() {
     }
 
     const sendSet = new Set(sendChatIds);
-    return { ok: true, file: CHANNEL_PROFILES_FILE, sendChatIds, sendSet, channels };
+    const placeAnOrderSet = new Set(placeAnOrderChatIds);
+    return {
+      ok: true,
+      file: CHANNEL_PROFILES_FILE,
+      sendChatIds,
+      sendSet,
+      placeAnOrderChatIds,
+      placeAnOrderSet,
+      channels,
+    };
   } catch (e) {
     return {
       ok: false,
@@ -126,6 +136,8 @@ export function readTelegramChannelProfiles() {
       error: String(/** @type {Error} */ (e).message ?? e),
       sendChatIds,
       sendSet: new Set(),
+      placeAnOrderChatIds,
+      placeAnOrderSet: new Set(),
       channels,
     };
   }
@@ -137,21 +149,49 @@ export function readTelegramChannelProfiles() {
  */
 export function listTelegramSendChannelsWithNames() {
   const { sendChatIds, channels } = readTelegramChannelProfiles();
-  return sendChatIds.map((id) => {
+  return mapChatIdsWithNames(sendChatIds, channels);
+}
+
+/**
+ * channel_profiles.json `placeAnOrder` → Debug「Telegram 自动开单」白名单。
+ * @returns {Array<{ id: string; name: string }>}
+ */
+export function listTelegramPlaceAnOrderChannelsWithNames() {
+  const { placeAnOrderChatIds, channels } = readTelegramChannelProfiles();
+  return mapChatIdsWithNames(placeAnOrderChatIds, channels);
+}
+
+/**
+ * @param {string[]} ids
+ * @param {Array<{ chatId: string, name: string }>} channels
+ */
+function mapChatIdsWithNames(ids, channels) {
+  return ids.map((id) => {
     const meta = channels.find((c) => telegramChatIdsMatch(c.chatId, id));
     return { id, name: String(meta?.name ?? id).trim() || id };
   });
 }
 
 /** @param {unknown} chatId */
-export function isCdpSendChannel(chatId) {
-  const { sendChatIds, sendSet } = readTelegramChannelProfiles();
-  if (!sendChatIds.length) return false;
+function isInChatIdList(chatId, /** @type {string[]} */ list, /** @type {Set<string>} */ set) {
+  if (!list.length) return false;
   const id = normalizeTelegramChatIdKey(chatId);
   if (!id) return false;
-  if (sendSet.has(id)) return true;
-  for (const sid of sendChatIds) {
+  if (set.has(id)) return true;
+  for (const sid of list) {
     if (telegramChatIdsMatch(sid, id)) return true;
   }
   return false;
+}
+
+/** @param {unknown} chatId */
+export function isCdpSendChannel(chatId) {
+  const { sendChatIds, sendSet } = readTelegramChannelProfiles();
+  return isInChatIdList(String(chatId ?? ""), sendChatIds, sendSet);
+}
+
+/** @param {unknown} chatId */
+export function isTelegramPlaceAnOrderChannel(chatId) {
+  const { placeAnOrderChatIds, placeAnOrderSet } = readTelegramChannelProfiles();
+  return isInChatIdList(String(chatId ?? ""), placeAnOrderChatIds, placeAnOrderSet);
 }

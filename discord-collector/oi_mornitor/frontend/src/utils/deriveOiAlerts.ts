@@ -36,13 +36,32 @@ export function oiDeltaMaxPct(window: OiAlertWindow): number {
 }
 
 export function isPlausibleOiAlert(item: Pick<OiAlertItem, "kind" | "window" | "deltaUsd" | "pct" | "row">): boolean {
-  if (item.kind !== "oi") return true;
-  return isPlausibleOiDelta(
-    item.deltaUsd,
-    item.pct,
-    item.row?.current_oi_usd ?? 0,
-    item.window,
-  );
+  if (item.kind === "oi") {
+    return isPlausibleOiDelta(
+      item.deltaUsd,
+      item.pct,
+      item.row?.current_oi_usd ?? 0,
+      item.window,
+    );
+  }
+  return isPlausiblePriceAlert(item);
+}
+
+/** 短窗「价格暴涨/暴跌」应与 24h 方向/量级大致一致（Binance 脏 tick 过滤） */
+export function isPlausiblePriceAlert(
+  item: Pick<OiAlertItem, "kind" | "pct" | "row">,
+): boolean {
+  if (item.kind !== "price") return true;
+  const pct = item.pct;
+  if (!Number.isFinite(pct) || Math.abs(pct) > 80) return false;
+  const p24 = Number(item.row?.price_change_pct_24h);
+  if (!Number.isFinite(p24) || Math.abs(p24) < 0.05) return true;
+  const abs5 = Math.abs(pct);
+  const abs24 = Math.abs(p24);
+  if (abs5 >= 8 && abs24 < Math.max(2, abs5 * 0.35)) return false;
+  if (abs5 >= 6 && abs24 < abs5 * 0.25) return false;
+  if (pct !== 0 && p24 !== 0 && Math.sign(pct) !== Math.sign(p24) && abs24 < 6) return false;
+  return true;
 }
 
 function isTriggered(
@@ -81,28 +100,40 @@ function windowSec(window: OiAlertWindow): number {
   return window === "5m" ? 300 : 900;
 }
 
-/** 扫描时刻所在 OI/价格测量窗口的结束时间（unix 秒，向下对齐 K 线边界） */
-export function alignOiWindowEndSec(scanSec: number, window: OiAlertWindow): number {
+/** unix 秒（后端偶发毫秒） */
+export function normalizeAlertTsSec(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return raw > 1e12 ? Math.floor(raw / 1000) : Math.floor(raw);
+}
+
+/** 5m/15m 测量窗口的 K 线收盘时刻（信号落在该根 K 线内） */
+export function alignOiWindowCloseSec(scanSec: number, window: OiAlertWindow): number {
   if (!Number.isFinite(scanSec) || scanSec <= 0) return 0;
   const bucket = windowSec(window);
-  return Math.floor(scanSec / bucket) * bucket;
+  return (Math.floor(scanSec / bucket) + 1) * bucket;
 }
 
 /**
  * 卡片展示用「信号发生时间」（unix 秒）：
- * - 优先后端 alert_ts（首次触发时刻，冷却内不变）
- * - 否则用当前扫描所在 5m/15m 窗口结束时刻，不用「刷新/入库」的 scanTs 原值
+ * - OI：后端 alert_ts（首次触发，冷却内不变），且当前窗口仍在触发/抑制集合内
+ * - 价格 / 无 alert_ts：用本轮扫描时刻（前端 merge 首次出现时冻结，不再跟随后续 scan）
  */
 export function resolveOiAlertSignalTs(
   row: TickerRow,
   window: OiAlertWindow,
   scanTs: number,
+  kind: OiAlertKind = "oi",
 ): number {
-  const alertTs = Number(row.alert_ts);
-  if (Number.isFinite(alertTs) && alertTs > 0) return alertTs;
-  const aligned = alignOiWindowEndSec(scanTs, window);
-  if (aligned > 0) return aligned;
-  return scanTs > 0 ? scanTs : 0;
+  if (kind === "oi") {
+    const ts = normalizeAlertTsSec(Number(row.alert_ts));
+    const wins = [...(row.raw_triggered_windows ?? []), ...(row.triggered_windows ?? [])];
+    if (ts > 0 && wins.includes(window)) return ts;
+  }
+  if (kind === "price" && row.data_source === "smartb") {
+    return 0;
+  }
+  if (scanTs > 0) return normalizeAlertTsSec(scanTs);
+  return 0;
 }
 
 function pricePct(row: TickerRow, window: OiAlertWindow): number {
@@ -160,12 +191,17 @@ function tagsFor(
  * - 价格暴涨/暴跌（5m / 15m）
  * 不依赖后端 is_hot 轮询门控。
  */
+export type RadarSource = "local" | "smartb" | string;
+
 export function deriveOiAlerts(
   rows: TickerRow[],
   thresholds: AlertThresholds,
   maxItems = 60,
   scanTs = 0,
+  radarSource: RadarSource = "local",
 ): OiAlertItem[] {
+  const fromSmartb =
+    radarSource === "smartb" || rows.some((r) => r.data_source === "smartb");
   const usdLimit = Number(thresholds.oi_usd_limit) || 500_000;
   const pctLimit = Number(thresholds.oi_pct_limit) || 2.5;
   const price5 = Number(thresholds.price_spike_pct_5m) || DEFAULT_PRICE_SPIKE_5M;
@@ -191,7 +227,7 @@ export function deriveOiAlerts(
       const inTrig = trigWins.includes(w.window);
       const isSuppressed = inRaw && !inTrig;
 
-      const alertTs = resolveOiAlertSignalTs(row, w.window, scanTs);
+      const alertTs = resolveOiAlertSignalTs(row, w.window, scanTs, "oi");
 
       items.push({
         id: `oi-${row.symbol}-${w.window}`,
@@ -207,6 +243,9 @@ export function deriveOiAlerts(
       });
     }
 
+    // smart.b 行无真实短窗价格差分，整类价格异动跳过
+    if (fromSmartb) continue;
+
     for (const window of ["5m", "15m"] as OiAlertWindow[]) {
       const pct = pricePct(row, window);
       const limit = window === "5m" ? price5 : price15;
@@ -214,7 +253,7 @@ export function deriveOiAlerts(
       // 过滤极端脏价
       if (Math.abs(pct) > 80) continue;
 
-      items.push({
+      const draft: OiAlertItem = {
         id: `price-${row.symbol}-${window}`,
         row,
         kind: "price",
@@ -223,8 +262,13 @@ export function deriveOiAlerts(
         pct,
         isPump: pct > 0,
         isSuppressed: false,
-        alertTs: resolveOiAlertSignalTs(row, window, scanTs),
+        alertTs: resolveOiAlertSignalTs(row, window, scanTs, "price"),
         tags: tagsFor(row, "price", maps),
+      };
+      if (!isPlausiblePriceAlert(draft)) continue;
+
+      items.push({
+        ...draft,
       });
     }
   }

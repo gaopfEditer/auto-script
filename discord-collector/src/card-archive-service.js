@@ -49,6 +49,7 @@ import { formatPipelineLog, formatSendCdpLog } from "./signal-pipeline-log.js";
 import {
   isTelegramAutoTradeChannel,
   prepareAutoTradeForOrder,
+  reinforceTelegramStopLossBeforeOrder,
   TELEGRAM_TRADE_INITIAL_SL_PCT,
   telegramTradeRequiresStopLoss,
 } from "./telegram-auto-trade.js";
@@ -438,7 +439,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
   }
 
   /**
-   * channel_profiles.send 白名单 Telegram 卡片 → 按 Debug 勾选平台自动开单（须含止盈止损）。
+   * channel_profiles.placeAnOrder 白名单 Telegram 卡片 → 按 Debug 勾选平台自动开单（须挂止损）。
    * @param {ReturnType<typeof archiveCardToClient>} clientCard
    * @param {ReturnType<typeof normalizeExecution>} executionJson
    * @param {Record<string, unknown>} parsedJson
@@ -464,7 +465,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     let execution = normalizeExecution(executionJson, parsedJson);
     /** @type {Record<string, unknown>} */
     const parsedForTrade = { ...(parsedJson && typeof parsedJson === "object" ? parsedJson : {}) };
-    const prepared = await prepareAutoTradeForOrder(parsedForTrade, execution, symbol);
+    const prepared = await reinforceTelegramStopLossBeforeOrder(parsedForTrade, execution, symbol);
     execution = prepared.execution;
     const parsed = prepared.parsed;
 
@@ -529,7 +530,8 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
    * @param {Record<string, unknown>} parsedJson
    * @param {{ tradePlatforms?: { bitget?: boolean; weex?: boolean }, publishEvent?: string, ingestSourceRef?: string }} [opts]
    */
-  async function runTelegramAutoTradeThenCdp(clientCard, executionJson, parsedJson, opts = {}) {
+  /** placeAnOrder 群：仅自动开单（CDP 仍走 send 白名单，见 maybeNotifyTradeSignalCdp）。 */
+  async function runTelegramAutoTradeIfConfigured(clientCard, executionJson, parsedJson, opts = {}) {
     const channelId = String(clientCard?.channelId ?? "").trim();
     if (!isTelegramAutoTradeChannel(channelId)) return;
     const cardId = extractSignalCardRowId(clientCard?.id);
@@ -543,10 +545,6 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
         `Telegram 自动开单异常 card=#${cardId ?? "?"}: ${String(/** @type {Error} */ (e).message ?? e)}`
       );
     }
-    maybeNotifyTradeSignalCdp(clientCard, {
-      publishEvent: opts.publishEvent ?? "entry",
-      ingestSourceRef: opts.ingestSourceRef,
-    });
   }
 
   /**
@@ -1099,11 +1097,15 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
             ingestSourceRef: ingestRef,
           });
           maybeRecordTelegramCardAlertStats(clientCard);
-          await runTelegramAutoTradeThenCdp(clientCard, mergedExecution, mergedParsed, {
+          await runTelegramAutoTradeIfConfigured(clientCard, mergedExecution, mergedParsed, {
             tradePlatforms:
               input.tradePlatforms && typeof input.tradePlatforms === "object"
                 ? /** @type {{ bitget?: boolean; weex?: boolean }} */ (input.tradePlatforms)
                 : undefined,
+            publishEvent: "update",
+            ingestSourceRef: ingestRef,
+          });
+          maybeNotifyTradeSignalCdp(clientCard, {
             publishEvent: "update",
             ingestSourceRef: ingestRef,
           });
@@ -1251,10 +1253,9 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       log.info(`卡片→频道消息 跳过: injectChannelMessage=false source=${sourceType}`);
     }
 
-    const isSendTelegram =
-      resolveSourcePlatform(sourceType) === "telegram" && isTelegramAutoTradeChannel(channelId);
-    if (isSendTelegram) {
-      await runTelegramAutoTradeThenCdp(clientCard, execution, parsedJson, {
+    const isTg = resolveSourcePlatform(sourceType) === "telegram";
+    if (isTg) {
+      await runTelegramAutoTradeIfConfigured(clientCard, execution, parsedJson, {
         tradePlatforms:
           input.tradePlatforms && typeof input.tradePlatforms === "object"
             ? /** @type {{ bitget?: boolean; weex?: boolean }} */ (input.tradePlatforms)
@@ -1262,12 +1263,11 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
         publishEvent: "entry",
         ingestSourceRef: ingestRef,
       });
-    } else {
-      maybeNotifyTradeSignalCdp(clientCard, {
-        publishEvent: "entry",
-        ingestSourceRef: ingestRef,
-      });
     }
+    maybeNotifyTradeSignalCdp(clientCard, {
+      publishEvent: "entry",
+      ingestSourceRef: ingestRef,
+    });
 
     return Object.assign(clientCard, { channelMessage });
   }

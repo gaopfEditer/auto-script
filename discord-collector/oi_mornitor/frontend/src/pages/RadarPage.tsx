@@ -22,18 +22,25 @@ export function RadarPage() {
     hot_tickers: hot,
     meta,
     scan_ts: scanTs,
+    alert_tickers: alertTickers,
+    alert_scan_ts: alertScanTs,
     pool_size: poolSize,
     thresholds,
+    radar_source: boardSource = "local",
     breakout_alerts: breakoutAlerts = [],
   } = snapshot;
 
-  const lists = useMemo(() => deriveAllLists(all, timeframe), [all, timeframe]);
+  const boardRows = alertTickers?.length ? alertTickers : all;
+  const alertTs = alertScanTs && alertScanTs > 0 ? alertScanTs : scanTs;
+  const boardScanTs = alertScanTs && alertScanTs > 0 ? alertScanTs : scanTs;
+
+  const lists = useMemo(() => deriveAllLists(boardRows, timeframe), [boardRows, timeframe]);
 
   return (
     <div className="mercu-app">
       <MercuHeader
         online={online}
-        scanTs={scanTs}
+        scanTs={boardScanTs}
         poolMeta={snapshot.pool_meta}
         poolSize={snapshot.pool_size}
         focusSymbols={focusSymbols}
@@ -48,7 +55,13 @@ export function RadarPage() {
         />
       ) : (
       <div className="mercu-body">
-        <AlertFeed rows={all} scanTs={scanTs} poolSize={poolSize} thresholds={thresholds} />
+        <AlertFeed
+          rows={boardRows}
+          scanTs={alertTs}
+          poolSize={poolSize}
+          thresholds={thresholds}
+          radarSource="local"
+        />
         <MarketMatrixGrid
           timeframe={timeframe}
           onTimeframeChange={setTimeframe}
@@ -57,6 +70,7 @@ export function RadarPage() {
           contract={lists.contract}
           spot={lists.spot}
           takerFlowStatus={snapshot.pool_meta?.taker_flow_status}
+          boardSource={boardSource}
         />
         <GlobalTrendPanel
           meta={meta}

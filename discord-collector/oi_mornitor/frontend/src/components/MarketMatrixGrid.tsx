@@ -157,6 +157,8 @@ interface Props {
   spot: FlowBlock;
   /** live | cached | unavailable — 合约/现货 Taker 流向可用性 */
   takerFlowStatus?: string;
+  /** binance=本机真差分；smartb=兜底榜单（涨跌幅可能不准） */
+  boardSource?: string;
 }
 
 export const MarketMatrixGrid = memo(function MarketMatrixGrid({
@@ -167,6 +169,7 @@ export const MarketMatrixGrid = memo(function MarketMatrixGrid({
   contract,
   spot,
   takerFlowStatus,
+  boardSource = "local",
 }: Props) {
   const navigate = useNavigate();
   const [hoveredSymbol, setHoveredSymbol] = useState<string | null>(null);
@@ -194,7 +197,14 @@ export const MarketMatrixGrid = memo(function MarketMatrixGrid({
   return (
     <main className="panel matrix-center">
       <div className="matrix-center-head">
-        <h2>热点观察榜单</h2>
+        <h2>
+          热点观察榜单
+          {boardSource === "smartb" ? (
+            <span className="matrix-source-warn" title="本机币安扫描未就绪，涨跌幅来自 smart.b 兜底，与 K 线可能不一致">
+              · smart.b 兜底
+            </span>
+          ) : null}
+        </h2>
         <MercuTimeframes timeframe={timeframe} onTimeframeChange={onTimeframeChange} />
       </div>
       {(contractEmpty || spotEmpty) && takerFlowStatus && takerFlowStatus !== "live" ? (

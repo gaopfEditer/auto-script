@@ -232,6 +232,37 @@ class OIRadarCache:
             dq.extend(kept)
         return dropped
 
+    def recent_anchor_price(self, symbol: str, n: int = 8) -> Optional[float]:
+        dq = self._history.get(symbol)
+        if not dq:
+            return None
+        vals = [s.price for s in list(dq)[-n:] if s.price > 0]
+        if not vals:
+            return None
+        return float(statistics.median(vals))
+
+    def prune_incompatible_price(self, symbol: str, anchor_price: float, max_pct: float) -> int:
+        """剔除相对锚点跳变过大的历史价，避免 5m 涨跌幅踩到脏 tick。"""
+        dq = self._history.get(symbol)
+        if not dq or anchor_price <= 0:
+            return 0
+        max_ratio = 1.0 + max(max_pct, 1.0) / 100.0
+        kept: list[OISnapshot] = []
+        dropped = 0
+        for snap in dq:
+            if snap.price <= 0:
+                dropped += 1
+                continue
+            ratio = anchor_price / snap.price
+            if ratio > max_ratio or ratio < (1.0 / max_ratio):
+                dropped += 1
+                continue
+            kept.append(snap)
+        if dropped:
+            dq.clear()
+            dq.extend(kept)
+        return dropped
+
 
 class OI5mChangeHistory:
     """每币种缓存 24h（288 个 5 分钟周期）的 5m OI 变动（USD），用于 Z-Score。"""
@@ -882,6 +913,58 @@ class BinanceOIRadar:
         return ((current_price - past_price) / past_price) * 100.0
 
     @staticmethod
+    def _is_price_discontinuity(
+        current_price: float,
+        past_price: float,
+        *,
+        max_pct: float = OI_DELTA_MAX_PCT_5M,
+    ) -> bool:
+        if past_price <= 0 or current_price <= 0:
+            return False
+        ratio = current_price / past_price
+        max_ratio = 1.0 + max_pct / 100.0
+        return ratio > max_ratio or ratio < (1.0 / max_ratio)
+
+    @staticmethod
+    def _clamp_suspicious_price_pct(pct: float, pct_24h: float) -> float:
+        """短窗涨跌幅与 24h 严重背离时归零（脏 tick / 口径切换）。"""
+        if not pct or abs(pct) < 6:
+            return pct
+        p24 = float(pct_24h or 0.0)
+        if abs(pct) >= 8 and abs(p24) < max(2.0, abs(pct) * 0.35):
+            return 0.0
+        if p24 != 0 and abs(p24) >= 0.5 and (pct * p24 < 0) and abs(p24) < 6:
+            return 0.0
+        if abs(pct) >= 6 and abs(p24) < abs(pct) * 0.25:
+            return 0.0
+        return pct
+
+    @classmethod
+    def _sanitize_past_price(
+        cls,
+        cache: OIRadarCache,
+        symbol: str,
+        current_price: float,
+        past: Optional[OISnapshot],
+        *,
+        max_pct: float = OI_DELTA_MAX_PCT_5M,
+    ) -> Optional[OISnapshot]:
+        if past is None:
+            return None
+        if cls._is_price_discontinuity(current_price, past.price, max_pct=max_pct):
+            dropped = cache.prune_incompatible_price(symbol, current_price, max_pct)
+            if dropped:
+                logger.warning(
+                    "价格脏历史剔除 %s · dropped=%d · past=%.8g now=%.8g",
+                    symbol,
+                    dropped,
+                    past.price,
+                    current_price,
+                )
+            return None
+        return past
+
+    @staticmethod
     def _build_oi_by_tf(
         cache: OIRadarCache,
         symbol: str,
@@ -906,14 +989,21 @@ class BinanceOIRadar:
         cache: OIRadarCache,
         symbol: str,
         current_price: float,
+        *,
+        pct_24h: float = 0.0,
     ) -> dict[str, dict[str, float]]:
         out: dict[str, dict[str, float]] = {}
         for label, minutes in OI_TF_WINDOWS.items():
+            cap = oi_delta_max_pct_for_minutes(minutes)
             past = cache.get_historical(symbol, minutes)
+            past = BinanceOIRadar._sanitize_past_price(
+                cache, symbol, current_price, past, max_pct=cap
+            )
             if past is None:
                 out[label] = {"pct": 0.0}
                 continue
             pct = BinanceOIRadar._calc_price_pct(current_price, past.price)
+            pct = BinanceOIRadar._clamp_suspicious_price_pct(pct, pct_24h)
             out[label] = {"pct": round(pct, 4)}
         return out
 
@@ -947,11 +1037,37 @@ class BinanceOIRadar:
                 past_5m = self.cache.get_historical(symbol, 5)
                 past_15m = self.cache.get_historical(symbol, 15)
 
+        if price > 0:
+            anchor_p = self.cache.recent_anchor_price(symbol)
+            if anchor_p:
+                dropped_p = self.cache.prune_incompatible_price(
+                    symbol, anchor_p, OI_DELTA_MAX_PCT_5M
+                )
+                if dropped_p:
+                    logger.warning(
+                        "价格历史跳变清洗 %s · dropped=%d · now=%.8g",
+                        symbol,
+                        dropped_p,
+                        price,
+                    )
+                    past_5m = self.cache.get_historical(symbol, 5)
+                    past_15m = self.cache.get_historical(symbol, 15)
+
         past_5m = self._sanitize_past(
             self.cache, symbol, current, past_5m, max_pct=OI_DELTA_MAX_PCT_5M
         )
         past_15m = self._sanitize_past(
             self.cache, symbol, current, past_15m, max_pct=OI_DELTA_MAX_PCT_15M
+        )
+        past_5m_price = self._sanitize_past_price(
+            self.cache, symbol, price, self.cache.get_historical(symbol, 5), max_pct=OI_DELTA_MAX_PCT_5M
+        )
+        past_15m_price = self._sanitize_past_price(
+            self.cache,
+            symbol,
+            price,
+            self.cache.get_historical(symbol, 15),
+            max_pct=OI_DELTA_MAX_PCT_15M,
         )
 
         # 相对近期锚点仍跳变 → 整段重置重采（用短窗上限，避免 5m 假翻倍残留）
@@ -1017,11 +1133,18 @@ class BinanceOIRadar:
             else (0.0, 0.0, 0.0)
         )
         oi_by_tf = self._build_oi_by_tf(self.cache, symbol, current)
-        price_by_tf = self._build_price_by_tf(self.cache, symbol, price)
-        pct_price_5m = self._calc_price_pct(price, past_5m.price)
-        pct_price_15m = (
-            self._calc_price_pct(price, past_15m.price) if past_15m is not None else 0.0
+        pct_24h = float(row.get("price_change_pct_24h") or 0.0)
+        price_by_tf = self._build_price_by_tf(self.cache, symbol, price, pct_24h=pct_24h)
+        pct_price_5m = (
+            self._calc_price_pct(price, past_5m_price.price) if past_5m_price is not None else 0.0
         )
+        pct_price_5m = self._clamp_suspicious_price_pct(pct_price_5m, pct_24h)
+        pct_price_15m = (
+            self._calc_price_pct(price, past_15m_price.price)
+            if past_15m_price is not None
+            else 0.0
+        )
+        pct_price_15m = self._clamp_suspicious_price_pct(pct_price_15m, pct_24h)
 
         z_score, is_historic = (0.0, False)
         if eval_5m:
@@ -1712,33 +1835,53 @@ class RadarService:
             await self._session.close()
             self._session = None
 
+    def _resolve_radar_board(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], float, str]:
+        """SSE 主表：本机 fapi 扫描优先（真短窗涨跌幅）；smart.b 仅在本机过期/空时兜底。"""
+        local_rows = self.radar.last_all_rows
+        local_ts = float(self.radar.last_scan_ts or 0.0)
+        smartb_rows = self.smartb.last_rows if self.smartb.enabled else []
+        smartb_ts = float(self.smartb.last_ts or 0.0)
+        max_age = 180.0
+
+        if local_rows and local_ts > 0 and (time.time() - local_ts) <= max_age:
+            return local_rows, self.radar.last_hot_tickers, local_ts, "local"
+        if smartb_rows:
+            return smartb_rows, self.smartb.last_hot, smartb_ts, "smartb"
+        return local_rows or [], self.radar.last_hot_tickers, local_ts or smartb_ts, "local"
+
     def get_snapshot(self) -> dict[str, Any]:
+        board_rows, board_hot, board_scan_ts, board_source = self._resolve_radar_board()
         pool_meta = merge_equity_into_pool_meta(
             self.radar.last_pool_meta,
             self._equity_stats,
         )
+        if board_source == "smartb":
+            pool_meta = {
+                **(pool_meta or {}),
+                "data_source": "smartb",
+                "data_source_label": "smart.b EzRadar",
+            }
+        else:
+            pool_meta = {
+                **(pool_meta or {}),
+                "data_source": "binance",
+                "data_source_label": "Binance",
+            }
         return {
-            "scan_ts": (self.smartb.last_ts if self.smartb.enabled and self.smartb.last_rows else self.radar.last_scan_ts),
+            "scan_ts": board_scan_ts,
             "meta": self.radar.last_global_meta,
             "pool_meta": pool_meta,
             "equity_pool": list(self._equity_pool),
             "equity_scan_ts": self._equity_scan_ts,
-            "hot_tickers": (
-                self.smartb.last_hot
-                if self.smartb.enabled and self.smartb.last_rows
-                else self.radar.last_hot_tickers
-            ),
-            "all_tickers": (
-                self.smartb.last_rows
-                if self.smartb.enabled and self.smartb.last_rows
-                else self.radar.last_all_rows
-            ),
+            "hot_tickers": board_hot,
+            "all_tickers": board_rows,
+            # 异动监控：始终本机币安（与 board 在 local 时同源）
+            "alert_tickers": self.radar.last_all_rows,
+            "alert_scan_ts": self.radar.last_scan_ts,
             "market_matrix": self.matrix.last_matrix,
-            "radar_source": (
-                "smartb"
-                if self.smartb.enabled and self.smartb.last_rows
-                else "local"
-            ),
+            "radar_source": board_source,
             "radar_source_meta": dict(self.smartb.last_meta) if self.smartb.enabled else None,
             "radar_source_error": self.smartb.last_error if self.smartb.enabled else None,
             "breakout_alerts": self.breakout_engine.last_alerts,

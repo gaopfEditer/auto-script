@@ -1,7 +1,7 @@
 import type { RadarSnapshot } from "../types";
 import { EMPTY_SNAPSHOT } from "../types";
 
-const CACHE_KEY = "oi_radar_snapshot_v1";
+const CACHE_KEY = "oi_radar_snapshot_v2";
 /** 热榜本地缓存时长 */
 const CACHE_TTL_MS = 2 * 60 * 60_000;
 
@@ -28,6 +28,8 @@ function pickBoardSnapshot(s: RadarSnapshot): RadarSnapshot {
     pool_meta: s.pool_meta,
     hot_tickers: s.hot_tickers ?? [],
     all_tickers: s.all_tickers ?? [],
+    alert_tickers: s.alert_tickers ?? [],
+    alert_scan_ts: s.alert_scan_ts ?? 0,
     market_matrix: s.market_matrix,
     breakout_alerts: s.breakout_alerts ?? [],
     pool_size: s.pool_size || 0,
@@ -39,6 +41,7 @@ function pickBoardSnapshot(s: RadarSnapshot): RadarSnapshot {
 
 export function loadRadarSnapshotCache(): RadarSnapshot | null {
   try {
+    localStorage.removeItem("oi_radar_snapshot_v1");
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as RadarCachePayload;
@@ -85,6 +88,8 @@ export function mergeRadarSnapshot(
       pool_size: data.pool_size || prev.pool_size,
       thresholds: data.thresholds ?? prev.thresholds,
       scan_ts: data.scan_ts || prev.scan_ts,
+      alert_tickers: data.alert_tickers?.length ? data.alert_tickers : prev.alert_tickers,
+      alert_scan_ts: data.alert_scan_ts || prev.alert_scan_ts,
       breakout_alerts: data.breakout_alerts?.length
         ? data.breakout_alerts
         : prev.breakout_alerts,
@@ -97,6 +102,8 @@ export function mergeRadarSnapshot(
     ...data,
     all_tickers: data.all_tickers?.length ? data.all_tickers : prev.all_tickers,
     hot_tickers: data.hot_tickers?.length ? data.hot_tickers : prev.hot_tickers,
+    alert_tickers: data.alert_tickers?.length ? data.alert_tickers : prev.alert_tickers,
+    alert_scan_ts: data.alert_scan_ts || prev.alert_scan_ts,
     market_matrix: data.market_matrix ?? prev.market_matrix,
     meta: data.meta ?? prev.meta,
     pool_meta: data.pool_meta ?? prev.pool_meta,

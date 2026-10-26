@@ -1,5 +1,5 @@
 /**
- * channel_profiles.json `send` 白名单 Telegram 群 → Debug 勾选平台自动开单。
+ * channel_profiles.json `placeAnOrder` 白名单 Telegram 群 → Debug 勾选平台自动开单。
  * 默认 20x、保证金 orderSizeUsdt（Debug 可调，默认 1U）、市价开仓 + 完整 TP/SL（5% SL + 5/8/12% 三档）。
  */
 import { fetchFuturesPrice, parseEntryPrice } from "./card-price-fetch.js";
@@ -7,14 +7,14 @@ import { isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { applyDefaultTpSl } from "./card-liquidation-engine.js";
 import { parseEntryPriceForOrder } from "./bitget-order-from-signal.js";
-import { isCdpSendChannel } from "./telegram-channel-profiles.js";
+import { isTelegramPlaceAnOrderChannel } from "./telegram-channel-profiles.js";
 
 export const TELEGRAM_TRADE_LEVERAGE = 20;
 export const TELEGRAM_TRADE_INITIAL_SL_PCT = 5;
 
 /** @param {unknown} channelId */
 export function isTelegramAutoTradeChannel(channelId) {
-  return isCdpSendChannel(channelId);
+  return isTelegramPlaceAnOrderChannel(channelId);
 }
 
 /** @returns {Record<string, unknown>} */
@@ -156,6 +156,60 @@ export async function prepareAutoTradeForOrder(parsed, execution, symbol) {
   const nextEx = { ...execution, planned: { ...execution.planned } };
   await enrichTelegramMarketEntry(nextParsed, nextEx, symbol);
   return prepareTelegramTradeParsed(nextParsed, nextEx);
+}
+
+/**
+ * 开单前二次加固：有方向但缺止损时，用现价/入场价补 5% 止损（再跑一遍 prepare）。
+ * @param {Record<string, unknown>} parsed
+ * @param {ReturnType<typeof normalizeExecution>} execution
+ * @param {string} symbol
+ */
+export async function reinforceTelegramStopLossBeforeOrder(parsed, execution, symbol) {
+  let r = await prepareAutoTradeForOrder(parsed, execution, symbol);
+  if (telegramTradeRequiresStopLoss(r.execution)) return r;
+
+  const sym = String(symbol ?? r.parsed.symbol ?? r.execution.symbol ?? "").trim();
+  const direction = String(r.parsed.direction ?? r.execution.direction ?? "").trim();
+  if (!sym || !direction) return r;
+
+  let entryNum =
+    parseEntryPriceForOrder(r.parsed.entry, direction) ??
+    parseEntryPrice(r.parsed.entry) ??
+    null;
+  if (!entryNum || entryNum <= 0) {
+    try {
+      const { price } = await fetchFuturesPrice(sym);
+      if (Number.isFinite(price) && price > 0) {
+        entryNum = price;
+        r.parsed.entry = String(price);
+        r.execution.planned.entryPrice = String(price);
+        r.parsed.orderMode = "market";
+      }
+    } catch {
+      return r;
+    }
+  }
+  if (!entryNum || entryNum <= 0) return r;
+
+  const isShort = isShortDirection(direction);
+  const applied = applyDefaultTpSl(entryNum, isShort, [], null);
+  if (applied.sl == null) return r;
+
+  r.parsed.stopLoss = String(applied.sl);
+  r.execution.planned.stopLossPrice = String(applied.sl);
+  if (!r.parsed.exitPlan || typeof r.parsed.exitPlan !== "object") {
+    r.parsed.exitPlan = buildDefaultTelegramExitPlan();
+  } else {
+    r.parsed.exitPlan = {
+      .../** @type {Record<string, unknown>} */ (r.parsed.exitPlan),
+      defaultApplied: true,
+      slPct: TELEGRAM_TRADE_INITIAL_SL_PCT,
+    };
+  }
+  return prepareTelegramTradeParsed(
+    /** @type {Record<string, unknown>} */ (r.parsed),
+    r.execution,
+  );
 }
 
 /** @param {ReturnType<typeof normalizeExecution>} execution */

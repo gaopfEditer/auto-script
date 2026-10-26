@@ -65,6 +65,7 @@ export interface TickerRow {
   is_historic_anomaly: boolean;
   global_intensity_rank: number | null;
   global_volume_rank: number | null;
+  data_source?: string;
 }
 
 export interface MatrixRow {
@@ -738,12 +739,17 @@ export interface PatternChartData {
 
 export interface RadarSnapshot {
   scan_ts: number;
+  /** local=本机币安扫描；smartb=smart.b 榜单桥 */
+  radar_source?: "local" | "smartb" | string;
   meta?: GlobalMeta;
   pool_meta?: PoolMeta;
   equity_pool?: EquityPoolItem[];
   equity_scan_ts?: number;
   hot_tickers: TickerRow[];
   all_tickers: TickerRow[];
+  /** 异动流专用：本机 fapi 扫描行（与 all_tickers 在 smartb 模式下不同） */
+  alert_tickers?: TickerRow[];
+  alert_scan_ts?: number;
   market_matrix?: MarketMatrix;
   breakout_alerts?: BreakoutAlert[];
   pattern?: PatternPayload;
