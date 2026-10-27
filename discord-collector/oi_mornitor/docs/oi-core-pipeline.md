@@ -106,7 +106,10 @@ adapter **不可达**时：`gate_result=unavailable`，**降级观察**，不假
 | `settlement` | 名称 | 要点 |
 |--------------|------|------|
 | `entry_sl_tp_trail` | 现行 composite | 1R 保本；TP1≈1.8R 平 50%；余仓 EMA13/21；约 48×15m 到期 |
-| `entry_sl_tp_protect` | 守利润 | 0.7R 保本；TP1 1.1R 平 50%；阶梯移损 + 近 3 根反向极值；余仓 EMA144 结构出场；前 8 根未达 +0.5R 减半/平 |
+| `entry_sl_tp_protect` | 守利润（**仅实验对照**） | 0.7R 保本；TP1 1.1R 平 50%；阶梯移损 + 近 3 根反向极值；余仓 EMA144 结构出场；前 8 根未达 +0.5R 减半/平 |
+
+**默认结算仍为 `entry_sl_tp_trail`（composite）**。净利口径为「R × 仓位比例 × (risk/entry) × 100」的价格收益率 %，**不是** R×100。  
+本机真实 51 笔（job `31d146bd67fe`）对照示例：composite 净约 **+5.13%（22/29）**，protect 净约 **−7.09%（13/38）** — protect 当前参数**不宜作默认上线**，需重标定后再评估启用。
 
 费率默认 **万 4/边**（`BTC_BACKTEST_FEE_RATE_PER_SIDE`）。本机对照：
 

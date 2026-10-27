@@ -66,7 +66,23 @@ class SimResult:
 
 
 def _tick_size(entry: float) -> float:
-    return max(entry * 1e-6, 0.01)
+    """保本价偏移：按入场价比例，不用绝对 0.01 地板（避免 DOGE 等小价币假盈利）。"""
+    e = abs(float(entry))
+    if e <= 0:
+        return 1e-12
+    return max(e * 1e-6, 1e-12)
+
+
+def _risk_frac(plan: TradePlan) -> float:
+    """1R 占入场价的比例（价格维度）。"""
+    if plan.entry <= 0:
+        return 0.0
+    return plan.risk / plan.entry
+
+
+def _gross_pct_from_r(plan: TradePlan, r_mult: float, position_frac: float) -> float:
+    """R 倍数 × 仓位比例 → 相对入场全仓的价格收益率 %（非 R×100）。"""
+    return float(r_mult) * float(position_frac) * _risk_frac(plan) * 100.0
 
 
 def compute_composite_trade_plan(
@@ -183,8 +199,8 @@ def _simulate_trail(
         hit_sl = (plan.is_long and bar.low <= sl) or (not plan.is_long and bar.high >= sl)
         if hit_sl and pos > 0:
             px = sl
-            part = _signed_r(plan, px) * pos
-            gross += part * 100.0
+            r_exit = _signed_r(plan, px)
+            gross += _gross_pct_from_r(plan, r_exit, pos)
             fees += _fee_pct(pos, fee)
             pos = 0.0
             exit_reason = "stop_loss"
@@ -198,13 +214,11 @@ def _simulate_trail(
                 tp_sl,
                 False,
                 peak_r,
-                part,
+                r_exit,
             )
 
         if not tp1_done and mfe >= float(BTC_TRAIL_TP1_R):
-            tp_px = _price_at_r(plan, float(BTC_TRAIL_TP1_R))
-            part = float(BTC_TRAIL_TP1_R) * 0.5
-            gross += part * 50.0
+            gross += _gross_pct_from_r(plan, float(BTC_TRAIL_TP1_R), 0.5)
             fees += _fee_pct(0.5, fee)
             pos = 0.5
             tp1_done = True
@@ -214,8 +228,8 @@ def _simulate_trail(
             e13, e21 = ema13[i], ema21[i]
             if e13 is not None and e21 is not None:
                 if plan.is_long and bar.close < min(e13, e21):
-                    part = _signed_r(plan, bar.close) * pos
-                    gross += part * 100.0
+                    r_exit = _signed_r(plan, bar.close)
+                    gross += _gross_pct_from_r(plan, r_exit, pos)
                     fees += _fee_pct(pos, fee)
                     pos = 0.0
                     exit_reason = "ema_runner_exit"
@@ -229,11 +243,11 @@ def _simulate_trail(
                         tp_sl,
                         False,
                         peak_r,
-                        part,
+                        r_exit,
                     )
                 if not plan.is_long and bar.close > max(e13, e21):
-                    part = _signed_r(plan, bar.close) * pos
-                    gross += part * 100.0
+                    r_exit = _signed_r(plan, bar.close)
+                    gross += _gross_pct_from_r(plan, r_exit, pos)
                     fees += _fee_pct(pos, fee)
                     pos = 0.0
                     exit_reason = "ema_runner_exit"
@@ -247,13 +261,13 @@ def _simulate_trail(
                         tp_sl,
                         False,
                         peak_r,
-                        part,
+                        r_exit,
                     )
 
     if pos > 0:
         last = bars[min(len(bars), max_bars) - 1]
-        part = _signed_r(plan, last.close) * pos
-        gross += part * 100.0
+        r_exit = _signed_r(plan, last.close)
+        gross += _gross_pct_from_r(plan, r_exit, pos)
         fees += _fee_pct(pos, fee)
         exit_reason = "expired"
         return _finish(
@@ -265,7 +279,7 @@ def _simulate_trail(
             False,
             True,
             peak_r,
-            part,
+            r_exit,
         )
 
     return _finish("entry_sl_tp_trail", gross, fees, exit_reason, max_bars, tp_sl, False, peak_r, 0.0)
@@ -297,14 +311,14 @@ def _simulate_protect(
         if i + 1 == early_bars and peak_r < float(BTC_PROTECT_EARLY_MIN_MFE_R) and pos > 0:
             # 前 2h 未到 +0.5R：减半；若仍无进展则本根收盘全平
             if pos >= 1.0:
-                part = _signed_r(plan, bar.close) * 0.5
-                gross += part * 100.0
+                r_exit = _signed_r(plan, bar.close)
+                gross += _gross_pct_from_r(plan, r_exit, 0.5)
                 fees += _fee_pct(0.5, fee)
                 pos = 0.5
                 exit_reason = "early_half_exit"
             else:
-                part = _signed_r(plan, bar.close) * pos
-                gross += part * 100.0
+                r_exit = _signed_r(plan, bar.close)
+                gross += _gross_pct_from_r(plan, r_exit, pos)
                 fees += _fee_pct(pos, fee)
                 pos = 0.0
                 exit_reason = "early_flat"
@@ -317,7 +331,7 @@ def _simulate_protect(
                     True,
                     False,
                     peak_r,
-                    part,
+                    r_exit,
                 )
 
         if not be_armed and peak_r >= float(BTC_PROTECT_BE_R):
@@ -349,8 +363,8 @@ def _simulate_protect(
         hit_sl = (plan.is_long and bar.low <= sl) or (not plan.is_long and bar.high >= sl)
         if hit_sl and pos > 0:
             px = sl
-            part = _signed_r(plan, px) * pos
-            gross += part * 100.0
+            r_exit = _signed_r(plan, px)
+            gross += _gross_pct_from_r(plan, r_exit, pos)
             fees += _fee_pct(pos, fee)
             pos = 0.0
             exit_reason = "stop_loss"
@@ -364,12 +378,11 @@ def _simulate_protect(
                 tp_sl,
                 False,
                 peak_r,
-                part,
+                r_exit,
             )
 
         if not tp1_done and mfe >= float(BTC_PROTECT_TP1_R):
-            part = float(BTC_PROTECT_TP1_R) * 0.5
-            gross += part * 50.0
+            gross += _gross_pct_from_r(plan, float(BTC_PROTECT_TP1_R), 0.5)
             fees += _fee_pct(0.5, fee)
             pos = 0.5
             tp1_done = True
@@ -379,8 +392,8 @@ def _simulate_protect(
             e144 = ema144[i] if i < len(ema144) else None
             if e144 is not None:
                 if plan.is_long and bar.close < e144:
-                    part = _signed_r(plan, bar.close) * pos
-                    gross += part * 100.0
+                    r_exit = _signed_r(plan, bar.close)
+                    gross += _gross_pct_from_r(plan, r_exit, pos)
                     fees += _fee_pct(pos, fee)
                     pos = 0.0
                     exit_reason = "ema144_exit"
@@ -394,11 +407,11 @@ def _simulate_protect(
                         tp_sl,
                         False,
                         peak_r,
-                        part,
+                        r_exit,
                     )
                 if not plan.is_long and bar.close > e144:
-                    part = _signed_r(plan, bar.close) * pos
-                    gross += part * 100.0
+                    r_exit = _signed_r(plan, bar.close)
+                    gross += _gross_pct_from_r(plan, r_exit, pos)
                     fees += _fee_pct(pos, fee)
                     pos = 0.0
                     exit_reason = "ema144_exit"
@@ -412,13 +425,13 @@ def _simulate_protect(
                         tp_sl,
                         False,
                         peak_r,
-                        part,
+                        r_exit,
                     )
 
     if pos > 0:
         last = bars[min(len(bars), max_bars) - 1]
-        part = _signed_r(plan, last.close) * pos
-        gross += part * 100.0
+        r_exit = _signed_r(plan, last.close)
+        gross += _gross_pct_from_r(plan, r_exit, pos)
         fees += _fee_pct(pos, fee)
         return _finish(
             "entry_sl_tp_protect",
@@ -429,7 +442,7 @@ def _simulate_protect(
             False,
             True,
             peak_r,
-            part,
+            r_exit,
         )
 
     return _finish("entry_sl_tp_protect", gross, fees, exit_reason, max_bars, tp_sl, False, peak_r, 0.0)

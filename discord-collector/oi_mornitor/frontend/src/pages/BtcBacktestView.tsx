@@ -128,7 +128,8 @@ export function BtcBacktestView() {
           <div>
             <h1>AI BTC · 15m 出场对照</h1>
             <p className="muted">
-              净盈亏来自 <code>entry_sl_tp_trail</code>（现行 composite）与 <code>entry_sl_tp_protect</code>（守利润）；
+              净盈亏来自 <code>entry_sl_tp_trail</code>（现行 composite，<strong>默认</strong>）与{" "}
+              <code>entry_sl_tp_protect</code>（守利润，<strong>仅实验对照</strong>，当前参数未达上线标准）；
               下方 <strong>+1h / +4h / +8h</strong> 仅看收盘价方向，<strong>不受</strong> TP/SL 规则影响。
             </p>
           </div>
