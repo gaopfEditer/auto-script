@@ -1,12 +1,17 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { TickerRow } from "../types";
+import type { RadarAnomalyHistory, TickerRow } from "../types";
 import {
   deriveOiAlerts,
   isPlausibleOiAlert,
   type AlertThresholds,
   type OiAlertItem,
 } from "../utils/deriveOiAlerts";
+import {
+  historyRecordsToItems,
+  mergeAnomalyFeed,
+  retentionMsFromHistory,
+} from "../utils/radarAnomalyHistory";
 import { fmtDelta, fmtPct } from "../utils/format";
 import { patternsPathForSymbol } from "../utils/patternNav";
 import { displaySymbol } from "../utils/symbol";
@@ -17,10 +22,11 @@ interface Props {
   scanTs: number;
   poolSize: number;
   thresholds: AlertThresholds;
+  history?: RadarAnomalyHistory | null;
 }
 
-/** 异动流本地缓存时长 */
-const ALERT_FEED_TTL_MS = 2 * 60 * 60_000;
+/** 与后端 OI_RADAR_ANOMALY_RETENTION_SEC 对齐的本地兜底 */
+const ALERT_FEED_TTL_MS = 4 * 60 * 60_000;
 const ALERT_FEED_MAX = 80;
 /** v2：丢掉旧缓存里 5m OI +100% 这类脏点 */
 const ALERT_FEED_CACHE_KEY = "oi_alert_feed_v2";
@@ -43,14 +49,22 @@ function windowLabel(window: OiAlertItem["window"]): string {
 }
 
 function typeLabel(item: OiAlertItem): string {
+  if (item.kind === "board") {
+    const tag = item.tags[0];
+    return tag ? `榜单 · ${tag}` : "榜单异动";
+  }
   if (item.kind === "price") {
     return item.isPump ? "价格暴涨" : "价格暴跌";
   }
   return item.isPump ? "OI 暴增" : "OI 暴跌";
 }
 
-function pruneAlertItems(items: OiAlertItem[], nowMs = Date.now()): OiAlertItem[] {
-  const cutoffSec = (nowMs - ALERT_FEED_TTL_MS) / 1000;
+function pruneAlertItems(
+  items: OiAlertItem[],
+  nowMs = Date.now(),
+  retentionMs = ALERT_FEED_TTL_MS,
+): OiAlertItem[] {
+  const cutoffSec = (nowMs - retentionMs) / 1000;
   return items
     .filter((it) => Number(it.alertTs) > cutoffSec)
     .filter((it) => isPlausibleOiAlert(it))
@@ -175,13 +189,18 @@ const AlertCard = memo(function AlertCard({
   );
 });
 
+type FeedFilter = "all" | "oi" | "price" | "board";
+
 export const AlertFeed = memo(function AlertFeed({
   rows,
   scanTs,
   poolSize,
   thresholds,
+  history,
 }: Props) {
   const navigate = useNavigate();
+  const retentionMs = retentionMsFromHistory(history);
+  const [filter, setFilter] = useState<FeedFilter>("all");
   const [items, setItems] = useState<OiAlertItem[]>(() => loadAlertFeedCache());
 
   const liveAlerts = useMemo(
@@ -189,26 +208,35 @@ export const AlertFeed = memo(function AlertFeed({
     [rows, thresholds, scanTs],
   );
 
+  const serverItems = useMemo(() => historyRecordsToItems(history), [history]);
+
   useEffect(() => {
     setItems((prev) => {
-      const next = mergeAlertFeed(prev, liveAlerts, scanTs);
+      const mergedLocal = mergeAlertFeed(prev, liveAlerts, scanTs);
+      const next = mergeAnomalyFeed(serverItems, mergedLocal, retentionMs);
       saveAlertFeedCache(next);
       return next;
     });
-  }, [liveAlerts, scanTs]);
+  }, [liveAlerts, scanTs, serverItems, retentionMs]);
 
   useEffect(() => {
     if (!items.length) return;
     const id = window.setInterval(() => {
       setItems((prev) => {
-        const next = pruneAlertItems(prev);
+        const next = pruneAlertItems(prev, Date.now(), retentionMs);
         if (next.length !== prev.length) saveAlertFeedCache(next);
         return next;
       });
     }, 30_000);
     return () => window.clearInterval(id);
-  }, [items.length]);
+  }, [items.length, retentionMs]);
 
+  const visible = useMemo(() => {
+    if (filter === "all") return items;
+    return items.filter((it) => it.kind === filter);
+  }, [items, filter]);
+
+  const retentionH = Math.round(retentionMs / 3_600_000);
   const scanTimeLabel = formatClock(scanTs);
   const openPattern = (symbol: string) => navigate(patternsPathForSymbol(symbol));
 
@@ -219,26 +247,48 @@ export const AlertFeed = memo(function AlertFeed({
           异动监控
           <span
             className="alert-feed-info"
-            title="OI 暴增/暴跌 + 价格暴涨/暴跌（5m/15m）；本地缓存约 2 小时，刷新不丢"
+            title={`OI/价格异动 + 榜单进出；服务端与本地缓存默认保留约 ${retentionH} 小时`}
           >
             ⓘ
           </span>
         </span>
         <span className="panel-count">
-          LIVE · {items.length} · 更新 {scanTimeLabel}
+          LIVE · {visible.length}/{items.length} · 更新 {scanTimeLabel}
         </span>
       </div>
 
       <div className="alert-scanner">
         <span className="alert-scanner-label">AI 全市场扫描</span>
-        <span className="alert-scanner-meta">{poolSize}+ 币种</span>
+        <span className="alert-scanner-meta">{poolSize}+ 币种 · 回看 {retentionH}h</span>
+      </div>
+
+      <div className="alert-feed-filters" role="tablist" aria-label="异动筛选">
+        {(
+          [
+            ["all", "全部"],
+            ["oi", "OI"],
+            ["price", "价格"],
+            ["board", "榜单"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={filter === id}
+            className={filter === id ? "active" : ""}
+            onClick={() => setFilter(id)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       <div className="alert-feed-scroll">
-        {items.length === 0 ? (
+        {visible.length === 0 ? (
           <div className="panel-empty">暂无异动 · 持续扫描中（暖机约需数分钟）</div>
         ) : (
-          items.map((item) => (
+          visible.map((item) => (
             <AlertCard
               key={item.id}
               item={item}

@@ -426,6 +426,29 @@ button {
   color: var(--muted);
 }
 
+.alert-feed-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 10px 8px;
+  flex-shrink: 0;
+}
+
+.alert-feed-filters button {
+  font-size: 0.68rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  color: var(--muted);
+  background: transparent;
+}
+
+.alert-feed-filters button.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(184, 255, 60, 0.08);
+}
+
 .alert-feed-scroll {
   flex: 1;
   overflow-y: auto;

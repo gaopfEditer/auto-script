@@ -1276,6 +1276,20 @@ class BinanceOIRadar:
             )
             logger.debug("🔇 冷却抑制 %d: %s", len(suppressed_rows), syms)
 
+        try:
+            from oi_mornitor.radar_anomaly_history import ingest_radar_scan
+
+            ingest_radar_scan(
+                evaluated,
+                scan_ts=self._last_scan_ts,
+                oi_usd_limit=self.oi_usd_limit,
+                oi_pct_limit=self.oi_pct_limit,
+                price_spike_5m=PRICE_SPIKE_PCT_5M,
+                price_spike_15m=PRICE_SPIKE_PCT_15M,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("雷达异动历史写入跳过: %s", exc)
+
         return list(self._last_hot)
 
     @property
@@ -1740,8 +1754,18 @@ class RadarService:
                 "price_spike_pct_5m": PRICE_SPIKE_PCT_5M,
                 "price_spike_pct_15m": PRICE_SPIKE_PCT_15M,
             },
+            "radar_anomaly_history": self._radar_anomaly_history_payload(),
             "tv_alert": self.tv_alert_sync.get_payload(),
         }
+
+    def _radar_anomaly_history_payload(self) -> dict[str, Any]:
+        try:
+            from oi_mornitor.radar_anomaly_history import history_payload
+
+            return history_payload()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("radar_anomaly_history: %s", exc)
+            return {"retention_sec": 14_400, "oi_price": [], "board": []}
 
     async def get_market_matrix(self, *, force: bool = False) -> dict[str, Any]:
         rows = self.radar.last_all_rows

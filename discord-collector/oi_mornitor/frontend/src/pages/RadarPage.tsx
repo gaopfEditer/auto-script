@@ -48,7 +48,13 @@ export function RadarPage() {
         />
       ) : (
       <div className="mercu-body">
-        <AlertFeed rows={all} scanTs={scanTs} poolSize={poolSize} thresholds={thresholds} />
+        <AlertFeed
+          rows={all}
+          scanTs={scanTs}
+          poolSize={poolSize}
+          thresholds={thresholds}
+          history={snapshot.radar_anomaly_history}
+        />
         <MarketMatrixGrid
           timeframe={timeframe}
           onTimeframeChange={setTimeframe}

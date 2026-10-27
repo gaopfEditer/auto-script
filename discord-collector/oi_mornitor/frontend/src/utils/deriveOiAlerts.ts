@@ -1,7 +1,7 @@
 import type { TickerRow } from "../types";
 
 export type OiAlertWindow = "5m" | "15m";
-export type OiAlertKind = "oi" | "price";
+export type OiAlertKind = "oi" | "price" | "board";
 
 export interface OiAlertItem {
   id: string;

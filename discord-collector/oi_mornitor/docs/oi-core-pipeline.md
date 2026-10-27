@@ -28,6 +28,29 @@ pattern_monitor 扫描
 
 Telegram 推送仍走 `telegram_push_allowed_or_record_observation`（含 MTF 等），与胜率「正式行」判定相互独立但因子同源。
 
+## 雷达异动历史（L0 旁路 · 仅展示/回看）
+
+与形态 L1/L2 **独立**：热钱雷达每轮 `scan_once` 仍只反映**当前池**状态；同时把命中事件写入历史，供页面回看约 **4 小时**（默认）。
+
+| 类型 | 含义 | 写入时机 |
+|------|------|----------|
+| **OI 异动** | 5m/15m OI 达阈值（与 `AlertFeed` 派生口径一致） | 每轮扫描对全池评估行 upsert |
+| **价格异动** | 5m/15m 价变达 `OI_PRICE_SPIKE_PCT_*` | 同上 |
+| **榜单异动** | 价格/OI/合约流入流出 Top N **新进入**榜单 | 与上一轮 Top 集合 diff |
+
+- **模块**：`radar_anomaly_history.py`（`ingest_radar_scan` 由 `radar.py` 扫描末尾调用）
+- **存储**：`oi_mornitor/data/radar_anomaly_history.json`（进程内存 + 落盘；过期按 `last_seen_ts` 清理）
+- **API**：`GET /api/snapshot` → `radar_anomaly_history`（`oi_price` + `board` + `retention_sec`）
+- **前端**：`AlertFeed` 合并服务端历史 + 本地缓存 + 本轮 live；筛选 **全部 / OI / 价格 / 榜单**
+- **与实时关系**：Toast / `hot_tickers` 仍是瞬时告警；历史流用于「这段时间发生过什么」，不触发下单
+
+| 环境变量 | 默认 | 说明 |
+|----------|------|------|
+| `OI_RADAR_ANOMALY_RETENTION_SEC` | `14400`（4h） | OI/价格/榜单统一保留时长 |
+| `OI_RADAR_ANOMALY_MAX_ITEMS` | `600` | OI+价格条目软上限 |
+| `OI_RADAR_BOARD_HISTORY_MAX` | `400` | 榜单事件软上限 |
+| `OI_RADAR_BOARD_TOP_N` | `7` | 与矩阵榜 Top 7 对齐 |
+
 ## 正式行 vs 观察档
 
 | 条件 | 列表 | 纸面结算 | 头条胜率 | UI |

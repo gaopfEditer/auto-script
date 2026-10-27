@@ -731,6 +731,32 @@ export interface PatternChartData {
   error?: string;
 }
 
+export type RadarAnomalyRecord = {
+  id: string;
+  kind: "oi" | "price" | "board";
+  window?: string;
+  symbol: string;
+  alert_ts?: number;
+  first_seen_ts?: number;
+  last_seen_ts?: number;
+  pct?: number;
+  delta_usd?: number;
+  is_pump?: boolean;
+  is_suppressed?: boolean;
+  tags?: string[];
+  board_label?: string;
+  board_domain?: string;
+  board_rank?: number;
+  row?: Partial<TickerRow>;
+};
+
+export type RadarAnomalyHistory = {
+  retention_sec?: number;
+  oi_price?: RadarAnomalyRecord[];
+  board?: RadarAnomalyRecord[];
+  storage_path?: string;
+};
+
 export interface RadarSnapshot {
   scan_ts: number;
   meta?: GlobalMeta;
@@ -749,6 +775,7 @@ export interface RadarSnapshot {
     price_spike_pct_5m?: number;
     price_spike_pct_15m?: number;
   };
+  radar_anomaly_history?: RadarAnomalyHistory;
 }
 
 export const EMPTY_SNAPSHOT: RadarSnapshot = {
