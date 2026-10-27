@@ -168,10 +168,17 @@ function sumPnlFromItems(items) {
 }
 
 /** @param {Record<string, unknown>} g */
+function groupHasPnlBacktest(g) {
+  if (g?.backtestEnrichedAt) return true;
+  const items = g?.backtestItems;
+  if (!Array.isArray(items) || !items.length) return false;
+  return items.some((c) => c && ("entered" in c || "pnlPct" in c || c.outcome));
+}
+
 function cardsForGroup(g) {
-  /** 与 Telegram 一致：有 batch 结果时用 backtestItems（含 entered/盈亏）；cards 仅解析元数据 */
+  /** 批量回溯后才有 backtestItems；仅「获取数据」阶段只看 cards */
   let list;
-  if (Array.isArray(g.backtestItems) && g.backtestItems.length) {
+  if (groupHasPnlBacktest(g) && Array.isArray(g.backtestItems) && g.backtestItems.length) {
     list = g.backtestItems;
   } else if (Array.isArray(g.cards) && g.cards.length) {
     list = g.cards;
@@ -483,7 +490,7 @@ async function refreshStatus() {
   try {
     const st = await fetchDiscordBackfillStatus();
     running.value = Boolean(st.running);
-    cdpReady.value = st.cdpScrollReady !== false;
+    cdpReady.value = st.cdpScrollReady === true;
     if (st.running && st.period) runPeriod.value = String(st.period);
     applyRebacktestStatus(
       st.rebacktest && typeof st.rebacktest === "object"
@@ -502,7 +509,7 @@ async function refreshStatus() {
         if (!selectedRunId.value) {
           await loadResults();
           if (!error.value && rows.value.length) {
-            note.value = "拉取/解析完成；请点「批量回溯盈亏」计算胜率与合计盈亏";
+            note.value = "获取数据完成（仅解析卡片）。请点「批量回溯盈亏」开始 K 线回溯与胜率统计";
           }
         }
         applyLastRunFailure(st.lastRun);
@@ -551,16 +558,15 @@ async function onRun() {
     error.value = "请至少勾选一个频道";
     return;
   }
-  if (!cdpReady.value) {
-    error.value = "CDP 未就绪：请配置 CDP_CONNECT_URL 并保持 Chrome 内 Discord 已登录";
-    return;
-  }
   try {
-    await runDiscordBackfill(period.value, selectedChannelIds.value);
+    const started = await runDiscordBackfill(period.value, selectedChannelIds.value);
     running.value = true;
     runPeriod.value = period.value;
     if (!pollTimer) pollTimer = setInterval(() => void refreshStatus(), 2800);
-    note.value = `CDP 拉取并解析 ${selectedChannelIds.value.length} 个频道 ·「${periodLabel.value}」；完成后请点「批量回溯盈亏」`;
+    const dbOnly = started?.dbOnly === true || !cdpReady.value;
+    note.value = dbOnly
+      ? `已提交：库内消息解析 ${selectedChannelIds.value.length} 个频道 ·「${periodLabel.value}」（未 CDP 上滚）。完成后点「批量回溯盈亏」才算盈亏`
+      : `已提交：拉取并解析 ${selectedChannelIds.value.length} 个频道 ·「${periodLabel.value}」。完成后点「批量回溯盈亏」才算盈亏`;
   } catch (e) {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   }
@@ -672,9 +678,12 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <p v-if="!cdpReady" class="warn tiny">CDP 未连接 — 需 <code>CDP_CONNECT_URL</code> 与 Discord 登录态</p>
+      <p v-if="!cdpReady" class="warn tiny">
+        CDP 未连接 —「开始获取数据」将<strong>仅用 MySQL 已有消息</strong>解析，不会上滚拉历史。补拉请配置
+        <code>CDP_CONNECT_URL</code>（如 <code>http://127.0.0.1:9222</code>）并保持 Chrome 内 Discord 已登录。
+      </p>
       <p v-if="running" class="run-banner">
-        正在 CDP 拉取并解析
+        正在获取数据（拉取/解析信号，不算盈亏）
         <template v-if="runPeriod">
           · {{ BACKFILL_PERIOD_OPTIONS.find((o) => o.id === runPeriod)?.label ?? runPeriod }}
         </template>

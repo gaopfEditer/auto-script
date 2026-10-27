@@ -107,8 +107,10 @@ function writeBacktestCache(filePath, item) {
  */
 export function normalizeBackfillDirection(raw) {
   const s = String(raw ?? "").trim().toLowerCase();
-  if (s === "long" || s === "多") return "long";
-  if (s === "short" || s === "空") return "short";
+  if (s === "long" || s === "多" || s === "做多" || s.includes("long")) return "long";
+  if (s === "short" || s === "空" || s === "做空" || s.includes("short")) return "short";
+  if (/做多|开多|多单|偏多/.test(s)) return "long";
+  if (/做空|开空|空单|偏空/.test(s)) return "short";
   return "";
 }
 

@@ -1,7 +1,10 @@
 /**
  * Discord 频道回溯：CDP 上滚拉历史 → 解析信号 → 真实 K 线回测（不写库建卡）。
  */
-import { runUnifiedBatchBacktestOnSignal } from "./backfill-batch-eval.js";
+import {
+  normalizeBackfillDirection,
+  runUnifiedBatchBacktestOnSignal,
+} from "./backfill-batch-eval.js";
 import { dedupeBackfillGroupCards } from "./backfill-card-dedup.js";
 import { DISCORD_BACKFILL_PARSE_REPLAY_VERSION } from "./discord-backfill-parse-version.js";
 import { extractSymbolFromPayload } from "./card-fields.js";
@@ -22,6 +25,23 @@ import { cardRowParsed } from "./discord-signal-staged-trade.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("discord-backfill");
+
+/** 仅解析/拉取阶段：去掉盈亏回溯字段，避免与「批量回溯盈亏」混淆 */
+export function stripBackfillGroupPnl(group) {
+  if (!group || typeof group !== "object") return group;
+  return {
+    ...group,
+    backtestItems: [],
+    backtestsRun: 0,
+    wins: 0,
+    losses: 0,
+    errors: 0,
+    winRate: null,
+    totalPnlPct: null,
+    pnlSummedCount: 0,
+    backtestEnrichedAt: undefined,
+  };
+}
 
 /** @type {Record<string, { days: number, label: string }>} */
 export const DISCORD_BACKFILL_PERIODS = {
@@ -86,6 +106,10 @@ async function resolveGuildId(meta, store) {
  */
 export async function pullDiscordChannelHistoryUntil(opts) {
   const { store, scrollFn, navigateFn, guildId, channelId, fromMs, maxPages, onProgress } = opts;
+  if (typeof scrollFn !== "function") {
+    onProgress?.({ phase: "db_only", pagesDone: 0 });
+    return { ok: true, pagesDone: 0, dbOnly: true };
+  }
   if (navigateFn) {
     const nav = await navigateFn(guildId, channelId);
     if (!nav?.ok) {
@@ -268,8 +292,7 @@ export async function replayDiscordChannelMessages(rows, channelId, opts = {}) {
 
       const execution = executionFromParsed(parsed);
       const sym = extractSymbolFromPayload(parsed, execution);
-      const dirRaw = String(parsed.direction ?? execution.direction ?? "").toLowerCase();
-      const dirNorm = dirRaw.includes("short") || dirRaw === "空" ? "short" : dirRaw.includes("long") || dirRaw === "多" ? "long" : "";
+      const dirNorm = normalizeBackfillDirection(parsed.direction ?? execution.direction);
       const entry = execution.planned?.entryPrice ?? parsed.entry ?? "";
       const sigKey = signalTextHash(
         `${sym}|${dirNorm}|${String(entry ?? "").trim() || "mkt"}|${String(parsed.signalPhase ?? "")}`,
@@ -359,8 +382,7 @@ export async function replayDiscordChannelMessages(rows, channelId, opts = {}) {
         if (!parsed) continue;
         const execution = executionFromParsed(parsed);
         const sym = extractSymbolFromPayload(parsed, execution);
-        const dirRaw = String(parsed.direction ?? execution.direction ?? "").toLowerCase();
-        const dirNorm = dirRaw.includes("short") || dirRaw === "空" ? "short" : dirRaw.includes("long") || dirRaw === "多" ? "long" : "";
+        const dirNorm = normalizeBackfillDirection(parsed.direction ?? execution.direction);
         if (!sym || !dirNorm) continue;
         const phase = String(parsed.signalPhase ?? "full");
         if (phase === "tpsl") continue;
@@ -575,7 +597,7 @@ export async function runDiscordBackfillScan(opts) {
         parseReplayVersion: DISCORD_BACKFILL_PARSE_REPLAY_VERSION,
         ...replay,
       });
-      results.push(deduped);
+      results.push(stripBackfillGroupPnl(deduped));
     } catch (e) {
       results.push({
         channelId,
@@ -601,6 +623,7 @@ export async function runDiscordBackfillScan(opts) {
   return {
     ok: true,
     replayMode: "discord_signal_parse_validate",
+    parseOnly: true,
     period: periodKey,
     periodDays: days,
     fromMs,
@@ -609,5 +632,6 @@ export async function runDiscordBackfillScan(opts) {
     groupCount: results.length,
     groups: results,
     ranking,
+    backtestEnrichedAt: undefined,
   };
 }

@@ -84,6 +84,7 @@ export async function enrichDiscordBackfillFile(filePath, opts = {}) {
       ...summarizeBacktestItems(
         /** @type {Array<Record<string, unknown>>} */ (row.backtestItems ?? []),
       ),
+      backtestEnrichedAt: new Date().toISOString(),
     };
     out.push(row);
   }

@@ -801,7 +801,8 @@ function buildJunzhangOpenCard(p) {
     ].filter(Boolean);
     if (!takeProfits.length) return null;
   }
-  const hasMarketOpen = /现价\s*开/.test(joined.replace(/\s/g, ""));
+  const hasMarketOpen =
+    /现价\s*开/.test(joined.replace(/\s/g, "")) || p.orderMode === "market";
   if (!entry && !hasMarketOpen && p.orderMode !== "limit") return null;
 
   const lev = matchLine(joined, /(\d+)\s*倍(?:杠[杆干]|杠杆)?/i);
@@ -831,6 +832,64 @@ function buildJunzhangOpenCard(p) {
     note: noteParts.join(" · "),
     title: `${symbol} · 军长`,
   };
+}
+
+/**
+ * 口语开仓：order现在价格做空、ATOM现从开个多单、比特与以太开个空单（无「现价」）。
+ * @param {string} joined
+ */
+function parseJunzhangInformalOpens(joined) {
+  const compact = joined.replace(/\s/g, "");
+  /** @type {Array<Record<string, unknown>>} */
+  const out = [];
+
+  const latinNow = compact.match(
+    /^([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?现在价格?(做多|做空|开多|开空)$/i,
+  );
+  if (latinNow) {
+    const symbol = String(latinNow[1] ?? "").toUpperCase();
+    const dirTok = String(latinNow[2] ?? "");
+    const direction = /空/.test(dirTok) ? "做空" : "做多";
+    const card = buildJunzhangOpenCard({
+      symbol,
+      direction,
+      joined,
+      orderMode: "market",
+    });
+    if (card) out.push(card);
+    return out;
+  }
+
+  const typoOpen = compact.match(
+    /^([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?现[价从]?开(?:个)?(?:一层)?([多空])(?:单)?$/i,
+  );
+  if (typoOpen) {
+    const symbol = String(typoOpen[1] ?? "").toUpperCase();
+    const direction = String(typoOpen[2] ?? "") === "空" ? "做空" : "做多";
+    const card = buildJunzhangOpenCard({
+      symbol,
+      direction,
+      joined,
+      orderMode: "market",
+    });
+    if (card) out.push(card);
+    return out;
+  }
+
+  const cnPair = compact.match(/^(比特(?:币)?与以太(?:币)?|以太(?:币)?与比特(?:币)?)开(?:个)?(?:一层)?([多空])(?:单)?$/);
+  if (cnPair) {
+    const direction = String(cnPair[2] ?? "") === "空" ? "做空" : "做多";
+    for (const symbol of ["BTC", "ETH"]) {
+      const card = buildJunzhangOpenCard({
+        symbol,
+        direction,
+        joined,
+        orderMode: "market",
+      });
+      if (card) out.push(card);
+    }
+  }
+  return out;
 }
 
 /** 例：比特与以太现价开一层多单 */
@@ -1095,6 +1154,7 @@ export function parseJunzhangSignals(text) {
   }
 
   for (const card of parseJunzhangChineseMarketOpens(t)) pushUnique(card);
+  for (const card of parseJunzhangInformalOpens(t)) pushUnique(card);
   for (const card of parseJunzhangLimitOrders(t)) pushUnique(card);
 
   return out;

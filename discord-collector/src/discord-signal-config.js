@@ -88,6 +88,12 @@ export const DEFAULT_SIGNAL_CHANNELS = {
     styles: ["cn_formal", "cn_brief"],
     telegramStyle: "cn_brief",
   },
+  "1562351038277619783": {
+    name: "胖猫社区",
+    parser: "junzhang",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
 };
 
 /** YouTube paste coin-action 卡片暂归颜驰（/signals 频道概览） */

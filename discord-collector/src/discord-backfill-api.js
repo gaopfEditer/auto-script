@@ -298,12 +298,8 @@ export function registerDiscordBackfillRoutes(app, deps) {
       return res.status(409).json({ ok: false, error: "回溯任务进行中，请先停止或等待完成" });
     }
     const scrollFn = deps.getScrollImpl();
-    if (typeof scrollFn !== "function") {
-      return res.status(503).json({
-        ok: false,
-        error: "CDP 未就绪：请配置 CDP_CONNECT_URL 并保持 Chrome Discord 已登录",
-      });
-    }
+    const cdpScrollReady = typeof scrollFn === "function";
+    const navigateFn = cdpScrollReady ? deps.getNavigateImpl?.() ?? undefined : undefined;
     const { entries, configFile } = loadBackfillChannelEntries();
     if (!entries.length) {
       return res.status(500).json({
@@ -322,15 +318,12 @@ export function registerDiscordBackfillRoutes(app, deps) {
       return res.status(400).json({ ok: false, error: "没有可回溯的频道（检查配置与勾选）" });
     }
 
-    const navigateFn = deps.getNavigateImpl?.() ?? undefined;
     const maxScrollPages = Math.min(
       80,
       Math.max(1, Number(process.env.DISCORD_BACKFILL_MAX_SCROLL_PAGES) || 32),
     );
-    const inlineBacktest = Boolean(body.inlineBacktest);
-    const maxBacktestsPerChannel = inlineBacktest
-      ? Math.min(120, Math.max(0, Number(process.env.DISCORD_BACKFILL_MAX_BACKTEST_SIGNALS) || 40))
-      : 0;
+    // 盈亏回溯仅走 POST /rebacktest；拉取阶段只做 CDP/库内消息 + 信号解析
+    const maxBacktestsPerChannel = 0;
     const startedAt = new Date().toISOString();
     const outFile = cachePathForPeriod(period);
     jobState.abort = false;
@@ -348,7 +341,11 @@ export function registerDiscordBackfillRoutes(app, deps) {
       started: true,
       period,
       channelCount: groups.length,
-      hint: "轮询 GET /api/local/discord-backfill/status 或 results",
+      cdpScrollReady,
+      dbOnly: !cdpScrollReady,
+      hint: cdpScrollReady
+        ? "轮询 GET /api/local/discord-backfill/status 或 results"
+        : "CDP 未连接：仅用 MySQL 已有消息解析（不上滚拉历史）",
     });
 
     jobState.promise = (async () => {
@@ -357,7 +354,7 @@ export function registerDiscordBackfillRoutes(app, deps) {
       try {
         payload = await runDiscordBackfillScan({
           store: deps.store,
-          scrollFn,
+          scrollFn: cdpScrollReady ? scrollFn : undefined,
           navigateFn: typeof navigateFn === "function" ? navigateFn : undefined,
           groups,
           period,
