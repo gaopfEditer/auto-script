@@ -441,18 +441,55 @@ export interface PotentialModelHit {
   metrics?: Record<string, unknown>;
 }
 
-/** 信号后 12h 或衰竭/离池时的最大盈/回撤评判 */
+/** 潜力信号跟踪窗内/终点评判（默认约 7 天） */
+export interface PotentialTrackCheckpoint {
+  key?: string;
+  day?: number;
+  status?: string;
+  due_ms?: number;
+  return_pct?: number | null;
+  mfe_pct?: number | null;
+  mae_pct?: number | null;
+}
+
 export interface PotentialSignalOutcome {
   status?: string;
   pending?: boolean;
   settle_reason?: string | null;
   settle_label?: string | null;
   window_end_ms?: number;
+  track_days?: number;
   hours_left?: number;
+  days_left?: number;
   max_profit_pct?: number | null;
   max_drawdown_pct?: number | null;
   end_pnl_pct?: number | null;
   entry_price?: number | null;
+  checkpoints?: PotentialTrackCheckpoint[];
+  expectation_met?: boolean | null;
+  expectation_label?: string | null;
+}
+
+export interface PotentialTrackingItem extends PotentialSignalOutcome {
+  id?: string;
+  symbol?: string;
+  model_id?: string;
+  model_label?: string;
+  signal_time_ms?: number;
+  signal_tf?: string;
+  direction?: string;
+  snapshot?: {
+    score?: number;
+    stage?: string;
+    reasons?: string[];
+    metrics?: Record<string, unknown>;
+  };
+}
+
+export interface PotentialTrackingPayload {
+  track_days_default?: number;
+  checkpoint_days?: number[];
+  items?: PotentialTrackingItem[];
 }
 
 export interface PotentialDiscoveryItem {
