@@ -61,6 +61,11 @@ def is_observation_record(rec: dict[str, Any]) -> bool:
         return True
     if rec.get("confluence_observation_only"):
         return True
+    if rec.get("second_trial_observation_only"):
+        return True
+    st = rec.get("second_trial")
+    if isinstance(st, dict) and st.get("enabled") and not st.get("formal"):
+        return True
     conf = rec.get("confluence")
     if isinstance(conf, dict):
         tier = str(conf.get("tier") or "").strip().upper()

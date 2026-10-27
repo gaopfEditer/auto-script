@@ -91,11 +91,33 @@ def ingest_live_pattern_alert(
     if not passes_stats_admission(alert, list_alert_stats(), peers):
         return None
 
+    confluence_formal = passes_confluence_tier_push_gate(alert)
+    from oi_mornitor.pattern_second_trial import evaluate_second_trial
+
+    radar_snap: dict[str, Any] | None = None
+    try:
+        from oi_mornitor.radar import get_service
+
+        radar_snap = get_service().get_snapshot()
+    except Exception:  # noqa: BLE001
+        radar_snap = None
+
+    verdict = evaluate_second_trial(
+        alert,
+        radar_snapshot=radar_snap,
+        confluence_formal=confluence_formal,
+    )
+    alert["second_trial"] = verdict.to_dict()
+
     rec: dict[str, Any] | None
-    if passes_confluence_tier_push_gate(alert):
+    if confluence_formal and verdict.formal:
         rec = record_alert_from_push(alert)
     else:
-        record_confluence_observation_only(alert)
+        stub = dict(alert)
+        stub["confluence_observation_only"] = True
+        if confluence_formal and verdict.enabled:
+            stub["second_trial_observation_only"] = True
+        record_alert_from_push(stub)
         rec = None
     try:
         from oi_mornitor.pattern_alert_ticker import record_ticker_from_alert

@@ -62,6 +62,15 @@ export type AlertStatsRecord = {
   observation_only?: boolean;
   /** C 档共振观察：入库结算但不计头条胜率 */
   confluence_observation_only?: boolean;
+  /** B 档但第二审判未过：观察档 */
+  second_trial_observation_only?: boolean;
+  second_trial?: {
+    enabled?: boolean;
+    formal?: boolean;
+    gate_result?: string;
+    action?: string;
+    reason?: string;
+  };
   settleProfileId?: string;
   settleRulesVersion?: number;
   slPrice?: number;
@@ -145,6 +154,9 @@ export function isObservationStatsRecord(rec: AlertStatsRecord): boolean {
   const lab = String(rec.typeLabel || "");
   if (lab.includes("观察")) return true;
   if (rec.confluence_observation_only) return true;
+  if (rec.second_trial_observation_only) return true;
+  const st = rec.second_trial;
+  if (st?.enabled && st.formal === false) return true;
   const tier = String(rec.confluence?.tier || "").toUpperCase();
   if (tier === "C") return true;
   return Boolean(rec.observation_only);

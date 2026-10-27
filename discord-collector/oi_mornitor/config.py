@@ -373,6 +373,24 @@ OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS = max(
 # T3 山寨 15m MA144：保留扫描，但须多周期共振或更高综合分
 OI_MA144_T3_15M_MIN_MTF = max(1, env_int("OI_MA144_T3_15M_MIN_MTF", 2, min_val=1))
 OI_MA144_T3_15M_MIN_SCORE = env_float("OI_MA144_T3_15M_MIN_SCORE", 70.0, min_val=0.0)
+# —— 方案1：ezcoin-adapter 硬门禁 + LLM 第二审判（正式行） ——
+OI_SECOND_TRIAL_ENABLED = env_bool_off("OI_SECOND_TRIAL_ENABLED", True)
+OI_SECOND_TRIAL_BYPASS = env_bool("OI_SECOND_TRIAL_BYPASS", False)
+OI_EZCOIN_ADAPTER_BASE_URL = env_str("OI_EZCOIN_ADAPTER_BASE_URL", "http://127.0.0.1:5179")
+OI_EZCOIN_ADAPTER_JUDGE_PATH = env_str("OI_EZCOIN_ADAPTER_JUDGE_PATH", "/api/judge")
+OI_EZCOIN_ADAPTER_TIMEOUT_SEC = env_float("OI_EZCOIN_ADAPTER_TIMEOUT_SEC", 8.0, min_val=1.0, max_val=120.0)
+_OI_SECOND_TRIAL_FORMAL_RAW = env_str("OI_SECOND_TRIAL_FORMAL_ACTIONS", "LONG,SHORT")
+OI_SECOND_TRIAL_FORMAL_ACTIONS = tuple(
+    x.strip().upper() for x in _OI_SECOND_TRIAL_FORMAL_RAW.split(",") if x.strip()
+) or ("LONG", "SHORT")
+_OI_LLM_MAX_TIER_RAW = env_str("OI_SECOND_TRIAL_LLM_MAX_TIER", "t2").strip().lower()
+OI_SECOND_TRIAL_LLM_MAX_TIER = (
+    _OI_LLM_MAX_TIER_RAW if _OI_LLM_MAX_TIER_RAW in ("t1", "t2", "t3") else "t2"
+)
+OI_SECOND_TRIAL_T3_LLM_SAMPLE_PCT = env_float(
+    "OI_SECOND_TRIAL_T3_LLM_SAMPLE_PCT", 0.0, min_val=0.0, max_val=100.0
+)
+OI_SECOND_TRIAL_DEDUPE_TTL_SEC = env_int("OI_SECOND_TRIAL_DEDUPE_TTL_SEC", 900, min_val=0)
 # Telegram：优先 HTTP 网关，否则 Bot API
 TELEGRAM_SEND_URL = os.getenv("TELEGRAM_SEND_URL", "").strip()
 TELEGRAM_PUSH_CHAT_ID = (

@@ -390,6 +390,22 @@ async def handle_pattern_alert_stats_post(request: web.Request) -> web.Response:
     return _json_response({"ok": True, "updated": len(raw), "summary": summarize(items)})
 
 
+async def handle_ai_judge_backtest_btc(_request: web.Request) -> web.Response:
+    """探活 / 离线验证：对 BTC 探针快照调用 ezcoin-adapter（非结构回测）。"""
+    from oi_mornitor.ai_judge_bridge import build_btc_probe_snapshot, call_adapter_judge
+
+    snap = build_btc_probe_snapshot()
+    result = call_adapter_judge(snap)
+    return _json_response(
+        {
+            "ok": True,
+            "probe": snap,
+            "judge": result.to_dict(),
+            "raw": result.raw if _request.rel_url.query.get("verbose") == "1" else None,
+        }
+    )
+
+
 async def handle_backtest_structure_options(_request: web.Request) -> web.Response:
     """结构回测：可选形态 / 周期 / 核算说明。"""
     from oi_mornitor.backtest_kline_store import storage_stats
@@ -1213,6 +1229,9 @@ def create_app() -> web.Application:
     app.router.add_post("/api/pattern-alert-stats/recalculate-v2", handle_pattern_alert_stats_recalculate_v2)
     app.router.add_post("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
     app.router.add_put("/api/pattern-alert-stats", handle_pattern_alert_stats_post)
+
+    app.router.add_get("/api/ai-judge/backtest-btc", handle_ai_judge_backtest_btc)
+    app.router.add_post("/api/ai-judge/backtest-btc", handle_ai_judge_backtest_btc)
 
     app.router.add_get("/api/backtest/structure/options", handle_backtest_structure_options)
     app.router.add_get("/api/backtest/structure/latest", handle_backtest_structure_latest)

@@ -1,6 +1,10 @@
 # 文档已迁移
 
-形态 **信号 / 拐点 / 通知 / 胜率列表** 完整说明已移至：
+**OI 核心管线（方案1：因子 → 门禁 → adapter/LLM → 正式行）** 见：
+
+- [**docs/oi-core-pipeline.md**](docs/oi-core-pipeline.md)
+
+形态 **信号 / 拐点 / 通知 / 胜率列表** 细则见：
 
 - [**docs/signal-logic.md**](docs/signal-logic.md)
 

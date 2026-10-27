@@ -1117,6 +1117,11 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
             rec["observation_only"] = True
         if alert.get("confluence_observation_only"):
             rec["confluence_observation_only"] = True
+        if alert.get("second_trial_observation_only"):
+            rec["second_trial_observation_only"] = True
+        st = alert.get("second_trial")
+        if isinstance(st, dict):
+            rec["second_trial"] = st
         conf = alert.get("confluence")
         if isinstance(conf, dict):
             rec["confluence"] = conf
