@@ -161,6 +161,18 @@ const SIGNAL_PATTERN_SETS = {
     /【卡片】/,
     /\d+\.\d+/,
   ],
+  /** 胖猫社区：口语市价 + 止损/目标补充 */
+  pangmao: [
+    /[A-Za-z][A-Za-z0-9]{1,14}(?:USDT)?(?:现在|现)价格?(做多|做空|开多|开空)/i,
+    /[A-Za-z][A-Za-z0-9]{1,14}(?:USDT)?(做多|做空)$/i,
+    /[A-Za-z][A-Za-z0-9]{1,14}(?:USDT)?(?:低位|继续)(做多|做空)/i,
+    /现价\s*开/,
+    /止损\s*[：:\s]*[\d.]/,
+    /^[\d.]+\s*止损/,
+    /目标\s*[\d.]/,
+    /入场\s*[：:]/,
+    /【卡片】/,
+  ],
   generic: [
     /(做多|做空|LONG|SHORT|多|空)/i,
     /(止盈|目标|TARGETS?|TP)\s*[：:]/i,
@@ -1161,6 +1173,128 @@ export function parseJunzhangSignals(text) {
 }
 
 /**
+ * 胖猫社区口语：iost做多、order现价格做空、jct低位做多、irys继续做多 等。
+ * @param {string} joined
+ */
+/** @type {Record<string, string>} */
+const PANGMAO_CN_TICKER = {
+  闪迪: "SNDK",
+  海力士: "HYNIX",
+  以太坊: "ETH",
+  以太: "ETH",
+  比特币: "BTC",
+};
+
+/** @param {string} joined */
+function pangmaoCompactLine(joined) {
+  return String(joined ?? "")
+    .replace(/\s/g, "")
+    .replace(/[，,。.!！?？、；;]+$/g, "");
+}
+
+function parsePangmaoInformalOpens(joined) {
+  const compact = pangmaoCompactLine(joined);
+  /** @type {Array<Record<string, unknown>>} */
+  const out = [];
+  const pushOpen = (/** @type {string} */ symbol, /** @type {string} */ direction) => {
+    const card = buildJunzhangOpenCard({
+      symbol,
+      direction,
+      joined,
+      orderMode: "market",
+    });
+    if (card) out.push({ ...card, parser: "pangmao" });
+  };
+
+  const cnHead = compact.match(/^(闪迪|海力士)(?:现价格?)?(做多|做空)/);
+  if (cnHead) {
+    const sym = PANGMAO_CN_TICKER[String(cnHead[1] ?? "")] ?? String(cnHead[1] ?? "");
+    const direction = /空/.test(String(cnHead[2] ?? "")) ? "做空" : "做多";
+    pushOpen(sym, direction);
+    return out;
+  }
+
+  const majorNear = compact.match(/^(比特币|以太坊?|以太)([\d.]+)?附近(做空|做多|空|多)/);
+  if (majorNear) {
+    const sym = PANGMAO_CN_TICKER[String(majorNear[1] ?? "")] ?? "ETH";
+    const direction = /空/.test(String(majorNear[3] ?? "")) ? "做空" : "做多";
+    pushOpen(sym, direction);
+    return out;
+  }
+
+  const rules = [
+    /^([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?(?:现在|现)价格?(做多|做空|开多|开空)/i,
+    /^([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?现在(做多|做空)/i,
+    /^([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?现[价从]?开(?:个)?(?:一层)?([多空])(?:单)?/i,
+    /^([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?低位(做多|做空)/i,
+    /^([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?继续(做多|做空)/i,
+    /^([A-Za-z][A-Za-z0-9]{1,14})也值得(做多|做空)/i,
+    /^([A-Za-z][A-Za-z0-9]{1,14})(?:USDT)?(做多|做空)/i,
+  ];
+  for (const re of rules) {
+    const m = compact.match(re);
+    if (!m) continue;
+    const symbol = String(m[1] ?? "").toUpperCase();
+    const dirTok = String(m[2] ?? "");
+    const direction = /空/.test(dirTok) ? "做空" : "做多";
+    pushOpen(symbol, direction);
+    return out;
+  }
+  return out;
+}
+
+/**
+ * 胖猫社区：口语市价为主，复用军长双币/限价/止损合并逻辑。
+ * @param {string} text
+ */
+export function parsePangmaoSignals(text) {
+  const t = foldJunzhangText(String(text ?? "").trim());
+  if (!t) return [];
+
+  /** @type {Array<Record<string, unknown>>} */
+  const out = [];
+  const pushUnique = (/** @type {Record<string, unknown>} */ card) => {
+    const stamped = { ...card, parser: "pangmao" };
+    const sym = String(stamped.symbol ?? "").toUpperCase();
+    const dir = String(stamped.direction ?? "");
+    const ent = String(stamped.entry ?? "").trim() || "mkt";
+    const key = `${sym}|${dir}|${ent}|${String(stamped.signalPhase ?? "")}`;
+    if (
+      out.some(
+        (c) =>
+          `${String(c.symbol ?? "").toUpperCase()}|${String(c.direction ?? "")}|${String(c.entry ?? "").trim() || "mkt"}|${String(c.signalPhase ?? "")}` ===
+          key,
+      )
+    ) {
+      return;
+    }
+    out.push(stamped);
+  };
+
+  for (const card of parsePangmaoInformalOpens(t)) pushUnique(card);
+  for (const card of parseJunzhangSignals(t)) pushUnique(card);
+
+  const slOnly = t.replace(/\s/g, "").match(/^([\d.]+)止损$/);
+  if (slOnly && !out.some((c) => String(c.signalPhase ?? "") === "tpsl")) {
+    pushUnique({
+      parser: "pangmao",
+      symbol: "",
+      asset: "",
+      direction: "",
+      entry: "",
+      stopLoss: String(slOnly[1] ?? ""),
+      takeProfits: [],
+      targets: [],
+      signalPhase: "tpsl",
+      awaitingTpsl: false,
+      title: "胖猫止损",
+    });
+  }
+
+  return out;
+}
+
+/**
  * @param {string} text
  * @param {import("./discord-signal-config.js").ParserKind} kind
  * @returns {Array<Record<string, unknown>>}
@@ -1177,6 +1311,16 @@ export function parseSignalTexts(text, kind) {
     if (/入场\s*[：:]|入場\s*[：:]|【卡片】/.test(t)) {
       const brief = parseCnBriefStructured(t);
       if (brief) return [brief];
+    }
+    return [];
+  }
+
+  if (kind === "pangmao") {
+    const multi = parsePangmaoSignals(t);
+    if (multi.length) return multi;
+    if (/入场\s*[：:]|入場\s*[：:]|【卡片】/.test(t)) {
+      const brief = parseCnBriefStructured(t);
+      if (brief) return [{ ...brief, parser: "pangmao" }];
     }
     return [];
   }
@@ -1254,6 +1398,10 @@ function parseSignalTextSwitch(t, kind) {
       return parseAltcoinKing(t);
     case "junzhang":
       return parseJunzhang(t);
+    case "pangmao": {
+      const multi = parsePangmaoSignals(t);
+      return multi[0] ?? null;
+    }
     default:
       return (
         parseDabiaoke(t) ||
@@ -1323,6 +1471,7 @@ export function formatCardFallback(parsed, styleId) {
   // 军长 / 币圈所长等同款简体极简（cn_brief / cn_formal）
   if (
     parsed.parser === "junzhang" ||
+    parsed.parser === "pangmao" ||
     ((parsed.parser === "biquan_suozhang" ||
       parsed.parser === "dabiaoke" ||
       parsed.parser === "feiyang" ||

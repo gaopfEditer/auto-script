@@ -17,6 +17,7 @@ import { executionFromParsed } from "./discord-signal-execution.js";
 import {
   JUNZHANG_SL_LINK_MS,
   parseJunzhangSignals,
+  parsePangmaoSignals,
   parseSignalText,
 } from "./discord-signal-parsers.js";
 import { extractDiscordMessageContent, resolveDiscordMessageCreatedAtMs } from "./discord-gateway.js";
@@ -228,6 +229,9 @@ async function parseDiscordBackfillRow(store, row, channelId, parser) {
   if (parser === "junzhang") {
     return { content, parsedList: parseJunzhangSignals(content) };
   }
+  if (parser === "pangmao") {
+    return { content, parsedList: parsePangmaoSignals(content) };
+  }
   const one = parseSignalText(content, parser);
   return { content, parsedList: one ? [one] : [] };
 }
@@ -283,7 +287,7 @@ export async function replayDiscordChannelMessages(rows, channelId, opts = {}) {
     for (const parsed of parsedList) {
       const phaseEarly = String(parsed.signalPhase ?? "full");
       if (
-        parser === "junzhang" &&
+        (parser === "junzhang" || parser === "pangmao") &&
         phaseEarly === "tpsl" &&
         mergeJunzhangStopIntoOpenCards(cards, parsed, signalMs)
       ) {
