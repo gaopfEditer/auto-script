@@ -6082,3 +6082,137 @@ button.ghost {
   gap: 12px;
   align-items: center;
 }
+
+.btc-backtest-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px 20px 48px;
+}
+
+.btc-backtest-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.btc-backtest-head h1 {
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+
+.btc-backtest-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.btc-horizon-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 10px 14px;
+  background: var(--panel, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.btc-view-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.btc-view-toggle button {
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+}
+
+.btc-view-toggle button.active {
+  border-color: var(--accent, #6cf);
+  color: var(--accent, #6cf);
+}
+
+.btc-settle-grid {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.btc-settle-grid.side-by-side {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 720px) {
+  .btc-settle-grid.side-by-side {
+    grid-template-columns: 1fr;
+  }
+}
+
+.btc-settle-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--panel, rgba(255, 255, 255, 0.03));
+}
+
+.btc-settle-card h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.btc-settle-dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.btc-settle-dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.btc-settle-dl dt {
+  color: var(--muted);
+}
+
+.btc-settle-dl dd {
+  margin: 0;
+  text-align: right;
+}
+
+.btc-compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-bottom: 24px;
+}
+
+.btc-compare-table th,
+.btc-compare-table td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.btc-backtest-help .code-block {
+  font-size: 12px;
+  overflow-x: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+}
+
+.muted.small {
+  font-size: 12px;
+}

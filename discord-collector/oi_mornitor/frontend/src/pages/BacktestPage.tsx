@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { MercuHeader } from "../components/MercuHeader";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useSpecialFocus } from "../hooks/useSpecialFocus";
@@ -1170,6 +1171,9 @@ export function BacktestPage() {
           <h1 className="bt-title">结构形态回测</h1>
           <p className="bt-desc">
             先分段拉 K 线入库，再选回测区间扫描。回测默认走 Live 漏斗（雷达山寨池 + 结构 OI 过滤 + 推送冷却），与实时形态卡片对齐。
+          </p>
+          <p className="bt-desc">
+            <Link to="/backtest/ai-btc">AI BTC 15m 出场对照</Link>（composite vs 守利润，含 SL/TP 结算胜率；与下方 horizon 列无关）
           </p>
 
           <section className="bt-section">

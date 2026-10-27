@@ -396,6 +396,23 @@ OI_RADAR_ANOMALY_RETENTION_SEC = env_int("OI_RADAR_ANOMALY_RETENTION_SEC", 14_40
 OI_RADAR_ANOMALY_MAX_ITEMS = env_int("OI_RADAR_ANOMALY_MAX_ITEMS", 600, min_val=50)
 OI_RADAR_BOARD_HISTORY_MAX = env_int("OI_RADAR_BOARD_HISTORY_MAX", 400, min_val=50)
 OI_RADAR_BOARD_TOP_N = env_int("OI_RADAR_BOARD_TOP_N", 7, min_val=3)
+# AI BTC 15m 结算对照（composite trail vs protect）
+BTC_BACKTEST_FEE_RATE_PER_SIDE = env_float("BTC_BACKTEST_FEE_RATE_PER_SIDE", 0.0004, min_val=0.0)
+BTC_TRAIL_BE_R = env_float("BTC_TRAIL_BE_R", 1.0, min_val=0.1)
+BTC_TRAIL_TP1_R = env_float("BTC_TRAIL_TP1_R", 1.8, min_val=0.1)
+BTC_TRAIL_MAX_BARS = env_int("BTC_TRAIL_MAX_BARS", 48, min_val=4)
+BTC_PROTECT_BE_R = env_float("BTC_PROTECT_BE_R", 0.7, min_val=0.1)
+BTC_PROTECT_TP1_R = env_float("BTC_PROTECT_TP1_R", 1.1, min_val=0.1)
+BTC_PROTECT_LADDER_STEP_R = env_float("BTC_PROTECT_LADDER_STEP_R", 0.5, min_val=0.1)
+BTC_PROTECT_LADDER_TRAIL_R = env_float("BTC_PROTECT_LADDER_TRAIL_R", 0.4, min_val=0.05)
+BTC_PROTECT_REV_EXTREME_BARS = env_int("BTC_PROTECT_REV_EXTREME_BARS", 3, min_val=1)
+BTC_PROTECT_EARLY_BARS = env_int("BTC_PROTECT_EARLY_BARS", 8, min_val=1)
+BTC_PROTECT_EARLY_MIN_MFE_R = env_float("BTC_PROTECT_EARLY_MIN_MFE_R", 0.5, min_val=0.0)
+BTC_PROTECT_MAX_BARS = env_int("BTC_PROTECT_MAX_BARS", 48, min_val=4)
+BTC_AI_BACKTEST_FIXTURE = env_str(
+    "BTC_AI_BACKTEST_FIXTURE",
+    str(_PKG_ROOT / "tests" / "fixtures" / "btc_ai_backtest_sample.json"),
+)
 # Telegram：优先 HTTP 网关，否则 Bot API
 TELEGRAM_SEND_URL = os.getenv("TELEGRAM_SEND_URL", "").strip()
 TELEGRAM_PUSH_CHAT_ID = (

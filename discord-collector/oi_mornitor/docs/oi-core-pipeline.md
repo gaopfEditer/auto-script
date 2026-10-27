@@ -81,7 +81,9 @@ adapter **不可达**时：`gate_result=unavailable`，**降级观察**，不假
 | `pattern_alert_stats.py` | 胜率库、结算回写（禁止无 admission 插条） |
 | `ai_judge_bridge.py` | `build_ezcoin_snapshot` / `call_adapter_judge` |
 | `pattern_second_trial.py` | `evaluate_second_trial`、LLM 配额与去重 |
-| `server.py` | `GET/POST /api/ai-judge/backtest-btc` 探针 |
+| `server.py` | `GET/POST /api/ai-judge/backtest-btc` 探针；`btc-settlement-compare` 出场对照 |
+| `strategy/tight_sl_15m.py` | 15m composite / protect 模拟与 horizon |
+| `btc_1h_backtest.py` | 批量对照汇总 |
 | `ezcoin-adapter`（独立进程，默认 **5179**） | 硬门禁 + slim 5 席 LLM |
 
 ## 回测 vs AI 探针
@@ -89,7 +91,30 @@ adapter **不可达**时：`gate_result=unavailable`，**降级观察**，不假
 | 入口 | 用途 |
 |------|------|
 | 前端 `/backtest` + `/api/backtest/structure/*` | **结构回测**：历史 K 线、形态命中、分组胜率（规则门控，默认不走 L2） |
+| 前端 `/backtest/ai-btc` + `GET/POST /api/ai-judge/btc-settlement-compare` | **AI BTC 15m 出场对照**：同一批信号的 `entry_sl_tp_trail` vs `entry_sl_tp_protect` 净盈亏与 SL/TP 结算胜率 |
 | `/api/ai-judge/backtest-btc` | **AI 探针**：固定 BTC 快照调用 adapter，验证联通与延迟，不是全历史回测 |
+
+### AI BTC：两档 15m 出场 vs Horizon
+
+| 口径 | 模块 | 是否走 TP/SL |
+|------|------|----------------|
+| **+1h / +4h / +8h 胜率** | `evaluate_future_outcome`（`tight_sl_15m.py`） | **否**（仅看入场后第 N 根 15m 收盘价相对入场价） |
+| **净盈亏 / 盈亏笔数 / SL/TP 结算胜率** | `simulate_tight_sl_outcome` + `compute_composite_trade_plan` | **是** |
+
+两档结算（默认不互相覆盖，UI 并排对照）：
+
+| `settlement` | 名称 | 要点 |
+|--------------|------|------|
+| `entry_sl_tp_trail` | 现行 composite | 1R 保本；TP1≈1.8R 平 50%；余仓 EMA13/21；约 48×15m 到期 |
+| `entry_sl_tp_protect` | 守利润 | 0.7R 保本；TP1 1.1R 平 50%；阶梯移损 + 近 3 根反向极值；余仓 EMA144 结构出场；前 8 根未达 +0.5R 减半/平 |
+
+费率默认 **万 4/边**（`BTC_BACKTEST_FEE_RATE_PER_SIDE`）。本机对照：
+
+```bash
+cd discord-collector
+PYTHONPATH=. python3 oi_mornitor/scripts/compare_btc_settlement_modes.py
+PYTHONPATH=. python3 oi_mornitor/scripts/compare_btc_settlement_modes.py --fixture /path/to/your_51_trades.json
+```
 
 ## 关键环境变量（空/非法 → 代码默认）
 
@@ -107,6 +132,10 @@ adapter **不可达**时：`gate_result=unavailable`，**降级观察**，不假
 | `OI_CONFLUENCE_PUSH_MIN_TIER` | `B` | 共振正式档 |
 | `OI_PATTERN_STATS_COOLDOWN_SAME_BARS` | `4` | 同向冷却 |
 | `OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS` | `6` | 反向锁定 |
+| `BTC_BACKTEST_FEE_RATE_PER_SIDE` | `0.0004` | AI BTC 对照费率 |
+| `BTC_TRAIL_BE_R` / `BTC_TRAIL_TP1_R` | `1.0` / `1.8` | composite 保本 / TP1 |
+| `BTC_PROTECT_BE_R` / `BTC_PROTECT_TP1_R` | `0.7` / `1.1` | protect 保本 / TP1 |
+| `BTC_AI_BACKTEST_FIXTURE` | `oi_mornitor/tests/fixtures/btc_ai_backtest_sample.json` | 默认对照样本 |
 
 形态因子与列表收紧的其余变量见 [signal-logic.md](./signal-logic.md)。
 

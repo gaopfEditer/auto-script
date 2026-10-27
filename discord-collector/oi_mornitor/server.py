@@ -406,6 +406,24 @@ async def handle_ai_judge_backtest_btc(_request: web.Request) -> web.Response:
     )
 
 
+async def handle_btc_settlement_compare(request: web.Request) -> web.Response:
+    """AI BTC 15m：composite trail vs protect 对照（默认 fixture；POST 可传 trades[]）。"""
+    from oi_mornitor.btc_1h_backtest import run_from_fixture, run_from_request_body
+
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        payload = run_from_request_body(body)
+    else:
+        fixture = request.rel_url.query.get("fixture")
+        payload = run_from_fixture(fixture)
+    return _json_response({"ok": True, **payload})
+
+
 async def handle_backtest_structure_options(_request: web.Request) -> web.Response:
     """结构回测：可选形态 / 周期 / 核算说明。"""
     from oi_mornitor.backtest_kline_store import storage_stats
@@ -1232,6 +1250,8 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/ai-judge/backtest-btc", handle_ai_judge_backtest_btc)
     app.router.add_post("/api/ai-judge/backtest-btc", handle_ai_judge_backtest_btc)
+    app.router.add_get("/api/ai-judge/btc-settlement-compare", handle_btc_settlement_compare)
+    app.router.add_post("/api/ai-judge/btc-settlement-compare", handle_btc_settlement_compare)
 
     app.router.add_get("/api/backtest/structure/options", handle_backtest_structure_options)
     app.router.add_get("/api/backtest/structure/latest", handle_backtest_structure_latest)
