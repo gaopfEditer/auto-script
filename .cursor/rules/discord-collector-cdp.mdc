@@ -1,0 +1,22 @@
+---
+description: CDP 附加 Chrome：Discord Gateway 与 Twitter 列表抓取
+globs: discord-collector/src/{cdp-*,twitter-cdp-*,index.js,collector-ui-server.js,load-env.js}
+alwaysApply: false
+---
+
+# CDP 约定
+
+两条互不抢浏览器的附加链：
+
+| 用途 | 默认端口 | 模块 | Chrome profile |
+|------|----------|------|----------------|
+| Discord Gateway | `9222`（`CDP_CONNECT_URL`） | `cdp-ws-monitor.js` | 已登录 discord.com |
+| X 列表最新帖 | `TWITTER_CDP_PORT`（可 `9223`） | `twitter-cdp-fetch.js` | 已登录 x.com |
+
+- `connectOverCDP` 后 `browser.close()` **只断开会话，不许杀用户 Chrome**。
+- 连本机调试端口必须摘掉代理（`load-env.js` 的 `NO_PROXY` + fetch/Playwright 的 localhost 直连）。
+- Discord：监听 `Network.webSocketFrameReceived`，不注入业务脚本（仅可选 visibility 保活）。
+- Twitter：只读当前时间线最新帖；**每个 list 首次只记 seen、不推历史**；新帖走现有 Telegram `TELEGRAM_SEND_URL`。
+- 不要用 Discord 的 `openOrRefreshDiscordUrl` 去打开 x.com，反之亦然。
+
+探测：`GET http://127.0.0.1:{port}/json/version`。Windows 示例见 `docs/development.md`。

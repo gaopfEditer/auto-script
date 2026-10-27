@@ -1,0 +1,71 @@
+﻿# 工作区索引范围：discord-collector/ + telegram/
+# 其余兄弟项目、根目录杂项脚本不进入 Cursor 索引
+
+# —— 兄弟项目（与主开发无关）——
+stream-collector/
+youtube-fetch/
+youtube-fetch-py/
+workflow/
+realtime-btc/
+dealMsg/
+binance/
+macstudio/
+prompts/
+system/
+test/
+tv_ws/
+auto_git_commit_and_set_task/
+.pnpm-store/
+
+# —— 根目录杂项脚本 / 工具 ——
+browser_automation.py
+config.py
+fix_all_encoding.py
+fix_json_encoding.py
+git_repos.py
+image_llm_analyzer.py
+notifier.py
+promat_publish.py
+python-takeup-cpu.py
+task_notifier.py
+tv_ws_pic_push_public.py
+tv_ws_pic_push_public_only_telegram.py
+tv_ws_pic_push_public_test.py
+docker-compose.yaml
+install_mac_commands.sh
+manage_git_tasks.bat
+pull_code.bat
+push_code.bat
+setup_shutdown_startup_tasks.ps1
+shutdown_git_commit.bat
+startup_git_pull.bat
+startwin.bat
+startwin.config.json
+startwin.ps1
+tasks_config.example.json
+test_git_path.bat
+gpll
+gpsh
+README.md
+Git*.md
+
+# —— 敏感 / 本地配置 ——
+.env
+.env.*
+!.env.example
+discord-collector/.env
+telegram/.env
+
+# —— 依赖与构建产物（保留源码，减索引体积）——
+**/node_modules/
+**/venv/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+discord-collector/public/
+discord-collector/data/
+discord-collector/oi_mornitor/static/dist/
+youtube-fetch/archives/
+
+# —— Git / IDE 缓存 ——
+.git/

@@ -8,8 +8,8 @@
 
 | 脚本 | 说明 |
 |------|------|
-| `list_groups.py` | 列出已加入的群组/频道及最近消息 |
-| `listen.py` | 监听消息；默认 AI 聚合窗口内交易信息后推送 |
+| `list_groups.py` | **仅打印**监听范围内消息（不建卡、不推送） |
+| `listen.py` | 主群建卡 + 次要群推送（生产用） |
 | `poll_groups.py` | 轮询群组等 |
 
 ## 环境变量
@@ -57,12 +57,32 @@ setup_telethon_logging()
 
 日志格式：`时间 级别 [logger名] 消息`，输出到 **stderr**，时间格式为 `%H:%M:%S`。
 
-## listen.py：AI 聚合推送（默认）
+## listen.py：主群建卡 + 次要群推送（默认）
 
-配置了 `push_chat` 后，**不会**把每条闲聊原样转发，而是：
+在 `monitored_groups.txt` 配置：
 
-1. 每个监听群保留最近 **30** 条消息（`TELEGRAM_TRADE_CONTEXT_SIZE`）
-2. 停聊 **45s** 后（`TELEGRAM_TRADE_CONTEXT_FLUSH_SEC`）将窗口交给 **Ollama** 提取交易信息
-3. 按 **币种** 合并为「入场 / 止损 / 止盈 / 调整」等一行摘要，发到 `push_chat`（`TELEGRAM_SEND_URL` 或 Telethon）
+| 键 | 用途 |
+|----|------|
+| `main_monitored` | 主要发车群（发车占比高）→ `POST /api/v1/cards` |
+| `monitored` | 次要闲聊群（发车占比低）→ 整理后发到 `push_chat` |
+| `push_chat` | 次要群推送目标 |
 
-需本机 **Ollama** 与 **Telegram 发送 API**（如 `http://127.0.0.1:8000/api/telegram/send`）。关闭 AI、恢复关键词单条转发：`TELEGRAM_AI_TRADE_AGGREGATE=0` 并配置 `sender_keywords`。
+两类群都用滚动窗口检测「币种 + 做多/做空」；可先发信号、再补止盈止损。
+
+主群建卡还需：
+
+1. `discord-collector/.env` 中配置 `CARDS_API_KEY`，并运行 `pnpm run collect:ui`
+2. （可选）复制 `channel_profiles.example.json` → `channel_profiles.json`，为每个主群 id 填 `name` / `avatar`（未填时用群标题）
+
+启动示例：
+
+```
+[+] 主发车群 → 卡片 API: [...]
+[+] 次要闲聊群 → push_chat: [...]
+[+] 主群建卡: http://127.0.0.1:3851/api/v1/cards
+[+] 次要群规则推送: ...
+```
+
+## listen.py：可选 AI 交易聚合
+
+设 `TELEGRAM_AI_TRADE_AGGREGATE=1` 时：仅对**次要群**改为 Ollama 聚合后推送。需本机 **Ollama** 与 `TELEGRAM_SEND_URL`。

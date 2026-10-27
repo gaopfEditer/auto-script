@@ -1,0 +1,758 @@
+"""
+主发车群（main_monitored）：检测到交易信号后写入 discord-collector 卡片 API。
+
+策略：
+  1. #prom + 方向（如「#prom 市价多」）→ 立即建卡；10 分钟内同 key 补充消息再 POST，靠后台合并更新同一张卡
+  2. 普通开仓信号 → 立即建卡（initial）；补齐止盈止损 → 再建卡（update）
+  3. 后台 card-signal-merge：#prom 默认 10 分钟窗口，其它 30 分钟
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import os
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
+
+from cards_client import post_card, signal_to_card_payload
+from config import get_cards_api_key, resolve_channel_profile
+from signal_pipeline_log import log_pipeline
+from trade_context_buffer import TradeContextBuffer, WindowMessage
+from trade_signal_detect import (
+    TradeSignal,
+    format_signal_push,
+    is_push_bypass_message,
+    is_spam_or_recap_message,
+    log_signal_skip,
+    looks_like_trade_message,
+    parse_trade_text,
+    resolve_sender_name,
+    signal_skip_reason,
+    strip_promotional_lines,
+)
+from ui_feed_pusher import (
+    get_profile_meta,
+    parse_only_names_patterns,
+    sender_allowed_for_profile,
+    sender_filter_patterns,
+)
+
+# #prom 开仓后允许补充止盈/止损/币种的窗口
+_PROM_MERGE_WINDOW = timedelta(minutes=10)
+
+
+@dataclass
+class PendingCard:
+    key: str
+    signal: TradeSignal
+    chat_id: int
+    chat_title: str = ""
+    signal_at: datetime | None = None
+    card_id: int | None = None
+    is_prom: bool = False
+    is_tponly_pending: bool = False  # True=只收到 TP/SL，缺币种/方向，等待补充
+    opened_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# TP/SL-only 消息（无币种/方向）建卡后，等待补充 core 的窗口
+_TPSLA_ONLY_WINDOW = timedelta(minutes=10)
+
+
+class TradeCardPusher:
+    def __init__(self, client=None) -> None:
+        raw = os.environ.get("TELEGRAM_TRADE_SIGNAL_WINDOW", "10").strip()
+        try:
+            window = int(raw)
+        except ValueError:
+            window = 10
+        self._window = max(5, window)
+        self._buffer = TradeContextBuffer(max_size=self._window)
+        self._pending: dict[str, PendingCard] = {}
+        self._pushed_digest: set[str] = set()
+        self._lock = asyncio.Lock()
+        self._client = client
+        # 格式参考 discord 卡片通知，推到 MAIN_CARD_TELEGRAM_CHAT_ID
+        raw_id = os.environ.get("MAIN_CARD_TELEGRAM_CHAT_ID", "").strip()
+        self._tg_chat_id: int | None = int(raw_id) if raw_id.lstrip("-").isdigit() else None
+
+    def enabled(self) -> bool:
+        return bool(get_cards_api_key())
+
+    def _pending_key(self, chat_id: int, sig: TradeSignal) -> str:
+        # #prom 尚无币种时用方向+发言人占位，避免与其它币种混卡
+        sym = (sig.symbol or ("PROM" if sig.is_prom else "")).upper()
+        who = (sig.sender or "").strip().lower() or "_"
+        return f"{chat_id}:{sym}:{sig.direction}:{who}"
+
+    def _digest(self, text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
+
+    def _expire_pending(self, now: datetime) -> None:
+        dead = [
+            k
+            for k, p in self._pending.items()
+            if (p.is_prom or p.is_tponly_pending)
+            and now - p.opened_at > _PROM_MERGE_WINDOW
+        ]
+        for k in dead:
+            self._pending.pop(k, None)
+
+    def _find_prom_pending(
+        self, chat_id: int, sig: TradeSignal, now: datetime
+    ) -> PendingCard | None:
+        """同群同发言人、#prom 窗口内：允许币种从空补全后仍命中 pending。"""
+        who = (sig.sender or "").strip().lower() or "_"
+        for p in self._pending.values():
+            if not p.is_prom or p.chat_id != chat_id:
+                continue
+            if now - p.opened_at > _PROM_MERGE_WINDOW:
+                continue
+            p_who = (p.signal.sender or "").strip().lower() or "_"
+            if p_who != who:
+                continue
+            if p.signal.direction and sig.direction and p.signal.direction != sig.direction:
+                continue
+            if (
+                p.signal.symbol
+                and sig.symbol
+                and p.signal.symbol.upper() != sig.symbol.upper()
+            ):
+                continue
+            return p
+        return None
+
+    def _find_core_pending_by_sender(
+        self, chat_id: int, sender: str, now: datetime
+    ) -> PendingCard | None:
+        """同群同发言人、窗口内已发开仓卡 pending → 等待补 TP/SL。"""
+        who = (sender or "").strip().lower() or "_"
+        for p in self._pending.values():
+            if p.chat_id != chat_id or p.is_tponly_pending or p.is_prom:
+                continue
+            if now - p.opened_at > _PROM_MERGE_WINDOW:
+                continue
+            p_who = (p.signal.sender or "").strip().lower() or "_"
+            if p_who != who:
+                continue
+            if p.signal.symbol and (p.signal.direction or p.signal.entry):
+                return p
+        return None
+
+    def _find_tponly_pending(
+        self, chat_id: int, sig: TradeSignal, now: datetime
+    ) -> PendingCard | None:
+        """同群同发言人、TP/SL-only 窗口内：core 消息来时，合并到对应 pending。"""
+        who = (sig.sender or "").strip().lower() or "_"
+        for p in self._pending.values():
+            if not p.is_tponly_pending or p.chat_id != chat_id:
+                continue
+            if now - p.opened_at > _PROM_MERGE_WINDOW:
+                continue
+            p_who = (p.signal.sender or "").strip().lower() or "_"
+            if p_who != who:
+                continue
+            # core 补完后清除 tponly_pending flag
+            return p
+        return None
+
+    def _merge_window(
+        self,
+        messages: list[WindowMessage],
+        *,
+        prefer_sender: str = "",
+    ) -> TradeSignal | None:
+        merged: TradeSignal | None = None
+        ordered = list(reversed(messages))
+        if prefer_sender:
+            same = [m for m in ordered if (m.sender or "") == prefer_sender]
+            rest = [m for m in ordered if (m.sender or "") != prefer_sender]
+            ordered = same + rest
+
+        for m in ordered:
+            frag = parse_trade_text(m.text, sender=m.sender, msg_id=m.msg_id)
+            if frag is None:
+                continue
+            if merged is None:
+                merged = frag
+            else:
+                if not merged.symbol or not frag.symbol or merged.symbol == frag.symbol:
+                    if (
+                        not merged.direction
+                        or not frag.direction
+                        or merged.direction == frag.direction
+                    ):
+                        merged = merged.merge_from(frag)
+        if merged and (merged.has_core or merged.has_prom_open or merged.has_tpsl):
+            return merged
+        return None
+
+    def _merge_snap_with_current(
+        self,
+        snap: list[WindowMessage],
+        current: TradeSignal | None,
+        *,
+        prefer_sender: str = "",
+    ) -> TradeSignal | None:
+        merged = self._merge_window(snap, prefer_sender=prefer_sender)
+        if current is None:
+            return merged
+        if merged is None:
+            return (
+                current
+                if current.has_core or current.has_prom_open or current.has_tpsl
+                else None
+            )
+        if current.has_core or current.has_prom_open:
+            if not merged.symbol or not current.symbol or current.symbol == merged.symbol:
+                merged = merged.merge_from(current)
+        elif current.has_tpsl or current.entry or current.is_prom:
+            merged = merged.merge_from(current)
+        return merged
+
+    def _combine_raw_for_signal(
+        self,
+        snap: list[WindowMessage],
+        sig: TradeSignal,
+        *,
+        prefer_sender: str = "",
+    ) -> str:
+        """建卡/更新时拼接窗口内相关原文（开仓 + 止盈止损）。"""
+        msg_ids = set(sig.msg_ids)
+        parts: list[str] = []
+        seen: set[str] = set()
+
+        ordered = list(snap)
+        if prefer_sender:
+            same = [m for m in ordered if (m.sender or "") == prefer_sender]
+            rest = [m for m in ordered if (m.sender or "") != prefer_sender]
+            ordered = same + rest
+
+        for m in ordered:
+            t = (m.text or "").strip()
+            if not t or t in seen:
+                continue
+            in_ids = m.msg_id in msg_ids
+            if not in_ids and not looks_like_trade_message(t):
+                continue
+            frag = parse_trade_text(t, sender=m.sender, msg_id=m.msg_id)
+            if frag and sig.symbol:
+                if frag.symbol and frag.symbol != sig.symbol:
+                    continue
+            parts.append(t)
+            seen.add(t)
+
+        src = (sig.source_text or "").strip()
+        if src and src not in seen:
+            parts.insert(0, src)
+
+        return "\n\n".join(parts) if parts else src
+
+    async def on_group_message(
+        self,
+        chat_id: int,
+        *,
+        msg_id: int,
+        sender: str,
+        text: str,
+        title: str,
+        at,
+    ) -> None:
+        if not self.enabled():
+            return
+        body = strip_promotional_lines((text or "").strip())
+        if not body:
+            return
+        profile = get_profile_meta(chat_id, fallback_title=title or str(chat_id))
+        profile_name = str(profile.get("name") or title or chat_id)
+        if is_spam_or_recap_message(body):
+            log_signal_skip(
+                "营销/战绩回顾",
+                chat_id=chat_id,
+                title=title,
+                profile_name=profile_name,
+                sender=sender,
+                msg_id=msg_id,
+                body=body,
+            )
+            return
+        filter_patterns = sender_filter_patterns(profile)
+        if filter_patterns and not sender_allowed_for_profile(profile, sender):
+            label = (
+                "only_names"
+                if parse_only_names_patterns(profile.get("only_names"))
+                else "main"
+            )
+            log_signal_skip(
+                f"发言人未命中 {label} 白名单（配置: {','.join(filter_patterns)}）",
+                chat_id=chat_id,
+                title=title,
+                profile_name=profile_name,
+                sender=sender,
+                msg_id=msg_id,
+                body=body,
+            )
+            return
+        print(f"    · [card_pusher] chat={chat_id} body[:80]={body[:80]!r}", flush=True)
+
+        self._buffer.add(
+            chat_id,
+            msg_id=msg_id,
+            sender=sender,
+            text=body,
+            at=at,
+            title=title,
+        )
+        win = self._buffer.get(chat_id)
+        if win is None:
+            print(f"    · [card_pusher] win is None after add", flush=True)
+            return
+
+        async with self._lock:
+            now = datetime.now(timezone.utc)
+            self._expire_pending(now)
+            snap = win.snapshot_for_ai()
+
+            if not looks_like_trade_message(body):
+                log_pipeline(
+                    "skip",
+                    chat_id=chat_id,
+                    msg_id=msg_id,
+                    sender=sender,
+                    reason="非结构化/闲聊（looks_like=false）",
+                    body=body,
+                )
+                return
+
+            current = parse_trade_text(body, sender=sender, msg_id=msg_id)
+            if current is None:
+                log_pipeline(
+                    "skip",
+                    chat_id=chat_id,
+                    msg_id=msg_id,
+                    sender=sender,
+                    reason="looks_like 但 parse 失败",
+                    body=body,
+                )
+                return
+            log_pipeline(
+                "parsed",
+                chat_id=chat_id,
+                msg_id=msg_id,
+                sender=sender,
+                symbol=current.symbol,
+                direction=current.direction,
+                body=body,
+            )
+            merged = self._merge_snap_with_current(snap, current, prefer_sender=sender)
+            if merged is None:
+                log_pipeline(
+                    "skip",
+                    chat_id=chat_id,
+                    msg_id=msg_id,
+                    sender=sender,
+                    reason="合并窗口无有效信号",
+                    body=body,
+                )
+                return
+            merged.sender = resolve_sender_name(
+                merged.sender,
+                sender,
+                str(profile.get("name") or ""),
+                str(title or ""),
+            )
+            skip = signal_skip_reason(merged, body, sender=sender)
+            if skip and not is_push_bypass_message(body):
+                log_signal_skip(
+                    skip,
+                    chat_id=chat_id,
+                    title=title,
+                    profile_name=profile_name,
+                    sender=sender,
+                    msg_id=msg_id,
+                    body=body,
+                )
+                return
+
+            signal_at = at if isinstance(at, datetime) else now
+            if signal_at.tzinfo is None:
+                signal_at = signal_at.replace(tzinfo=timezone.utc)
+
+            # —— #prom 路径：立即建卡，10 分钟内任意补充都再 POST 合并 ——
+            if merged.is_prom or self._find_prom_pending(chat_id, merged, now):
+                await self._handle_prom(
+                    merged,
+                    chat_id=chat_id,
+                    title=title,
+                    signal_at=signal_at,
+                    snap=snap,
+                    sender=sender,
+                    now=now,
+                    current_body=body,
+                )
+                return
+
+            card_key = self._pending_key(chat_id, merged)
+            pf = self._pending.get(card_key)
+
+            # —— 优先处理 tponly pending（core+TP/SL 已合并且来自 tponly 补充的场景）——
+            if merged.has_core and merged.has_tpsl:
+                tp_pf = self._find_tponly_pending(chat_id, merged, now)
+                if tp_pf:
+                    raw_body = self._combine_raw_for_signal(snap, merged, prefer_sender=sender)
+                    await self._post_card(
+                        merged,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="update",
+                        raw_body=raw_body,
+                    )
+                    self._clear_pending(tp_pf.key)
+                    print(
+                        f"    · TP/SL-only 卡已补充 core → {merged.symbol}做{merged.direction}，"
+                        "更新卡片",
+                        flush=True,
+                    )
+                    return
+
+            if merged.has_core and merged.has_tpsl:
+                phase = "update" if pf else "full"
+                raw_body = self._combine_raw_for_signal(snap, merged, prefer_sender=sender)
+                await self._post_card(
+                    merged,
+                    chat_id=chat_id,
+                    title=title,
+                    signal_at=signal_at,
+                    phase=phase,
+                    raw_body=raw_body,
+                )
+                self._clear_pending(card_key)
+                return
+
+            # —— TP/SL-only 路径（无币种/方向，只有止盈止损）——
+            if merged.has_tpsl and not merged.has_core:
+                core_pf = self._find_core_pending_by_sender(chat_id, sender, now)
+                if core_pf:
+                    merged = core_pf.signal.merge_from(merged)
+                    raw_body = self._combine_raw_for_signal(
+                        snap, merged, prefer_sender=sender
+                    )
+                    await self._post_card(
+                        merged,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="update",
+                        raw_body=raw_body,
+                    )
+                    self._clear_pending(core_pf.key)
+                    print(
+                        f"    · 开仓卡已补充 TP/SL → {merged.symbol}做{merged.direction}，"
+                        "更新卡片",
+                        flush=True,
+                    )
+                    return
+                tp_pf = self._find_tponly_pending(chat_id, merged, now)
+                if tp_pf:
+                    # 后续 core 消息补充进来：合并后 POST update 覆盖待补充 symbol
+                    merged = tp_pf.signal.merge_from(merged)
+                    raw_body = self._combine_raw_for_signal(snap, merged, prefer_sender=sender)
+                    await self._post_card(
+                        merged,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="update",
+                        raw_body=raw_body,
+                    )
+                    tp_pf.signal = merged
+                    tp_pf.is_tponly_pending = False
+                    print(
+                        f"    · TP/SL-only 卡已补充 core → {merged.symbol}做{merged.direction}，"
+                        "更新卡片",
+                        flush=True,
+                    )
+                else:
+                    # 首次只发 TP/SL：建卡 symbol=待补充，后续 core 来再合并
+                    placeholder = merged.merge_from(
+                        TradeSignal(symbol="待补充", direction="", sender=sender or "")
+                    )
+                    await self._post_card(
+                        placeholder,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="initial",
+                        raw_body=body,
+                        merge_window_ms=int(_PROM_MERGE_WINDOW.total_seconds() * 1000),
+                    )
+                    tponly_key = self._pending_key(chat_id, placeholder)
+                    self._pending[tponly_key] = PendingCard(
+                        key=tponly_key,
+                        signal=merged,
+                        chat_id=chat_id,
+                        chat_title=title,
+                        signal_at=signal_at,
+                        is_tponly_pending=True,
+                        opened_at=now,
+                    )
+                    print(
+                        "    · 主群已发 TP/SL-only 卡（symbol=待补充），"
+                        "等待同发言人补币种/方向",
+                        flush=True,
+                    )
+                return
+
+            if merged.has_core and not merged.has_tpsl:
+                # 优先合并到已有 tponly pending（TP/SL-only 建卡等待补充的情况）
+                tp_pf = self._find_tponly_pending(chat_id, merged, now)
+                if tp_pf:
+                    # snap 里只有当前消息的 core；把 pending 里存的前一条 TP/SL 显式合并进来
+                    merged = tp_pf.signal.merge_from(merged)
+                    # 用 tp_pf.signal（包含 [10,11] msg_ids）生成 raw_body，才能取到两条原始消息
+                    raw_body = self._combine_raw_for_signal(snap, tp_pf.signal, prefer_sender=sender)
+                    await self._post_card(
+                        merged,
+                        chat_id=chat_id,
+                        title=title,
+                        signal_at=signal_at,
+                        phase="update",
+                        raw_body=raw_body,
+                    )
+                    self._clear_pending(tp_pf.key)
+                    print(
+                        f"    · 开仓卡已补充 TP/SL → {merged.symbol}做{merged.direction}，"
+                        "更新卡片",
+                        flush=True,
+                    )
+                    return
+                if pf:
+                    log_pipeline(
+                        "pending",
+                        chat_id=chat_id,
+                        msg_id=msg_id,
+                        sender=sender,
+                        symbol=merged.symbol,
+                        direction=merged.direction,
+                        reason="已有开仓 pending，等待止盈止损补充",
+                    )
+                    return
+                await self._post_card(
+                    merged,
+                    chat_id=chat_id,
+                    title=title,
+                    signal_at=signal_at,
+                    phase="initial",
+                    raw_body=body,
+                )
+                self._pending[card_key] = PendingCard(
+                    key=card_key,
+                    signal=merged,
+                    chat_id=chat_id,
+                    chat_title=title,
+                    signal_at=signal_at,
+                    is_prom=False,
+                    opened_at=now,
+                )
+                print(
+                    f"    · 主群已发开仓卡 {merged.symbol}做{merged.direction}，"
+                    "等待止盈止损补充",
+                    flush=True,
+                )
+
+    async def _handle_prom(
+        self,
+        merged: TradeSignal,
+        *,
+        chat_id: int,
+        title: str,
+        signal_at: datetime,
+        snap: list[WindowMessage],
+        sender: str,
+        now: datetime,
+        current_body: str,
+    ) -> None:
+        merged.is_prom = True
+        pf = self._find_prom_pending(chat_id, merged, now)
+        if pf:
+            merged = pf.signal.merge_from(merged)
+            merged.is_prom = True
+            if not merged.sender:
+                merged.sender = sender
+
+        # 尚无币种：仅开仓意图时先本地 pending，等同窗口补币种再发；
+        # 若已有方向且用户约定「马上发卡」，用占位符号 PROM 建卡（后续合并更新真实币种需同 channel+author）
+        if not merged.symbol:
+            if not merged.direction:
+                return
+            # 仍无 pending：记下等待币种
+            if not pf:
+                key = self._pending_key(chat_id, merged)
+                self._pending[key] = PendingCard(
+                    key=key,
+                    signal=merged,
+                    chat_id=chat_id,
+                    chat_title=title,
+                    signal_at=signal_at,
+                    is_prom=True,
+                    opened_at=now,
+                )
+                print(
+                    f"    · #prom 已见方向「{merged.direction}」，等待币种后建卡（10 分钟内）",
+                    flush=True,
+                )
+                return
+            # 有 pending 但仍无币种：只刷新窗口正文，不重复 POST
+            pf.signal = merged
+            return
+
+        raw_body = self._combine_raw_for_signal(snap, merged, prefer_sender=sender)
+        if not raw_body:
+            raw_body = current_body
+
+        if pf is None:
+            # 首次：立即建卡
+            result = await self._post_card(
+                merged,
+                chat_id=chat_id,
+                title=title,
+                signal_at=signal_at,
+                phase="initial",
+                raw_body=raw_body,
+                merge_window_ms=int(_PROM_MERGE_WINDOW.total_seconds() * 1000),
+            )
+            card_id = None
+            if isinstance(result, dict):
+                card = result.get("card")
+                if isinstance(card, dict) and card.get("id") is not None:
+                    try:
+                        card_id = int(card["id"])
+                    except (TypeError, ValueError):
+                        card_id = None
+            key = self._pending_key(chat_id, merged)
+            self._pending[key] = PendingCard(
+                key=key,
+                signal=merged,
+                chat_id=chat_id,
+                chat_title=title,
+                signal_at=signal_at,
+                card_id=card_id,
+                is_prom=True,
+                opened_at=now,
+            )
+            print(
+                f"    · #prom 已建卡 {merged.symbol}做{merged.direction}"
+                + (f" id={card_id}" if card_id else "")
+                + "，10 分钟内补充消息将合并更新",
+                flush=True,
+            )
+            return
+
+        # 窗口内更新：再 POST，服务端按 10 分钟窗口合并
+        # 若币种刚补上，key 可能变化，迁移 pending
+        old_key = pf.key
+        await self._post_card(
+            merged,
+            chat_id=chat_id,
+            title=title,
+            signal_at=signal_at,
+            phase="update",
+            raw_body=raw_body,
+            merge_window_ms=int(_PROM_MERGE_WINDOW.total_seconds() * 1000),
+        )
+        new_key = self._pending_key(chat_id, merged)
+        pf.signal = merged
+        pf.key = new_key
+        if new_key != old_key:
+            self._pending.pop(old_key, None)
+            self._pending[new_key] = pf
+        if merged.has_tpsl:
+            print(
+                f"    · #prom 已合并止盈止损 → {merged.symbol}做{merged.direction}",
+                flush=True,
+            )
+
+    def _clear_pending(self, key: str) -> None:
+        self._pending.pop(key, None)
+
+    async def _push_telegram(self, sig: TradeSignal, *, phase: str) -> None:
+        """把格式化的交易信号推送到 MAIN_CARD_TELEGRAM_CHAT_ID。"""
+        print(
+            f"    · [_push_telegram] client={'set' if self._client else 'None'} "
+            f"chat_id={self._tg_chat_id} phase={phase} symbol={sig.symbol} dir={sig.direction}",
+            flush=True,
+        )
+        if not self._client or not self._tg_chat_id:
+            return
+        text = format_signal_push(sig, phase=phase)
+        print(f"    · [_push_telegram] text={text!r}", flush=True)
+        try:
+            await self._client.send_message(self._tg_chat_id, text, link_preview=False)
+            print(f"    → 交易信号已推送 Telegram({phase}) → {self._tg_chat_id}", flush=True)
+        except Exception as e:
+            print(f"[!] Telegram 推送失败: {e}", flush=True)
+
+    async def _post_card(
+        self,
+        sig: TradeSignal,
+        *,
+        chat_id: int,
+        title: str,
+        signal_at: datetime | None,
+        phase: str,
+        raw_body: str = "",
+        merge_window_ms: int | None = None,
+    ) -> dict | bool:
+        payload = signal_to_card_payload(
+            sig,
+            chat_id=chat_id,
+            chat_title=title,
+            signal_at=signal_at,
+            phase=phase,
+            raw_body=raw_body,
+            merge_window_ms=merge_window_ms,
+        )
+        body_text = str(payload.get("body") or "")
+        digest = self._digest(
+            f"{phase}:{body_text}:{payload.get('symbol')}:{payload.get('sourceRef')}"
+        )
+        if digest in self._pushed_digest and not is_push_bypass_message(body_text):
+            log_pipeline(
+                "dedup",
+                chat_id=chat_id,
+                source_ref=payload.get("sourceRef"),
+                symbol=payload.get("symbol"),
+                phase=phase,
+                reason="本进程 digest 去重",
+            )
+            return False
+        try:
+            result = await asyncio.to_thread(post_card, payload)
+        except Exception as e:
+            log_pipeline(
+                "card_fail",
+                chat_id=chat_id,
+                source_ref=payload.get("sourceRef"),
+                symbol=sig.symbol,
+                phase=phase,
+                reason=str(e),
+            )
+            print(f"[!] 建卡失败 chat={chat_id}: {e}", flush=True)
+            return False
+        self._pushed_digest.add(digest)
+        if len(self._pushed_digest) > 500:
+            self._pushed_digest = set(list(self._pushed_digest)[-250:])
+
+        # Telegram 推送由 discord-collector archiveCard → pushArchivedCardToTelegram 统一处理，避免重复
+
+        card = (result or {}).get("card") if isinstance(result, dict) else None
+        cid = card.get("id") if isinstance(card, dict) else None
+        tpsl = "含止盈止损" if sig.has_tpsl else "仅开仓"
+        tag = "#prom " if sig.is_prom else ""
+        print(
+            f"    → 主群已写入卡片({tag}{phase}/{tpsl}) {sig.symbol or '?'}做{sig.direction}"
+            + (f" id={cid}" if cid is not None else ""),
+            flush=True,
+        )
+        return result if isinstance(result, dict) else True

@@ -1,0 +1,229 @@
+"""向 discord-collector 开放建卡 API 发交易信号。"""
+
+from __future__ import annotations
+
+import json
+import re
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from config import (
+    get_cards_api_base_url,
+    get_cards_api_key,
+    resolve_channel_profile,
+    telegram_avatar_dir,
+)
+from signal_pipeline_log import log_pipeline
+from default_tpsl import apply_default_tpsl_if_needed
+from trade_signal_detect import (
+    TradeSignal,
+    format_signal_push,
+    refine_trade_text,
+    strip_promotional_lines,
+)
+
+
+def _split_targets(raw: str) -> list[str]:
+    if not raw:
+        return []
+    parts: list[str] = []
+    normalized = (
+        (raw or "")
+        .replace("，", ",")
+        .replace("/", ",")
+        .replace("|", ",")
+        .replace("｜", ",")
+    )
+    for chunk in re.split(r"[,，\s]+", normalized):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        for sub in re.split(r"(?<=\d)-(?=\d)", chunk):
+            t = sub.strip()
+            if t:
+                parts.append(t)
+    return parts
+
+
+def _channel_avatar_for_api(resolved: str) -> str:
+    """
+    本地 telegram/avatar 文件 → collector 静态 URL（/telegram-avatars/…）；
+    已是 http(s)/data 则原样返回。
+    """
+    s = (resolved or "").strip()
+    if not s:
+        return ""
+    if s.startswith(("http://", "https://", "data:")):
+        return s
+    p = Path(s)
+    if not p.is_file():
+        return ""
+    try:
+        p.resolve().relative_to(telegram_avatar_dir())
+    except ValueError:
+        # 非 avatar 目录下的本地文件：仍尝试用文件名走静态路由
+        pass
+    return f"{get_cards_api_base_url()}/telegram-avatars/{p.name}"
+
+
+def signal_to_card_payload(
+    sig: TradeSignal,
+    *,
+    chat_id: int,
+    chat_title: str = "",
+    signal_at: datetime | None = None,
+    phase: str = "full",
+    raw_body: str = "",
+    merge_window_ms: int | None = None,
+) -> dict[str, Any]:
+    profile = resolve_channel_profile(chat_id, fallback_title=chat_title or sig.sender)
+    direction = ""
+    if sig.direction == "多":
+        direction = "long"
+    elif sig.direction == "空":
+        direction = "short"
+
+    at = signal_at or datetime.now(timezone.utc)
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    iso = at.isoformat().replace("+00:00", "Z")
+
+    sig, defaulted, exit_plan = apply_default_tpsl_if_needed(sig)
+    formatted = format_signal_push(sig, phase=phase if phase != "update" else "full")
+    refined_raw = refine_trade_text(raw_body) if (raw_body or "").strip() else ""
+    body = strip_promotional_lines(refined_raw or formatted)
+    note_parts = []
+    if defaulted:
+        note_parts.append("默认TP/SL(5/8/12%+5%止损·30/30/40)")
+    if sig.is_prom:
+        note_parts.append("#prom")
+    if sig.note:
+        note_parts.append(sig.note)
+    if phase == "update":
+        note_parts.append("补充止盈/止损")
+    if sig.sender:
+        note_parts.append(f"发言人:{sig.sender}")
+    note_parts.append(f"来源:telegram:{chat_id}")
+
+    avatar = _channel_avatar_for_api(profile.get("avatar") or "")
+    payload: dict[str, Any] = {
+        "channelId": profile["channelId"],
+        "channelName": profile["name"],
+        "channelAvatar": avatar,
+        "body": body,
+        "symbol": sig.symbol,
+        "entry": sig.entry or "",
+        "targets": _split_targets(sig.take_profit),
+        "stopLoss": sig.stop_loss or "",
+        "direction": direction,
+        "signalAt": iso,
+        "note": " · ".join(note_parts),
+        "source": "telegram",
+        "sourceRef": f"tg:{chat_id}:{','.join(str(x) for x in sig.msg_ids[:5])}",
+    }
+    if merge_window_ms is not None and merge_window_ms > 0:
+        payload["mergeWindowMs"] = int(merge_window_ms)
+    elif sig.is_prom:
+        payload["mergeWindowMs"] = 10 * 60 * 1000
+    if sig.sender:
+        payload["authorKey"] = sig.sender.strip()
+        payload["sender"] = sig.sender.strip()
+    tp_list = _split_targets(sig.take_profit)
+    sl_val = sig.stop_loss or ""
+    has_tpsl = bool(tp_list) or bool(sl_val.strip())
+    if has_tpsl:
+        signal_phase = "full"
+        awaiting_tpsl = False
+    elif phase == "initial":
+        signal_phase = "open"
+        awaiting_tpsl = True
+    else:
+        signal_phase = "full"
+        awaiting_tpsl = not has_tpsl
+    parsed_json: dict[str, Any] = {
+        "parser": "telegram",
+        "signalPhase": signal_phase,
+        "orderMode": "market",
+        "symbol": sig.symbol,
+        "direction": direction,
+        "entry": sig.entry or "",
+        "takeProfits": tp_list,
+        "stopLoss": sl_val,
+    }
+    if awaiting_tpsl:
+        parsed_json["awaitingTpsl"] = True
+    if exit_plan:
+        parsed_json["exitPlan"] = exit_plan
+        parsed_json["defaultTpsl"] = True
+    payload["parsedJson"] = parsed_json
+    if not payload["channelAvatar"]:
+        payload.pop("channelAvatar", None)
+    return payload
+
+
+def post_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """同步 POST /api/v1/cards；成功返回 JSON，失败抛异常。"""
+    key = get_cards_api_key()
+    if not key:
+        raise RuntimeError("未配置 CARDS_API_KEY（请在 discord-collector/.env 或根 .env 设置）")
+    url = f"{get_cards_api_base_url()}/api/v1/cards"
+    source_ref = str(payload.get("sourceRef") or "")
+    log_pipeline(
+        "card_post",
+        chat_id=payload.get("channelId"),
+        symbol=payload.get("symbol"),
+        direction=payload.get("direction"),
+        source_ref=source_ref or None,
+        url=url,
+        body=str(payload.get("body") or ""),
+    )
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "X-Cards-Api-Key": key,
+        },
+        method="POST",
+    )
+    try:
+        # 归档含 Bitget/WEEX 自动开单时 collect:ui 可能较慢；开单已改后台，此处仍留足余量
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            body = json.loads(raw) if raw else {}
+            if resp.status >= 400:
+                raise RuntimeError(f"HTTP {resp.status}: {raw[:300]}")
+            if isinstance(body, dict) and body.get("ok") is False:
+                raise RuntimeError(str(body.get("error") or body))
+            card = body.get("card") if isinstance(body, dict) else None
+            card_id = card.get("id") if isinstance(card, dict) else None
+            log_pipeline(
+                "card_ok",
+                chat_id=payload.get("channelId"),
+                card_id=card_id,
+                source_ref=source_ref or None,
+                symbol=payload.get("symbol"),
+            )
+            return body if isinstance(body, dict) else {"ok": True, "raw": body}
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")[:300]
+        log_pipeline(
+            "card_fail",
+            chat_id=payload.get("channelId"),
+            source_ref=source_ref or None,
+            reason=f"HTTP {e.code}",
+            detail=err_body,
+        )
+        raise RuntimeError(f"HTTP {e.code}: {err_body}") from e
+    except Exception as e:
+        log_pipeline(
+            "card_fail",
+            chat_id=payload.get("channelId"),
+            source_ref=source_ref or None,
+            reason=str(e),
+        )
+        raise

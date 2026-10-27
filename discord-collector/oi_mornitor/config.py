@@ -1,0 +1,689 @@
+"""OI Monitor 配置项。"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+
+    def load_dotenv(*_args, **_kwargs):  # type: ignore[misc]
+        return False
+
+
+_PKG_ROOT = Path(__file__).resolve().parent
+_REPO_ROOT = _PKG_ROOT.parent
+load_dotenv(_REPO_ROOT / ".env")
+load_dotenv(_PKG_ROOT / ".env")
+load_dotenv()
+
+from oi_mornitor.env_parse import env_bool, env_bool_off, env_float, env_int, env_str
+
+# 币安 U 本位永续 REST
+FAPI_BASE_URL = os.getenv("OI_FAPI_BASE_URL", "https://fapi.binance.com").rstrip("/")
+# 币安现货 REST（主力现货流向）
+SPOT_BASE_URL = os.getenv("OI_SPOT_BASE_URL", "https://api.binance.com").rstrip("/")
+# 备选所公共 REST（币安 418 / 失败时按顺序轮询）
+BYBIT_BASE_URL = os.getenv("OI_BYBIT_BASE_URL", "https://api.bybit.com").rstrip("/")
+OKX_BASE_URL = os.getenv("OI_OKX_BASE_URL", "https://www.okx.com").rstrip("/")
+BITGET_BASE_URL = os.getenv("OI_BITGET_BASE_URL", "https://api.bitget.com").rstrip("/")
+GATE_BASE_URL = os.getenv("OI_GATE_BASE_URL", "https://api.gateio.ws").rstrip("/")
+FALLBACK_SOURCE_ORDER = tuple(
+    x.strip().lower()
+    for x in os.getenv("OI_FALLBACK_SOURCES", "bybit,okx,bitget,gate").split(",")
+    if x.strip()
+)
+FALLBACK_MIN_TICKERS = int(os.getenv("OI_FALLBACK_MIN_TICKERS", "30"))
+# 币安 418 / 硬封后，多久内优先走备选所（秒）
+BINANCE_BAN_COOLDOWN_SEC = float(os.getenv("OI_BINANCE_BAN_COOLDOWN_SEC", "1800"))
+
+# 候选池：fapi 全市场 ticker/24hr 聚合 + OI 量级分层（略降门槛以覆盖更多山寨异动）
+OI_TIER_MID_MIN_USD = float(os.getenv("OI_TIER_MID_MIN_USD", "5000000"))
+OI_TIER_HEAVY_MIN_USD = float(os.getenv("OI_TIER_HEAVY_MIN_USD", "50000000"))
+
+# —— 币股白名单池（与加密 OI 分层并行，不并入 build_tier_pool）——
+OI_EQUITY_ENABLED = os.getenv("OI_EQUITY_ENABLED", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+OI_EQUITY_SCAN_INTERVAL_SEC = int(os.getenv("OI_EQUITY_SCAN_INTERVAL_SEC", "300"))
+OI_EQUITY_KLINE_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_EQUITY_KLINE_INTERVALS", "1h,4h").split(",")
+    if x.strip()
+) or ("1h", "4h")
+OI_EQUITY_MIN_TURNOVER_USD = float(os.getenv("OI_EQUITY_MIN_TURNOVER_USD", "500000"))
+OI_EQUITY_MAX_POOL = int(os.getenv("OI_EQUITY_MAX_POOL", "18"))
+OI_EQUITY_SIGNAL_SESSION_ONLY = os.getenv("OI_EQUITY_SIGNAL_SESSION_ONLY", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+OI_EQUITY_SESSION_START_UTC = os.getenv("OI_EQUITY_SESSION_START_UTC", "13:30").strip()
+OI_EQUITY_SESSION_END_UTC = os.getenv("OI_EQUITY_SESSION_END_UTC", "20:00").strip()
+OI_EQUITY_STATS_LEVERAGE = float(os.getenv("OI_EQUITY_STATS_LEVERAGE", "5"))
+OI_EQUITY_CARD_TELEGRAM = os.getenv("OI_EQUITY_CARD_TELEGRAM", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+OI_EQUITY_WHITELIST_EXTRA = os.getenv("OI_EQUITY_WHITELIST_EXTRA", "").strip()
+
+OI_OI_BATCH_CONCURRENCY = int(os.getenv("OI_OI_BATCH_CONCURRENCY", "8"))
+# 并发拉单 symbol OI 的上限（被 ban 时降速：默认 8）
+# 监控池上限：0=不限；默认 200 减少后续 K 线/形态扫描的 symbol 数量
+TOP_N = int(os.getenv("OI_TOP_N", "200"))
+# Heavyweight 池（形态/沙盒/卡片快速扫描的目标）按 USD 排名取前 N
+HEAVY_POOL_LIMIT = int(os.getenv("OI_HEAVY_POOL_LIMIT", "200"))
+
+# 异动阈值（偏灵敏：便于发现刚起的热币；可用 env 调严）
+OI_USD_LIMIT = float(os.getenv("OI_USD_LIMIT", "500000"))
+OI_PCT_LIMIT = float(os.getenv("OI_PCT_LIMIT", "2.5"))
+# 价格尖刺（%）：左栏「价格暴涨/暴跌」独立阈值
+PRICE_SPIKE_PCT_5M = float(os.getenv("OI_PRICE_SPIKE_PCT_5M", "2.0"))
+PRICE_SPIKE_PCT_15M = float(os.getenv("OI_PRICE_SPIKE_PCT_15M", "3.5"))
+# 单窗口 OI 变动上限：超过视为口径跳变（备选所单位切换 / 脏样本），丢弃差分并重置缓存
+# 旧默认 150% 允许 5m 内翻倍多，假暴增会进异动栏；短窗单独收紧
+OI_DELTA_MAX_PCT = float(os.getenv("OI_DELTA_MAX_PCT", "80"))
+OI_DELTA_MAX_PCT_5M = float(os.getenv("OI_DELTA_MAX_PCT_5M", "25"))
+OI_DELTA_MAX_PCT_15M = float(os.getenv("OI_DELTA_MAX_PCT_15M", "40"))
+
+# 网络限频：每次请求后休眠秒数
+REQUEST_INTERVAL_SEC = float(os.getenv("OI_REQUEST_INTERVAL_SEC", "0.1"))
+
+# HTTP 超时（ticker/24hr 体量大，国内走代理时建议 ≥30）
+HTTP_TIMEOUT_SEC = float(os.getenv("OI_HTTP_TIMEOUT_SEC", "30"))
+
+# 扫描周期（秒）— 略缩短以更快刷新左栏/榜单
+SCAN_INTERVAL_SEC = int(os.getenv("OI_SCAN_INTERVAL_SEC", "150"))
+
+# HTTP 重试
+MAX_RETRIES = int(os.getenv("OI_MAX_RETRIES", "3"))
+RETRY_BACKOFF_SEC = float(os.getenv("OI_RETRY_BACKOFF_SEC", "1.0"))
+RATE_LIMIT_COOLDOWN_SEC = float(os.getenv("OI_RATE_LIMIT_COOLDOWN_SEC", "10.0"))
+# HTTP 429/418：无 Retry-After 时指数退避基数（秒）；实现见 http_backoff.py
+HTTP_BACKOFF_BASE_SEC = float(os.getenv("OI_HTTP_BACKOFF_BASE_SEC", "60"))
+HTTP_BACKOFF_MAX_SEC = float(os.getenv("OI_HTTP_BACKOFF_MAX_SEC", "900"))
+HTTP_BACKOFF_MAX_ATTEMPTS = int(os.getenv("OI_HTTP_BACKOFF_MAX_ATTEMPTS", "4"))
+HTTP_RETRY_AFTER_MAX_SEC = float(os.getenv("OI_HTTP_RETRY_AFTER_MAX_SEC", str(2 * 3600)))
+
+
+# Web 服务
+WEB_HOST = os.getenv("OI_WEB_HOST", "127.0.0.1")
+WEB_PORT = int(os.getenv("OI_WEB_PORT", "8765"))
+
+# 双周期轮询（秒）— 门控缩短，避免长时间看不到新异动
+POLL_5M_SEC = int(os.getenv("OI_POLL_5M_SEC", "60"))
+POLL_15M_SEC = int(os.getenv("OI_POLL_15M_SEC", "180"))
+ALERT_COOLDOWN_SEC = int(os.getenv("OI_ALERT_COOLDOWN_SEC", "300"))
+
+# --- OI 三层入场过滤（默认关，避免改变现网异动噪声；回测脚本默认开）---
+# OI_ENTRY_FILTER_V2=1 时：对告警行标注 consensus / 背离 / 形态等待字段
+# OI_ENTRY_FILTER_V2_GATE_ALERT=1 时：仅 L1+L2 通过才保持 is_alert（更激进，默认关）
+OI_ENTRY_FILTER_V2 = env_bool("OI_ENTRY_FILTER_V2", False)
+OI_ENTRY_FILTER_V2_GATE_ALERT = env_bool("OI_ENTRY_FILTER_V2_GATE_ALERT", False)
+OI_ENTRY_FLAT_ABS_PCT = env_float("OI_ENTRY_FLAT_ABS_PCT", 0.15, min_val=0.0)
+OI_ENTRY_DIVERGENCE_MODE = env_str("OI_ENTRY_DIVERGENCE_MODE", "filter")  # filter | downweight
+OI_ENTRY_PATTERN_TIMEOUT_SEC = env_int("OI_ENTRY_PATTERN_TIMEOUT_SEC", 900, min_val=60)
+OI_ENTRY_PATTERN_TIMEOUT_BARS = env_int("OI_ENTRY_PATTERN_TIMEOUT_BARS", 3, min_val=1)
+OI_ENTRY_PATTERNS = env_str(
+    "OI_ENTRY_PATTERNS", "shooting_star,inverted_hammer,engulfing"
+)
+
+# OI 分钟级快照缓存长度（支持 1d 窗口差分）
+OI_CACHE_MAXLEN = int(os.getenv("OI_CACHE_MAXLEN", "1440"))
+MATRIX_TOP_N = int(os.getenv("OI_MATRIX_TOP_N", "7"))
+MATRIX_REFRESH_SEC = int(os.getenv("OI_MATRIX_REFRESH_SEC", "30"))
+OI_ZSCORE_HISTORY_LEN = int(os.getenv("OI_ZSCORE_HISTORY_LEN", "288"))
+OI_ZSCORE_THRESHOLD = float(os.getenv("OI_ZSCORE_THRESHOLD", "3.0"))
+OI_ZSCORE_MIN_SAMPLES = int(os.getenv("OI_ZSCORE_MIN_SAMPLES", "5"))
+OI_5M_RECORD_INTERVAL_SEC = int(os.getenv("OI_5M_RECORD_INTERVAL_SEC", "300"))
+
+# 榜单突破检测（5m K 线）
+BREAKOUT_LOOKBACK = int(os.getenv("OI_BREAKOUT_LOOKBACK", "50"))
+BREAKOUT_KLINE_LIMIT = BREAKOUT_LOOKBACK + 2
+BREAKOUT_VOL_MULT = float(os.getenv("OI_BREAKOUT_VOL_MULT", "2.5"))
+BREAKOUT_BODY_RATIO = float(os.getenv("OI_BREAKOUT_BODY_RATIO", "0.65"))
+PULLBACK_SCAN_ENABLED = os.getenv("OI_PULLBACK_SCAN_ENABLED", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+PULLBACK_VOL_SHRINK_RATIO = float(os.getenv("OI_PULLBACK_VOL_SHRINK", "0.6"))
+PULLBACK_TOUCH_TOLERANCE = float(os.getenv("OI_PULLBACK_TOUCH_TOL", "0.003"))
+BREAKOUT_WATCH_MAX_SEC = int(os.getenv("OI_BREAKOUT_WATCH_MAX_SEC", "7200"))
+BREAKOUT_MATRIX_TF = os.getenv("OI_BREAKOUT_MATRIX_TF", "15m")
+BREAKOUT_STATE_DB = _PKG_ROOT / "data" / "breakout_state.db"
+
+# 形态追踪（15m K 线，LH → HL → 多头爆发）
+PATTERN_KLINE_INTERVAL = os.getenv("OI_PATTERN_INTERVAL", "15m")
+PATTERN_KLINE_LIMIT = int(os.getenv("OI_PATTERN_KLINE_LIMIT", "120"))
+PATTERN_BB_LENGTH = int(os.getenv("OI_PATTERN_BB_LENGTH", "20"))
+PATTERN_BB_MULT = float(os.getenv("OI_PATTERN_BB_MULT", "2.0"))
+PATTERN_PIVOT_WINDOW = int(os.getenv("OI_PATTERN_PIVOT_WINDOW", "11"))
+PATTERN_WICK_RATIO = float(os.getenv("OI_PATTERN_WICK_RATIO", "0.3"))
+PATTERN_STAGE2_VOL_MULT = float(os.getenv("OI_PATTERN_STAGE2_VOL_MULT", "1.5"))
+PATTERN_WATCH_MAX_SEC = int(os.getenv("OI_PATTERN_WATCH_MAX_SEC", "14400"))
+# 形态监听列表总上限（默认 50）
+PATTERN_WATCH_MAX = int(os.getenv("OI_PATTERN_WATCH_MAX", "50"))
+# 热钱自动挑选数量（默认与上限对齐）
+PATTERN_AUTO_PICK_COUNT = int(os.getenv("OI_PATTERN_AUTO_PICK", "50"))
+# 为卡片预留槽位；热榜最多占 总上限 − 预留
+PATTERN_CARD_RESERVED = int(os.getenv("OI_PATTERN_CARD_RESERVED", "10"))
+# 形态页手动输入币种专用槽（固定 1 个；新输入替换旧手动币）
+PATTERN_MANUAL_RESERVED = max(0, int(os.getenv("OI_PATTERN_MANUAL_RESERVED", "1")))
+# 形态 watchlist：每隔 N 秒用合约流入榜 + OI 爆发榜刷新（未进场币可替换）
+PATTERN_WATCHLIST_REFRESH_SEC = int(os.getenv("OI_PATTERN_WATCHLIST_REFRESH_SEC", "7200"))
+PATTERN_WATCHLIST_REFRESH_TF = os.getenv("OI_PATTERN_WATCHLIST_REFRESH_TF", "15m").strip() or "15m"
+# OI 异动 + 多榜共振 → 立即入形态池（≥ 该榜单数）
+PATTERN_MULTI_BOARD_MIN = int(os.getenv("OI_PATTERN_MULTI_BOARD_MIN", "2"))
+# EXPIRED 超过该秒数移出形态列表（默认立即清）
+PATTERN_INACTIVE_PURGE_SEC = int(os.getenv("OI_PATTERN_INACTIVE_PURGE_SEC", "0"))
+# 纯 SEARCHING 无进展超过该秒数也视为不活跃（默认 2h）
+PATTERN_SEARCHING_STALE_SEC = int(os.getenv("OI_PATTERN_SEARCHING_STALE_SEC", "7200"))
+# OI 放大入池：|pct_5m| 或 |pct_15m| 达到该阈值（%）也立即加入（与 is_alert 叠加）
+PATTERN_OI_AMPLIFY_PCT = float(os.getenv("OI_PATTERN_OI_AMPLIFY_PCT", "3.0"))
+# 手动置顶维持时长（秒），到期自动取消；也可手动取消
+PATTERN_PIN_TTL_SEC = int(os.getenv("OI_PATTERN_PIN_TTL_SEC", "86400"))
+# 卡片接入后置顶时长（默认 7 天，保证占住预留槽）
+PATTERN_CARD_PIN_TTL_SEC = int(os.getenv("OI_PATTERN_CARD_PIN_TTL_SEC", str(7 * 86400)))
+PATTERN_STATE_DB = _PKG_ROOT / "data" / "pattern_state.db"
+BACKTEST_KLINES_DIR = Path(
+    os.getenv(
+        "OI_BACKTEST_KLINES_DIR",
+        str(Path(PATTERN_STATE_DB).resolve().parent / "backtest_klines"),
+    )
+)
+PATTERN_CHART_DEFAULT_LIMIT = int(os.getenv("OI_PATTERN_CHART_LIMIT", "500"))
+PATTERN_CHART_MAX_LIMIT = int(os.getenv("OI_PATTERN_CHART_MAX_LIMIT", "1500"))
+PATTERN_CHART_LOAD_CHUNK = int(os.getenv("OI_PATTERN_CHART_LOAD_CHUNK", "300"))
+# 形态+OI 同现 → Toast + Telegram 推荐短线（默认开；开了卡片推送后 combo 不再发旧文案）
+PATTERN_OI_COMBO_TELEGRAM = os.getenv(
+    "OI_PATTERN_OI_COMBO_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# 射击之星 / OI异动倒锤子 → Telegram 卡片（多周期规则，默认开）
+CANDLE_CARD_TELEGRAM = os.getenv(
+    "OI_CANDLE_CARD_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# 卡片推送群（默认指定形态卡片群；可改 OI_CANDLE_CARD_TELEGRAM_CHAT_ID）
+CANDLE_CARD_TELEGRAM_CHAT_ID = os.getenv(
+    "OI_CANDLE_CARD_TELEGRAM_CHAT_ID", "-1004364826383"
+).strip()
+# 特别关注币种专属推送群（默认与 MAIN_CARD_TELEGRAM_CHAT_ID / OI_MAIN_CARD_TELEGRAM_CHAT_ID）
+MAIN_CARD_TELEGRAM_CHAT_ID = (
+    os.getenv("MAIN_CARD_TELEGRAM_CHAT_ID")
+    or os.getenv("OI_MAIN_CARD_TELEGRAM_CHAT_ID")
+    or ""
+).strip()
+_MAIN_CARD_DEFAULT_ENV = (
+    "BTCUSDT,ETHUSDT,"
+    "QQQUSDT,SOXLUSDT,"
+    "AAPLUSDT,MSFTUSDT,NVDAUSDT,AMZNUSDT,GOOGLUSDT,GOOGUSDT,METAUSDT,TSLAUSDT"
+)
+MAIN_CARD_DEFAULT_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_MAIN_CARD_DEFAULT_SYMBOLS", _MAIN_CARD_DEFAULT_ENV).split(",")
+    if s.strip()
+)
+
+from oi_mornitor.signal_policy import filter_active_intervals
+
+MAIN_CARD_MAJOR_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_MAIN_CARD_MAJORS", os.getenv("OI_CANDLE_CARD_MAJORS", "BTCUSDT,ETHUSDT,SOLUSDT")).split(",")
+    if s.strip()
+)
+MAIN_CARD_MAJOR_INTERVALS = filter_active_intervals(
+    tuple(
+        x.strip().lower()
+        for x in os.getenv("OI_MAIN_CARD_MAJOR_INTERVALS", "15m,1h,4h,8h,1d").split(",")
+        if x.strip()
+    )
+)
+MAIN_CARD_EQUITY_INTERVALS = filter_active_intervals(
+    tuple(
+        x.strip().lower()
+        for x in os.getenv("OI_MAIN_CARD_EQUITY_INTERVALS", "1h,4h,1d,1w").split(",")
+        if x.strip()
+    )
+)
+_union_iv = tuple(dict.fromkeys((*MAIN_CARD_MAJOR_INTERVALS, *MAIN_CARD_EQUITY_INTERVALS)))
+MAIN_CARD_INTERVALS = filter_active_intervals(
+    tuple(
+        x.strip().lower()
+        for x in os.getenv("OI_MAIN_CARD_INTERVALS", ",".join(_union_iv)).split(",")
+        if x.strip()
+    )
+) or _union_iv
+MAIN_CARD_TYPE_PREFIXES = tuple(
+    x.strip()
+    for x in os.getenv(
+        "OI_MAIN_CARD_TYPE_PREFIXES",
+        "射击之星,倒锤子",
+    ).split(",")
+    if x.strip()
+)
+# 形态信号列表结算摘要 → MAIN 群（北京时间 04/08/12/16/20/24 点各发一档）
+STATS_SETTLE_TELEGRAM = os.getenv(
+    "OI_STATS_SETTLE_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+STATS_SETTLE_TELEGRAM_CHAT_ID = (
+    os.getenv("OI_STATS_SETTLE_TELEGRAM_CHAT_ID")
+    or MAIN_CARD_TELEGRAM_CHAT_ID
+    or ""
+).strip()
+CANDLE_CARD_MAJOR_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_CANDLE_CARD_MAJORS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
+    if s.strip()
+)
+CANDLE_CARD_MAJOR_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_CANDLE_CARD_MAJOR_INTERVALS", "15m,1h,4h,8h,1d").split(",")
+    if x.strip()
+)
+CANDLE_CARD_ALT_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_CANDLE_CARD_ALT_INTERVALS", "15m,1h").split(",")
+    if x.strip()
+)
+
+from oi_mornitor.signal_policy import filter_active_intervals
+
+CANDLE_CARD_MAJOR_INTERVALS = filter_active_intervals(CANDLE_CARD_MAJOR_INTERVALS)
+CANDLE_CARD_ALT_INTERVALS = filter_active_intervals(CANDLE_CARD_ALT_INTERVALS)
+# 山寨：价格幅度 TopN ∪ 流动性(合约流入)幅度 TopN
+CANDLE_CARD_ALT_TOP_N = int(os.getenv("OI_CANDLE_CARD_ALT_TOP_N", "7"))
+CANDLE_CARD_ALT_RANK_TF = os.getenv("OI_CANDLE_CARD_ALT_RANK_TF", "15m").strip() or "15m"
+# 各周期 K 线刷新间隔（秒），避免每轮雷达都打满高周期接口
+_CANDLE_CARD_REFRESH_DEFAULTS = {"15m": 45, "1h": 180, "4h": 600, "8h": 900, "1d": 1800, "1w": 3600}
+CANDLE_CARD_REFRESH_SEC: dict[str, int] = {}
+for _iv, _sec in _CANDLE_CARD_REFRESH_DEFAULTS.items():
+    CANDLE_CARD_REFRESH_SEC[_iv] = int(
+        os.getenv(f"OI_CANDLE_CARD_REFRESH_{_iv.upper()}", str(_sec))
+    )
+# 顶部/底部结构（头肩+Vegas、二次探底、2B、流动性掠夺）→ 同群 Telegram
+STRUCTURE_CARD_TELEGRAM = os.getenv(
+    "OI_STRUCTURE_CARD_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+STRUCTURE_KLINE_LIMIT = int(os.getenv("OI_STRUCTURE_KLINE_LIMIT", "250"))
+
+# ---- 卡片推送信号过滤（2026-09 调优，全部可经环境变量开关）----
+# 射击之星位置过滤：收盘须在 BB 上轨区（basis + 0.85×带宽）或贴近 Vegas A/B 通道，否则不推
+CANDLE_SHOOT_REQUIRE_POSITION = env_bool("OI_CANDLE_SHOOT_REQUIRE_POSITION", True)
+# 射击之星趋势背景：信号前 N 根（不含信号根）累计涨幅 ≥ 阈值(%) 才推（看跌前提是前期上涨）
+CANDLE_SHOOT_TREND_LOOKBACK = env_int("OI_CANDLE_SHOOT_TREND_LOOKBACK", 20, min_val=1)
+CANDLE_SHOOT_TREND_MIN_PCT = env_float("OI_CANDLE_SHOOT_TREND_MIN_PCT", 3.0, min_val=0.0)
+# 倒锤子趋势背景：信号前 N 根累计跌幅 ≥ 阈值(%) 才推（看涨前提是前期下跌）
+CANDLE_HAMMER_TREND_LOOKBACK = env_int("OI_CANDLE_HAMMER_TREND_LOOKBACK", 20, min_val=1)
+CANDLE_HAMMER_TREND_MIN_PCT = env_float("OI_CANDLE_HAMMER_TREND_MIN_PCT", 3.0, min_val=0.0)
+# 放量 ≥ MA 时是否跳过位置/趋势背景（默认关，与卡片严模式一致）
+CANDLE_VOL_BYPASS_CONTEXT = env_bool("OI_CANDLE_VOL_BYPASS_CONTEXT", False)
+# 1h 倒锤子/射击之星：须 4h 或 1d 同向趋势背景（各周期独立 lookback）
+CANDLE_1H_HTF_TREND_ENABLED = env_bool_off("OI_CANDLE_1H_HTF_TREND_ENABLED", True)
+CANDLE_1H_HTF_TREND_LOOKBACK = env_int("OI_CANDLE_1H_HTF_TREND_LOOKBACK", 20, min_val=1)
+CANDLE_1H_HTF_TREND_MIN_PCT = env_float("OI_CANDLE_1H_HTF_TREND_MIN_PCT", 3.0, min_val=0.0)
+# 形态群推送量能（与 candle_card_config 共用）
+CANDLE_CARD_REQUIRE_VOL = env_bool_off("OI_CANDLE_CARD_REQUIRE_VOL", True)
+CANDLE_CARD_VOL_MULT = env_float("OI_CANDLE_CARD_VOL_MULT", 1.2, min_val=0.0)
+_CANDLE_CARD_VOL_LOOKBACK_DEFAULT = max(0, env_int("OI_CANDLE_CARD_VOL_LOOKBACK", 3, min_val=0))
+CANDLE_CARD_VOL_LOOKBACK = _CANDLE_CARD_VOL_LOOKBACK_DEFAULT
+MAIN_CARD_VOL_LOOKBACK = max(
+    0,
+    env_int("OI_MAIN_CARD_VOL_LOOKBACK", _CANDLE_CARD_VOL_LOOKBACK_DEFAULT, min_val=0),
+)
+MAIN_CARD_VOL_MULT = env_float("OI_MAIN_CARD_VOL_MULT", 1.0, min_val=0.0)
+# 形态推送 / 胜率入库：多周期共振最少档数（1=关闭硬过滤）
+OI_PATTERN_PUSH_MTF_MIN = max(1, env_int("OI_PATTERN_PUSH_MTF_MIN", 2, min_val=1))
+# 共振分推送门槛：B=仅推 A/B；C 档 confluence_observation_only（正常结算+参与校准）
+_OI_CONFLUENCE_PUSH_MIN_RAW = env_str("OI_CONFLUENCE_PUSH_MIN_TIER", "B").strip().upper()
+OI_CONFLUENCE_PUSH_MIN_TIER = (
+    _OI_CONFLUENCE_PUSH_MIN_RAW if _OI_CONFLUENCE_PUSH_MIN_RAW in ("A", "B", "C", "D", "ALL") else "B"
+)
+OI_CONFLUENCE_SHRINK_K = env_int("OI_CONFLUENCE_SHRINK_K", 50, min_val=1)
+OI_CONFLUENCE_MIN_N = env_int("OI_CONFLUENCE_MIN_N", 30, min_val=1)
+OI_CONFLUENCE_SPLIT_AT = env_str("OI_CONFLUENCE_SPLIT_AT", "2026-10-14 20:44")
+# 结算 SL 最小距离（%）：山寨默认 0.8，主流 0.4
+OI_PATTERN_SL_MIN_PCT = env_float("OI_PATTERN_SL_MIN_PCT", 0.8, min_val=0.0)
+OI_PATTERN_SL_MIN_PCT_MAJOR = env_float("OI_PATTERN_SL_MIN_PCT_MAJOR", 0.4, min_val=0.0)
+# 15m 信号核实窗（小时）
+OI_PATTERN_15M_VERIFY_H = env_float("OI_PATTERN_15M_VERIFY_H", 6.0, min_val=1.0, max_val=72.0)
+OI_PATTERN_15M_VERIFY_MS = int(OI_PATTERN_15M_VERIFY_H * 60 * 60 * 1000)
+# 结算 V2 ATR 乘数（按市值梯队，可被 OI_SETTLE_ATR_K_T1 等覆盖）
+OI_SETTLE_ATR_K_T1 = env_float("OI_SETTLE_ATR_K_T1", 1.5, min_val=0.1)
+OI_SETTLE_ATR_K_T2 = env_float("OI_SETTLE_ATR_K_T2", 2.0, min_val=0.1)
+OI_SETTLE_ATR_K_T3 = env_float("OI_SETTLE_ATR_K_T3", 2.5, min_val=0.1)
+OI_SETTLE_CAP_T1 = env_float("OI_SETTLE_CAP_T1", 0.02, min_val=0.001)
+OI_SETTLE_CAP_T2 = env_float("OI_SETTLE_CAP_T2", 0.03, min_val=0.001)
+OI_SETTLE_CAP_T3 = env_float("OI_SETTLE_CAP_T3", 0.04, min_val=0.001)
+# 结算步进 v3：5m 逐步 + 同柱 SL 优先 + TP1 保本（新 pending 记录写入 settleVersion=3）
+OI_PATTERN_SETTLE_FINE_BARS = env_bool_off("OI_PATTERN_SETTLE_FINE_BARS", True)
+OI_PATTERN_SETTLE_BREAKEVEN_TP1 = env_bool_off("OI_PATTERN_SETTLE_BREAKEVEN_TP1", True)
+SETTLE_WALK_VERSION = 3
+SETTLE_WALK_VERSION_LEGACY_AGG = 2
+# 结构破位量能确认：头肩顶 / M顶 触发 K 成交量 ≥ 该倍数 × MA20，否则不推
+STRUCTURE_BREAK_VOL_MULT = float(os.getenv("OI_STRUCTURE_BREAK_VOL_MULT", "1.3"))
+# 圆弧顶斜率归一化：按窗口均价相对变化（%/根），避免高价主流/低价山寨尺度失衡
+STRUCTURE_CURVE_UP_SLOPE = float(os.getenv("OI_STRUCTURE_CURVE_UP_SLOPE", "0.05"))
+STRUCTURE_CURVE_DOWN_SLOPE = float(os.getenv("OI_STRUCTURE_CURVE_DOWN_SLOPE", "0.0"))
+STRUCTURE_CURVE_DECEL = float(os.getenv("OI_STRUCTURE_CURVE_DECEL", "-0.08"))
+# 推送节流：同币同周期同方向在 N 根 K 内只推一次（0=关闭）
+CARD_PUSH_COOLDOWN_BARS = int(os.getenv("OI_CARD_PUSH_COOLDOWN_BARS", "4"))
+# 胜率库：同币同周期同向/反向冷却（根 K，默认 15m 下 4 / 6）
+OI_PATTERN_STATS_COOLDOWN_SAME_BARS = max(
+    0, env_int("OI_PATTERN_STATS_COOLDOWN_SAME_BARS", 4, min_val=0)
+)
+OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS = max(
+    0, env_int("OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS", 6, min_val=0)
+)
+# T3 山寨 15m MA144：保留扫描，但须多周期共振或更高综合分
+OI_MA144_T3_15M_MIN_MTF = max(1, env_int("OI_MA144_T3_15M_MIN_MTF", 2, min_val=1))
+OI_MA144_T3_15M_MIN_SCORE = env_float("OI_MA144_T3_15M_MIN_SCORE", 70.0, min_val=0.0)
+# —— 方案1：ezcoin-adapter 硬门禁 + LLM 第二审判（正式行） ——
+OI_SECOND_TRIAL_ENABLED = env_bool_off("OI_SECOND_TRIAL_ENABLED", True)
+OI_SECOND_TRIAL_BYPASS = env_bool("OI_SECOND_TRIAL_BYPASS", False)
+OI_EZCOIN_ADAPTER_BASE_URL = env_str("OI_EZCOIN_ADAPTER_BASE_URL", "http://127.0.0.1:5179")
+OI_EZCOIN_ADAPTER_JUDGE_PATH = env_str("OI_EZCOIN_ADAPTER_JUDGE_PATH", "/api/judge")
+OI_EZCOIN_ADAPTER_TIMEOUT_SEC = env_float("OI_EZCOIN_ADAPTER_TIMEOUT_SEC", 8.0, min_val=1.0, max_val=120.0)
+_OI_SECOND_TRIAL_FORMAL_RAW = env_str("OI_SECOND_TRIAL_FORMAL_ACTIONS", "LONG,SHORT")
+OI_SECOND_TRIAL_FORMAL_ACTIONS = tuple(
+    x.strip().upper() for x in _OI_SECOND_TRIAL_FORMAL_RAW.split(",") if x.strip()
+) or ("LONG", "SHORT")
+_OI_LLM_MAX_TIER_RAW = env_str("OI_SECOND_TRIAL_LLM_MAX_TIER", "t2").strip().lower()
+OI_SECOND_TRIAL_LLM_MAX_TIER = (
+    _OI_LLM_MAX_TIER_RAW if _OI_LLM_MAX_TIER_RAW in ("t1", "t2", "t3") else "t2"
+)
+OI_SECOND_TRIAL_T3_LLM_SAMPLE_PCT = env_float(
+    "OI_SECOND_TRIAL_T3_LLM_SAMPLE_PCT", 0.0, min_val=0.0, max_val=100.0
+)
+OI_SECOND_TRIAL_DEDUPE_TTL_SEC = env_int("OI_SECOND_TRIAL_DEDUPE_TTL_SEC", 900, min_val=0)
+# 雷达页 OI/价格异动 + 榜单进出历史（秒，默认 4h）
+OI_RADAR_ANOMALY_RETENTION_SEC = env_int("OI_RADAR_ANOMALY_RETENTION_SEC", 14_400, min_val=300)
+OI_RADAR_ANOMALY_MAX_ITEMS = env_int("OI_RADAR_ANOMALY_MAX_ITEMS", 600, min_val=50)
+OI_RADAR_BOARD_HISTORY_MAX = env_int("OI_RADAR_BOARD_HISTORY_MAX", 400, min_val=50)
+OI_RADAR_BOARD_TOP_N = env_int("OI_RADAR_BOARD_TOP_N", 7, min_val=3)
+# AI BTC 15m 结算对照（composite trail vs protect）
+BTC_BACKTEST_FEE_RATE_PER_SIDE = env_float("BTC_BACKTEST_FEE_RATE_PER_SIDE", 0.0004, min_val=0.0)
+BTC_TRAIL_BE_R = env_float("BTC_TRAIL_BE_R", 1.0, min_val=0.1)
+BTC_TRAIL_TP1_R = env_float("BTC_TRAIL_TP1_R", 1.8, min_val=0.1)
+BTC_TRAIL_MAX_BARS = env_int("BTC_TRAIL_MAX_BARS", 48, min_val=4)
+BTC_PROTECT_BE_R = env_float("BTC_PROTECT_BE_R", 0.7, min_val=0.1)
+BTC_PROTECT_TP1_R = env_float("BTC_PROTECT_TP1_R", 1.1, min_val=0.1)
+BTC_PROTECT_LADDER_STEP_R = env_float("BTC_PROTECT_LADDER_STEP_R", 0.5, min_val=0.1)
+BTC_PROTECT_LADDER_TRAIL_R = env_float("BTC_PROTECT_LADDER_TRAIL_R", 0.4, min_val=0.05)
+BTC_PROTECT_REV_EXTREME_BARS = env_int("BTC_PROTECT_REV_EXTREME_BARS", 3, min_val=1)
+BTC_PROTECT_EARLY_BARS = env_int("BTC_PROTECT_EARLY_BARS", 8, min_val=1)
+BTC_PROTECT_EARLY_MIN_MFE_R = env_float("BTC_PROTECT_EARLY_MIN_MFE_R", 0.5, min_val=0.0)
+BTC_PROTECT_MAX_BARS = env_int("BTC_PROTECT_MAX_BARS", 48, min_val=4)
+BTC_AI_BACKTEST_FIXTURE = env_str(
+    "BTC_AI_BACKTEST_FIXTURE",
+    str(_PKG_ROOT / "tests" / "fixtures" / "btc_ai_backtest_sample.json"),
+)
+# Telegram：优先 HTTP 网关，否则 Bot API
+TELEGRAM_SEND_URL = os.getenv("TELEGRAM_SEND_URL", "").strip()
+TELEGRAM_PUSH_CHAT_ID = (
+    os.getenv("TELEGRAM_PUSH_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or ""
+).strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+PATTERN_CHART_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_PATTERN_CHART_INTERVALS", "5m,15m,30m,1h,4h,1d").split(",")
+    if x.strip()
+)
+
+# 回踩 / Vegas / 射击之星策略（WS 本地监控 + 回测）
+STRATEGY_KLINE_INTERVAL = os.getenv("OI_STRATEGY_INTERVAL", "1h")
+STRATEGY_KLINE_LIMIT = int(os.getenv("OI_STRATEGY_KLINE_LIMIT", "200"))
+STRATEGY_VEGAS_FILTER = int(os.getenv("OI_STRATEGY_VEGAS_FILTER", "12"))
+STRATEGY_VEGAS_PERIODS = tuple(
+    int(x.strip())
+    for x in os.getenv("OI_STRATEGY_VEGAS_PERIODS", "144,169,576,676").split(",")
+    if x.strip()
+)
+STRATEGY_PULLBACK_TOL = float(os.getenv("OI_STRATEGY_PULLBACK_TOL", "0.005"))
+STRATEGY_PULLBACK_VOL_SHRINK = float(os.getenv("OI_STRATEGY_PULLBACK_VOL_SHRINK", "0.6"))
+STRATEGY_SHOOT_WICK_RATIO = float(os.getenv("OI_STRATEGY_SHOOT_WICK_RATIO", "1.5"))
+STRATEGY_SHOOT_WICK_MAX_RATIO = float(os.getenv("OI_STRATEGY_SHOOT_WICK_MAX_RATIO", "20.0"))
+STRATEGY_OI_MIN_CHANGE_PCT = float(os.getenv("OI_STRATEGY_OI_MIN_CHANGE_PCT", "-2.0"))
+STRATEGY_WATCH_MAX_SEC = int(os.getenv("OI_STRATEGY_WATCH_MAX_SEC", "86400"))
+STRATEGY_STATE_DB = _PKG_ROOT / "data" / "pullback_state.db"
+FSTREAM_WS_BASE = os.getenv("OI_FSTREAM_WS", "wss://fstream.binance.com")
+STRATEGY_DEFAULT_SYMBOLS = [
+    s.strip().upper()
+    for s in os.getenv(
+        "OI_STRATEGY_SYMBOLS",
+        "BTCUSDT,ETHUSDT,SOLUSDT,ORDIUSDT",
+    ).split(",")
+    if s.strip()
+]
+
+# 沙盒纸面交易（逻辑 A/B/C/D · 每日随机 N 币）
+SANDBOX_ENABLED = os.getenv("OI_SANDBOX_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+SANDBOX_DAILY_COUNT = int(os.getenv("OI_SANDBOX_DAILY_COUNT", "12"))
+# 执行周期：默认 15m + 1h 同等扫描（OI_SANDBOX_INTERVALS=15m 可只跑单周期）
+SANDBOX_INTERVALS: tuple[str, ...] = tuple(
+    s.strip()
+    for s in os.getenv("OI_SANDBOX_INTERVALS", "15m,1h").split(",")
+    if s.strip()
+) or ("15m", "1h")
+# 兼容旧代码：主周期 = 列表首项
+SANDBOX_INTERVAL = SANDBOX_INTERVALS[0]
+SANDBOX_KLINE_LIMIT = int(os.getenv("OI_SANDBOX_KLINE_LIMIT", "200"))
+# 1h/更高周期至少拉够 Vegas 慢速通道（EMA676）
+SANDBOX_KLINE_LIMIT_1H = int(os.getenv("OI_SANDBOX_KLINE_LIMIT_1H", "720"))
+# 策略参考周期（展示/记录用；信号执行周期为仓位自己的 interval）
+SANDBOX_REF_INTERVALS_HUNTER = tuple(
+    s.strip()
+    for s in os.getenv("OI_SANDBOX_REF_INTERVALS_HUNTER", "15m").split(",")
+    if s.strip()
+)
+SANDBOX_REF_INTERVALS_TREND = tuple(
+    s.strip()
+    for s in os.getenv("OI_SANDBOX_REF_INTERVALS_TREND", "15m,1h,4h,1d").split(",")
+    if s.strip()
+)
+# 单笔保证金（U）；名义仓位 = 保证金 × 杠杆
+SANDBOX_NOTIONAL_USD = float(os.getenv("OI_SANDBOX_NOTIONAL_USD", "1"))
+SANDBOX_INITIAL_BALANCE = float(os.getenv("OI_SANDBOX_INITIAL_BALANCE", "1000"))
+# 最大同时持仓币数
+SANDBOX_MAX_CONCURRENT = int(os.getenv("OI_SANDBOX_MAX_CONCURRENT", "20"))
+# —— 短线猎手 S ——
+SANDBOX_HUNTER_SL_PAD = float(os.getenv("OI_SANDBOX_HUNTER_SL_PAD", "0.001"))  # 0.1%
+SANDBOX_HUNTER_ATR_MULT = float(os.getenv("OI_SANDBOX_HUNTER_ATR_MULT", "2"))
+# —— 猎手高胜率过滤（2026-09 对齐卡片准确率调优，默认值与 OI_CANDLE_* 一致）——
+# 射击之星做空：收盘须在 BB 上轨区（basis + 0.85×带宽）或贴近 Vegas A/B 通道，否则不开
+SANDBOX_HUNTER_REQUIRE_POSITION = os.getenv(
+    "OI_SANDBOX_HUNTER_REQUIRE_POSITION", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# 射击之星做空：信号前 N 根（不含信号根）累计涨幅 ≥ 阈值(%) 才开（看跌前提是前期上涨）
+SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK = int(
+    os.getenv("OI_SANDBOX_HUNTER_SHOOT_TREND_LOOKBACK", "20")
+)
+SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT = float(
+    os.getenv("OI_SANDBOX_HUNTER_SHOOT_TREND_MIN_PCT", "3.0")
+)
+# 倒锤/锤子做多：信号前 N 根累计跌幅 ≥ 阈值(%) 才开（看涨前提是前期下跌）
+SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK = int(
+    os.getenv("OI_SANDBOX_HUNTER_HAMMER_TREND_LOOKBACK", "20")
+)
+SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT = float(
+    os.getenv("OI_SANDBOX_HUNTER_HAMMER_TREND_MIN_PCT", "3.0")
+)
+# 倒锤/锤子做多：收盘须在布林中轨之下（对齐卡片倒锤子 §4.2 口径）
+SANDBOX_HUNTER_HAMMER_BELOW_MID = os.getenv(
+    "OI_SANDBOX_HUNTER_HAMMER_BELOW_MID", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# —— 长线维加斯 T（价变阈值为设计基准；ROE≈价变%×杠杆）——
+SANDBOX_TREND_SLOPE_MIN = float(os.getenv("OI_SANDBOX_TREND_SLOPE_MIN", "0.0003"))
+SANDBOX_TREND_SL_PAD = float(os.getenv("OI_SANDBOX_TREND_SL_PAD", "0.002"))  # EMA169 外 0.2%
+SANDBOX_TREND_BE_PRICE_PCT = float(os.getenv("OI_SANDBOX_TREND_BE_PRICE_PCT", "0.75"))
+SANDBOX_TREND_PARTIAL_PRICE_PCT = float(
+    os.getenv("OI_SANDBOX_TREND_PARTIAL_PRICE_PCT", "1.0")
+)
+SANDBOX_TREND_PARTIAL_FRAC = float(os.getenv("OI_SANDBOX_TREND_PARTIAL_FRAC", "0.30"))
+SANDBOX_TREND_TRAIL_PCT = float(os.getenv("OI_SANDBOX_TREND_TRAIL_PCT", "1.0"))
+# 阶梯上移止损：峰值价变每满 STEP_PROFIT% → SL 相对入场再锁定 STEP_SL_LIFT%
+SANDBOX_STEP_TRAIL_PROFIT_PCT = float(
+    os.getenv("OI_SANDBOX_STEP_TRAIL_PROFIT_PCT", "2.2")
+)
+SANDBOX_STEP_TRAIL_SL_LIFT_PCT = float(
+    os.getenv("OI_SANDBOX_STEP_TRAIL_SL_LIFT_PCT", "1.0")
+)
+SANDBOX_BREAKEVEN_PCT = float(os.getenv("OI_SANDBOX_BREAKEVEN_PCT", "1.5"))
+SANDBOX_HL_TRAIL_BUF = float(os.getenv("OI_SANDBOX_HL_TRAIL_BUF", "0.005"))
+SANDBOX_BB_STOP_BUF = float(os.getenv("OI_SANDBOX_BB_STOP_BUF", "0.003"))
+SANDBOX_RANGE_SLOPE_MAX = float(os.getenv("OI_SANDBOX_RANGE_SLOPE_MAX", "0.0015"))
+# Vegas 蓝(144/169) vs 红(576/676)：UP 只做多、DOWN 只做空（S/T 自动入场）
+SANDBOX_VEGAS_DIRECTION_GATE = os.getenv(
+    "OI_SANDBOX_VEGAS_DIRECTION_GATE", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+# 主动平仓旧参数（兼容）；S/T 模块主要用上面阈值
+SANDBOX_MIN_HOLD_BARS = int(os.getenv("OI_SANDBOX_MIN_HOLD_BARS", "2"))
+SANDBOX_SOFT_EXIT_MIN_MOVE_PCT = float(
+    os.getenv("OI_SANDBOX_SOFT_EXIT_MIN_MOVE_PCT", "0.25")
+)
+# 初始止损距离：2.5×ATR(14) 动态上限（取代旧 0.5%/1.5% 百分比硬裁剪）
+SANDBOX_SL_ATR_MULT = float(os.getenv("OI_SANDBOX_SL_ATR_MULT", "2.5"))
+# 以下百分比仅作兼容占位，入场裁剪已改走 ATR，不再使用
+SANDBOX_SL_MAX_PCT_MAJOR = float(os.getenv("OI_SANDBOX_SL_MAX_PCT_MAJOR", "0.5"))
+SANDBOX_SL_MAX_PCT_ALT = float(os.getenv("OI_SANDBOX_SL_MAX_PCT_ALT", "1.5"))
+SANDBOX_MAJOR_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_SANDBOX_MAJOR_SYMBOLS", "BTCUSDT,ETHUSDT").split(",")
+    if s.strip()
+)
+# 杠杆：BTC/ETH 100x，山寨 30x（SANDBOX_NOTIONAL_USD 为单笔保证金）
+SANDBOX_LEVERAGE_MAJOR = float(os.getenv("OI_SANDBOX_LEVERAGE_MAJOR", "100"))
+SANDBOX_LEVERAGE_ALT = float(os.getenv("OI_SANDBOX_LEVERAGE_ALT", "30"))
+# 合约 taker 手续费（占名义本金的 %，单边；开+平各收一次，与回测 fee_pct 一致）
+SANDBOX_FEE_PCT = float(os.getenv("OI_SANDBOX_FEE_PCT", "0.04"))
+# 平仓后至少隔 N 根已收盘 K 才允许同币再入场（防反复触发）
+SANDBOX_REENTRY_COOLDOWN_BARS = int(os.getenv("OI_SANDBOX_REENTRY_COOLDOWN_BARS", "8"))
+# 纸面持仓最长天数；超过则市价强平（默认 2 天）
+SANDBOX_MAX_HOLD_DAYS = float(os.getenv("OI_SANDBOX_MAX_HOLD_DAYS", "2"))
+SANDBOX_STATE_DB = _PKG_ROOT / "data" / "sandbox_state.db"
+
+# —— 卡片信号 WebSocket（外部卡片系统推送 → 沙盒评估）——
+CARD_WS_ENABLED = os.getenv("OI_CARD_WS_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+CARD_WS_PATH = os.getenv("OI_CARD_WS_PATH", "/ws/cards").strip() or "/ws/cards"
+# 限价近场：未入场监听带宽（默认 ±5%）
+CARD_NEAR_ENTRY_PCT = float(os.getenv("OI_CARD_NEAR_ENTRY_PCT", "5.0"))
+CARD_NEAR_ENTRY_PCT_MAJOR = float(os.getenv("OI_CARD_NEAR_ENTRY_PCT_MAJOR", "5.0"))
+# 卡片杠杆 ≥ 该值视为「主流档」近场阈值（无币种信息时回退）
+CARD_NEAR_ENTRY_MAJOR_LEV = float(os.getenv("OI_CARD_NEAR_ENTRY_MAJOR_LEV", "80"))
+# 卡片仓位执行评估周期（触 TP/SL；默认 5m 刷新）
+CARD_EVAL_INTERVAL = os.getenv("OI_CARD_EVAL_INTERVAL", "5m").strip() or "5m"
+# 卡片仓：SL/TP 相对入场价最大偏离 %（防小数位点错 → 万倍离谱成交）
+CARD_SL_MAX_DIST_PCT = float(os.getenv("OI_CARD_SL_MAX_DIST_PCT", "40"))
+CARD_TP_MAX_DIST_PCT = float(os.getenv("OI_CARD_TP_MAX_DIST_PCT", "200"))
+# 任意出场：价格变动 |pnl_pct| 超过该值则拒记（兜底）
+SANDBOX_ABSURD_PNL_PCT = float(os.getenv("OI_SANDBOX_ABSURD_PNL_PCT", "80"))
+CARD_DEFAULT_LEVERAGE = float(os.getenv("OI_CARD_DEFAULT_LEVERAGE", "10"))
+# 卡片币种市价刷新间隔（秒）：写入 last_price，便于看板看距入场/TP/SL
+CARD_PRICE_REFRESH_SEC = float(os.getenv("OI_CARD_PRICE_REFRESH_SEC", "300"))
+# 已开仓 / 卡片挂单：独立快扫间隔（秒），尽快触价更新评价与交易逻辑
+OPEN_TRADE_SCAN_SEC = float(os.getenv("OI_OPEN_TRADE_SCAN_SEC", "15"))
+# S/T 纸面扫描独立循环间隔（秒）；与主雷达解耦，避免形态扫拖死日池/自动入场
+SANDBOX_SCAN_SEC = float(os.getenv("OI_SANDBOX_SCAN_SEC", "60"))
+# 单轮沙盒拉 K 总超时（秒）；超时则跳过本轮入场评估，下轮重试
+SANDBOX_KLINE_FETCH_TIMEOUT_SEC = float(
+    os.getenv("OI_SANDBOX_KLINE_FETCH_TIMEOUT_SEC", "45")
+)
+# 平仓后回写 discord-collector 自动评价
+CARD_SETTLEMENT_URL = (
+    os.getenv("OI_CARD_SETTLEMENT_URL", "http://127.0.0.1:3851/api/cards/settlement").strip()
+)
+
+# —— TradingView BB-Wicks 信号监听（CDP 9222）——
+# 币种出现在 ≥ N 个雷达矩阵榜单时，为其 15m/1h 创建 TV 提醒
+TV_ALERT_ENABLED = os.getenv("OI_TV_ALERT_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+TV_ALERT_MIN_BOARDS = int(os.getenv("OI_TV_ALERT_MIN_BOARDS", "4"))
+# 最多同时监听多少个币种（每个币 15m+1h 共 2 条提醒）
+TV_ALERT_MAX_SYMBOLS = int(os.getenv("OI_TV_ALERT_MAX_SYMBOLS", "15"))
+TV_ALERT_INTERVALS = tuple(
+    x.strip()
+    for x in os.getenv("OI_TV_ALERT_INTERVALS", "15,60").split(",")
+    if x.strip()
+) or ("15", "60")
+TV_ALERT_INDICATOR = os.getenv("OI_TV_ALERT_INDICATOR", "BB-Wicks").strip() or "BB-Wicks"
+TV_ALERT_CDP_URL = (
+    os.getenv("OI_TV_ALERT_CDP_URL")
+    or os.getenv("CHROME_CDP_URL")
+    or f"http://127.0.0.1:{os.getenv('CHROME_DEBUG_PORT', '9222')}"
+).strip()
+TV_ALERT_PROTECTED = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_TV_ALERT_PROTECTED", "BTC,ETH,BTCUSDT,ETHUSDT").split(",")
+    if s.strip()
+)
+_TV_SCRIPT_DEFAULT = _PKG_ROOT.parent.parent / "dealMsg" / "tv_playwright" / "tv_alert.js"
+TV_ALERT_NODE_SCRIPT = Path(
+    os.getenv("OI_TV_ALERT_NODE_SCRIPT", str(_TV_SCRIPT_DEFAULT))
+).expanduser()
+TV_ALERT_LOG_DB = Path(
+    os.getenv("OI_TV_ALERT_LOG_DB", str(_PKG_ROOT / "data" / "tv_alert_sync.db"))
+).expanduser()
+TV_ALERT_SCRIPT_TIMEOUT_SEC = float(os.getenv("OI_TV_ALERT_SCRIPT_TIMEOUT_SEC", "180"))
+
+
+def proxy_url() -> str | None:
+    """读取代理，与仓库 volumn 模块一致。"""
+    for key in (
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ):
+        v = (os.getenv(key) or "").strip()
+        if v:
+            return v
+    return None
+
+# —— 潜力暴涨漏斗 A/B/C（并行于 LH→HL；默认开猎场内 A 扫）——
+MOONSHOT_ENABLED = os.getenv("OI_MOONSHOT_ENABLED", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+MOONSHOT_FULL_SCAN = os.getenv("OI_MOONSHOT_FULL_SCAN", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+MOONSHOT_A_INTERVAL_SEC = int(os.getenv("OI_MOONSHOT_A_INTERVAL_SEC", "7200"))
+MOONSHOT_A_POOL_MAX = int(os.getenv("OI_MOONSHOT_A_POOL_MAX", "120"))
+MOONSHOT_KLINE_INTERVAL = os.getenv("OI_MOONSHOT_INTERVAL", "1h").strip() or "1h"
+MOONSHOT_KLINE_LIMIT = int(os.getenv("OI_MOONSHOT_KLINE_LIMIT", "120"))
+MOONSHOT_ATR_RATIO = float(os.getenv("OI_MOONSHOT_ATR_RATIO", "0.7"))
+MOONSHOT_BB_PCTILE = float(os.getenv("OI_MOONSHOT_BB_PCTILE", "20"))
+MOONSHOT_RANGE_RATIO = float(os.getenv("OI_MOONSHOT_RANGE_RATIO", "0.5"))
+MOONSHOT_COMPRESS_DAYS_MIN = float(os.getenv("OI_MOONSHOT_COMPRESS_DAYS_MIN", "3"))
+MOONSHOT_COMPRESS_DAYS_MAX = float(os.getenv("OI_MOONSHOT_COMPRESS_DAYS_MAX", "8"))
+MOONSHOT_VOL_WAKE_LO = float(os.getenv("OI_MOONSHOT_VOL_WAKE_LO", "1.5"))
+MOONSHOT_VOL_WAKE_HI = float(os.getenv("OI_MOONSHOT_VOL_WAKE_HI", "2.5"))
+MOONSHOT_VOL_BREAK = float(os.getenv("OI_MOONSHOT_VOL_BREAK", "2.5"))
+MOONSHOT_BODY_RATIO = float(os.getenv("OI_MOONSHOT_BODY_RATIO", "0.55"))
+MOONSHOT_SCORE_B = float(os.getenv("OI_MOONSHOT_SCORE_B", "8"))
+MOONSHOT_SCORE_C = float(os.getenv("OI_MOONSHOT_SCORE_C", "9"))
+MOONSHOT_SCORE_DISPLAY = float(os.getenv("OI_MOONSHOT_SCORE_DISPLAY", "5"))
+MOONSHOT_HOT_EXCLUDE_TOP = int(os.getenv("OI_MOONSHOT_HOT_EXCLUDE_TOP", "10"))
+MOONSHOT_QUOTE_VOL_MIN = float(os.getenv("OI_MOONSHOT_QUOTE_VOL_MIN", "500000"))
+MOONSHOT_COOLDOWN_DAYS = float(os.getenv("OI_MOONSHOT_COOLDOWN_DAYS", "4"))
+MOONSHOT_SANDBOX_B = os.getenv("OI_MOONSHOT_SANDBOX_B", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+MOONSHOT_SANDBOX_C = os.getenv("OI_MOONSHOT_SANDBOX_C", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+MOONSHOT_STATE_DB = Path(
+    os.getenv("OI_MOONSHOT_STATE_DB") or (_PKG_ROOT / "data" / "moonshot_state.db")
+)
+

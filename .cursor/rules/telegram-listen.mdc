@@ -1,0 +1,39 @@
+---
+description: Telegram 监听、#prom 建卡合并、与 cards API
+globs: telegram/**/*
+alwaysApply: false
+---
+
+# Telegram 工具（仓库根 `telegram/`）
+
+与 `discord-collector` 平级；**未点名不要改**。建卡走开放 API，不直连 MySQL。
+
+## 入口
+
+| 脚本 | 作用 |
+|------|------|
+| `listen.py` | 主群建卡 + 次要群 push（生产） |
+| `list_groups.py` | 只打印消息，不建卡 |
+| `trade_card_pusher.py` | 主群信号窗口合并 → `POST /api/v1/cards` |
+| `trade_signal_detect.py` | 规则解析币种/多空/入场/TP/SL/`#prom` |
+| `cards_client.py` | HTTP 建卡客户端 |
+
+群配置：`monitored_groups.txt`（`main_monitored=` / `monitored=`）。
+
+## `#prom` 约定（勿改语义）
+
+1. `#prom` 是**标签**，不是币种（解析时排除 `PROM`）。
+2. `#prom` + 方向（如 `#prom #BTC 市价多`）→ **立刻建卡**。
+3. **10 分钟内**同发言人补充 `止盈/tp1..tp3/止损` → 再 POST；Body 带 `mergeWindowMs: 600000`，服务端合并同一张卡。
+4. 尚无币种时本地 pending，等补币种再建卡。
+
+支持：`市价多/空`、`止盈`、`tp1/tp2/tp3`、`止损`。
+
+## 与前端
+
+discord-collector UI `/telegram`：按 channelId + 时间检查已入库卡片，并 `POST /api/cards/validate` 回测（当前可 mock）。
+
+## 不要
+
+- 不要在 telegram 里写 Discord CDP / OI 逻辑。
+- 更新卡用再 POST（合并），开放 API **无 PATCH**。

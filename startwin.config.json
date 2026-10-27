@@ -1,0 +1,77 @@
+{
+  "order": [
+    "vpn",
+    "fileManager",
+    "logs",
+    "chrome",
+    "cursor",
+    "pull_code_script",
+    "grokbot"
+  ],
+  "apps": {
+    "vpn": {
+      "enabled": true,
+      "label": "VPN (v2rayN)",
+      "path": "D:\\frontend\\main\\tools\\v2rayn7.13\\v2rayn\\v2rayN.exe",
+      "args": "",
+      "delay": 0
+    },
+    "fileManager": {
+      "enabled": true,
+      "label": "文件管理器",
+      "path": "explorer.exe",
+      "args": "C:\\Users\\eason\\Desktop\\script",
+      "delay": 300
+    },
+    "logs": {
+      "enabled": true,
+      "label": "日志目录",
+      "path": "explorer.exe",
+      "args": "C:\\Users\\eason\\Desktop\\script",
+      "delay": 300
+    },
+    "chrome": {
+      "enabled": true,
+      "label": "Chrome + gemini",
+      "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "args": "--remote-debugging-port=9222 --user-data-dir=\"D:\\chrome_debug_profile\"",
+      "url": "https://gemini.google.com/app",
+      "delay": 1000
+    },
+    "cursor": {
+      "enabled": true,
+      "label": "打开Cursor项目",
+      "path": "C:\\Users\\eason\\AppData\\Local\\Programs\\cursor\\Cursor.exe",
+      "args": "D:\\frontend\\3d\\Code\\GUI",
+      "delay": 1000
+    },
+    "pull_code_script": {
+      "enabled": true,
+      "label": "执行拉取代码脚本",
+      "path": "C:\\Users\\eason\\Desktop\\script\\pull_code.bat",
+      "args": "",
+      "delay": 500
+    },
+    "music": {
+      "enabled": true,
+      "label": "打开酷狗",
+      "path": "C:\\Program Files (x86)\\KuGou\\KGMusic\\KuGou.exe",
+      "args": "",
+      "delay": 300
+    },
+    "md-log": {
+      "enabled": true,
+      "label": "打开日志",
+      "path": "C:\\Users\\eason\\Desktop\\---2025年度计划.md.lnk",
+      "args": "",
+      "delay": 300
+    },
+    "grokbot": {
+      "enabled": true,
+      "label": "打开 Grok Bot",
+      "path": "C:\\\\Users\\\\eason\\\\AppData\\\\Local\\\\Programs\\\\Grok Bot\\\\Grok Bot.exe",
+      "args": "",
+      "delay": 300
+    }
+  }
+}

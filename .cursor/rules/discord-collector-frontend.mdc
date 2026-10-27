@@ -1,0 +1,28 @@
+---
+description: collector-ui-vue 页面/路由/API 约定
+globs: discord-collector/collector-ui-vue/**/*.{js,vue}
+alwaysApply: false
+---
+
+# 前端约定
+
+## 加一个页面（四处必须齐）
+
+1. `src/lib/uiMode.js` → `ALL_UI_PAGES`（`name` = 路径名，`nav` 控制顶栏）
+2. `vite.config.js` → `__UI_PAGE_FOO__: JSON.stringify(pageOn("foo"))`
+3. `src/router/index.js` → `/* global */` + `if (__UI_PAGE_FOO__)` 懒加载
+4. `src/views/FooView.vue` + `src/lib/fooApi.js`（`fetch('/api/…')` **相对路径**）
+
+deploy 白名单：`VITE_UI_PAGES`（构建期注入）。local 开发默认全开。改 `VITE_UI_*` 后必须重新 `ui:build`。
+
+## UI
+
+- 暗色对齐现有页（`CardEvalView` / `TwitterCdpView`）：`#1a1c20` 卡片、`#e8eaed` 字、`#9aa0a6` 次要。
+- `/content` 是独立模块，不要塞进 Discord 顶栏。
+- OI 是 iframe 嵌入 `oi_mornitor`，不要在 Vue 里重写雷达。
+- 实时：`useCollectorSocket`，按 `channel` / `kind` 过滤；WS **无房间**。
+
+## 不要
+
+- 不要把后台绝对 URL 写进前端。
+- 不要为表格数据新造一套视觉体系；复杂分析才考虑 canvas。

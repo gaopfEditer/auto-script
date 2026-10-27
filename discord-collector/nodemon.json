@@ -1,0 +1,5 @@
+{
+  "watch": ["src"],
+  "ext": "js,mjs,json",
+  "ignore": ["node_modules", "public", "collector-ui-vue"]
+}

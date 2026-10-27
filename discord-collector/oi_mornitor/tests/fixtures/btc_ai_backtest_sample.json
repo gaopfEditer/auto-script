@@ -1,0 +1,87 @@
+{
+  "note": "样例 fixture：6 笔合成 15m 序列，用于 trail vs protect 对照；本机 51 笔请 POST 同结构 trades 或设 BTC_AI_BACKTEST_FIXTURE",
+  "trades": [
+    {
+      "id": "long_tp1_fast",
+      "side": "long",
+      "entry": 100000,
+      "sl": 99500,
+      "bars_15m": [
+        {"ts": 1, "open": 100000, "high": 100550, "low": 99900, "close": 100400},
+        {"ts": 2, "open": 100400, "high": 100600, "low": 100200, "close": 100550},
+        {"ts": 3, "open": 100550, "high": 100700, "low": 100300, "close": 100650},
+        {"ts": 4, "open": 100650, "high": 100800, "low": 100400, "close": 100500},
+        {"ts": 5, "open": 100500, "high": 100600, "low": 100200, "close": 100250}
+      ]
+    },
+    {
+      "id": "long_slow_bleed",
+      "side": "long",
+      "entry": 100000,
+      "sl": 99500,
+      "bars_15m": [
+        {"ts": 1, "open": 100000, "high": 100100, "low": 99800, "close": 99950},
+        {"ts": 2, "open": 99950, "high": 100050, "low": 99850, "close": 99900},
+        {"ts": 3, "open": 99900, "high": 99980, "low": 99750, "close": 99800},
+        {"ts": 4, "open": 99800, "high": 99850, "low": 99650, "close": 99700},
+        {"ts": 5, "open": 99700, "high": 99750, "low": 99500, "close": 99520},
+        {"ts": 6, "open": 99520, "high": 99550, "low": 99480, "close": 99500}
+      ]
+    },
+    {
+      "id": "short_tp1_fast",
+      "side": "short",
+      "entry": 100000,
+      "sl": 100500,
+      "bars_15m": [
+        {"ts": 1, "open": 100000, "high": 100200, "low": 99450, "close": 99500},
+        {"ts": 2, "open": 99500, "high": 99600, "low": 99300, "close": 99400},
+        {"ts": 3, "open": 99400, "high": 99500, "low": 99200, "close": 99350},
+        {"ts": 4, "open": 99350, "high": 99450, "low": 99250, "close": 99300}
+      ]
+    },
+    {
+      "id": "long_be_then_stop",
+      "side": "long",
+      "entry": 100000,
+      "sl": 99000,
+      "bars_15m": [
+        {"ts": 1, "open": 100000, "high": 100800, "low": 99900, "close": 100700},
+        {"ts": 2, "open": 100700, "high": 100900, "low": 100500, "close": 100850},
+        {"ts": 3, "open": 100850, "high": 100950, "low": 100000, "close": 100050},
+        {"ts": 4, "open": 100050, "high": 100100, "low": 99990, "close": 100000}
+      ]
+    },
+    {
+      "id": "long_no_early_mfe",
+      "side": "long",
+      "entry": 100000,
+      "sl": 99500,
+      "bars_15m": [
+        {"ts": 1, "open": 100000, "high": 100120, "low": 99950, "close": 100050},
+        {"ts": 2, "open": 100050, "high": 100150, "low": 99980, "close": 100020},
+        {"ts": 3, "open": 100020, "high": 100100, "low": 99970, "close": 99990},
+        {"ts": 4, "open": 99990, "high": 100080, "low": 99960, "close": 100010},
+        {"ts": 5, "open": 100010, "high": 100100, "low": 99950, "close": 99980},
+        {"ts": 6, "open": 99980, "high": 100050, "low": 99940, "close": 99970},
+        {"ts": 7, "open": 99970, "high": 100030, "low": 99920, "close": 99950},
+        {"ts": 8, "open": 99950, "high": 100000, "low": 99900, "close": 99940},
+        {"ts": 9, "open": 99940, "high": 100200, "low": 99900, "close": 100150}
+      ]
+    },
+    {
+      "id": "long_runner_trail",
+      "side": "long",
+      "entry": 100000,
+      "sl": 99500,
+      "bars_15m": [
+        {"ts": 1, "open": 100000, "high": 100900, "low": 99950, "close": 100850},
+        {"ts": 2, "open": 100850, "high": 101500, "low": 100800, "close": 101400},
+        {"ts": 3, "open": 101400, "high": 101600, "low": 101200, "close": 101550},
+        {"ts": 4, "open": 101550, "high": 101700, "low": 101300, "close": 101450},
+        {"ts": 5, "open": 101450, "high": 101500, "low": 101000, "close": 101050},
+        {"ts": 6, "open": 101050, "high": 101200, "low": 100900, "close": 100950}
+      ]
+    }
+  ]
+}

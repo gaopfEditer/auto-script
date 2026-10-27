@@ -1,0 +1,797 @@
+export type OiTimeframe = "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+
+export interface OiWindowSnapshot {
+  delta_usd: number;
+  pct: number;
+}
+
+export interface FlowWindowSnapshot {
+  net_usd: number;
+  volume_usd: number;
+}
+
+export interface PriceWindowSnapshot {
+  pct: number;
+}
+
+export type OiByTf = Record<OiTimeframe, OiWindowSnapshot>;
+export type FlowByTf = Record<OiTimeframe, FlowWindowSnapshot>;
+export type PriceByTf = Record<OiTimeframe, PriceWindowSnapshot>;
+
+export interface RankMetricSnapshot {
+  magnitude_usd: number;
+  change_rate: number;
+  z_score: number;
+  intensity_score: number;
+}
+
+export type RankDomain = "price" | "oi" | "contract_flow" | "spot_flow";
+export type RankByTf = Record<OiTimeframe, Record<RankDomain, RankMetricSnapshot>>;
+
+export type TickerStatus = "pump" | "dump" | "normal" | "warming" | "suppressed";
+export type OiTier = "heavyweight" | "midweight";
+
+export interface TickerRow {
+  symbol: string;
+  volume_rank: number;
+  quote_volume: number;
+  last_price: number;
+  current_oi: number;
+  current_oi_usd: number;
+  delta_5m_usd: number;
+  pct_5m: number;
+  delta_15m_usd: number;
+  pct_15m: number;
+  pct_price_5m?: number;
+  pct_price_15m?: number;
+  price_change_pct_24h?: number;
+  oi_tier?: OiTier;
+  oi_by_tf?: Partial<OiByTf>;
+  price_by_tf?: Partial<PriceByTf>;
+  flow_by_tf?: Partial<FlowByTf>;
+  spot_flow_by_tf?: Partial<FlowByTf>;
+  rank_by_tf?: Partial<RankByTf>;
+  status: TickerStatus;
+  triggered_windows: string[];
+  raw_triggered_windows?: string[];
+  is_hot: boolean;
+  is_alert: boolean;
+  is_suppressed: boolean;
+  alert_reason?: string;
+  /** 该异动卡片首次产生时间（unix 秒）；冷却期内保持不变 */
+  alert_ts?: number;
+  type: string;
+  individual_strength_score: number | null;
+  is_historic_anomaly: boolean;
+  global_intensity_rank: number | null;
+  global_volume_rank: number | null;
+}
+
+export interface MatrixRow {
+  symbol: string;
+  category: string;
+  matrix_rank: number;
+  matrix_score: number;
+  matrix_bar?: number;
+  last_price?: number;
+  price_change_pct_24h: number;
+  quote_volume: number;
+  volume_rank?: number;
+  current_oi_usd: number;
+  delta_5m_usd: number;
+  pct_5m: number;
+  delta_15m_usd: number;
+  pct_15m: number;
+  global_intensity_rank: number | null;
+  global_volume_rank: number | null;
+}
+
+export interface MarketMatrix {
+  matrix_ts: number;
+  scan_ts: number;
+  top_n: number;
+  refresh_sec: number;
+  pool_eligible: number;
+  top_gainers_oi: MatrixRow[];
+  top_losers_oi: MatrixRow[];
+  oi_pumps: MatrixRow[];
+  oi_dumps: MatrixRow[];
+}
+
+export interface CapitalBiasItem {
+  symbol: string;
+  rank: number;
+  direction: "inflow" | "outflow";
+  direction_label: "流入" | "流出";
+  score: number;
+  score_fmt?: string;
+}
+
+export interface GlobalMeta {
+  global_oi_net_inflow: number;
+  global_oi_net_inflow_fmt: string;
+  long_short_bias: {
+    long_build_count: number;
+    short_suppress_count: number;
+    dominant: "long" | "short" | "neutral";
+    label: string;
+  };
+  risk_regime: "risk_on" | "risk_off" | "mixed";
+  risk_regime_label: string;
+  pool_monitored: number;
+  pool_size: number;
+  capital_bias_tf?: string;
+  capital_confluence?: CapitalBiasItem[];
+  capital_intensity?: CapitalBiasItem[];
+}
+
+export interface PoolMeta {
+  mode: string;
+  data_source?: string;
+  data_source_label?: string;
+  fallback_reason?: string;
+  fallback_chain?: string[];
+  ticker_count?: number;
+  heavyweight_count?: number;
+  midweight_count?: number;
+  excluded_sub_10m?: number;
+  eligible_count?: number;
+  tier_mid_min_usd?: number;
+  tier_heavy_min_usd?: number;
+  taker_flow_status?: "live" | "cached" | "unavailable" | string;
+  proxy_disabled?: boolean;
+  /** 币股池并行开关（OI_EQUITY_ENABLED） */
+  equity_enabled?: boolean;
+  equity_count?: number;
+  equity_eligible?: number;
+  equity_excluded?: number;
+  equity_no_oi?: number;
+}
+
+export interface EquityPoolItem {
+  base: string;
+  symbol: string;
+  venue?: string;
+  product?: string;
+  last_price?: number;
+  turnover_24h_usd?: number;
+  oi_usd?: number | null;
+  oi_available?: boolean;
+  asset_class?: "equity";
+  tier?: "equity";
+  session_ok?: boolean;
+  in_watchlist?: boolean;
+  ui_tag?: string;
+  price_change_pct_24h?: number;
+}
+
+export interface EquityPatternState {
+  symbol: string;
+  base?: string;
+  asset_class?: "equity";
+  tier?: "equity";
+  intervals?: string[];
+  session_ok?: boolean;
+  ui_tag?: string;
+  last_price?: number;
+  oi_available?: boolean;
+  oi_usd?: number | null;
+}
+
+export interface BreakoutAlert {
+  symbol: string;
+  type: "breakout_trigger";
+  supply_wall: number;
+  last_price: number;
+  categories: string;
+  category_labels: string[];
+  matrix_tf: string;
+  scan_ts: number;
+  kline_close_time: number;
+  message: string;
+}
+
+export interface PatternWatchItem {
+  symbol: string;
+  interval: string;
+  added_at: number;
+  pinned?: boolean;
+  pinned_until?: number;
+  pin_remaining_sec?: number;
+  /** 手动输入专用槽 */
+  slot?: string;
+  manual?: boolean;
+}
+
+export interface PatternState {
+  symbol: string;
+  interval: string;
+  status: string;
+  status_label: string;
+  h_max?: number;
+  lh_price?: number;
+  l1?: number;
+  hl?: number;
+  trigger_price?: number;
+  hh_price?: number;
+  message?: string;
+  updated_at?: number;
+  trigger_emitted?: boolean;
+}
+
+export interface PatternAlert {
+  symbol: string;
+  type: string;
+  interval: string;
+  status?: string;
+  status_label: string;
+  lh_price?: number;
+  hl?: number;
+  trigger_price?: number;
+  hh_price?: number;
+  last_price?: number;
+  price?: number;
+  close?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  entry_price?: number;
+  exit_price?: number;
+  entry_time?: number;
+  exit_time?: number;
+  leverage?: number;
+  side?: string;
+  side_hint?: string;
+  logic?: string;
+  kind?: string;
+  signal_kind?: string;
+  signal_text?: string;
+  type_label?: string;
+  pattern_label?: string;
+  pnl_usd?: number;
+  pnl_pct?: number;
+  roe_pct?: number;
+  message: string;
+  scan_ts?: number;
+  kline_close_time: number;
+  kline_open_time?: number;
+  time?: number;
+  oi_anomaly?: boolean;
+  bb_mid?: number;
+  prior_high?: number;
+  prior_low?: number;
+  near_vegas?: boolean;
+  trend_pct?: number;
+  head_high?: number;
+  left_shoulder?: number;
+  right_shoulder?: number;
+  neckline?: number;
+  vegas_mid?: number;
+  vol_ratio?: number;
+  climax_vol_ratio?: number;
+  defense?: number;
+  support_ref?: number;
+  resistance_ref?: number;
+  l1?: number;
+  l2?: number;
+  close_pct?: number;
+  events?: Array<Record<string, unknown>>;
+  exit_code?: string;
+  exit_label?: string;
+  /** 量价 ticker：评分与观察档 */
+  score?: number;
+  observation_only?: boolean;
+  invalid_level?: number;
+  entry_hint?: number;
+}
+
+export interface SandboxTrade {
+  id?: number;
+  symbol: string;
+  side: string;
+  logic: string;
+  entry_price: number;
+  exit_price: number;
+  entry_time?: number;
+  exit_time?: number;
+  leverage?: number;
+  pnl_usd: number;
+  pnl_pct: number;
+  roe_pct?: number;
+  reason: string;
+  day?: string;
+  events?: Array<Record<string, unknown>>;
+  is_partial?: number;
+  entry_reason?: string;
+  source?: string;
+  source_label?: string;
+  exit_code?: string;
+  exit_label?: string;
+  fee_usd?: number;
+  fee_pct?: number;
+  interval?: string;
+  ref_intervals?: string[];
+  ref_intervals_label?: string;
+}
+
+export interface SandboxStats {
+  day: string;
+  balance: number;
+  open_positions: number;
+  closed_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  pnl_usd: number;
+  avg_pnl_pct: number;
+  by_logic?: Record<string, { trades: number; wins: number; pnl_usd: number }>;
+  recent_trades?: SandboxTrade[];
+}
+
+export interface SandboxPosition {
+  id?: number;
+  symbol: string;
+  side: string;
+  logic: string;
+  size: number;
+  entry_price: number;
+  entry_time: number;
+  sl: number;
+  tp1?: number | null;
+  tp2?: number | null;
+  breakeven_armed: boolean;
+  leverage?: number;
+  module?: string;
+  stage?: number;
+  events?: Array<Record<string, unknown>>;
+  highest_price?: number;
+  lowest_price?: number;
+  partial_done?: boolean;
+  entry_reason?: string;
+  source?: string;
+  source_label?: string;
+  exit_code?: string;
+  exit_label?: string;
+  interval?: string;
+  ref_intervals?: string[];
+  ref_intervals_label?: string;
+  card_id?: string;
+  card_tps?: number[];
+  tp3?: number | null;
+  /** 卡片作者（频道品牌，如山寨之王） */
+  author_name?: string;
+  channel_id?: string;
+  channel_name?: string;
+  card_source?: string;
+}
+
+export interface SandboxCardOrder {
+  card_id: string;
+  symbol: string;
+  side: string;
+  status: string;
+  position_id?: number | null;
+  created_at?: number;
+  updated_at?: number;
+  /** 卡片发单时间（unix 秒，优先 signal_at） */
+  signal_at?: number | null;
+  author_name?: string;
+  author_id?: string;
+  channel_id?: string;
+  channel_name?: string;
+  guild_name?: string;
+  message_id?: string;
+  event?: string;
+  signal_phase?: string;
+  entry_type?: string;
+  entry_low?: number | null;
+  entry_high?: number | null;
+  tps?: number[];
+  sl?: number | null;
+  leverage?: number | null;
+  title?: string;
+  source_label?: string;
+  last_price?: number;
+  last_price_ts?: number;
+  near_pct?: number;
+  fill_price?: number;
+  /** 生命周期阶段文案 */
+  phase?: string;
+  phase_created?: boolean;
+  phase_watching?: boolean;
+  phase_entered?: boolean;
+  phase_exited?: boolean;
+  phase_sl?: boolean;
+  phase_tp?: boolean;
+  dist_entry_pct?: number;
+  dist_zone_pct?: number;
+  dist_sl_pct?: number;
+  dist_next_tp_pct?: number;
+  next_tp?: number;
+  tp_distances?: Array<{ tp: number; price: number; dist_pct: number; hit: boolean }>;
+  exit_code?: string;
+  exit_label?: string;
+  exit_price?: number;
+  outcome?: string;
+  closed_at?: number;
+  reject_reason?: string;
+}
+
+/** 潜力发现 · 单模型命中 */
+export interface PotentialModelHit {
+  id: string;
+  label: string;
+  stage?: string;
+  score: number;
+  reasons?: string[];
+  entry?: string;
+  exit?: string;
+  end_signals?: string[];
+  tf?: string;
+  /** 判定所依据 K 线周期 */
+  signal_tf?: string;
+  /** 最近一根已收盘 K 的 open_time（毫秒） */
+  signal_time_ms?: number | null;
+  /** 北京时间 YYYY-MM-DD HH:mm */
+  signal_time_utc8?: string | null;
+  direction?: "long" | "short" | "neutral" | string;
+  direction_label?: string;
+  score_reasons?: string[];
+  outcome?: PotentialSignalOutcome;
+  metrics?: Record<string, unknown>;
+}
+
+/** 信号后 12h 或衰竭/离池时的最大盈/回撤评判 */
+export interface PotentialSignalOutcome {
+  status?: string;
+  pending?: boolean;
+  settle_reason?: string | null;
+  settle_label?: string | null;
+  window_end_ms?: number;
+  hours_left?: number;
+  max_profit_pct?: number | null;
+  max_drawdown_pct?: number | null;
+  end_pnl_pct?: number | null;
+  entry_price?: number | null;
+}
+
+export interface PotentialDiscoveryItem {
+  symbol: string;
+  mcap_usd?: number | null;
+  mcap_tier?: string;
+  score: number;
+  top_model?: string;
+  stage?: string;
+  entry?: string;
+  exit?: string;
+  tf?: string;
+  signal_tf?: string;
+  signal_time_ms?: number | null;
+  signal_time_utc8?: string | null;
+  /** 列表合并/扫描时间（非 K 线产生时刻） */
+  scan_at_utc8?: string | null;
+  direction?: "long" | "short" | "neutral" | string;
+  direction_label?: string;
+  /** 综合分公式一行说明 */
+  score_summary?: string;
+  score_reasons?: string[];
+  max_model_score?: number;
+  resonance_bonus?: number;
+  model_count?: number;
+  outcome?: PotentialSignalOutcome;
+  notes?: string;
+  metrics?: Record<string, unknown>;
+  models: PotentialModelHit[];
+}
+
+export interface PotentialDiscoveryCatalogEntry {
+  id: string;
+  label: string;
+  summary?: string;
+  end_signals?: string[];
+  /** 触发后常见价格路径（形态页悬浮） */
+  typical_outlook?: string;
+  cautions?: string[];
+  stage_hints?: Record<string, string>;
+}
+
+export interface PotentialScanDiagSlice {
+  evaluated?: number;
+  model_hits?: number;
+  soft_merged?: number;
+  merge_rows?: number;
+  exported?: number;
+  skip?: Record<string, number>;
+}
+
+export interface PotentialDiscoveryPayload {
+  ok: boolean;
+  updated_at?: number | null;
+  updated_utc8?: string | null;
+  fast_scan_at_utc8?: string | null;
+  slow_scan_at_utc8?: string | null;
+  scan_count?: number;
+  score_list_min?: number;
+  /** 未 hit 但单模型 score ≥ 此值仍合并（0=仅 spec 命中） */
+  soft_export_min?: number;
+  scan_diagnostics?: {
+    fast?: PotentialScanDiagSlice;
+    slow?: PotentialScanDiagSlice;
+  };
+  catalog?: PotentialDiscoveryCatalogEntry[];
+  items?: PotentialDiscoveryItem[];
+}
+
+/** 潜力暴涨漏斗条目（并行于 LH→HL） */
+export interface MoonshotItem {
+  symbol: string;
+  state: string;
+  state_label?: string;
+  reasons?: string[];
+  range_high?: number;
+  last_hl?: number;
+  last_lh?: number;
+  vol_wake?: number;
+  compress_days?: number;
+  updated_at?: number;
+  cooldown_until?: number;
+}
+
+export interface PatternPayload {
+  scan_ts: number;
+  watchlist: PatternWatchItem[];
+  states: PatternState[];
+  pattern_alerts: PatternAlert[];
+  heavyweight_pool_size?: number;
+  auto_pick_count?: number;
+  max_watch_symbols?: number;
+  multi_board_min?: number;
+  card_reserved_slots?: number;
+  manual_reserved_slots?: number;
+  manual_slot_symbol?: string | null;
+  watchlist_refresh_sec?: number;
+  watchlist_refresh_tf?: string;
+  last_watchlist_refresh_ts?: number;
+  package_root?: string;
+  /** 潜力暴涨漏斗 */
+  moonshot_enabled?: boolean;
+  moonshot_full_scan?: boolean;
+  moonshot_a_interval_sec?: number;
+  moonshot_last_a_scan_ts?: number;
+  moonshot_a_pool_size?: number;
+  moonshot?: MoonshotItem[];
+  moonshot_by_symbol?: Record<string, MoonshotItem>;
+  moonshot_alerts?: PatternAlert[];
+  card_orders?: SandboxCardOrder[];
+  card_price_ts?: number;
+  card_scan_ts?: number;
+  card_near_entry_pct?: number;
+  card_near_entry_pct_major?: number;
+  /** 币股并行池（与加密 watchlist 独立） */
+  equity_enabled?: boolean;
+  equity_pool?: EquityPoolItem[];
+  equity_alerts?: PatternAlert[];
+  equity_states?: EquityPatternState[];
+  equity_scan_ts?: number;
+}
+
+export interface PatternCandle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+export interface PatternChartMarker {
+  time: number;
+  position: "aboveBar" | "belowBar";
+  color: string;
+  shape: "arrowDown" | "arrowUp" | "circle";
+  text: string;
+  price?: number;
+  kind?: string;
+  /** LWC marker size；缺省 1 */
+  size?: number;
+  /** 柱级 OI 异动（形态后缀或纯 OI 标签） */
+  oi_anomaly?: boolean;
+}
+
+/** 从形态信号列表点开图表时，用于在 K 线上标出入场点 */
+export interface ChartAlertEntryFocus {
+  key: string;
+  symbol: string;
+  interval?: string;
+  entry: number;
+  typeLabel?: string;
+  signalAt: number;
+  side: "long" | "short" | "flat";
+  dir?: "多" | "空" | "—";
+}
+
+export interface PatternPriceLine {
+  kind: string;
+  price: number;
+  color: string;
+  title: string;
+}
+
+export interface PatternChartDerivatives {
+  funding_rate?: number;
+  funding_rate_pct?: number;
+  funding_extreme?: boolean;
+  funding_extreme_positive?: boolean;
+  oi_regime?: "breakout" | "squeeze" | "dump_oi_up" | "neutral" | string;
+  oi_regime_label?: string;
+  oi_price_chg_pct?: number;
+  oi_chg_pct?: number;
+  high_funding_short_bias?: boolean;
+  liquidation_zones?: PatternPriceLine[];
+  mtf?: {
+    allow_short?: boolean;
+    allow_long?: boolean;
+    summary?: string;
+    block_reason?: string;
+    "4h"?: Record<string, unknown>;
+    "1d"?: Record<string, unknown>;
+  };
+}
+
+/** 形态图头部：市值梯队（与 mcap_tier.py / chart-meta 同源） */
+export interface PatternChartMcapTier {
+  id: string;
+  label: string;
+  mcapNote?: string;
+  strategyHint?: string;
+  listedInTierConfig?: boolean;
+  marketCapUsd?: number;
+}
+
+export interface PatternChartAnalysis {
+  status?: string;
+  status_label?: string;
+  message?: string;
+  h_max?: number;
+  lh_price?: number;
+  l1?: number;
+  hl?: number;
+  trigger_price?: number;
+  hh_price?: number;
+  last_price?: number;
+  bb_wick_top?: boolean;
+  macd_bull?: boolean;
+  macd_top_weak?: boolean;
+  /** 最新 K：OI 异动（含形态+OI 或纯 OI） */
+  oi_anomaly?: boolean;
+  /** 最新 K：仅有 OI 异动、无形态 */
+  oi_anomaly_only?: boolean;
+  /** 扫流动性 / 反转持续性（Pinbar + 量能 + OI） */
+  sweep_momentum?: {
+    symbol?: string;
+    timestamp?: string | null;
+    price_close: number;
+    vol_ratio: number;
+    oi_delta_pct: number | null;
+    sustainability_score: number;
+    signal_type: string;
+    is_bullish_sweep?: boolean;
+    is_bearish_sweep?: boolean;
+    lower_shadow_ratio?: number;
+    upper_shadow_ratio?: number;
+    body_ratio?: number;
+    reasons: string[];
+  };
+  derivatives?: PatternChartDerivatives;
+}
+
+export interface PatternChartData {
+  ok: boolean;
+  symbol: string;
+  interval: string;
+  candles: PatternCandle[];
+  markers: PatternChartMarker[];
+  price_lines: PatternPriceLine[];
+  bb: {
+    upper: { time: number; value: number }[];
+    mid?: { time: number; value: number }[];
+    lower: { time: number; value: number }[];
+  };
+  vegas?: {
+    filter?: { time: number; value: number }[];
+    a1?: { time: number; value: number }[];
+    a2?: { time: number; value: number }[];
+    b1?: { time: number; value: number }[];
+    b2?: { time: number; value: number }[];
+  };
+  ema?: {
+    e13?: { time: number; value: number }[];
+    e33?: { time: number; value: number }[];
+    e99?: { time: number; value: number }[];
+    e144?: { time: number; value: number }[];
+  };
+  macd?: {
+    line?: { time: number; value: number }[];
+    signal?: { time: number; value: number }[];
+    hist?: { time: number; value: number }[];
+  };
+  oi?: { time: number; value: number }[];
+  analysis: PatternChartAnalysis;
+  state: PatternState;
+  partial?: boolean;
+  has_more?: boolean;
+  ticker?: {
+    last_price?: number;
+    price_change_pct_24h?: number;
+    current_oi_usd?: number;
+    quote_volume?: number;
+    oi_tier?: string;
+  };
+  mcapTier?: PatternChartMcapTier;
+  error?: string;
+}
+
+export type RadarAnomalyRecord = {
+  id: string;
+  kind: "oi" | "price" | "board";
+  window?: string;
+  symbol: string;
+  alert_ts?: number;
+  first_seen_ts?: number;
+  last_seen_ts?: number;
+  pct?: number;
+  delta_usd?: number;
+  is_pump?: boolean;
+  is_suppressed?: boolean;
+  tags?: string[];
+  board_label?: string;
+  board_domain?: string;
+  board_rank?: number;
+  row?: Partial<TickerRow>;
+};
+
+export type RadarAnomalyHistory = {
+  retention_sec?: number;
+  oi_price?: RadarAnomalyRecord[];
+  board?: RadarAnomalyRecord[];
+  storage_path?: string;
+};
+
+export interface RadarSnapshot {
+  scan_ts: number;
+  meta?: GlobalMeta;
+  pool_meta?: PoolMeta;
+  equity_pool?: EquityPoolItem[];
+  equity_scan_ts?: number;
+  hot_tickers: TickerRow[];
+  all_tickers: TickerRow[];
+  market_matrix?: MarketMatrix;
+  breakout_alerts?: BreakoutAlert[];
+  pattern?: PatternPayload;
+  pool_size: number;
+  thresholds: {
+    oi_usd_limit: number;
+    oi_pct_limit: number;
+    price_spike_pct_5m?: number;
+    price_spike_pct_15m?: number;
+  };
+  radar_anomaly_history?: RadarAnomalyHistory;
+}
+
+export const EMPTY_SNAPSHOT: RadarSnapshot = {
+  scan_ts: 0,
+  meta: undefined,
+  pool_meta: undefined,
+  hot_tickers: [],
+  all_tickers: [],
+  market_matrix: undefined,
+  breakout_alerts: [],
+  pattern: { scan_ts: 0, watchlist: [], states: [], pattern_alerts: [] },
+  pool_size: 0,
+  thresholds: {
+    oi_usd_limit: 500_000,
+    oi_pct_limit: 2.5,
+    price_spike_pct_5m: 2,
+    price_spike_pct_15m: 3.5,
+  },
+};

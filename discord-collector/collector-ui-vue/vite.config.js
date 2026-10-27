@@ -1,0 +1,126 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { defineConfig, loadEnv } from "vite";
+import vue from "@vitejs/plugin-vue";
+
+const root = path.dirname(fileURLToPath(import.meta.url));
+const collectorRoot = path.resolve(root, "..");
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, collectorRoot, "");
+  const uiPort = Number(env.COLLECTOR_UI_PORT) || 3851;
+  const devPort = Number(env.VITE_DEV_PORT || env.COLLECTOR_VUE_DEV_PORT) || 5178;
+  const apiTarget = `http://127.0.0.1:${uiPort}`;
+
+  const oiPublicEmbedUrl = (
+    env.VITE_OI_PUBLIC_EMBED_URL ||
+    env.OI_PUBLIC_EMBED_URL ||
+    "https://op.b.ezcoin.ink"
+  )
+    .trim()
+    .replace(/\/$/, "");
+
+  const uiMode = String(env.VITE_UI_MODE ?? "").trim().toLowerCase();
+  const isDeployBuild =
+    mode === "production" &&
+    uiMode !== "local" &&
+    uiMode !== "dev" &&
+    uiMode !== "full";
+  /** 本机 Local 模块：deploy 构建强制关闭（Telegram 顶栏模块可打包） */
+  const LOCAL_ONLY = new Set(["manual-stats", "fetch", "archives", "debug"]);
+  const pagesCsv =
+    String(env.VITE_UI_PAGES ?? "show,cards,eval,community,oi,news,telegram").trim() ||
+    "show,cards,eval,community,oi,news,telegram";
+  const pageSet = new Set(
+    pagesCsv
+      .split(/[,;\s]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s && !LOCAL_ONLY.has(s))
+  );
+  /** deploy 必进包（仅 Local 二级模块剔除）；与 .env VITE_UI_PAGES 取并集 */
+  if (isDeployBuild) {
+    for (const name of ["show", "cards", "eval", "community", "oi", "news", "telegram"]) {
+      pageSet.add(name);
+    }
+    for (const name of LOCAL_ONLY) pageSet.delete(name);
+  }
+  /** @param {string} name */
+  const pageOn = (name) => {
+    if (LOCAL_ONLY.has(name)) return !isDeployBuild;
+    return !isDeployBuild || pageSet.has(name);
+  };
+
+  if (mode === "production") {
+    console.info(
+      `[discord-collector-ui] build mode=${mode} deploy=${isDeployBuild} pages=${[...pageSet].join(",")} (local-only stripped)`
+    );
+  }
+
+  return {
+    define: {
+      "import.meta.env.VITE_OI_PUBLIC_EMBED_URL": JSON.stringify(oiPublicEmbedUrl),
+      __UI_DEPLOY__: JSON.stringify(isDeployBuild),
+      __UI_PAGE_SHOW__: JSON.stringify(pageOn("show")),
+      __UI_PAGE_FETCH__: JSON.stringify(pageOn("fetch")),
+      __UI_PAGE_OI__: JSON.stringify(pageOn("oi")),
+      __UI_PAGE_NEWS__: JSON.stringify(pageOn("news")),
+      __UI_PAGE_CARDS__: JSON.stringify(pageOn("cards")),
+      __UI_PAGE_EVAL__: JSON.stringify(pageOn("eval")),
+      __UI_PAGE_TELEGRAM__: JSON.stringify(pageOn("telegram")),
+      __UI_PAGE_ARCHIVES__: JSON.stringify(pageOn("archives")),
+      __UI_PAGE_COMMUNITY__: JSON.stringify(pageOn("community")),
+      __UI_PAGE_DEBUG__: JSON.stringify(pageOn("debug")),
+      __UI_PAGE_CONTENT__: JSON.stringify(pageOn("content")),
+      __UI_PAGE_MANUAL_STATS__: JSON.stringify(pageOn("manual-stats")),
+      __UI_PAGE_HOME__: JSON.stringify(pageOn("home") || !isDeployBuild),
+    },
+    plugins: [
+      vue(),
+      {
+        name: "discord-collector-proxy-banner",
+        configureServer(server) {
+          server.httpServer?.once("listening", () => {
+            const addr = server.httpServer?.address();
+            const port = addr && typeof addr === "object" ? addr.port : "?";
+            console.info(
+              `[discord-collector-ui] dev 端口 ${port}；/api、/ws、/telegram-avatars、/telegram-media、/community-avatars → ${apiTarget}`
+            );
+          });
+        },
+      },
+    ],
+    root,
+    envDir: collectorRoot,
+    publicDir: path.resolve(root, "public"),
+    build: {
+      outDir: path.resolve(root, "../public/collector-ui"),
+      emptyOutDir: true,
+      rollupOptions: {
+        input: path.resolve(root, "index.html"),
+      },
+    },
+    server: {
+      port: devPort,
+      strictPort: true,
+      fs: {
+        allow: [collectorRoot, path.resolve(collectorRoot, "..")],
+      },
+      proxy: {
+        "/api": { target: apiTarget, changeOrigin: true },
+        "/community-avatars": { target: apiTarget, changeOrigin: true },
+        "/telegram-avatars": { target: apiTarget, changeOrigin: true },
+        "/telegram-media": { target: apiTarget, changeOrigin: true },
+        "/ws": {
+          target: apiTarget,
+          ws: true,
+          changeOrigin: true,
+          configure: (proxy) => {
+            proxy.on("error", (err) => {
+              console.warn("[discord-collector-ui] WS 代理错误（collect:ui 是否在运行？）:", err.message);
+            });
+          },
+        },
+      },
+    },
+  };
+});

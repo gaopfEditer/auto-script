@@ -1,0 +1,2660 @@
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  ColorType,
+  CrosshairMode,
+  createChart,
+  LineStyle,
+  type CandlestickData,
+  type HistogramData,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type LineData,
+  type LogicalRange,
+  type SeriesMarker,
+  type UTCTimestamp,
+  type WhitespaceData,
+} from "lightweight-charts";
+import type { ChartAlertEntryFocus, PatternCandle, PatternChartData, PatternState } from "../types";
+import {
+  chartOscillatorFormat,
+  chartPriceFormat,
+  chartPriceFormatFromPrices,
+  formatChartAxisPrice,
+  fmtMetaPrice,
+  fmtNum,
+  fmtPct,
+} from "../utils/format";
+import {
+  formatChartMcapDisplay,
+  formatMcapTierBadge,
+  mcapTierTitle,
+} from "../utils/mcapTier";
+import { alignPriceToReference, displaySymbol, toUsdtSymbol } from "../utils/symbol";
+import { CoinAvatar } from "./CoinAvatar";
+import type { TickerRow } from "../types";
+import { useBinanceChartLive } from "../hooks/useBinanceChartLive";
+import type { LiveKlineUpdate } from "../utils/binanceWs";
+import {
+  CHART_DEFAULT_LIMIT,
+  CHART_LOAD_CHUNK,
+  CHART_REFRESH_TAIL,
+  CHART_TIMEFRAMES,
+  CHART_VISIBLE_BARS,
+  chartLimitForSignalTime,
+  coerceChartTimeframe,
+  type ChartTimeframe,
+  chartCandlesApiUrl,
+  fetchPatternChart,
+  mergeCandlesByTime,
+  oldestCandleOpenMs,
+  resolveChartHasMore,
+  type VegasKey,
+  vegasSeriesLineWidth,
+} from "../utils/chartTimeframe";
+import {
+  CHART_EMA_LINES,
+  DEFAULT_CHART_LAYERS,
+  TRAIN_CHART_LAYER_TOGGLES,
+  type ChartEmaKey,
+} from "../utils/chartLayers";
+import { chartLocalization, chartTimeScaleOptions, formatCandleLocalTime } from "../utils/chartLocale";
+import { buildChartFromCandles, buildChartIndicatorSeries } from "../utils/chartIndicators";
+import {
+  buildAlertEntryMarkers,
+  fetchAlertStatsForSymbol,
+} from "../utils/patternAlertWinRate";
+import {
+  DERIV_OI_LINE_COLOR,
+  fetchChartDerivSubplots,
+  type ChartDerivSubplots,
+} from "../utils/chartDerivSubplots";
+import {
+  buildOiHistogramBars,
+  buildOiMaLine,
+  buildSignedHistMaLine,
+  buildVolumeMaData,
+  computeOiPanelAxis,
+  NET_BUY_MA_COLOR,
+  NET_BUY_MA_PERIOD,
+  oiAutoscaleForVisibleRange,
+  OI_MA_COLOR,
+  OI_MA_PERIOD,
+  visibleOiDomain,
+  VOLUME_MA_COLOR,
+  VOLUME_MA_PERIOD,
+  volumeLiveUpdate,
+} from "../utils/chartMaSeries";
+
+/** 仅当左缘已贴到数据起点附近（几乎要露空白）才预取；真正空白是 from < 0 */
+const LEFT_HISTORY_PAD = 24;
+/** 当前选中币种：定时重拉近期 K 线（毫秒） */
+const CHART_KLINE_REFRESH_MS = 60_000;
+/** 自动向左续载的上限 */
+const CHART_HISTORY_MAX = 5000;
+
+/**
+ * 向右拖动露出左侧空白（from < 0），或几乎贴到最早一根时，才续载。
+ * 不因「缩到看全图 / 距左缘还很远」自动连拉多页。
+ */
+function needsLeftHistory(range: LogicalRange, len: number): boolean {
+  if (len <= 0 || len >= CHART_HISTORY_MAX) return false;
+  if (range.from < 0) return true;
+  const span = Math.max(1, range.to - range.from);
+  const pad = Math.max(LEFT_HISTORY_PAD, Math.min(160, span * 0.22));
+  return range.from < pad;
+}
+
+function restoreLogicalRange(
+  chart: IChartApi,
+  range: LogicalRange,
+  suppressRef?: { current: number },
+) {
+  // setData 后同步改 range 常被 LWC 内部布局冲掉，下一帧再设一次
+  if (suppressRef) suppressRef.current += 1;
+  const apply = () => {
+    try {
+      chart.timeScale().setVisibleLogicalRange(range);
+    } catch {
+      /* chart disposed */
+    }
+  };
+  apply();
+  requestAnimationFrame(() => {
+    apply();
+    requestAnimationFrame(() => {
+      apply();
+      if (suppressRef) {
+        // 等 LWC 抛完程序性 range 事件再允许续载
+        requestAnimationFrame(() => {
+          suppressRef.current = Math.max(0, suppressRef.current - 1);
+        });
+      }
+    });
+  });
+}
+
+function chartSymbolKey(symbol: string): string {
+  return toUsdtSymbol(symbol) || String(symbol || "").trim().toUpperCase();
+}
+
+function chartDataMatchesSymbol(data: PatternChartData | null | undefined, symbol: string): boolean {
+  if (!data?.candles?.length) return false;
+  const payloadSym = chartSymbolKey(String(data.symbol || ""));
+  const want = chartSymbolKey(symbol);
+  if (!payloadSym || !want) return false;
+  return payloadSym === want;
+}
+
+function visibleRangeAroundIndex(len: number, idx: number, bars = CHART_VISIBLE_BARS): LogicalRange {
+  const half = Math.floor(bars / 2);
+  let from = idx - half;
+  let to = idx + half + 2;
+  if (from < 0) {
+    to -= from;
+    from = 0;
+  }
+  if (to > len) {
+    from = Math.max(0, from - (to - len));
+    to = len;
+  }
+  return { from, to } as LogicalRange;
+}
+
+interface Props {
+  symbol: string;
+  state?: PatternState;
+  liveTicker?: TickerRow;
+  onClose: () => void;
+  /** 信号 chip / 列表打开时带上的周期（如 1h、15m） */
+  preferredTimeframe?: string | null;
+  /** 每次从信号打开递增，确保重复点击同一周期也会切回 */
+  preferredTimeframeNonce?: number;
+  /** 形态信号列表点开：在曲线上标出入场点与类型 */
+  alertFocus?: ChartAlertEntryFocus | null;
+  alertFocusNonce?: number;
+  /** 右键标题：打开与左侧列表相同的操作菜单 */
+  onTitleContextMenu?: (e: React.MouseEvent, symbol: string) => void;
+  /** 当前币是否已在形态监听列表 */
+  inWatchlist?: boolean;
+  /** 加入形态监听 */
+  onAddToWatchlist?: (symbol: string) => void;
+  addWatchBusy?: boolean;
+}
+
+type ChartLayers = typeof DEFAULT_CHART_LAYERS & {
+  /** 下方持仓量 / 净买入副图（默认关） */
+  oi: boolean;
+};
+
+const DEFAULT_LAYERS: ChartLayers = {
+  ...DEFAULT_CHART_LAYERS,
+  oi: false,
+};
+
+const LAYER_TOGGLES: { key: keyof ChartLayers; label: string }[] = [
+  ...TRAIN_CHART_LAYER_TOGGLES,
+  { key: "oi", label: "持仓量" },
+];
+
+/** H_max / LH / L₁ / HL / 扳机 等水平价线 */
+const STRUCTURE_LINE_KINDS = new Set(["h_max", "lh", "l1", "hl", "trigger"]);
+const LIQ_LINE_KINDS = new Set(["liq_short", "liq_long"]);
+/** 形态结构箭头标记（与价线对应） */
+const STRUCTURE_MARKER_KINDS = new Set([
+  "h_max",
+  "lh",
+  "l1",
+  "hl",
+  "mid_peak",
+  "trigger",
+  "hh",
+  "bb_wick",
+]);
+
+const MARKER_LEGEND = [
+  { kind: "h_max", label: "① H_max 绝对高点", color: "#ff5252" },
+  { kind: "lh", label: "② LH 次高点", color: "#ffc107" },
+  { kind: "l1", label: "L₁ 洗盘低点", color: "#ff8a80" },
+  { kind: "hl", label: "③ HL 更高低点", color: "#00e676" },
+  { kind: "mid_peak", label: "夹角反弹高点", color: "#64b5f6" },
+  { kind: "trigger", label: "扳机线", color: "#64b5f6" },
+  { kind: "hh", label: "④ HH 更高高点", color: "#00e676" },
+  { kind: "bb_wick", label: "BB-Wicks 插针", color: "#e040fb" },
+  { kind: "shooting_star", label: "射击之星 / V+oi异动", color: "#ff4081" },
+  { kind: "inverted_hammer", label: "倒锤子", color: "#00bcd4" },
+  { kind: "continuous_upper_wick", label: "连续上插针", color: "#9c27b0" },
+  { kind: "continuous_lower_wick", label: "连续下插针", color: "#9c27b0" },
+  { kind: "oi_anomaly", label: "OI异动（无形态）", color: "#ff9800" },
+  { kind: "alert_entry_focus", label: "形态信号入场", color: "#b8ff3c" },
+];
+
+const VEGAS_SERIES: { key: VegasKey; title: string; color: string }[] = [
+  { key: "filter", title: "过滤线 EMA12", color: "rgba(0, 230, 118, 0.85)" },
+  { key: "a1", title: "A组1 EMA144", color: "rgba(33, 150, 243, 0.75)" },
+  { key: "a2", title: "A组2 EMA169", color: "rgba(33, 150, 243, 0.45)" },
+  { key: "b1", title: "B组1 EMA576", color: "rgba(239, 83, 80, 0.75)" },
+  { key: "b2", title: "B组2 EMA676", color: "rgba(239, 83, 80, 0.45)" },
+];
+
+/** K 线形态信号：半尺寸箭头；字号随图表 layout.fontSize（整体 60%） */
+const COMPACT_MARKER_KINDS = new Set([
+  "shooting_star",
+  "inverted_hammer",
+  "continuous_upper_wick",
+  "continuous_lower_wick",
+  "continuous_non_upper_wick",
+  "continuous_non_lower_wick",
+  "oi_anomaly",
+]);
+const COMPACT_MARKER_SIZE = 0.5;
+/** 图表全局字号 = LWC 默认 12 × 60% */
+const CHART_FONT_SIZE = Math.round(12 * 0.6);
+
+/**
+ * 将标记时间对齐到已加载 K 线 open_time。
+ * LWC 对「不在 series 内」的 time 会吸附到端点，缩小时左侧会堆一排入/出标记。
+ */
+function alignMarkerTime(
+  rawTime: number,
+  candleTimeSet: Set<number>,
+  candleTimes: number[],
+): number | null {
+  if (!candleTimes.length) return null;
+  let t = Number(rawTime);
+  if (!Number.isFinite(t) || t <= 0) return null;
+  // 兼容毫秒时间戳
+  if (t > 1e12) t = Math.floor(t / 1000);
+  if (candleTimeSet.has(t)) return t;
+
+  const first = candleTimes[0];
+  const last = candleTimes[candleTimes.length - 1];
+  if (t < first || t > last) return null;
+
+  // 落在两根 K 线之间：对齐到不大于 t 的最近 open
+  let lo = 0;
+  let hi = candleTimes.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (candleTimes[mid] <= t) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  if (hi < 0) return null;
+  return candleTimes[hi];
+}
+
+/**
+ * 用当前已加载的全部 K 线重算形态/结构标记（避免 refresh 只带尾部 80 根把历史标记冲掉）。
+ */
+function rebuildChartMarkers(
+  candles: PatternCandle[],
+  state: PatternState | undefined,
+): PatternChartData["markers"] {
+  const built = buildChartFromCandles(
+    candles,
+    state as unknown as Record<string, unknown> | undefined,
+    {},
+  );
+  return built.markers;
+}
+
+function toCandleMarkers(
+  markers: PatternChartData["markers"],
+  showCandlePattern: boolean,
+  showStructure: boolean,
+  candles?: PatternCandle[],
+): SeriesMarker<UTCTimestamp>[] {
+  const candleTimes = (candles ?? []).map((c) => c.time).sort((a, b) => a - b);
+  const candleTimeSet = new Set(candleTimes);
+
+  return [...(markers ?? [])]
+    .filter((m) => {
+      const kind = m.kind ?? "";
+      if (!showCandlePattern && COMPACT_MARKER_KINDS.has(kind)) return false;
+      if (!showStructure && STRUCTURE_MARKER_KINDS.has(kind)) return false;
+      return true;
+    })
+    .map((m) => {
+      const aligned = alignMarkerTime(m.time, candleTimeSet, candleTimes);
+      if (aligned == null) return null;
+      const kind = m.kind ?? "";
+      const compact = COMPACT_MARKER_KINDS.has(kind);
+      return {
+        time: aligned as UTCTimestamp,
+        position: m.position,
+        color: m.color,
+        shape: m.shape,
+        text: m.text || undefined,
+        size: m.size ?? (compact ? COMPACT_MARKER_SIZE : 1),
+      } as SeriesMarker<UTCTimestamp>;
+    })
+    .filter((m): m is SeriesMarker<UTCTimestamp> => m != null)
+    .sort((a, b) => (a.time as number) - (b.time as number));
+}
+
+function toCandleData(candles: PatternCandle[]): CandlestickData[] {
+  return candles.map((c) => ({
+    time: c.time as UTCTimestamp,
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+  }));
+}
+
+/** 量能柱从 0 起算，按当前可见区内最大量撑满分配高度 */
+function volumeAutoscaleInfoProvider(
+  original: () => { priceRange: { minValue: number; maxValue: number } | null } | null,
+) {
+  const res = original();
+  if (!res?.priceRange) return res;
+  const max = Math.max(res.priceRange.maxValue, 0);
+  return {
+    priceRange: {
+      minValue: 0,
+      // 略放大上限，避免最高柱贴顶；可视区内最高柱约占分配高度 ~85%
+      maxValue: max <= 0 ? 1 : max / 0.85,
+    },
+  };
+}
+
+/** MACD 金叉/死叉小圆点（画在 DIF 线上） */
+function buildMacdCrossMarkers(
+  line: { time: number; value: number }[],
+  signal: { time: number; value: number }[],
+): SeriesMarker<UTCTimestamp>[] {
+  const sigByTime = new Map(signal.map((p) => [p.time, p.value]));
+  const markers: SeriesMarker<UTCTimestamp>[] = [];
+  let prevDiff: number | null = null;
+
+  for (const p of line) {
+    const sig = sigByTime.get(p.time);
+    if (sig == null || !Number.isFinite(p.value) || !Number.isFinite(sig)) {
+      prevDiff = null;
+      continue;
+    }
+    const diff = p.value - sig;
+    if (prevDiff != null) {
+      if (prevDiff <= 0 && diff > 0) {
+        markers.push({
+          time: p.time as UTCTimestamp,
+          position: "inBar",
+          shape: "circle",
+          color: "#00e676",
+          size: 0.6,
+          text: undefined,
+        });
+      } else if (prevDiff >= 0 && diff < 0) {
+        markers.push({
+          time: p.time as UTCTimestamp,
+          position: "inBar",
+          shape: "circle",
+          color: "#ff5252",
+          size: 0.6,
+          text: undefined,
+        });
+      }
+    }
+    prevDiff = diff;
+  }
+  return markers;
+}
+
+/** MACD 对称扩展，可见区内柱线充分利用分区高度 */
+/** 副图十字线锚点：与主图 K 线等长，value=0 不参与 autoscale */
+function buildCrosshairAnchorLine(times: number[]): LineData[] {
+  return times.map((t) => ({ time: t as UTCTimestamp, value: 0 }));
+}
+
+function addCrosshairAnchorSeries(chart: IChartApi): ISeriesApi<"Line"> {
+  return chart.addLineSeries({
+    color: "transparent",
+    lineWidth: 0,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    crosshairMarkerVisible: false,
+    autoscaleInfoProvider: () => null,
+  });
+}
+
+function positionSharedCrosshairVLine(
+  lineEl: HTMLDivElement | null,
+  wrapEl: HTMLDivElement | null,
+  canvasEl: HTMLDivElement | null,
+  pointX: number | undefined,
+  visible: boolean,
+) {
+  if (!lineEl || !wrapEl || !canvasEl) return;
+  if (!visible || pointX == null || !Number.isFinite(pointX) || pointX < 0) {
+    lineEl.style.display = "none";
+    return;
+  }
+  const wrapRect = wrapEl.getBoundingClientRect();
+  const canvasRect = canvasEl.getBoundingClientRect();
+  lineEl.style.display = "block";
+  lineEl.style.left = `${canvasRect.left - wrapRect.left + pointX}px`;
+}
+
+function macdAutoscaleInfoProvider(
+  original: () => { priceRange: { minValue: number; maxValue: number } | null } | null,
+) {
+  const res = original();
+  if (!res?.priceRange) return res;
+  const { minValue, maxValue } = res.priceRange;
+  const amp = Math.max(Math.abs(minValue), Math.abs(maxValue), 1e-12);
+  return {
+    priceRange: {
+      minValue: -amp / 0.85,
+      maxValue: amp / 0.85,
+    },
+  };
+}
+
+/**
+ * 量能与 K 线共用主图区（同 bottom），叠在 K 线底部，不另开独立带。
+ * 仅 MACD 在整图最底独占一条。
+ */
+function applyPaneMargins(chart: IChartApi, layers: ChartLayers) {
+  const { volume, macd } = layers;
+  const MACD_H = 0.24;
+  const VOL_IN_MAIN = 0.28;
+
+  const mainBottom = macd ? MACD_H : 0.04;
+  const mainTop = 0.03;
+  const mainSpan = 1 - mainTop - mainBottom;
+  const volTop = mainTop + mainSpan * (1 - (volume ? VOL_IN_MAIN : 0));
+
+  chart.priceScale("right").applyOptions({
+    scaleMargins: { top: mainTop, bottom: mainBottom },
+  });
+
+  if (volume) {
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: volTop, bottom: mainBottom },
+      borderVisible: false,
+    });
+  } else {
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.95, bottom: 0 },
+      borderVisible: false,
+    });
+  }
+
+  if (macd) {
+    chart.priceScale("macd").applyOptions({
+      scaleMargins: { top: 1 - MACD_H + 0.02, bottom: 0.02 },
+      borderVisible: false,
+    });
+  } else {
+    chart.priceScale("macd").applyOptions({
+      scaleMargins: { top: 0.95, bottom: 0 },
+      borderVisible: false,
+    });
+  }
+}
+
+export const PatternChartPanel = memo(function PatternChartPanel({
+  symbol,
+  state,
+  liveTicker,
+  onClose: _onClose,
+  preferredTimeframe = null,
+  preferredTimeframeNonce = 0,
+  alertFocus = null,
+  alertFocusNonce = 0,
+  onTitleContextMenu,
+  inWatchlist = false,
+  onAddToWatchlist,
+  addWatchBusy = false,
+}: Props) {
+  void _onClose;
+  const chartRef = useRef<HTMLDivElement>(null);
+  const chartWrapRef = useRef<HTMLDivElement>(null);
+  const crosshairPriceRef = useRef<HTMLDivElement>(null);
+  /** 贯穿主图 + 全部副图的共享竖线（数据为空时 LWC 副图十字线会断） */
+  const crosshairVLineRef = useRef<HTMLDivElement>(null);
+  const oiChartElRef = useRef<HTMLDivElement>(null);
+  const spotNetElRef = useRef<HTMLDivElement>(null);
+  const futNetElRef = useRef<HTMLDivElement>(null);
+  const oiChartApi = useRef<IChartApi | null>(null);
+  const spotNetChartApi = useRef<IChartApi | null>(null);
+  const futNetChartApi = useRef<IChartApi | null>(null);
+  const oiHistSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const oiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const oiMaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const oiLineDataRef = useRef<Array<LineData | WhitespaceData>>([]);
+  const oiMaLineDataRef = useRef<LineData[]>([]);
+  const oiVisibleRefreshRef = useRef<() => void>(() => {});
+  const spotNetSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const spotNetMaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const futNetSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const futNetMaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** 副图十字线锚点：每根 K 线 time 均有 value=0，避免 OI/净买入缺数时竖线中断 */
+  const oiCrossAnchorRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const spotCrossAnchorRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const futCrossAnchorRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const derivSyncingRef = useRef(false);
+  /** 防止 setCrosshairPosition 触发的 move 事件回环 */
+  const crosshairSyncingRef = useRef(false);
+  /** 副图按 time(秒) 取价，供十字线水平定位 */
+  const oiValueByTimeRef = useRef(new Map<number, number>());
+  const spotNetByTimeRef = useRef(new Map<number, number>());
+  const futNetByTimeRef = useRef(new Map<number, number>());
+  const chartApi = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const upperRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const midRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const lowerRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const volumeMaRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const macdLineRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const vegasRefs = useRef<Partial<Record<VegasKey, ISeriesApi<"Line">>>>({});
+  const emaRefs = useRef<Partial<Record<ChartEmaKey, ISeriesApi<"Line">>>>({});
+  const priceLinesRef = useRef<IPriceLine[]>([]);
+  const alertEntryLineRef = useRef<IPriceLine | null>(null);
+  const alertEntryMarkersRef = useRef<NonNullable<PatternChartData["markers"]>>([]);
+  const pendingFocusScrollRef = useRef(false);
+  const focusScrollKeyRef = useRef("");
+  const focusLoadingMoreRef = useRef(false);
+
+  const candlesRef = useRef<PatternCandle[]>([]);
+  const hasMoreRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  /** >0 时忽略 range 续载（程序性 setVisibleLogicalRange / 初次定位） */
+  const suppressHistoryLoadRef = useRef(0);
+  /** 左侧续载已直接 setData 到图表；跳过随后 data effect，避免用短数据冲掉历史 */
+  const skipNextDataApplyRef = useRef(false);
+  const timeframeRef = useRef<ChartTimeframe>("15m");
+  const metaRef = useRef<PatternChartData | null>(null);
+  const layersRef = useRef<ChartLayers>(DEFAULT_LAYERS);
+  const priceDecimalsRef = useRef(2);
+  const lastCloseRef = useRef(0);
+
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>(() => {
+    return coerceChartTimeframe(preferredTimeframe) || "15m";
+  });
+  const [data, setData] = useState<PatternChartData | null>(null);
+  /** 分析增强数据（形态状态/衍生品/多周期），不阻塞 chart 渲染 */
+  const analysisRef = useRef<PatternChartData | null>(null);
+  const [candleCount, setCandleCount] = useState(0);
+  const [lastCandleTime, setLastCandleTime] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  /** chart K 线已到达（不阻塞图表渲染） */
+  const [loading, setLoading] = useState(true);
+  /** 侧边栏形态分析尚未到达 */
+  const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [err, setErr] = useState("");
+  const [layers, setLayers] = useState<ChartLayers>(DEFAULT_LAYERS);
+  const [oiSubLoading, setOiSubLoading] = useState(false);
+  const [oiSubErr, setOiSubErr] = useState("");
+  /** 副图 LWC 实例就绪代数（挂载后 +1，驱动数据 effect 重跑） */
+  const [oiChartsGen, setOiChartsGen] = useState(0);
+  /** 主图 LWC 就绪代数（副图挂载依赖 chartApi） */
+  const [mainChartGen, setMainChartGen] = useState(0);
+  const pendingDerivPayloadRef = useRef<{
+    payload: ChartDerivSubplots;
+    times: number[];
+  } | null>(null);
+  const [alertOverlayCount, setAlertOverlayCount] = useState(0);
+  layersRef.current = layers;
+
+  const clearPriceLines = useCallback(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const line of priceLinesRef.current) {
+      series.removePriceLine(line);
+    }
+    priceLinesRef.current = [];
+  }, []);
+
+  const applyPriceAxisFormat = useCallback(
+    (
+      price: number | null | undefined,
+      samplePrices?: Array<number | null | undefined>,
+    ) => {
+      const samples = [
+        ...(samplePrices ?? []),
+        price,
+      ].filter((x) => x != null && Number.isFinite(Number(x)) && Number(x) > 0);
+      const fmt = samples.length
+        ? chartPriceFormatFromPrices(samples)
+        : chartPriceFormat(price);
+      priceDecimalsRef.current = fmt.precision;
+      seriesRef.current?.applyOptions({ priceFormat: fmt });
+      upperRef.current?.applyOptions({ priceFormat: fmt });
+      midRef.current?.applyOptions({ priceFormat: fmt });
+      lowerRef.current?.applyOptions({ priceFormat: fmt });
+      for (const { key } of VEGAS_SERIES) {
+        vegasRefs.current[key]?.applyOptions({ priceFormat: fmt });
+      }
+      for (const { key } of CHART_EMA_LINES) {
+        emaRefs.current[key]?.applyOptions({ priceFormat: fmt });
+      }
+      chartApi.current?.applyOptions({
+        localization: {
+          ...chartLocalization,
+          priceFormatter: (p: number) => formatChartAxisPrice(p, priceDecimalsRef.current),
+        },
+      });
+    },
+    [],
+  );
+
+  const applyMacdAxisFormat = useCallback((payload: PatternChartData) => {
+    const vals = [
+      ...(payload.macd?.hist ?? []).map((p) => p.value),
+      ...(payload.macd?.line ?? []).map((p) => p.value),
+      ...(payload.macd?.signal ?? []).map((p) => p.value),
+    ];
+    const fmt = chartOscillatorFormat(vals);
+    macdHistRef.current?.applyOptions({ priceFormat: fmt });
+    macdLineRef.current?.applyOptions({ priceFormat: fmt });
+    macdSignalRef.current?.applyOptions({ priceFormat: fmt });
+  }, []);
+
+  const applyPriceLines = useCallback((payload: PatternChartData) => {
+    const series = seriesRef.current;
+    if (!series || payload.partial) return;
+    clearPriceLines();
+    const showStructure = layersRef.current.structure;
+    for (const line of payload.price_lines ?? []) {
+      const kind = line.kind ?? "";
+      // 清算区图层已下线
+      if (LIQ_LINE_KINDS.has(kind)) continue;
+      if (!showStructure && STRUCTURE_LINE_KINDS.has(kind)) continue;
+      priceLinesRef.current.push(
+        series.createPriceLine({
+          price: line.price,
+          color: line.color,
+          lineWidth: 1,
+          lineStyle: line.kind === "trigger" ? 2 : 0,
+          axisLabelVisible: true,
+          title: line.title,
+        }),
+      );
+    }
+  }, [clearPriceLines]);
+
+  const applyAlertEntryPriceLine = useCallback(
+    (candles?: PatternCandle[]) => {
+      const series = seriesRef.current;
+      if (!series) return;
+      if (alertEntryLineRef.current) {
+        try {
+          series.removePriceLine(alertEntryLineRef.current);
+        } catch {
+          /* disposed */
+        }
+        alertEntryLineRef.current = null;
+      }
+      const focus = alertFocus;
+      if (!focus || !(focus.entry > 0)) return;
+      const bars = candles ?? candlesRef.current;
+      const refPx = bars.at(-1)?.close ?? focus.entry;
+      const price = alignPriceToReference(focus.entry, refPx);
+      if (!(price > 0)) return;
+      const isShort = focus.side === "short" || focus.dir === "空";
+      const type = String(focus.typeLabel || "").trim();
+      alertEntryLineRef.current = series.createPriceLine({
+        price,
+        color: isShort ? "#ff6e40" : "#b8ff3c",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: type ? `入场 ${type}` : "入场",
+      });
+    },
+    [alertFocus],
+  );
+
+  const applyChartSeries = useCallback(
+    (payload: PatternChartData, candles: PatternCandle[], opts?: { isPrepend?: boolean }) => {
+      const series = seriesRef.current;
+      const chart = chartApi.current;
+      if (!series || !chart) return;
+
+      try {
+        const prevRange = chart.timeScale().getVisibleLogicalRange();
+        const prevLen = candlesRef.current.length;
+        const sortedCandles = [...candles]
+          .sort((a, b) => a.time - b.time)
+          .filter((c, i, arr) => i === 0 || c.time !== arr[i - 1].time);
+        const prepended = opts?.isPrepend ? sortedCandles.length - prevLen : 0;
+
+        const stateForIndicators = (metaRef.current?.state || payload.state) as
+          | PatternState
+          | undefined;
+        const { bb, vegas, ema, macd } = buildChartIndicatorSeries(
+          sortedCandles,
+          stateForIndicators as Record<string, unknown> | null,
+          { symbol: payload.symbol || symbol },
+        );
+
+        // 必须先设精度再 setData：LWC 会按 minMove 量化 OHLC，默认 0.01 会把低价币画成锯齿
+        const samplePrices = sortedCandles.flatMap((c) => [c.open, c.high, c.low, c.close]);
+        applyPriceAxisFormat(sortedCandles.at(-1)?.close, samplePrices);
+        applyMacdAxisFormat({ ...payload, macd });
+
+        series.setData(toCandleData(sortedCandles));
+
+        const showPattern = layersRef.current.candlePattern;
+        const showStructure = layersRef.current.structure;
+        const rebuilt = [
+          ...rebuildChartMarkers(
+            sortedCandles,
+            (metaRef.current?.state || payload.state) as PatternState | undefined,
+          ),
+          ...alertEntryMarkersRef.current,
+        ];
+        const markers = toCandleMarkers(rebuilt, showPattern, showStructure, sortedCandles);
+        if (markers.length) {
+          series.setMarkers(markers);
+        } else {
+          series.setMarkers([]);
+        }
+
+        if (!payload.partial) {
+          applyPriceLines(payload);
+          applyAlertEntryPriceLine(sortedCandles);
+          metaRef.current = { ...payload, bb, vegas, ema, macd, markers: rebuilt };
+        } else if (metaRef.current) {
+          metaRef.current = { ...metaRef.current, bb, vegas, ema, macd, markers: rebuilt };
+          applyAlertEntryPriceLine(sortedCandles);
+        }
+
+        if (upperRef.current) {
+          const upperPts = [...(bb.upper ?? [])].sort((a, b) => a.time - b.time);
+          upperRef.current.setData(
+            upperPts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+        }
+        if (midRef.current) {
+          const midPts = [...(bb.mid ?? [])].sort((a, b) => a.time - b.time);
+          midRef.current.setData(
+            midPts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+        }
+        if (lowerRef.current) {
+          const lowerPts = [...(bb.lower ?? [])].sort((a, b) => a.time - b.time);
+          lowerRef.current.setData(
+            lowerPts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+        }
+
+        for (const { key } of VEGAS_SERIES) {
+          const line = vegasRefs.current[key];
+          if (!line) continue;
+          const pts = [...(vegas[key] ?? [])].sort((a, b) => a.time - b.time);
+          line.setData(
+            pts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+        }
+
+        for (const { key } of CHART_EMA_LINES) {
+          const line = emaRefs.current[key];
+          if (!line) continue;
+          const pts = [...(ema[key] ?? [])].sort((a, b) => a.time - b.time);
+          line.setData(
+            pts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+        }
+
+        if (volumeRef.current) {
+          const volPack = buildVolumeMaData(sortedCandles);
+          volumeRef.current.setData(volPack.bars);
+          volumeMaRef.current?.setData(volPack.ma);
+        }
+
+        if (macdHistRef.current) {
+          const hist = [...(macd.hist ?? [])].sort((a, b) => a.time - b.time);
+          macdHistRef.current.setData(
+            hist.map(
+              (p) =>
+                ({
+                  time: p.time as UTCTimestamp,
+                  value: p.value,
+                  color:
+                    p.value >= 0 ? "rgba(0, 230, 118, 0.55)" : "rgba(255, 82, 82, 0.55)",
+                }) as HistogramData,
+            ),
+          );
+        }
+        const macdLinePts = [...(macd.line ?? [])].sort((a, b) => a.time - b.time);
+        const macdSigPts = [...(macd.signal ?? [])].sort((a, b) => a.time - b.time);
+        if (macdLineRef.current) {
+          macdLineRef.current.setData(
+            macdLinePts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+          if (layersRef.current.macd) {
+            macdLineRef.current.setMarkers(buildMacdCrossMarkers(macdLinePts, macdSigPts));
+          } else {
+            macdLineRef.current.setMarkers([]);
+          }
+        }
+        if (macdSignalRef.current) {
+          macdSignalRef.current.setData(
+            macdSigPts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) as LineData[],
+          );
+        }
+
+        applyPaneMargins(chart, layersRef.current);
+
+        candlesRef.current = sortedCandles;
+        setCandleCount(sortedCandles.length);
+        setLastCandleTime(sortedCandles.at(-1)?.time ?? null);
+
+        if (prevRange && prepended > 0) {
+          // 只平移视口，保持用户当前看到的 K 线不动；不因缩全图把 from 钉在 0 去连环续载
+          restoreLogicalRange(
+            chart,
+            {
+              from: prevRange.from + prepended,
+              to: prevRange.to + prepended,
+            },
+            suppressHistoryLoadRef,
+          );
+        } else if (prevRange && prevLen > 0) {
+          // setData 会重置视口；非 prepend（refresh/live 合并）必须原样恢复，否则左滑历史被打回
+          const stickRight = prevRange.to >= prevLen - 8;
+          if (stickRight) {
+            const span = Math.max(20, prevRange.to - prevRange.from);
+            const to = sortedCandles.length + 2;
+            restoreLogicalRange(
+              chart,
+              {
+                from: Math.max(0, to - span),
+                to,
+              },
+              suppressHistoryLoadRef,
+            );
+          } else {
+            restoreLogicalRange(chart, prevRange, suppressHistoryLoadRef);
+          }
+        } else if (!prevRange || prevLen === 0) {
+          if (!pendingFocusScrollRef.current) {
+            const to = sortedCandles.length;
+            const from = Math.max(0, to - CHART_VISIBLE_BARS);
+            restoreLogicalRange(chart, { from, to: to + 2 }, suppressHistoryLoadRef);
+          }
+        }
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "图表渲染失败");
+      }
+    },
+    [symbol, applyPriceLines, applyAlertEntryPriceLine, applyPriceAxisFormat, applyMacdAxisFormat],
+  );
+
+  const loadMoreHistoryRef = useRef<() => Promise<void>>(async () => {});
+
+  const loadMoreHistory = useCallback(async () => {
+    if (loadingMoreRef.current || !hasMoreRef.current) return;
+    if (candlesRef.current.length >= CHART_HISTORY_MAX) {
+      hasMoreRef.current = false;
+      setHasMore(false);
+      return;
+    }
+    const oldestMs = oldestCandleOpenMs(candlesRef.current);
+    if (oldestMs == null) return;
+
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    let shouldChain = false;
+    try {
+      const prevLen = candlesRef.current.length;
+      const prevRange = chartApi.current?.timeScale().getVisibleLogicalRange() ?? null;
+      const res = await fetch(
+        chartCandlesApiUrl(symbol, timeframeRef.current, {
+          limit: CHART_LOAD_CHUNK,
+          endTimeMs: oldestMs - 1,
+        }),
+      );
+      const chunk = (await res.json()) as PatternChartData;
+      if (!chunk.ok || !chunk.candles?.length) {
+        hasMoreRef.current = false;
+        setHasMore(false);
+        return;
+      }
+
+      const merged = mergeCandlesByTime(candlesRef.current, chunk.candles);
+      // 无新增 K 线：停止续载，避免同一 endTime 空转
+      if (merged.length <= prevLen) {
+        hasMoreRef.current = false;
+        setHasMore(false);
+        return;
+      }
+      const prepended = merged.length - prevLen;
+      hasMoreRef.current =
+        resolveChartHasMore(chunk, CHART_LOAD_CHUNK) && merged.length < CHART_HISTORY_MAX;
+      setHasMore(hasMoreRef.current);
+
+      applyChartSeries(
+        {
+          ...chunk,
+          partial: true,
+          state: metaRef.current?.state ?? chunk.state,
+          oi: [],
+        },
+        merged,
+        { isPrepend: true },
+      );
+
+      // 同步 React state，但跳过 data→apply 的二次 setData（否则会丢 isPrepend 视口偏移）
+      skipNextDataApplyRef.current = true;
+      const ind = metaRef.current;
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              candles: merged,
+              has_more: hasMoreRef.current,
+              bb: ind?.bb ?? prev.bb,
+              vegas: ind?.vegas ?? prev.vegas,
+              ema: ind?.ema ?? prev.ema,
+              macd: ind?.macd ?? prev.macd,
+              oi: [],
+              markers: ind?.markers ?? prev.markers,
+            }
+          : {
+              ...chunk,
+              ok: true,
+              candles: merged,
+              has_more: hasMoreRef.current,
+              bb: ind?.bb ?? chunk.bb,
+              vegas: ind?.vegas ?? chunk.vegas,
+              ema: ind?.ema,
+              macd: ind?.macd ?? chunk.macd,
+              oi: [],
+              markers: ind?.markers ?? chunk.markers ?? [],
+              price_lines: ind?.price_lines ?? [],
+              analysis: ind?.analysis ?? {},
+              state: ind?.state ?? ({} as PatternState),
+            },
+      );
+
+      // 仅当续载后左侧仍有空白（用户拖过头）才再拉一页；不因贴边/看全图连环加载
+      if (hasMoreRef.current && prevRange) {
+        const intended: LogicalRange = {
+          from: prevRange.from + prepended,
+          to: prevRange.to + prepended,
+        };
+        shouldChain = intended.from < 0;
+      }
+    } catch (e) {
+      console.warn("[chart] 左侧历史续载失败", e);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+      if (shouldChain) {
+        window.setTimeout(() => {
+          void loadMoreHistoryRef.current();
+        }, 50);
+      }
+    }
+  }, [symbol, applyChartSeries]);
+
+  loadMoreHistoryRef.current = loadMoreHistory;
+
+  const refreshLatestRef = useRef<() => void>(() => {});
+
+  const refreshLatest = useCallback(async () => {
+    if (loadingMoreRef.current || loading) return;
+    const symKey = chartSymbolKey(symbol);
+    try {
+      const json = await fetchPatternChart(symbol, timeframeRef.current, {
+        limit: CHART_REFRESH_TAIL,
+      });
+      if (!json.ok || !json.candles?.length) return;
+      if (chartSymbolKey(String(json.symbol || symbol)) !== symKey) return;
+
+      const merged = mergeCandlesByTime(candlesRef.current, json.candles);
+
+      setData({
+        ...json,
+        candles: merged,
+        oi: [],
+        // markers / 指标由 applyChartSeries 按全量 K 线重算
+        markers: metaRef.current?.markers ?? json.markers,
+      });
+    } catch {
+      /* 静默 */
+    }
+  }, [symbol, loading]);
+
+  refreshLatestRef.current = () => {
+    void refreshLatest();
+  };
+
+  const applyLiveCandle = useCallback((candle: PatternCandle, closed: boolean) => {
+    const series = seriesRef.current;
+    if (!series || candle.time <= 0) return;
+
+    try {
+      series.update({
+        time: candle.time as UTCTimestamp,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      });
+
+      if (volumeRef.current && candle.volume != null) {
+        const live = volumeLiveUpdate(candle, candlesRef.current);
+        volumeRef.current.update(live.bar);
+        if (live.ma && volumeMaRef.current) volumeMaRef.current.update(live.ma);
+      }
+
+      const candles = candlesRef.current;
+      const last = candles[candles.length - 1];
+      if (last?.time === candle.time) {
+        candles[candles.length - 1] = candle;
+      } else if (!last || candle.time > last.time) {
+        candlesRef.current = [...candles, candle];
+        setCandleCount(candlesRef.current.length);
+      }
+      setLastCandleTime(candle.time);
+
+      if (closed) refreshLatestRef.current();
+
+      const chart = chartApi.current;
+      const range = chart?.timeScale().getVisibleLogicalRange();
+      const len = candlesRef.current.length;
+      if (chart && range && len > 0 && range.to >= len - 8) {
+        const to = len + 2;
+        const from = Math.max(0, to - CHART_VISIBLE_BARS);
+        chart.timeScale().setVisibleLogicalRange({ from, to });
+      }
+    } catch {
+      /* 静默 */
+    }
+  }, []);
+
+  const applyLayerVisibility = useCallback((next: ChartLayers) => {
+    const chart = chartApi.current;
+    upperRef.current?.applyOptions({ visible: next.bb });
+    midRef.current?.applyOptions({ visible: next.bb });
+    lowerRef.current?.applyOptions({ visible: next.bb });
+    for (const { key } of VEGAS_SERIES) {
+      vegasRefs.current[key]?.applyOptions({ visible: next.vegas });
+    }
+    for (const { key } of CHART_EMA_LINES) {
+      emaRefs.current[key]?.applyOptions({ visible: next.ema });
+    }
+    volumeRef.current?.applyOptions({ visible: next.volume });
+    volumeMaRef.current?.applyOptions({ visible: next.volume });
+    macdHistRef.current?.applyOptions({ visible: next.macd });
+    macdLineRef.current?.applyOptions({ visible: next.macd });
+    macdSignalRef.current?.applyOptions({ visible: next.macd });
+    if (macdLineRef.current) {
+      if (next.macd && metaRef.current?.macd) {
+        macdLineRef.current.setMarkers(
+          buildMacdCrossMarkers(metaRef.current.macd.line ?? [], metaRef.current.macd.signal ?? []),
+        );
+      } else {
+        macdLineRef.current.setMarkers([]);
+      }
+    }
+
+    const series = seriesRef.current;
+    if (series) {
+      series.setMarkers(
+        toCandleMarkers(
+          metaRef.current?.markers ?? [],
+          next.candlePattern,
+          next.structure,
+          candlesRef.current,
+        ),
+      );
+    }
+    if (metaRef.current && !metaRef.current.partial) {
+      applyPriceLines(metaRef.current);
+      applyAlertEntryPriceLine();
+    }
+
+    if (chart) applyPaneMargins(chart, next);
+  }, [applyPriceLines, applyAlertEntryPriceLine]);
+
+  const toggleLayer = useCallback(
+    (key: keyof ChartLayers) => {
+      setLayers((prev) => {
+        const next = { ...prev, [key]: !prev[key] };
+        layersRef.current = next;
+        if (key !== "oi") {
+          applyLayerVisibility(next);
+        } else {
+          // 副图挂载后主图画布高度会变，下一帧再量一次
+          requestAnimationFrame(() => {
+            if (chartRef.current && chartApi.current) {
+              chartApi.current.applyOptions({
+                width: chartRef.current.clientWidth,
+                height: chartRef.current.clientHeight,
+              });
+            }
+          });
+        }
+        return next;
+      });
+    },
+    [applyLayerVisibility],
+  );
+
+  const wsEnabled = !loading && !err && Boolean(data?.candles?.length);
+  const { markPrice, connected: wsConnected } = useBinanceChartLive(
+    symbol,
+    timeframe,
+    wsEnabled,
+    useCallback(
+      (update: LiveKlineUpdate) => applyLiveCandle(update.candle, update.closed),
+      [applyLiveCandle],
+    ),
+    useCallback(() => {
+      refreshLatestRef.current();
+    }, []),
+  );
+
+  // 从信号 chip / 列表打开时，切到该信号的周期
+  useEffect(() => {
+    const tf = coerceChartTimeframe(preferredTimeframe);
+    if (tf) setTimeframe(tf);
+  }, [symbol, preferredTimeframe, preferredTimeframeNonce]);
+
+  useEffect(() => {
+    if (alertFocus?.signalAt) {
+      pendingFocusScrollRef.current = true;
+      focusScrollKeyRef.current = "";
+    } else {
+      pendingFocusScrollRef.current = false;
+      alertEntryMarkersRef.current = [];
+      setAlertOverlayCount(0);
+    }
+  }, [alertFocus?.key, alertFocusNonce, symbol]);
+
+  // 拉取该币种全部入场记录，叠到 K 线
+  useEffect(() => {
+    let cancelled = false;
+    const focus = alertFocus;
+    const applyLocal = (records: Parameters<typeof buildAlertEntryMarkers>[0] = []) => {
+      const refPx = candlesRef.current.at(-1)?.close;
+      const markers = focus
+        ? buildAlertEntryMarkers(records, focus, refPx)
+        : [];
+      alertEntryMarkersRef.current = markers;
+      setAlertOverlayCount(markers.length);
+      const series = seriesRef.current;
+      const candles = candlesRef.current;
+      if (!series || !candles.length) return;
+      const rebuilt = [
+        ...rebuildChartMarkers(candles, metaRef.current?.state),
+        ...markers,
+      ];
+      if (metaRef.current) metaRef.current = { ...metaRef.current, markers: rebuilt };
+      series.setMarkers(
+        toCandleMarkers(
+          rebuilt,
+          layersRef.current.candlePattern,
+          layersRef.current.structure,
+          candles,
+        ),
+      );
+      applyAlertEntryPriceLine(candles);
+    };
+
+    if (!focus) {
+      applyLocal([]);
+      if (alertEntryLineRef.current && seriesRef.current) {
+        try {
+          seriesRef.current.removePriceLine(alertEntryLineRef.current);
+        } catch {
+          /* */
+        }
+        alertEntryLineRef.current = null;
+      }
+      return;
+    }
+
+    applyLocal([]);
+    void fetchAlertStatsForSymbol(focus.symbol || symbol).then((rows) => {
+      if (cancelled) return;
+      applyLocal(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [alertFocus, alertFocusNonce, symbol, applyAlertEntryPriceLine]);
+
+  // 视口滚到入场 K 线；不够历史则向左续载
+  useEffect(() => {
+    if (!alertFocus?.signalAt || loading) return;
+    const key = `${alertFocus.key}:${alertFocusNonce}:${timeframe}:${symbol}`;
+    if (focusScrollKeyRef.current === key) return;
+
+    const candles = candlesRef.current;
+    if (!candles.length) return;
+    const times = candles.map((c) => c.time).sort((a, b) => a - b);
+    const timeSet = new Set(times);
+    const aligned = alignMarkerTime(alertFocus.signalAt, timeSet, times);
+    if (aligned != null) {
+      const idx = times.indexOf(aligned);
+      const chart = chartApi.current;
+      if (chart && idx >= 0) {
+        restoreLogicalRange(chart, visibleRangeAroundIndex(times.length, idx), suppressHistoryLoadRef);
+      }
+      pendingFocusScrollRef.current = false;
+      focusScrollKeyRef.current = key;
+      return;
+    }
+
+    const signalSec =
+      alertFocus.signalAt > 1e12 ? Math.floor(alertFocus.signalAt / 1000) : alertFocus.signalAt;
+    const oldest = times[0];
+    if (
+      signalSec < oldest &&
+      hasMoreRef.current &&
+      candles.length < CHART_HISTORY_MAX &&
+      !focusLoadingMoreRef.current
+    ) {
+      focusLoadingMoreRef.current = true;
+      void loadMoreHistoryRef.current().finally(() => {
+        focusLoadingMoreRef.current = false;
+      });
+    } else {
+      pendingFocusScrollRef.current = false;
+      focusScrollKeyRef.current = key;
+    }
+  }, [alertFocus, alertFocusNonce, loading, candleCount, timeframe, symbol]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const symKey = chartSymbolKey(symbol);
+    timeframeRef.current = timeframe;
+    candlesRef.current = [];
+    hasMoreRef.current = true;
+    loadingMoreRef.current = false;
+    metaRef.current = null;
+    analysisRef.current = null;
+    skipNextDataApplyRef.current = false;
+    setHasMore(true);
+    setData(null);
+    setLoading(true);
+    setAnalysisLoading(true);
+    setErr("");
+    setLoadingMore(false);
+    setLastCandleTime(null);
+    setCandleCount(0);
+
+    // 阶段 1：拉轻量 K 线端点 → 立刻渲染图表，不等待形态分析
+    const loadCandles = async () => {
+      try {
+        const limit = alertFocus?.signalAt
+          ? chartLimitForSignalTime(alertFocus.signalAt, timeframe)
+          : CHART_DEFAULT_LIMIT;
+        const url = chartCandlesApiUrl(symbol, timeframe, { limit });
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json: PatternChartData = await res.json();
+        if (cancelled) return;
+        if (chartSymbolKey(String(json.symbol || symbol)) !== symKey) return;
+        if (!json.ok || !json.candles?.length) {
+          setErr(json.error || "K线数据为空");
+          setData(null);
+          setLoading(false);
+          return;
+        }
+        hasMoreRef.current = resolveChartHasMore(json, limit);
+        setHasMore(hasMoreRef.current);
+        setData(json);
+        setLoading(false);
+      } catch {
+        if (!cancelled) {
+          setErr("网络错误");
+          setLoading(false);
+        }
+      }
+    };
+
+    // 阶段 2：后台补完整形态分析（OI历史/资金费率/多周期），不阻塞图表
+    const loadAnalysis = async () => {
+      try {
+        const json = await fetchPatternChart(symbol, timeframe, { limit: CHART_DEFAULT_LIMIT });
+        if (cancelled) return;
+        if (chartSymbolKey(String(json.symbol || symbol)) !== symKey) return;
+        if (json.ok) {
+          analysisRef.current = json;
+          // 同时更新 data（仅形态分析字段，candles 保持已有）
+          setData((prev) => {
+            if (prev && !chartDataMatchesSymbol(prev, symbol)) return prev;
+            return prev
+              ? {
+                  ...prev,
+                  symbol: json.symbol ?? prev.symbol,
+                  analysis: json.analysis ?? {},
+                  state: json.state ?? {},
+                  markers: json.markers ?? prev.markers,
+                  price_lines: json.price_lines ?? prev.price_lines,
+                  ticker: json.ticker ?? prev.ticker,
+                  oi: json.oi ?? prev.oi,
+                  mcapTier: json.mcapTier ?? prev.mcapTier,
+                  // 若 K 线条数一致，顺带刷新 meta；指标仍由 applyChartSeries 全量重算
+                  ...(prev.candles.length === json.candles.length
+                    ? {
+                        candles: json.candles,
+                      }
+                    : {}),
+                }
+              : json;
+          });
+        }
+      } catch {
+        /* 分析加载失败不影响 chart 显示 */
+      } finally {
+        if (!cancelled) setAnalysisLoading(false);
+      }
+    };
+
+    loadCandles();
+    void loadAnalysis(); // 不等待
+
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, timeframe]);
+
+  useEffect(() => {
+    if (loading || err || !data?.candles?.length || !symbol) return;
+
+    const tick = () => {
+      if (!document.hidden) void refreshLatest();
+    };
+    // 先立即补一次，再每分钟刷新当前选中币种的近期 K 线
+    tick();
+    const id = window.setInterval(tick, CHART_KLINE_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [symbol, timeframe, loading, err, data?.candles?.length, refreshLatest]);
+
+  useEffect(() => {
+    if (!chartRef.current) return;
+
+    if (chartApi.current) {
+      chartApi.current.remove();
+      chartApi.current = null;
+      seriesRef.current = null;
+      upperRef.current = null;
+      midRef.current = null;
+      lowerRef.current = null;
+      volumeRef.current = null;
+      volumeMaRef.current = null;
+      macdHistRef.current = null;
+      macdLineRef.current = null;
+      macdSignalRef.current = null;
+      vegasRefs.current = {};
+      emaRefs.current = {};
+      priceLinesRef.current = [];
+    }
+
+    const el = chartRef.current;
+
+    try {
+      const chart = createChart(el, {
+        width: el.clientWidth,
+        height: el.clientHeight,
+        layout: {
+          background: { type: ColorType.Solid, color: "#0a0a0a" },
+          textColor: "#9e9e9e",
+          fontSize: CHART_FONT_SIZE,
+        },
+        grid: {
+          vertLines: { color: "#1e1e1e" },
+          horzLines: { color: "#1e1e1e" },
+        },
+        rightPriceScale: { borderColor: "#2a2a2a" },
+        localization: {
+          ...chartLocalization,
+          priceFormatter: (p: number) => formatChartAxisPrice(p, priceDecimalsRef.current),
+        },
+        timeScale: {
+          borderColor: "#2a2a2a",
+          ...chartTimeScaleOptions,
+        },
+        crosshair: {
+          mode: CrosshairMode.Normal,
+          horzLine: { labelVisible: false },
+        },
+        handleScale: {
+          axisPressedMouseMove: { time: true, price: true },
+          mouseWheel: true,
+          pinch: true,
+        },
+        handleScroll: {
+          mouseWheel: true,
+          pressedMouseMove: true,
+          horzTouchDrag: true,
+          vertTouchDrag: false,
+        },
+      });
+
+      const seedFmt = chartPriceFormat(null);
+      priceDecimalsRef.current = seedFmt.precision;
+
+      const series = chart.addCandlestickSeries({
+        upColor: "#00e676",
+        downColor: "#ff5252",
+        borderVisible: false,
+        wickUpColor: "#00e676",
+        wickDownColor: "#ff5252",
+        priceFormat: seedFmt,
+      });
+
+      upperRef.current = chart.addLineSeries({
+        color: "rgba(100, 181, 246, 0.45)",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.bb,
+        priceFormat: seedFmt,
+      });
+      midRef.current = chart.addLineSeries({
+        color: "rgba(255, 193, 7, 0.55)",
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.bb,
+        priceFormat: seedFmt,
+      });
+      lowerRef.current = chart.addLineSeries({
+        color: "rgba(100, 181, 246, 0.25)",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.bb,
+        priceFormat: seedFmt,
+      });
+
+      for (const { key, color } of VEGAS_SERIES) {
+        vegasRefs.current[key] = chart.addLineSeries({
+          color,
+          lineWidth: vegasSeriesLineWidth(key),
+          priceLineVisible: false,
+          lastValueVisible: false,
+          visible: layersRef.current.vegas,
+          priceFormat: seedFmt,
+        });
+      }
+
+      for (const { key, color, period } of CHART_EMA_LINES) {
+        emaRefs.current[key] = chart.addLineSeries({
+          color,
+          lineWidth: period <= 13 ? 2 : period <= 33 ? 1 : 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          visible: layersRef.current.ema,
+          priceFormat: seedFmt,
+        });
+      }
+
+      volumeRef.current = chart.addHistogramSeries({
+        priceScaleId: "volume",
+        priceFormat: { type: "volume" },
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.volume,
+        autoscaleInfoProvider: volumeAutoscaleInfoProvider,
+      });
+      volumeMaRef.current = chart.addLineSeries({
+        priceScaleId: "volume",
+        color: VOLUME_MA_COLOR,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.volume,
+        autoscaleInfoProvider: volumeAutoscaleInfoProvider,
+      });
+
+      macdHistRef.current = chart.addHistogramSeries({
+        priceScaleId: "macd",
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.macd,
+        autoscaleInfoProvider: macdAutoscaleInfoProvider,
+      });
+      macdLineRef.current = chart.addLineSeries({
+        priceScaleId: "macd",
+        color: "rgba(33, 150, 243, 0.9)",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.macd,
+        autoscaleInfoProvider: macdAutoscaleInfoProvider,
+      });
+      macdSignalRef.current = chart.addLineSeries({
+        priceScaleId: "macd",
+        color: "rgba(255, 152, 0, 0.9)",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: layersRef.current.macd,
+        autoscaleInfoProvider: macdAutoscaleInfoProvider,
+      });
+
+      applyPaneMargins(chart, layersRef.current);
+
+      chartApi.current = chart;
+      seriesRef.current = series;
+      setMainChartGen((g) => g + 1);
+
+      const hideCrosshairPrice = () => {
+        const label = crosshairPriceRef.current;
+        if (label) label.style.display = "none";
+      };
+
+      const onCrosshairMove = (param: {
+        point?: { x: number; y: number } | undefined;
+        time?: unknown;
+      }) => {
+        const label = crosshairPriceRef.current;
+        const seriesApi = seriesRef.current;
+        if (!label || !seriesApi) return;
+        if (
+          !param.point ||
+          param.time === undefined ||
+          param.point.x < 0 ||
+          param.point.y < 0
+        ) {
+          hideCrosshairPrice();
+          return;
+        }
+        const price = seriesApi.coordinateToPrice(param.point.y);
+        if (price == null || !Number.isFinite(price)) {
+          hideCrosshairPrice();
+          return;
+        }
+        const d = priceDecimalsRef.current;
+        const priceStr = d <= 0 ? String(Math.round(price)) : price.toFixed(d);
+        const last = lastCloseRef.current;
+        if (last > 0) {
+          const pctChg = ((price - last) / last) * 100;
+          const sign = pctChg >= 0 ? "+" : "";
+          label.textContent = `${priceStr} (${sign}${pctChg.toFixed(2)}%)`;
+          label.classList.toggle("pos", pctChg >= 0);
+          label.classList.toggle("neg", pctChg < 0);
+        } else {
+          label.textContent = priceStr;
+          label.classList.remove("pos", "neg");
+        }
+        label.style.display = "block";
+        label.style.top = `${param.point.y}px`;
+      };
+      chart.subscribeCrosshairMove(onCrosshairMove);
+
+      const onRange = (range: LogicalRange | null) => {
+        if (!range || loadingMoreRef.current) return;
+        if (suppressHistoryLoadRef.current > 0) return;
+        const len = candlesRef.current.length;
+        // 只有左侧真正露空白时，才允许把误判的 has_more=false 翻回来再试
+        if (!hasMoreRef.current) {
+          if (range.from >= 0 || len >= CHART_HISTORY_MAX) return;
+          hasMoreRef.current = true;
+          setHasMore(true);
+        }
+        if (needsLeftHistory(range, len)) void loadMoreHistoryRef.current();
+      };
+      chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
+
+      const probeLeftHistory = () => {
+        if (loadingMoreRef.current) return;
+        if (suppressHistoryLoadRef.current > 0) return;
+        const range = chart.timeScale().getVisibleLogicalRange();
+        const len = candlesRef.current.length;
+        if (!range) return;
+        if (!hasMoreRef.current) {
+          if (range.from >= 0 || len >= CHART_HISTORY_MAX) return;
+          hasMoreRef.current = true;
+          setHasMore(true);
+        }
+        if (needsLeftHistory(range, len)) void loadMoreHistoryRef.current();
+      };
+
+      // 滚轮缩放/平移后 LWC 有时不立刻抛 range 事件；下一帧再探一次左缘
+      const onWheel = () => {
+        window.requestAnimationFrame(probeLeftHistory);
+      };
+      el.addEventListener("wheel", onWheel, { passive: true });
+      // 拖拽平移松手后再探一次（向右滑看更早 K 线）
+      const onPointerUp = () => {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(probeLeftHistory);
+        });
+      };
+      el.addEventListener("pointerup", onPointerUp);
+      el.addEventListener("pointercancel", onPointerUp);
+      el.addEventListener("touchend", onPointerUp, { passive: true });
+
+      const resizeMain = () => {
+        if (chartRef.current && chartApi.current) {
+          chartApi.current.applyOptions({
+            width: chartRef.current.clientWidth,
+            height: chartRef.current.clientHeight,
+          });
+        }
+      };
+      const resizeOiSubs = () => {
+        const pairs: Array<[HTMLDivElement | null, IChartApi | null]> = [
+          [oiChartElRef.current, oiChartApi.current],
+          [spotNetElRef.current, spotNetChartApi.current],
+          [futNetElRef.current, futNetChartApi.current],
+        ];
+        for (const [node, api] of pairs) {
+          if (node && api) {
+            api.applyOptions({ width: node.clientWidth, height: node.clientHeight });
+          }
+        }
+      };
+      const onResize = () => {
+        resizeMain();
+        resizeOiSubs();
+      };
+      window.addEventListener("resize", onResize);
+      const ro =
+        typeof ResizeObserver !== "undefined" && chartRef.current
+          ? new ResizeObserver(() => resizeMain())
+          : null;
+      if (ro && chartRef.current) ro.observe(chartRef.current);
+
+      return () => {
+        window.removeEventListener("resize", onResize);
+        ro?.disconnect();
+        el.removeEventListener("wheel", onWheel);
+        el.removeEventListener("pointerup", onPointerUp);
+        el.removeEventListener("pointercancel", onPointerUp);
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
+        chart.unsubscribeCrosshairMove(onCrosshairMove);
+        hideCrosshairPrice();
+        chart.remove();
+        chartApi.current = null;
+        seriesRef.current = null;
+        upperRef.current = null;
+        midRef.current = null;
+        lowerRef.current = null;
+        volumeRef.current = null;
+        volumeMaRef.current = null;
+        macdHistRef.current = null;
+        macdLineRef.current = null;
+        macdSignalRef.current = null;
+        vegasRefs.current = {};
+      emaRefs.current = {};
+        priceLinesRef.current = [];
+        alertEntryLineRef.current = null;
+      };
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "图表初始化失败");
+    }
+  }, [symbol, timeframe]);
+
+  useEffect(() => {
+    if (!data?.candles?.length || !seriesRef.current) return;
+    if (!chartDataMatchesSymbol(data, symbol)) return;
+    if (skipNextDataApplyRef.current) {
+      skipNextDataApplyRef.current = false;
+      applyLayerVisibility(layersRef.current);
+      return;
+    }
+    // 左侧续载后 candlesRef 更长；勿用较短的 data 冲掉历史（否则左滑空白）
+    const refLen = candlesRef.current.length;
+    const dataLen = data.candles.length;
+    if (
+      refLen > dataLen &&
+      candlesRef.current.at(-1)?.time === data.candles.at(-1)?.time &&
+      chartDataMatchesSymbol(metaRef.current, symbol)
+    ) {
+      applyLayerVisibility(layersRef.current);
+      return;
+    }
+    applyChartSeries(data, data.candles);
+    applyLayerVisibility(layersRef.current);
+  }, [data, symbol, applyChartSeries, applyLayerVisibility]);
+
+  const analysis = data?.analysis;
+  const deriv = analysis?.derivatives;
+  const mtf = deriv?.mtf;
+  const ticker = data?.ticker;
+  const lastPrice =
+    markPrice ?? liveTicker?.last_price ?? ticker?.last_price ?? analysis?.last_price;
+  const pct = liveTicker?.price_change_pct_24h ?? ticker?.price_change_pct_24h;
+  const oiUsd = liveTicker?.current_oi_usd ?? ticker?.current_oi_usd;
+  const quoteVol = liveTicker?.quote_volume ?? ticker?.quote_volume;
+  const statusLabel = analysis?.status_label || state?.status_label || "—";
+  const mcapTier = data?.mcapTier;
+
+  useEffect(() => {
+    const seed =
+      lastPrice ??
+      candlesRef.current.at(-1)?.close ??
+      data?.candles?.at(-1)?.close ??
+      0;
+    if (seed && Number.isFinite(seed) && seed > 0) {
+      lastCloseRef.current = Number(seed);
+    }
+  }, [lastPrice, data?.candles, candleCount]);
+
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    const candles = candlesRef.current.length
+      ? candlesRef.current
+      : data?.candles ?? [];
+    const seed =
+      lastPrice ??
+      candles.at(-1)?.close ??
+      null;
+    const samples = candles.flatMap((c) => [c.open, c.high, c.low, c.close]);
+    applyPriceAxisFormat(seed, samples);
+  }, [lastPrice, data?.candles, candleCount, applyPriceAxisFormat]);
+
+  const oiAutoscaleProvider = useCallback(
+    (
+      original: () => { priceRange: { minValue: number; maxValue: number } | null } | null,
+    ) => {
+      const range =
+        oiChartApi.current?.timeScale().getVisibleLogicalRange() ??
+        chartApi.current?.timeScale().getVisibleLogicalRange();
+      const oi = oiLineDataRef.current;
+      const ma = oiMaLineDataRef.current;
+      if (range && oi.length) {
+        const scaled = oiAutoscaleForVisibleRange(range.from, range.to, oi, ma);
+        if (scaled) return scaled;
+      }
+      return original();
+    },
+    [],
+  );
+
+  const refreshOiVisibleLayout = useCallback(() => {
+    const range =
+      oiChartApi.current?.timeScale().getVisibleLogicalRange() ??
+      chartApi.current?.timeScale().getVisibleLogicalRange();
+    const oi = oiLineDataRef.current;
+    const ma = oiMaLineDataRef.current;
+    const hist = oiHistSeriesRef.current;
+    if (!range || !oi.length || !hist) return;
+    const domain = visibleOiDomain(range.from, range.to, oi, ma);
+    if (!domain) return;
+    const axis = computeOiPanelAxis(domain.yMin, domain.yMax);
+    try {
+      hist.applyOptions({ base: axis.axisBottom });
+      hist.setData(buildOiHistogramBars(oi, axis));
+    } catch {
+      /* chart disposed */
+    }
+  }, []);
+
+  useEffect(() => {
+    oiVisibleRefreshRef.current = refreshOiVisibleLayout;
+  }, [refreshOiVisibleLayout]);
+
+  const applyDerivSubplotsToCharts = useCallback(
+    (payload: ChartDerivSubplots, times: number[]) => {
+      const maLine = buildOiMaLine(payload.oi);
+      oiLineDataRef.current = payload.oi;
+      oiMaLineDataRef.current = maLine;
+      oiSeriesRef.current?.setData(payload.oi);
+      oiMaSeriesRef.current?.setData(maLine);
+      spotNetSeriesRef.current?.setData(payload.spotNet);
+      spotNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.spotNet));
+      futNetSeriesRef.current?.setData(payload.futuresNet);
+      futNetMaSeriesRef.current?.setData(buildSignedHistMaLine(payload.futuresNet));
+      const anchorLine = buildCrosshairAnchorLine(times);
+      oiCrossAnchorRef.current?.setData(anchorLine);
+      spotCrossAnchorRef.current?.setData(anchorLine);
+      futCrossAnchorRef.current?.setData(anchorLine);
+
+      const fillMap = (
+        rows: Array<{ time?: unknown; value?: unknown }>,
+        target: { current: Map<number, number> },
+      ) => {
+        const m = new Map<number, number>();
+        for (const row of rows) {
+          if (row == null || !("value" in row) || row.value == null) continue;
+          const t = Number(row.time);
+          const v = Number(row.value);
+          if (Number.isFinite(t) && Number.isFinite(v)) m.set(t, v);
+        }
+        target.current = m;
+      };
+      fillMap(payload.oi, oiValueByTimeRef);
+      fillMap(payload.spotNet, spotNetByTimeRef);
+      fillMap(payload.futuresNet, futNetByTimeRef);
+
+      const range = chartApi.current?.timeScale().getVisibleLogicalRange();
+      if (range && chartApi.current) {
+        derivSyncingRef.current = true;
+        try {
+          const tsOpts = chartApi.current.timeScale().options();
+          const spacing = {
+            barSpacing: tsOpts.barSpacing,
+            rightOffset: tsOpts.rightOffset,
+          };
+          for (const api of [
+            oiChartApi.current,
+            spotNetChartApi.current,
+            futNetChartApi.current,
+          ]) {
+            if (!api) continue;
+            api.timeScale().applyOptions(spacing);
+            api.timeScale().setVisibleLogicalRange(range);
+          }
+        } finally {
+          derivSyncingRef.current = false;
+        }
+      }
+      requestAnimationFrame(() => oiVisibleRefreshRef.current());
+    },
+    [],
+  );
+
+  /** 持仓量副图：挂载 / 销毁 LWC 实例，并与主图时间轴同步 */
+  useEffect(() => {
+    if (!layers.oi) {
+      oiChartApi.current?.remove();
+      spotNetChartApi.current?.remove();
+      futNetChartApi.current?.remove();
+      oiChartApi.current = null;
+      spotNetChartApi.current = null;
+      futNetChartApi.current = null;
+      oiHistSeriesRef.current = null;
+      oiSeriesRef.current = null;
+      oiMaSeriesRef.current = null;
+      oiLineDataRef.current = [];
+      oiMaLineDataRef.current = [];
+      spotNetSeriesRef.current = null;
+      spotNetMaSeriesRef.current = null;
+      futNetSeriesRef.current = null;
+      futNetMaSeriesRef.current = null;
+      oiCrossAnchorRef.current = null;
+      spotCrossAnchorRef.current = null;
+      futCrossAnchorRef.current = null;
+      if (crosshairVLineRef.current) crosshairVLineRef.current.style.display = "none";
+      return;
+    }
+
+    const main = chartApi.current;
+    const oiEl = oiChartElRef.current;
+    const spotEl = spotNetElRef.current;
+    const futEl = futNetElRef.current;
+    if (!main || !oiEl || !spotEl || !futEl) return;
+
+    const PRICE_AXIS_MIN_W = 56;
+    const mkSub = (el: HTMLDivElement) =>
+      createChart(el, {
+        width: el.clientWidth,
+        height: el.clientHeight,
+        layout: {
+          background: { type: ColorType.Solid, color: "#0a0a0a" },
+          textColor: "#9e9e9e",
+          fontSize: CHART_FONT_SIZE,
+        },
+        grid: {
+          vertLines: { color: "#1e1e1e" },
+          horzLines: { color: "#1e1e1e" },
+        },
+        rightPriceScale: {
+          borderColor: "#2a2a2a",
+          // 与主图右轴同宽，避免绘图区左右错位看起来像「时间不同步」
+          minimumWidth: PRICE_AXIS_MIN_W,
+        },
+        timeScale: {
+          borderColor: "#2a2a2a",
+          ...chartTimeScaleOptions,
+          visible: el === futEl,
+        },
+        crosshair: {
+          mode: CrosshairMode.Normal,
+          // 竖线由 chartWrap 共享 DOM 层绘制，避免 OI/净买入缺数时 LWC 竖线中断
+          vertLine: {
+            visible: false,
+            labelVisible: false,
+          },
+          horzLine: {
+            visible: true,
+            labelVisible: true,
+            style: 2,
+            color: "rgba(158, 158, 158, 0.35)",
+            width: 1,
+          },
+        },
+        handleScroll: false,
+        handleScale: false,
+      });
+
+    const oiChart = mkSub(oiEl);
+    const spotChart = mkSub(spotEl);
+    const futChart = mkSub(futEl);
+    oiChartApi.current = oiChart;
+    spotNetChartApi.current = spotChart;
+    futNetChartApi.current = futChart;
+
+    try {
+      main.priceScale("right").applyOptions({ minimumWidth: PRICE_AXIS_MIN_W });
+    } catch {
+      /* ignore */
+    }
+
+    const oiHistSeries = oiChart.addHistogramSeries({
+      priceLineVisible: false,
+      lastValueVisible: false,
+      base: 0,
+      autoscaleInfoProvider: oiAutoscaleProvider,
+    });
+    const oiSeries = oiChart.addLineSeries({
+      color: DERIV_OI_LINE_COLOR,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      autoscaleInfoProvider: oiAutoscaleProvider,
+    });
+    const oiMaSeries = oiChart.addLineSeries({
+      color: OI_MA_COLOR,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      autoscaleInfoProvider: oiAutoscaleProvider,
+    });
+    const spotSeries = spotChart.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const spotMaSeries = spotChart.addLineSeries({
+      color: NET_BUY_MA_COLOR,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const futSeries = futChart.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const futMaSeries = futChart.addLineSeries({
+      color: NET_BUY_MA_COLOR,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    oiHistSeriesRef.current = oiHistSeries;
+    oiSeriesRef.current = oiSeries;
+    oiMaSeriesRef.current = oiMaSeries;
+    spotNetSeriesRef.current = spotSeries;
+    spotNetMaSeriesRef.current = spotMaSeries;
+    futNetSeriesRef.current = futSeries;
+    futNetMaSeriesRef.current = futMaSeries;
+
+    const oiCrossAnchor = addCrosshairAnchorSeries(oiChart);
+    const spotCrossAnchor = addCrosshairAnchorSeries(spotChart);
+    const futCrossAnchor = addCrosshairAnchorSeries(futChart);
+    oiCrossAnchorRef.current = oiCrossAnchor;
+    spotCrossAnchorRef.current = spotCrossAnchor;
+    futCrossAnchorRef.current = futCrossAnchor;
+
+    const anchorTimes = candlesRef.current.map((c) => c.time);
+    if (anchorTimes.length) {
+      const anchorData = buildCrosshairAnchorLine(anchorTimes);
+      oiCrossAnchor.setData(anchorData);
+      spotCrossAnchor.setData(anchorData);
+      futCrossAnchor.setData(anchorData);
+    }
+
+    const subCharts = [oiChart, spotChart, futChart];
+    const crosshairTargets: Array<{
+      chart: IChartApi;
+      series: ISeriesApi<"Line">;
+      canvasEl: HTMLDivElement;
+    }> = [
+      { chart: oiChart, series: oiCrossAnchor, canvasEl: oiEl },
+      { chart: spotChart, series: spotCrossAnchor, canvasEl: spotEl },
+      { chart: futChart, series: futCrossAnchor, canvasEl: futEl },
+    ];
+
+    const clearAllSubCrosshairs = () => {
+      for (const { chart } of crosshairTargets) {
+        try {
+          chart.clearCrosshairPosition();
+        } catch {
+          /* disposed */
+        }
+      }
+    };
+
+    const syncCrosshairToSubs = (time: unknown) => {
+      if (crosshairSyncingRef.current) return;
+      if (time === undefined || time === null) {
+        crosshairSyncingRef.current = true;
+        try {
+          clearAllSubCrosshairs();
+        } finally {
+          crosshairSyncingRef.current = false;
+        }
+        return;
+      }
+      const t = typeof time === "number" ? time : Number(time);
+      if (!Number.isFinite(t)) {
+        clearAllSubCrosshairs();
+        return;
+      }
+      crosshairSyncingRef.current = true;
+      try {
+        for (const { chart, series } of crosshairTargets) {
+          // 锚点序列每根 K 线均有 value，与 OI/净买入是否为空无关
+          chart.setCrosshairPosition(0, t as UTCTimestamp, series);
+        }
+      } catch {
+        /* disposed */
+      } finally {
+        crosshairSyncingRef.current = false;
+      }
+    };
+
+    const onMainCrosshair = (param: { time?: unknown; point?: { x: number; y: number } }) => {
+      const hasTime = param.time !== undefined && param.time !== null;
+      positionSharedCrosshairVLine(
+        crosshairVLineRef.current,
+        chartWrapRef.current,
+        chartRef.current,
+        param.point?.x,
+        hasTime,
+      );
+      syncCrosshairToSubs(param.time);
+    };
+    main.subscribeCrosshairMove(onMainCrosshair);
+
+    // 副图悬停时同样把竖线打到其余副图（主图由用户指针主导，不回写以免抢焦点）
+    const onSubCrosshair =
+      (self: IChartApi, canvasEl: HTMLDivElement) =>
+      (param: { time?: unknown; point?: { x: number; y: number } }) => {
+        if (crosshairSyncingRef.current) return;
+        const hasTime = param.time !== undefined && param.time !== null;
+        positionSharedCrosshairVLine(
+          crosshairVLineRef.current,
+          chartWrapRef.current,
+          canvasEl,
+          param.point?.x,
+          hasTime,
+        );
+        if (!hasTime) {
+          for (const { chart } of crosshairTargets) {
+            if (chart !== self) {
+              try {
+                chart.clearCrosshairPosition();
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          if (!hasTime) {
+            crosshairVLineRef.current && (crosshairVLineRef.current.style.display = "none");
+          }
+          return;
+        }
+        const t = typeof param.time === "number" ? param.time : Number(param.time);
+        if (!Number.isFinite(t)) return;
+        crosshairSyncingRef.current = true;
+        try {
+          for (const { chart, series } of crosshairTargets) {
+            if (chart === self) continue;
+            chart.setCrosshairPosition(0, t as UTCTimestamp, series);
+          }
+        } catch {
+          /* ignore */
+        } finally {
+          crosshairSyncingRef.current = false;
+        }
+      };
+    const onOiCross = onSubCrosshair(oiChart, oiEl);
+    const onSpotCross = onSubCrosshair(spotChart, spotEl);
+    const onFutCross = onSubCrosshair(futChart, futEl);
+    oiChart.subscribeCrosshairMove(onOiCross);
+    spotChart.subscribeCrosshairMove(onSpotCross);
+    futChart.subscribeCrosshairMove(onFutCross);
+
+    const syncFromMain = (range: LogicalRange | null) => {
+      if (!range || derivSyncingRef.current) return;
+      derivSyncingRef.current = true;
+      try {
+        // 复制 barSpacing / rightOffset，再设 logical range，拖动/缩放时才不会漂
+        const tsOpts = main.timeScale().options();
+        const spacing = {
+          barSpacing: tsOpts.barSpacing,
+          rightOffset: tsOpts.rightOffset,
+        };
+        for (const c of subCharts) {
+          c.timeScale().applyOptions(spacing);
+          c.timeScale().setVisibleLogicalRange(range);
+        }
+      } catch {
+        /* disposed */
+      } finally {
+        derivSyncingRef.current = false;
+      }
+      requestAnimationFrame(() => oiVisibleRefreshRef.current());
+    };
+    const onMainRange = (range: LogicalRange | null) => syncFromMain(range);
+    main.timeScale().subscribeVisibleLogicalRangeChange(onMainRange);
+    const cur = main.timeScale().getVisibleLogicalRange();
+    if (cur) syncFromMain(cur);
+
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+      for (const [node, api] of [
+        [oiEl, oiChart],
+        [spotEl, spotChart],
+        [futEl, futChart],
+      ] as const) {
+        api.applyOptions({ width: node.clientWidth, height: node.clientHeight });
+      }
+    }) : null;
+    ro?.observe(oiEl);
+    ro?.observe(spotEl);
+    ro?.observe(futEl);
+
+    // 主图画布在副图出现后变矮
+    if (chartRef.current) {
+      main.applyOptions({
+        width: chartRef.current.clientWidth,
+        height: chartRef.current.clientHeight,
+      });
+    }
+
+    setOiChartsGen((g) => g + 1);
+
+    const pending = pendingDerivPayloadRef.current;
+    if (pending) {
+      applyDerivSubplotsToCharts(pending.payload, pending.times);
+      pendingDerivPayloadRef.current = null;
+    }
+
+    return () => {
+      main.timeScale().unsubscribeVisibleLogicalRangeChange(onMainRange);
+      main.unsubscribeCrosshairMove(onMainCrosshair);
+      oiChart.unsubscribeCrosshairMove(onOiCross);
+      spotChart.unsubscribeCrosshairMove(onSpotCross);
+      futChart.unsubscribeCrosshairMove(onFutCross);
+      try {
+        main.priceScale("right").applyOptions({ minimumWidth: 0 });
+      } catch {
+        /* ignore */
+      }
+      ro?.disconnect();
+      oiChart.remove();
+      spotChart.remove();
+      futChart.remove();
+      oiChartApi.current = null;
+      spotNetChartApi.current = null;
+      futNetChartApi.current = null;
+      oiHistSeriesRef.current = null;
+      oiSeriesRef.current = null;
+      oiMaSeriesRef.current = null;
+      oiLineDataRef.current = [];
+      oiMaLineDataRef.current = [];
+      spotNetSeriesRef.current = null;
+      spotNetMaSeriesRef.current = null;
+      futNetSeriesRef.current = null;
+      futNetMaSeriesRef.current = null;
+      oiCrossAnchorRef.current = null;
+      spotCrossAnchorRef.current = null;
+      futCrossAnchorRef.current = null;
+      if (crosshairVLineRef.current) crosshairVLineRef.current.style.display = "none";
+    };
+  }, [
+    layers.oi,
+    symbol,
+    timeframe,
+    candleCount > 0,
+    mainChartGen,
+    applyDerivSubplotsToCharts,
+    oiAutoscaleProvider,
+  ]);
+
+  /** 持仓量副图数据：与当前已加载 K 线时间戳对齐 */
+  useEffect(() => {
+    if (!layers.oi) {
+      setOiSubLoading(false);
+      setOiSubErr("");
+      return;
+    }
+    const times = candlesRef.current.map((c) => c.time);
+    if (!times.length) return;
+
+    let cancelled = false;
+    setOiSubLoading(true);
+    setOiSubErr("");
+
+    // 先用与主图等长的 whitespace 占位，避免续载/切换后 bar 数不一致导致拖动错位
+    const placeholders = times.map((t) => ({ time: t as UTCTimestamp }));
+    const anchorData = buildCrosshairAnchorLine(times);
+    oiSeriesRef.current?.setData(placeholders);
+    oiHistSeriesRef.current?.setData(placeholders);
+    oiMaSeriesRef.current?.setData([]);
+    oiLineDataRef.current = [];
+    oiMaLineDataRef.current = [];
+    spotNetSeriesRef.current?.setData(placeholders);
+    spotNetMaSeriesRef.current?.setData([]);
+    futNetSeriesRef.current?.setData(placeholders);
+    futNetMaSeriesRef.current?.setData([]);
+    oiCrossAnchorRef.current?.setData(anchorData);
+    spotCrossAnchorRef.current?.setData(anchorData);
+    futCrossAnchorRef.current?.setData(anchorData);
+    {
+      const range = chartApi.current?.timeScale().getVisibleLogicalRange();
+      if (range && chartApi.current) {
+        const tsOpts = chartApi.current.timeScale().options();
+        const spacing = {
+          barSpacing: tsOpts.barSpacing,
+          rightOffset: tsOpts.rightOffset,
+        };
+        for (const api of [
+          oiChartApi.current,
+          spotNetChartApi.current,
+          futNetChartApi.current,
+        ]) {
+          if (!api) continue;
+          api.timeScale().applyOptions(spacing);
+          api.timeScale().setVisibleLogicalRange(range);
+        }
+      }
+    }
+
+    void (async () => {
+      try {
+        const payload = await fetchChartDerivSubplots(symbol, timeframe, times);
+        if (cancelled) return;
+        // 副图实例可能比本 effect 晚一帧挂好
+        for (let i = 0; i < 24 && !oiSeriesRef.current; i++) {
+          await new Promise((r) => requestAnimationFrame(() => r(null)));
+          if (cancelled) return;
+        }
+        if (!oiSeriesRef.current) {
+          pendingDerivPayloadRef.current = { payload, times };
+        } else {
+          applyDerivSubplotsToCharts(payload, times);
+        }
+        const { oi: oiN, spotNet: spotN, futuresNet: futN } = payload.stats;
+        if (oiN + spotN + futN === 0) {
+          setOiSubErr(
+            "副图数据为空（币安 openInterest / 净买入未返回）。请确认 discord-collector/.env 已设 HTTPS_PROXY 且 OI 服务已重启；现货接口在国内常 451，合约 OI 需走代理。",
+          );
+        } else if (oiN === 0 || spotN === 0 || futN === 0) {
+          const parts: string[] = [];
+          if (oiN === 0) parts.push("OI");
+          if (spotN === 0) parts.push("现货净买入");
+          if (futN === 0) parts.push("合约净买入");
+          setOiSubErr(`${parts.join("、")} 暂无数据（其余副图正常）`);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setOiSubErr(e instanceof Error ? e.message : "副图加载失败");
+        }
+      } finally {
+        if (!cancelled) setOiSubLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [layers.oi, symbol, timeframe, candleCount, oiChartsGen, applyDerivSubplotsToCharts]);
+
+  const activeKinds = new Set(data?.markers?.map((m) => m.kind).filter(Boolean) ?? []);
+  data?.price_lines?.forEach((l) => activeKinds.add(l.kind));
+  if (alertOverlayCount > 0) {
+    activeKinds.add("alert_entry_focus");
+    activeKinds.add("alert_entry");
+  }
+  const hasVegas = Boolean(
+    data?.vegas && VEGAS_SERIES.some((s) => (data.vegas?.[s.key]?.length ?? 0) > 0),
+  );
+
+  return (
+    <div className="pattern-chart-panel">
+      <header className="pattern-chart-head">
+        <div className="pattern-chart-head-top">
+          <div
+            className="pattern-chart-title"
+            title={onTitleContextMenu ? "右键可置顶（至少 1 天）或取消置顶" : undefined}
+            onContextMenu={(e) => onTitleContextMenu?.(e, symbol)}
+          >
+            <CoinAvatar symbol={symbol} />
+            <div>
+              <h2>${displaySymbol(symbol)}</h2>
+              <div className="pattern-chart-meta">
+                <span className={pct != null && pct >= 0 ? "pos" : "neg"}>
+                  ${fmtMetaPrice(lastPrice)}
+                  {pct != null ? ` · ${fmtPct(pct)}` : ""}
+                </span>
+                {mcapTier?.id ? (
+                  <>
+                    <span
+                      className="pattern-chart-mcap"
+                      title={
+                        mcapTier.marketCapUsd != null
+                          ? `流通市值约 ${fmtNum(mcapTier.marketCapUsd)}（CoinGecko Top250）`
+                          : mcapTierTitle(mcapTier.id)
+                      }
+                    >
+                      市值 {formatChartMcapDisplay(mcapTier)}
+                    </span>
+                    <span
+                      className={`pattern-wr-mcap-badge pattern-chart-tier tier-${mcapTier.id}`}
+                      title={mcapTierTitle(mcapTier.id)}
+                    >
+                      {formatMcapTierBadge(mcapTier.id)} · {mcapTier.label}
+                    </span>
+                  </>
+                ) : null}
+                <span>OI {fmtNum(oiUsd)}</span>
+                {deriv?.funding_rate_pct != null ? (
+                  <span
+                    className={
+                      deriv.funding_extreme_positive
+                        ? "deriv-funding hot"
+                        : deriv.funding_rate_pct < 0
+                          ? "deriv-funding neg"
+                          : "deriv-funding"
+                    }
+                    title="永续资金费率（8h）"
+                  >
+                    费率 {deriv.funding_rate_pct >= 0 ? "+" : ""}
+                    {deriv.funding_rate_pct}%
+                  </span>
+                ) : null}
+                {deriv?.oi_regime_label ? (
+                  <span
+                    className={`deriv-oi ${deriv.oi_regime === "squeeze" ? "warn" : deriv.oi_regime === "breakout" ? "pos" : ""}`}
+                    title={`价变 ${deriv.oi_price_chg_pct ?? "—"}% · OI变 ${deriv.oi_chg_pct ?? "—"}%`}
+                  >
+                    {deriv.oi_regime_label}
+                  </span>
+                ) : null}
+                <span>24h额 {fmtNum(quoteVol)}</span>
+                <span className="pat-status-tag">{statusLabel}</span>
+                {alertFocus?.signalAt ? (
+                  <span
+                    className={`pattern-chart-alert-focus${
+                      alertFocus.side === "short" || alertFocus.dir === "空" ? " short" : ""
+                    }`}
+                    title={`${alertFocus.typeLabel || "形态信号"} · 入场 ${fmtMetaPrice(alertFocus.entry)}`}
+                  >
+                    入场 {alertFocus.dir || (alertFocus.side === "short" ? "空" : "多")}
+                    {alertFocus.typeLabel ? ` · ${alertFocus.typeLabel}` : ""}
+                    {alertFocus.interval ? ` · ${alertFocus.interval}` : ""}
+                    {` @${fmtMetaPrice(alertFocus.entry)}`}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+          <div className="pattern-chart-head-actions">
+            <div className="mercu-timeframes pattern-chart-tf">
+              {CHART_TIMEFRAMES.map((tf) => (
+                <button
+                  key={tf}
+                  type="button"
+                  className={`tf-btn ${tf === timeframe ? "active" : ""}`}
+                  onClick={() => setTimeframe(tf)}
+                  disabled={loading && tf !== timeframe}
+                >
+                  {tf}
+                </button>
+              ))}
+            </div>
+            <div className="pattern-chart-layers" role="group" aria-label="图表图层">
+              {LAYER_TOGGLES.map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`layer-btn ${layers[key] ? "active" : ""} ${key === "oi" ? "layer-btn-oi" : ""}`}
+                  onClick={() => toggleLayer(key)}
+                  title={layers[key] ? `隐藏${label}` : `显示${label}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {!inWatchlist && onAddToWatchlist ? (
+              <button
+                type="button"
+                className="pattern-chart-add-watch"
+                disabled={addWatchBusy}
+                onClick={() => onAddToWatchlist(symbol)}
+              >
+                添加到形态列表
+              </button>
+            ) : null}
+            {inWatchlist ? (
+              <span className="pattern-chart-in-watch" title="已在形态监听列表">
+                已在列表
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </header>
+
+      <div className="pattern-chart-body">
+        <aside className="pattern-analysis-side">
+          <h3>位置分析</h3>
+          {loading && <p className="pattern-empty">加载 K 线…</p>}
+          {err && <p className="pattern-err">{err}</p>}
+          {!loading && !err && data?.candles?.length ? (
+            <>
+              {analysisLoading && <p className="pattern-empty">加载形态分析…</p>}
+              {!analysisLoading && (
+                <>
+                  <p className="pattern-analysis-msg">{analysis?.message || "—"}</p>
+              <ul className="pattern-marker-legend">
+                {MARKER_LEGEND.filter(
+                  (m) =>
+                    activeKinds.has(m.kind) &&
+                    (layers.structure || !STRUCTURE_MARKER_KINDS.has(m.kind)),
+                ).map((m) => (
+                  <li key={m.kind}>
+                    <span className="legend-dot" style={{ background: m.color }} />
+                    {m.label}
+                    {analysis && m.kind === "h_max" && (analysis.h_max ?? 0) > 0 ? (
+                      <em>{fmtMetaPrice(analysis.h_max)}</em>
+                    ) : null}
+                    {analysis && m.kind === "lh" && (analysis.lh_price ?? 0) > 0 ? (
+                      <em>{fmtMetaPrice(analysis.lh_price)}</em>
+                    ) : null}
+                    {analysis && m.kind === "l1" && (analysis.l1 ?? 0) > 0 ? (
+                      <em>{fmtMetaPrice(analysis.l1)}</em>
+                    ) : null}
+                    {analysis && m.kind === "hl" && (analysis.hl ?? 0) > 0 ? (
+                      <em>{fmtMetaPrice(analysis.hl)}</em>
+                    ) : null}
+                    {analysis && m.kind === "trigger" && (analysis.trigger_price ?? 0) > 0 ? (
+                      <em>{fmtMetaPrice(analysis.trigger_price)}</em>
+                    ) : null}
+                  </li>
+                ))}
+                {layers.vegas && hasVegas
+                  ? VEGAS_SERIES.map((s) => (
+                      <li key={`vegas-${s.key}`}>
+                        <span className="legend-dot" style={{ background: s.color }} />
+                        Vegas {s.title}
+                      </li>
+                    ))
+                  : null}
+                {layers.ema
+                  ? CHART_EMA_LINES.map((s) => {
+                      const pts = data?.ema?.[s.key];
+                      const last =
+                        pts?.length && Number.isFinite(pts[pts.length - 1]?.value)
+                          ? pts[pts.length - 1]!.value
+                          : null;
+                      return (
+                        <li key={`ema-${s.key}`}>
+                          <span className="legend-dot" style={{ background: s.color }} />
+                          <span style={{ color: s.color }}>
+                            {last != null ? `${s.title}：${fmtMetaPrice(last)}` : s.title}
+                          </span>
+                        </li>
+                      );
+                    })
+                  : null}
+                {layers.bb && (data?.bb?.mid?.length ?? 0) > 0 ? (
+                  <li key="bb-mid">
+                    <span className="legend-dot" style={{ background: "rgba(255, 193, 7, 0.85)" }} />
+                    布林中轨
+                  </li>
+                ) : null}
+              </ul>
+              <div className="pattern-signal-tags">
+                {analysis?.bb_wick_top && <span className="sig bb">BB-Wicks 顶部</span>}
+                {analysis?.macd_top_weak && <span className="sig macd-weak">MACD 走弱</span>}
+                {analysis?.macd_bull && <span className="sig macd-bull">MACD 金叉放大</span>}
+                {deriv?.high_funding_short_bias && (
+                  <span className="sig funding-short" title="高正费率 + 挤空/突破结构，顶背离胜率提升">
+                    高费率·看空共振
+                  </span>
+                )}
+                {deriv?.oi_regime === "squeeze" && (
+                  <span className="sig oi-squeeze">挤空假突破风险</span>
+                )}
+                {deriv?.oi_regime === "breakout" && (
+                  <span className="sig oi-breakout">OI 真突破</span>
+                )}
+                {mtf?.summary ? (
+                  <span
+                    className={`sig mtf ${mtf.allow_short === false ? "blocked" : "ok"}`}
+                    title={mtf.block_reason || mtf.summary}
+                  >
+                    MTF {mtf["4h"]?.vegas_label ? `4h ${mtf["4h"].vegas_label}` : ""}
+                    {mtf.allow_short === false ? " · 过滤空信号" : ""}
+                  </span>
+                ) : null}
+                {analysis?.oi_anomaly_only && <span className="sig oi">OI异动</span>}
+                {analysis?.oi_anomaly && !analysis?.oi_anomaly_only && (
+                  <span className="sig oi-combo">形态+OI异动</span>
+                )}
+                {analysis?.sweep_momentum ? (
+                  <span
+                    className={`sig sweep score-${
+                      analysis.sweep_momentum.sustainability_score >= 70
+                        ? "high"
+                        : analysis.sweep_momentum.sustainability_score >= 40
+                          ? "mid"
+                          : "low"
+                    } ${
+                      analysis.sweep_momentum.is_bullish_sweep
+                        ? "bull"
+                        : analysis.sweep_momentum.is_bearish_sweep
+                          ? "bear"
+                          : ""
+                    }`}
+                    title={[
+                      analysis.sweep_momentum.signal_type,
+                      `量能 ${analysis.sweep_momentum.vol_ratio}x`,
+                      analysis.sweep_momentum.oi_delta_pct != null
+                        ? `OI ${analysis.sweep_momentum.oi_delta_pct > 0 ? "+" : ""}${analysis.sweep_momentum.oi_delta_pct}%`
+                        : "OI —",
+                      ...(analysis.sweep_momentum.reasons || []),
+                    ].join("\n")}
+                  >
+                    扫荡 {analysis.sweep_momentum.sustainability_score}
+                    {analysis.sweep_momentum.signal_type !== "普通震荡"
+                      ? ` · ${analysis.sweep_momentum.signal_type.replace("反转扫荡", "")}`
+                      : ""}
+                  </span>
+                ) : null}
+              </div>
+              {analysis?.sweep_momentum && analysis.sweep_momentum.reasons?.length ? (
+                <ul className="pattern-sweep-reasons">
+                  <li className="pattern-sweep-head">
+                    持续性 {analysis.sweep_momentum.sustainability_score}/100 ·{" "}
+                    {analysis.sweep_momentum.signal_type}
+                    {" · "}量 {analysis.sweep_momentum.vol_ratio}x
+                    {analysis.sweep_momentum.oi_delta_pct != null
+                      ? ` · OI ${analysis.sweep_momentum.oi_delta_pct > 0 ? "+" : ""}${analysis.sweep_momentum.oi_delta_pct}%`
+                      : ""}
+                  </li>
+                  {analysis.sweep_momentum.reasons.map((r, i) => (
+                    <li key={`sweep-r-${i}`}>{r}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {mtf?.["4h"]?.ready || mtf?.["1d"]?.ready ? (
+                <p className="pattern-mtf-row">
+                  多周期：
+                  {mtf?.["4h"]?.ready ? (
+                    <span>
+                      {" "}
+                      4h {String(mtf["4h"].vegas_label || "—")} / {String(mtf["4h"].trend || "—")}
+                      {mtf["4h"].macd_top_weak ? " · MACD顶弱" : ""}
+                    </span>
+                  ) : null}
+                  {mtf?.["1d"]?.ready ? (
+                    <span>
+                      {" · "}
+                      日线 {String(mtf["1d"].vegas_label || "—")} / {String(mtf["1d"].trend || "—")}
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
+              <p className="pattern-interval-tag">
+                {timeframe} · 已加载 {candleCount} 根
+                {lastCandleTime ? ` · 最新 ${formatCandleLocalTime(lastCandleTime)}` : ""}
+                {wsConnected ? " · 实时" : " · 连接中…"}
+                {loadingMore ? " · 加载更早…" : hasMore ? " · 右拖/左滑看更早可续载" : " · 已到最早"}
+              </p>
+                </>
+              )}
+            </>
+          ) : null}
+        </aside>
+        <div
+          className={`pattern-chart-wrap${layers.oi ? " with-oi-subs" : ""}`}
+          ref={chartWrapRef}
+        >
+          <div ref={crosshairVLineRef} className="pattern-crosshair-vline" aria-hidden />
+          <div className="pattern-chart-main-pane">
+            <div className="pattern-chart-canvas" ref={chartRef} />
+            <div
+              ref={crosshairPriceRef}
+              className="pattern-crosshair-price"
+              aria-hidden
+            />
+          </div>
+          {layers.oi ? (
+            <div className="pattern-oi-subplots" aria-label="持仓量副图">
+              {oiSubLoading || oiSubErr ? (
+                <p className="pattern-oi-subplots-status">
+                  {oiSubLoading ? "加载持仓量指标…" : oiSubErr}
+                </p>
+              ) : null}
+              <div className="pattern-oi-sub">
+                <div className="pattern-oi-sub-label">
+                  持仓量 OI · MA{OI_MA_PERIOD}
+                </div>
+                <div className="pattern-oi-sub-canvas" ref={oiChartElRef} />
+              </div>
+              <div className="pattern-oi-sub">
+                <div className="pattern-oi-sub-label">
+                  现货净买入 · MA{NET_BUY_MA_PERIOD}
+                </div>
+                <div className="pattern-oi-sub-canvas" ref={spotNetElRef} />
+              </div>
+              <div className="pattern-oi-sub">
+                <div className="pattern-oi-sub-label">
+                  合约净买入 · MA{NET_BUY_MA_PERIOD}
+                </div>
+                <div className="pattern-oi-sub-canvas" ref={futNetElRef} />
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+});
