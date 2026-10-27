@@ -60,6 +60,8 @@ export type AlertStatsRecord = {
   confluence?: AlertConfluence;
   invalid_level?: number;
   observation_only?: boolean;
+  /** C 档共振观察：入库结算但不计头条胜率 */
+  confluence_observation_only?: boolean;
   settleProfileId?: string;
   settleRulesVersion?: number;
   slPrice?: number;
@@ -142,7 +144,31 @@ export const ALERT_SETTLE_RULES_SUMMARY =
 export function isObservationStatsRecord(rec: AlertStatsRecord): boolean {
   const lab = String(rec.typeLabel || "");
   if (lab.includes("观察")) return true;
+  if (rec.confluence_observation_only) return true;
+  const tier = String(rec.confluence?.tier || "").toUpperCase();
+  if (tier === "C") return true;
   return Boolean(rec.observation_only);
+}
+
+/** 与后端 pattern_alert_stats.alert_stats_key 对齐（kind·side，不含文案） */
+export function buildAlertStatsKey(alert: Partial<PatternAlert>): string {
+  const typ = String(alert.type || "");
+  const sym = String(alert.symbol || "");
+  const closeT =
+    alert.kline_close_time ?? alert.time ?? alert.kline_open_time ?? "";
+  let kind = String(alert.kind || alert.signal_kind || "").trim();
+  if (!kind) {
+    const lab = String(
+      alert.type_label || alert.pattern_label || alert.signal_text || "",
+    ).trim();
+    if (lab.includes("射击")) kind = "shooting_star";
+    else if (lab.includes("倒锤")) kind = "inverted_hammer";
+    else if (lab) kind = lab;
+  }
+  let side = String(alert.side || "").toLowerCase();
+  if (side === "bull") side = "long";
+  else if (side === "bear") side = "short";
+  return `${typ}:${sym}:${closeT}:${kind}:${side}`;
 }
 
 let memoryStats: AlertStatsRecord[] = [];
@@ -291,9 +317,7 @@ export function isRetiredPatternRecord(rec: Pick<
 }
 
 export function isRetiredPatternAlert(alert: Partial<PatternAlert>, key = ""): boolean {
-  const k =
-    key ||
-    `${alert.type || ""}:${alert.symbol || ""}:${alert.kline_close_time || ""}:${alert.message || alert.type_label || ""}`;
+  const k = key || buildAlertStatsKey(alert);
   return isRetiredPatternRecord({
     key: k,
     typeLabel: resolveAlertTypeLabel(alert, k, ""),
@@ -1090,7 +1114,10 @@ export function upsertAlertForStats(input: {
   const tradeSymbol =
     toUsdtSymbol(input.alert.symbol) || String(input.alert.symbol || "");
   const list = loadAlertStats();
-  const existing = list.find((r) => r.key === input.key);
+  const canon = buildAlertStatsKey(input.alert);
+  const existing =
+    list.find((r) => r.key === input.key) ||
+    list.find((r) => buildAlertStatsKeyFromRecord(r) === canon);
   if (existing) {
     const needLabel = !String(existing.typeLabel || "").trim() && !!typeLabel;
     const needInterval = !String(existing.interval || "").trim() && !!interval;
@@ -1126,23 +1153,26 @@ export function upsertAlertForStats(input: {
     return existing;
   }
 
-  const rec: AlertStatsRecord = {
-    key: input.key,
-    symbol: displaySymbol(input.alert.symbol),
-    tradeSymbol,
-    dir: input.dir,
-    side,
-    signalAt,
-    entry,
-    tier,
-    stepPct,
-    verifyAt: signalAt + ALERT_VERIFY_DELAY_MS,
-    outcome: "pending",
-    typeLabel,
-    interval,
-  };
-  persistStats([rec, ...list]);
-  return rec;
+  // 新条须由服务端 ingest 入库；前端不得绕过 admission 补插
+  return null;
+}
+
+export function buildAlertStatsKeyFromRecord(rec: AlertStatsRecord): string {
+  const parts = String(rec.key || "").split(":");
+  if (parts.length >= 5) {
+    const side = parts[parts.length - 1]?.toLowerCase();
+    if (side === "long" || side === "short" || side === "bull" || side === "bear") {
+      return rec.key;
+    }
+  }
+  return buildAlertStatsKey({
+    type: parts[0] || "candle_pattern_card",
+    symbol: rec.tradeSymbol || rec.symbol,
+    kline_close_time: parts[2] ? Number(parts[2]) : rec.signalAt,
+    kind: parts[3],
+    type_label: rec.typeLabel,
+    side: rec.side,
+  });
 }
 
 type Bar = { ts: number; high: number; low: number; close: number };

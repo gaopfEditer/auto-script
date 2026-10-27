@@ -211,7 +211,11 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 - 圆弧顶斜率归一化：斜率按窗口均价相对变化（%/根），当前 20 根斜率对比 10 根前窗口；
   阈值 `OI_STRUCTURE_CURVE_UP_SLOPE`(0.05) / `OI_STRUCTURE_CURVE_DOWN_SLOPE`(0.0) /
   `OI_STRUCTURE_CURVE_DECEL`(-0.08)，消除主流/山寨价格尺度差异
-- 推送节流：同币同周期同方向在 `OI_CARD_PUSH_COOLDOWN_BARS`(4) 根 K 内只推一次（发送成功才计时）
+- 推送节流：同币同周期同方向在 `OI_CARD_PUSH_COOLDOWN_BARS`(4) 根 K 内只推一次（发送成功才计时）；反向锁定 `OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS`(6) 根 K（扫描 + 胜率入库 `pattern_stats_admission`）
+- **胜率库冷却**（入库 / `ingest_live_pattern_alert`，与去重 key 独立）：同向 `OI_PATTERN_STATS_COOLDOWN_SAME_BARS`(4)、反向 `OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS`(6) 根 K（默认按 15m 周期换算）
+- **T3·15m MA144**：保留扫描；须 `OI_MA144_T3_15M_MIN_MTF`(2) 多周期共振 **或** `OI_MA144_T3_15M_MIN_SCORE`(70) 综合分，否则不入库/不进 ticker
+- **观察档**：`confluence_observation_only` 与共振 **C** 档可进列表、正常纸面结算，但灰显且不计头条胜率（`is_observation_stats_record`）；正式行最低 **B**（`OI_CONFLUENCE_PUSH_MIN_TIER`）
+- **结算回写** `apply_settle_updates` 仅更新已存在 key，禁止前端/客户端绕过 admission 插新条；历史双 key 用 `python oi_mornitor/scripts/merge_pattern_alert_stats_keys.py [--dry-run]` 合并
 - 蜡烛卡片文案补参考位：看跌给「上方防守=前20根高点 / 下方参考=布林中轨」，看涨给「下方防守=前20根低点 / 上方参考=布林中轨」
 
 #### 环境变量默认（PR #3 形态质量 / PR #4–#5 Bitget TP·SL）

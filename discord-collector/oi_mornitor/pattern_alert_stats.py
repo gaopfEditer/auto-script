@@ -355,11 +355,9 @@ def list_alert_stats_cached() -> list[dict[str, Any]]:
 
 def is_headline_win_rate_excluded(rec: dict[str, Any]) -> bool:
     """头条胜率汇总排除（仍参与结算与共振校准）。"""
-    from oi_mornitor.pattern_settle_profile import is_observation_record
+    from oi_mornitor.pattern_stats_admission import is_observation_stats_record
 
-    if is_observation_record(rec):
-        return True
-    return bool(rec.get("confluence_observation_only"))
+    return is_observation_stats_record(rec)
 
 
 def mtf_resonance_peers_for_signal_at(
@@ -1047,7 +1045,20 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
 
     with _LOCK:
         items = _load()
+        from oi_mornitor.pattern_stats_admission import (
+            canonical_stats_key_from_record,
+            passes_stats_admission,
+        )
+
         existing = next((r for r in items if r.get("key") == key), None)
+        if existing is None:
+            canon = alert_stats_key(alert)
+            existing = next(
+                (r for r in items if canonical_stats_key_from_record(r) == canon),
+                None,
+            )
+            if existing is not None:
+                key = str(existing.get("key") or key)
         if existing:
             # 已存在：只补缺字段，不覆盖已核结果
             patched = dict(existing)
@@ -1066,6 +1077,9 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
                 _save(items)
                 return patched
             return existing
+
+        if not passes_stats_admission(alert, items):
+            return None
 
         rec = {
             "key": key,
@@ -1228,9 +1242,7 @@ def apply_settle_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if key and key in by_key and is_retired_pattern_stats_record(by_key[key]):
                 continue
             if not key or key not in by_key:
-                # 允许前端补登记一条完整记录
-                if key and u.get("signalAt") and u.get("entry") and u.get("side"):
-                    by_key[key] = {k: v for k, v in u.items() if v is not None}
+                # 禁止结算回写绕过入库门控插新条（须先经 ingest / record_alert_from_push）
                 continue
             cur = by_key[key]
             for k, v in u.items():

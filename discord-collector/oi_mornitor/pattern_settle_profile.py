@@ -59,6 +59,13 @@ def is_observation_record(rec: dict[str, Any]) -> bool:
         return True
     if rec.get("observation_only"):
         return True
+    if rec.get("confluence_observation_only"):
+        return True
+    conf = rec.get("confluence")
+    if isinstance(conf, dict):
+        tier = str(conf.get("tier") or "").strip().upper()
+        if tier == "C":
+            return True
     if rec.get("vp_formal") is False and str(rec.get("source") or "") == "telegram_push":
         return False
     return False

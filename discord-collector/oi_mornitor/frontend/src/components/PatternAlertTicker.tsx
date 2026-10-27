@@ -5,6 +5,9 @@ import { formatAlertHoverDetail } from "../utils/alertHoverDetail";
 import { isOiOperator } from "../utils/oiOperator";
 import {
   ALERT_SETTLE_RULES_SUMMARY,
+  buildAlertStatsKey,
+  buildAlertStatsKeyFromRecord,
+  isObservationStatsRecord,
   isRetiredPatternAlert,
   loadAlertStats,
   outcomeLabel,
@@ -191,7 +194,7 @@ function alertReason(a: PatternAlert): string {
 }
 
 function alertKey(a: PatternAlert): string {
-  return `${a.type}:${a.symbol}:${a.kline_close_time}:${a.message || a.type_label || ""}`;
+  return buildAlertStatsKey(a);
 }
 
 function makeTickerItem(alert: PatternAlert, now = Date.now()): TickerItem {
@@ -386,8 +389,22 @@ function registerItemsForStats(items: TickerItem[]) {
 
 function outcomeByKeyMap(): Map<string, AlertOutcome> {
   const map = new Map<string, AlertOutcome>();
-  for (const r of loadAlertStats()) map.set(r.key, r.outcome);
+  for (const r of loadAlertStats()) {
+    map.set(r.key, r.outcome);
+    map.set(buildAlertStatsKeyFromRecord(r), r.outcome);
+  }
   return map;
+}
+
+function tickerObservationOnly(it: TickerItem): boolean {
+  if (it.alert.observation_only) return true;
+  const k = it.key || alertKey(it.alert);
+  for (const r of loadAlertStats()) {
+    if (r.key === k || buildAlertStatsKeyFromRecord(r) === k) {
+      return isObservationStatsRecord(r);
+    }
+  }
+  return false;
 }
 
 export const PatternAlertTicker = memo(function PatternAlertTicker({
@@ -849,7 +866,7 @@ export const PatternAlertTicker = memo(function PatternAlertTicker({
                     : oc === "pending"
                       ? " outcome-pending"
                       : "";
-              const obsClass = it.alert.observation_only ? " observation-only" : "";
+              const obsClass = tickerObservationOnly(it) ? " observation-only" : "";
               return (
                 <button
                   key={`${it.id}-${idx}`}

@@ -20,6 +20,7 @@ from oi_mornitor.config import (
     CANDLE_CARD_MAJOR_SYMBOLS,
     CANDLE_CARD_REFRESH_SEC,
     CARD_PUSH_COOLDOWN_BARS,
+    OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS,
     FAPI_BASE_URL,
     HTTP_TIMEOUT_SEC,
     MATRIX_TOP_N,
@@ -1543,6 +1544,26 @@ class PatternMonitorEngine:
             return False
         return (int(close_ts) - int(last)) <= CARD_PUSH_COOLDOWN_BARS * bar_sec
 
+    def _card_reverse_locked(self, sym: str, iv: str, side: str, close_ts: int) -> bool:
+        """反向锁定：对向信号在 OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS 根 K 内不再发。"""
+        opp_bars = int(OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS)
+        if opp_bars <= 0:
+            return False
+        if side in ("bull", "long"):
+            opp = "bear"
+        elif side in ("bear", "short"):
+            opp = "bull"
+        else:
+            return False
+        bar_sec = _INTERVAL_SECONDS.get(iv)
+        if not bar_sec:
+            return False
+        key = f"{sym}:{iv}:{opp}"
+        last = self._card_last_emit.get(key)
+        if last is None:
+            return False
+        return (int(close_ts) - int(last)) <= opp_bars * bar_sec
+
     def _structure_emit_throttled(self, sym: str, iv: str, side: str, close_ts: int) -> bool:
         """结构卡片：同币同周期同方向 STRUCTURE_PUSH_COOLDOWN_BARS 根 K 内只推一次。"""
         if STRUCTURE_PUSH_COOLDOWN_BARS <= 0:
@@ -1707,6 +1728,8 @@ class PatternMonitorEngine:
                 if self._card_push_claimed(dedupe):
                     continue
                 side = "bull" if kind == "inverted_hammer" else "bear"
+                if self._card_reverse_locked(sym, iv, side, close_ts):
+                    continue
                 if self._card_emit_throttled(sym, iv, side, close_ts):
                     continue
                 type_label = str(hit.get("type_label") or kind)
@@ -1808,6 +1831,8 @@ class PatternMonitorEngine:
                 if self._card_push_claimed(dedupe):
                     continue
                 side = str(hit.get("side") or "")
+                if side in ("bull", "bear") and self._card_reverse_locked(sym, iv, side, close_ts):
+                    continue
                 if side in ("bull", "bear") and self._structure_emit_throttled(sym, iv, side, close_ts):
                     continue
                 type_label = str(hit.get("type_label") or kind)
@@ -2023,6 +2048,8 @@ class PatternMonitorEngine:
                 if self._card_push_claimed(dedupe):
                     continue
                 side = str(hit.get("side") or "")
+                if self._card_reverse_locked(sym, iv, side, close_ts):
+                    continue
                 if self._card_emit_throttled(sym, iv, side, close_ts):
                     continue
                 type_label = str(hit.get("type_label") or kind)

@@ -363,6 +363,16 @@ STRUCTURE_CURVE_DOWN_SLOPE = float(os.getenv("OI_STRUCTURE_CURVE_DOWN_SLOPE", "0
 STRUCTURE_CURVE_DECEL = float(os.getenv("OI_STRUCTURE_CURVE_DECEL", "-0.08"))
 # 推送节流：同币同周期同方向在 N 根 K 内只推一次（0=关闭）
 CARD_PUSH_COOLDOWN_BARS = int(os.getenv("OI_CARD_PUSH_COOLDOWN_BARS", "4"))
+# 胜率库：同币同周期同向/反向冷却（根 K，默认 15m 下 4 / 6）
+OI_PATTERN_STATS_COOLDOWN_SAME_BARS = max(
+    0, env_int("OI_PATTERN_STATS_COOLDOWN_SAME_BARS", 4, min_val=0)
+)
+OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS = max(
+    0, env_int("OI_PATTERN_STATS_COOLDOWN_OPPOSITE_BARS", 6, min_val=0)
+)
+# T3 山寨 15m MA144：保留扫描，但须多周期共振或更高综合分
+OI_MA144_T3_15M_MIN_MTF = max(1, env_int("OI_MA144_T3_15M_MIN_MTF", 2, min_val=1))
+OI_MA144_T3_15M_MIN_SCORE = env_float("OI_MA144_T3_15M_MIN_SCORE", 70.0, min_val=0.0)
 # Telegram：优先 HTTP 网关，否则 Bot API
 TELEGRAM_SEND_URL = os.getenv("TELEGRAM_SEND_URL", "").strip()
 TELEGRAM_PUSH_CHAT_ID = (

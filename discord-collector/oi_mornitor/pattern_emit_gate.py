@@ -85,7 +85,11 @@ def ingest_live_pattern_alert(
     if not passes_pattern_card_emit_gate(alert, peers):
         return None
     attach_confluence_on_alert(alert, peers)
-    from oi_mornitor.pattern_alert_stats import record_alert_from_push
+    from oi_mornitor.pattern_alert_stats import list_alert_stats, record_alert_from_push
+    from oi_mornitor.pattern_stats_admission import passes_stats_admission
+
+    if not passes_stats_admission(alert, list_alert_stats(), peers):
+        return None
 
     rec: dict[str, Any] | None
     if passes_confluence_tier_push_gate(alert):

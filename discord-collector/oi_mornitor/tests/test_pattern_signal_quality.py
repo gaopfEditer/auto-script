@@ -7,7 +7,18 @@ from unittest import mock
 
 import pandas as pd
 
-from oi_mornitor.pattern_alert_stats import alert_stats_key, record_alert_from_push, summarize
+from oi_mornitor.pattern_alert_stats import (
+    alert_stats_key,
+    apply_settle_updates,
+    record_alert_from_push,
+    summarize,
+)
+from oi_mornitor.pattern_stats_admission import (
+    canonical_stats_key_from_record,
+    is_observation_stats_record,
+    passes_ma144_t3_15m_gate,
+    stats_cooldown_blocks,
+)
 from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
 from oi_mornitor.pattern_settle_profile import build_settle_plan, resolve_verify_delay_ms
 from oi_mornitor.pattern_signal_time import align_signal_at_ms, resolve_signal_at_from_alert
@@ -180,6 +191,123 @@ class HtfTrendTests(unittest.TestCase):
                 card_kind="shooting_star",
             )
         )
+
+
+class DualKeyMergeTests(unittest.TestCase):
+    def test_canonical_key_from_legacy_message_key(self) -> None:
+        legacy = {
+            "key": "candle_pattern_card:IRYSUSDT:1730000000000:射击之星·15m",
+            "typeLabel": "射击之星",
+            "side": "short",
+            "interval": "15m",
+            "signalAt": 1_730_000_000_000,
+        }
+        canon = canonical_stats_key_from_record(legacy)
+        self.assertIn("shooting_star", canon)
+        self.assertTrue(canon.endswith(":short"))
+
+
+class ObservationStatsTests(unittest.TestCase):
+    def test_c_tier_and_confluence_flag(self) -> None:
+        self.assertTrue(
+            is_observation_stats_record({"confluence_observation_only": True, "outcome": "pending"})
+        )
+        self.assertTrue(
+            is_observation_stats_record(
+                {"confluence": {"tier": "C", "score": 55}, "outcome": "pending"}
+            )
+        )
+        self.assertFalse(
+            is_observation_stats_record(
+                {"confluence": {"tier": "B", "score": 72}, "outcome": "pending"}
+            )
+        )
+
+
+class SettleAdmissionTests(unittest.TestCase):
+    def test_apply_settle_updates_rejects_new_rows(self) -> None:
+        with mock.patch("oi_mornitor.pattern_alert_stats._load", return_value=[]):
+            with mock.patch("oi_mornitor.pattern_alert_stats._save", return_value=[]) as save_mock:
+                apply_settle_updates(
+                    [
+                        {
+                            "key": "candle_pattern_card:ETHUSDT:1:shooting_star:short",
+                            "signalAt": 1,
+                            "entry": 1.0,
+                            "side": "short",
+                            "outcome": "take_profit",
+                        }
+                    ]
+                )
+        save_mock.assert_called_once()
+        saved = save_mock.call_args[0][0]
+        self.assertEqual(saved, [])
+
+
+class StatsCooldownTests(unittest.TestCase):
+    def test_same_side_blocked_within_four_bars(self) -> None:
+        t = 1_700_000_000_000
+        existing = [
+            {
+                "tradeSymbol": "IRYSUSDT",
+                "interval": "15m",
+                "side": "long",
+                "signalAt": t,
+            }
+        ]
+        alert = {
+            "symbol": "IRYSUSDT",
+            "interval": "15m",
+            "side": "bull",
+            "kline_close_time": t + 15 * 60_000 * 2,
+        }
+        self.assertTrue(stats_cooldown_blocks(alert, existing))
+
+    def test_opposite_blocked_within_six_bars(self) -> None:
+        t = 1_700_000_000_000
+        existing = [
+            {
+                "tradeSymbol": "IRYSUSDT",
+                "interval": "15m",
+                "side": "short",
+                "signalAt": t,
+            }
+        ]
+        alert = {
+            "symbol": "IRYSUSDT",
+            "interval": "15m",
+            "side": "bull",
+            "kline_close_time": t + 15 * 60_000 * 4,
+        }
+        self.assertTrue(stats_cooldown_blocks(alert, existing))
+
+
+class Ma144T3GateTests(unittest.TestCase):
+    def test_t3_15m_needs_mtf_or_score(self) -> None:
+        alert = {
+            "type": "ma144_candle_card",
+            "symbol": "IRYSUSDT",
+            "interval": "15m",
+            "kind": "inverted_hammer",
+            "side": "bull",
+            "kline_close_time": 1_700_000_000_000,
+            "confluence": {"score": 50, "tier": "C"},
+        }
+        with mock.patch("oi_mornitor.mcap_tier.resolve_mcap_tier", return_value="t3"):
+            with mock.patch(
+                "oi_mornitor.pattern_push_gate.mtf_tier_count_for_alert",
+                return_value=1,
+            ):
+                with mock.patch.dict(os.environ, {"OI_MA144_T3_15M_MIN_SCORE": "70"}, clear=False):
+                    from oi_mornitor import config
+
+                    config.OI_MA144_T3_15M_MIN_SCORE = 70.0
+                    self.assertFalse(passes_ma144_t3_15m_gate(alert, peers=[]))
+            with mock.patch(
+                "oi_mornitor.pattern_push_gate.mtf_tier_count_for_alert",
+                return_value=2,
+            ):
+                self.assertTrue(passes_ma144_t3_15m_gate(alert, peers=[]))
 
 
 class CandleConfigUnifyTests(unittest.TestCase):
