@@ -8,6 +8,7 @@ import type {
   PotentialDiscoveryItem,
   PotentialDiscoveryPayload,
   PotentialSignalOutcome,
+  PotentialTrackingPayload,
 } from "../types";
 
 const FETCH_MS = 5 * 60 * 1000;
@@ -24,16 +25,36 @@ function modelSignalTf(m: { signal_tf?: string; tf?: string }): string {
   return (m.signal_tf || m.tf || "").trim();
 }
 
+function formatCheckpointLine(outcome: PotentialSignalOutcome): string {
+  const cps = outcome.checkpoints ?? [];
+  const done = cps.filter((c) => c.status === "done");
+  if (!done.length) return "";
+  return done
+    .map((c) => {
+      const d = c.day ?? c.key;
+      const ret = c.return_pct;
+      const retStr =
+        ret != null ? `${ret >= 0 ? "+" : ""}${ret}%` : "—";
+      return `+${d}d ${retStr}`;
+    })
+    .join(" · ");
+}
+
 function OutcomeBlock({ outcome }: { outcome?: PotentialSignalOutcome }) {
   if (!outcome) return null;
+  const trackDays = outcome.track_days ?? 7;
+  const cpLine = formatCheckpointLine(outcome);
   if (outcome.pending) {
     const left =
-      outcome.hours_left != null && Number.isFinite(outcome.hours_left)
-        ? ` · 约 ${outcome.hours_left.toFixed(1)}h 后或衰竭/离池时结算`
-        : "";
+      outcome.days_left != null && Number.isFinite(outcome.days_left)
+        ? ` · 约 ${outcome.days_left.toFixed(1)} 天后满窗结算`
+        : outcome.hours_left != null && Number.isFinite(outcome.hours_left)
+          ? ` · 约 ${outcome.hours_left.toFixed(0)}h`
+          : "";
     return (
       <p className="potential-outcome pending">
-        观察窗进行中（默认 12h）{left}
+        跟踪进行中（默认 {trackDays} 天，与发现解耦）{left}
+        {cpLine ? ` · ${cpLine}` : ""}
       </p>
     );
   }
@@ -41,11 +62,17 @@ function OutcomeBlock({ outcome }: { outcome?: PotentialSignalOutcome }) {
   const md = outcome.max_drawdown_pct;
   const end = outcome.end_pnl_pct;
   const label = outcome.settle_label || "已评判";
+  const expect =
+    outcome.expectation_label != null
+      ? ` · 预期${outcome.expectation_label}`
+      : "";
   return (
     <p className="potential-outcome settled">
       <strong>{label}</strong>
+      {expect}
       {mp != null ? ` · 最大盈利 +${mp}%` : ""}
       {md != null ? ` · 最大回撤 ${md}%` : ""}
+      {cpLine ? ` · ${cpLine}` : ""}
       {end != null ? (
         <>
           {" "}
@@ -71,6 +98,8 @@ export const PotentialDiscoveryPanel = memo(function PotentialDiscoveryPanel({
   const [loading, setLoading] = useState(true);
   const [modelFilter, setModelFilter] = useState<string>("all");
   const [expandedEnd, setExpandedEnd] = useState<string | null>(null);
+  const [tracking, setTracking] = useState<PotentialTrackingPayload | null>(null);
+  const [showTracking, setShowTracking] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -85,11 +114,29 @@ export const PotentialDiscoveryPanel = memo(function PotentialDiscoveryPanel({
     }
   }, []);
 
+  const loadTracking = useCallback(async () => {
+    try {
+      const res = await fetch("/api/potential-tracking?limit=80", { cache: "no-store" });
+      if (!res.ok) return;
+      const body = (await res.json()) as PotentialTrackingPayload;
+      setTracking(body);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     void load();
     const id = window.setInterval(() => void load(), FETCH_MS);
     return () => window.clearInterval(id);
   }, [load]);
+
+  useEffect(() => {
+    if (!showTracking) return;
+    void loadTracking();
+    const id = window.setInterval(() => void loadTracking(), FETCH_MS);
+    return () => window.clearInterval(id);
+  }, [showTracking, loadTracking]);
 
   const catalog = payload?.catalog ?? [];
   const items = payload?.items ?? [];
@@ -120,9 +167,9 @@ export const PotentialDiscoveryPanel = memo(function PotentialDiscoveryPanel({
           <h2>潜力发现</h2>
           <p className="pattern-hint-main">
             快扫约 15 分钟（M2 费率/OI、M5 打靶、M3 短线相对强弱）；慢扫约 1 小时（M1 OI 趋势、M4 箱体
-            Spring）。二/三梯队偏小市值，请交叉验证并关注失效征兆。每条信号默认{" "}
-            <strong>12h</strong> 观察窗（或阶段 <code>exiting</code> / 离池时提前结算），按方向统计{" "}
-            <strong>最大盈利</strong>与<strong>最大回撤</strong>（15m K，入场=信号 K 收盘价）。
+            Spring）。二/三梯队偏小市值，请交叉验证并关注失效征兆。入选信号进入默认{" "}
+            <strong>7 天</strong>跟踪窗（与扫描列表解耦，仅复盘用），检查点 +1d/+3d/+7d
+            记录收益与 MFE/MAE；满窗判定是否<strong>符合预期</strong>（15m K，入场=信号 K 收盘价）。
           </p>
         </div>
         <span className="potential-discovery-meta">
@@ -246,6 +293,67 @@ export const PotentialDiscoveryPanel = memo(function PotentialDiscoveryPanel({
           ))}
         </div>
       )}
+
+      <section className="potential-tracking-history">
+        <button
+          type="button"
+          className="potential-tracking-toggle"
+          onClick={() => setShowTracking((v) => !v)}
+        >
+          {showTracking ? "收起" : "展开"}一周跟踪历史（JSON 落盘 · 仅复盘）
+        </button>
+        {showTracking ? (
+          <div className="potential-tracking-table-wrap">
+            {!tracking?.items?.length ? (
+              <p className="pattern-hint-main">暂无跟踪记录；扫描命中后会写入 data/potential_outcomes.json。</p>
+            ) : (
+              <table className="potential-tracking-table">
+                <thead>
+                  <tr>
+                    <th>币</th>
+                    <th>模型</th>
+                    <th>状态</th>
+                    <th>检查点</th>
+                    <th>满窗</th>
+                    <th>预期</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tracking.items.map((row) => {
+                    const cp = formatCheckpointLine(row);
+                    const pending = row.pending;
+                    return (
+                      <tr key={row.id ?? `${row.symbol}-${row.signal_time_ms}`}>
+                        <td>
+                          <button
+                            type="button"
+                            className="potential-tracking-symbol"
+                            onClick={() => row.symbol && onOpenSymbol(row.symbol)}
+                          >
+                            {displaySymbol(row.symbol ?? "")}
+                          </button>
+                        </td>
+                        <td>{row.model_label ?? row.model_id}</td>
+                        <td>{pending ? "进行中" : row.settle_label ?? "已到期"}</td>
+                        <td>{cp || "—"}</td>
+                        <td>
+                          {!pending && row.end_pnl_pct != null
+                            ? `${row.end_pnl_pct >= 0 ? "+" : ""}${row.end_pnl_pct}%`
+                            : "—"}
+                        </td>
+                        <td>
+                          {row.expectation_label ??
+                            (pending ? "—" : row.expectation_met == null ? "数据不足" : "")}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 });

@@ -152,6 +152,30 @@ async def handle_potential_discovery(_request: web.Request) -> web.Response:
     return _json_response(payload)
 
 
+async def handle_potential_tracking(request: web.Request) -> web.Response:
+    """潜力信号一周跟踪历史（JSON 落盘，与发现列表解耦）。"""
+    from oi_mornitor.potential_outcome_config import (
+        POTENTIAL_TRACK_CHECKPOINT_DAYS,
+        POTENTIAL_TRACK_DAYS,
+    )
+    from oi_mornitor.potential_outcome_tracker import list_tracking_history
+
+    try:
+        limit = int(request.query.get("limit") or "200")
+    except ValueError:
+        limit = 200
+    status = str(request.query.get("status") or "").strip().lower() or None
+    if status not in ("pending", "settled"):
+        status = None
+    return _json_response(
+        {
+            "track_days_default": POTENTIAL_TRACK_DAYS,
+            "checkpoint_days": list(POTENTIAL_TRACK_CHECKPOINT_DAYS),
+            "items": list_tracking_history(limit=limit, status=status),
+        }
+    )
+
+
 async def handle_binance_leaderboards(request: web.Request) -> web.Response:
     """顶栏榜单：币安 U 本位永续 24h 涨跌幅 / 成交 / 持仓 / 热门。"""
     from oi_mornitor.binance_leaderboards import get_binance_leaderboards
@@ -1189,6 +1213,7 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/dormant-funnel", handle_dormant_funnel)
     app.router.add_get("/api/potential-discovery", handle_potential_discovery)
+    app.router.add_get("/api/potential-tracking", handle_potential_tracking)
     app.router.add_get("/api/binance/leaderboards", handle_binance_leaderboards)
 
     app.router.add_get("/api/patterns", handle_patterns)
