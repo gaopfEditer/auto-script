@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onMounted, onUnmounted, ref } from "vue";
 import { subscribeCollectorSocket } from "../composables/useCollectorSocket.js";
 import {
   canToggleTelegramRealIdentity,
@@ -75,6 +75,78 @@ const editSaving = ref(false);
 
 /** @type {import("vue").Ref<Record<string, HTMLElement | null>>} */
 const colBodies = ref({});
+
+const SCROLL_NEAR_BOTTOM_PX = 120;
+/** 首次进页 / 手动「滚到底」前，轮询刷新不抢滚动位置 */
+const initialScrollDone = ref(false);
+
+function isNearBottom(el) {
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_NEAR_BOTTOM_PX;
+}
+
+/** @returns {Record<string, { top: number, nearBottom: boolean }>} */
+function captureScrollAnchors() {
+  /** @type {Record<string, { top: number, nearBottom: boolean }>} */
+  const out = {};
+  for (const c of visibleChannels.value) {
+    const el = colBodies.value[c.chatId];
+    if (!el) continue;
+    out[c.chatId] = { top: el.scrollTop, nearBottom: isNearBottom(el) };
+  }
+  return out;
+}
+
+/** @param {Record<string, { top: number, nearBottom: boolean }> | null} anchors */
+function restoreScrollAnchors(anchors) {
+  if (!anchors) return;
+  for (const c of visibleChannels.value) {
+    const el = colBodies.value[c.chatId];
+    const a = anchors[c.chatId];
+    if (!el || !a) continue;
+    el.scrollTop = a.top;
+  }
+}
+
+/** @param {LiveMessage[]} prev @param {LiveMessage[]} next */
+function newMessagesSince(prev, next) {
+  if (!prev.length) return next;
+  const seen = new Set(prev.map((m) => m.id));
+  return next.filter((m) => m.id && !seen.has(m.id));
+}
+
+/** @param {LiveMessage[]} added */
+function scrollColumnsForNewMessages(added, { smooth = false } = {}) {
+  if (!added.length) return;
+  const chatIds = new Set(added.map((m) => m.chatId));
+  for (const cid of chatIds) {
+    const el =
+      colBodies.value[cid] || colBodies.value[String(Number(cid))] || null;
+    if (!isNearBottom(el)) continue;
+    scrollColumnToBottom(String(cid), { smooth });
+  }
+}
+
+/**
+ * @param {Record<string, { top: number, nearBottom: boolean }> | null} anchors
+ * @param {LiveMessage[]} added
+ */
+function applyScrollAfterMessageUpdate(anchors, added) {
+  const chatsWithNew = new Set(
+    added.flatMap((m) => [String(m.chatId), String(Number(m.chatId))]),
+  );
+  for (const c of visibleChannels.value) {
+    const el = colBodies.value[c.chatId];
+    const a = anchors?.[c.chatId];
+    if (!el) continue;
+    const hasNew = chatsWithNew.has(c.chatId) || chatsWithNew.has(String(Number(c.chatId)));
+    if (hasNew && a?.nearBottom) {
+      scrollColumnToBottom(c.chatId);
+    } else if (a) {
+      el.scrollTop = a.top;
+    }
+  }
+}
 
 function msgTime(m) {
   const t = Date.parse(String(m.at || ""));
@@ -195,16 +267,18 @@ function scrollAllToBottom({ smooth = false } = {}) {
   }
 }
 
+/** @returns {boolean} 是否为新增（非更新已有 id） */
 function upsertMessage(msg) {
-  if (!msg?.id) return;
+  if (!msg?.id) return false;
   const idx = messages.value.findIndex((m) => m.id === msg.id);
   if (idx >= 0) {
     const next = messages.value.slice();
     next[idx] = { ...next[idx], ...msg };
     messages.value = next;
-  } else {
-    messages.value = [...messages.value, msg].slice(-2000);
+    return false;
   }
+  messages.value = [...messages.value, msg].slice(-2000);
+  return true;
 }
 
 /** @param {Response} r */
@@ -243,18 +317,34 @@ async function loadChannels() {
   }
 }
 
-async function loadMessages() {
+async function loadMessages(opts = /** @type {{ forceBottom?: boolean }} */ ({})) {
+  const forceBottom = Boolean(opts.forceBottom);
+  const prevRows = messages.value;
+  const anchors =
+    initialScrollDone.value && !forceBottom ? captureScrollAnchors() : null;
   loading.value = true;
   try {
     const r = await fetch("/api/telegram/live/messages?limit=800");
     const j = await readJson(r);
     if (!j.ok) throw new Error(j.error || "messages failed");
     const rows = Array.isArray(j.messages) ? j.messages : [];
-    messages.value = rows.slice().sort((a, b) => msgTime(a) - msgTime(b));
+    const sorted = rows.slice().sort((a, b) => msgTime(a) - msgTime(b));
+    const added = newMessagesSince(prevRows, sorted);
+    messages.value = sorted;
     status.value = `库内 ${j.total ?? rows.length} 条 · 置顶 ${j.pinnedCount ?? 0} · ${channels.value.length} 群`;
     error.value = "";
     await nextTick();
-    scrollAllToBottom();
+    if (forceBottom) {
+      scrollAllToBottom();
+      initialScrollDone.value = true;
+    } else if (!initialScrollDone.value) {
+      scrollAllToBottom();
+      initialScrollDone.value = true;
+    } else if (added.length > 0) {
+      applyScrollAfterMessageUpdate(anchors, added);
+    } else {
+      restoreScrollAnchors(anchors);
+    }
   } catch (e) {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {
@@ -264,7 +354,6 @@ async function loadMessages() {
 
 function selectChannel(id) {
   activeChatId.value = activeChatId.value === id ? "" : id;
-  void nextTick(() => scrollAllToBottom());
 }
 
 function clearFilters() {
@@ -338,18 +427,13 @@ function onWs(msg) {
     typeof msg.message === "object"
   ) {
     const m = /** @type {LiveMessage} */ (msg.message);
-    upsertMessage(m);
+    const isNew = upsertMessage(m);
     status.value = `实时 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
-    if (kind === "telegram_message") {
-      void nextTick(() => scrollColumnToBottom(m.chatId, { smooth: true }));
+    if (kind === "telegram_message" && isNew) {
+      void nextTick(() => scrollColumnsForNewMessages([m], { smooth: true }));
     }
   }
 }
-
-watch([timePeriod, symbolQuery, activeChatId], async () => {
-  await nextTick();
-  scrollAllToBottom();
-});
 
 let unsub = /** @type {null | (() => void)} */ (null);
 let pollTimer = /** @type {ReturnType<typeof setInterval> | null} */ (null);
@@ -418,7 +502,7 @@ onUnmounted(() => {
         >
           {{ showRealIdentity ? "显示别名" : "显示真实" }}
         </button>
-        <button type="button" :disabled="loading" @click="loadMessages">
+        <button type="button" :disabled="loading" @click="loadMessages({ forceBottom: true })">
           {{ loading ? "刷新中…" : "刷新" }}
         </button>
       </div>

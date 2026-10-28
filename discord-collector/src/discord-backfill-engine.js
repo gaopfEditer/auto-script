@@ -79,6 +79,31 @@ function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const CDP_SCROLL_PAGE_TIMEOUT_MS = Math.min(
+  180_000,
+  Math.max(30_000, Number(process.env.DISCORD_BACKFILL_SCROLL_TIMEOUT_MS) || 90_000),
+);
+
+/**
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @param {string} label
+ * @returns {Promise<T>}
+ */
+async function withTimeout(promise, ms, label) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} 超时（${Math.round(ms / 1000)}s）`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * @param {Record<string, unknown>} meta
  * @param {import("./store.js").StoreLike} store
@@ -125,9 +150,18 @@ export async function pullDiscordChannelHistoryUntil(opts) {
       break;
     }
     onProgress?.({ phase: "scroll", pagesDone, oldestMs: oldest?.created_at_ms ?? null });
-    const out = await scrollFn(guildId, channelId, {
-      beforeMessageId: oldest?.message_id || undefined,
-    });
+    let out;
+    try {
+      out = await withTimeout(
+        scrollFn(guildId, channelId, {
+          beforeMessageId: oldest?.message_id || undefined,
+        }),
+        CDP_SCROLL_PAGE_TIMEOUT_MS,
+        "CDP 上滚",
+      );
+    } catch (e) {
+      return { ok: false, pagesDone, error: String(/** @type {Error} */ (e).message ?? e) };
+    }
     if (!out?.ok) {
       return { ok: false, pagesDone, error: out?.error ?? "CDP 上滚失败" };
     }
@@ -239,14 +273,16 @@ async function parseDiscordBackfillRow(store, row, channelId, parser) {
 /**
  * @param {Array<Record<string, unknown>>} rows
  * @param {string} channelId
- * @param {{ maxBacktests?: number; channelName?: string; store?: import("./store.js").StoreLike; fromMs?: number; toMs?: number }} [opts]
+ * @param {{ maxBacktests?: number; channelName?: string; store?: import("./store.js").StoreLike; fromMs?: number; toMs?: number; onProgress?: (patch: Record<string, unknown>) => void }} [opts]
  */
 export async function replayDiscordChannelMessages(rows, channelId, opts = {}) {
   const chCfg = getSignalChannelConfig(channelId);
   const parser = chCfg?.parser ?? "generic";
   const store = opts.store;
+  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : undefined;
   const dedup = new Set();
   let messageCount = 0;
+  const messageTotal = rows.length;
   let tradeLikeCount = 0;
   let parsedSignalCount = 0;
   /** @type {Record<string, number>} */
@@ -265,6 +301,18 @@ export async function replayDiscordChannelMessages(rows, channelId, opts = {}) {
 
   for (const row of rows) {
     messageCount += 1;
+    if (messageCount === 1 || messageCount === messageTotal || messageCount % 40 === 0) {
+      onProgress?.({
+        phase: "parse",
+        messageIndex: messageCount,
+        messageTotal,
+        parsedSignalCount,
+        tradeLikeCount,
+      });
+    }
+    if (messageCount % 80 === 0) {
+      await sleepMs(0);
+    }
     const { content, parsedList } = await parseDiscordBackfillRow(store, row, channelId, parser);
     if (!content) continue;
     if (/多|空|long|short|止盈|止损|entry|tp|sl|入场|【卡片】|现价开/i.test(content)) tradeLikeCount += 1;
@@ -575,7 +623,10 @@ export async function runDiscordBackfillScan(opts) {
       }
 
       if (typeof store.repairDiscordMessageCreatedAtForChannel === "function") {
-        await store.repairDiscordMessageCreatedAtForChannel(channelId);
+        onProgress?.({ channelId, name, phase: "repair_ts" });
+        await store.repairDiscordMessageCreatedAtForChannel(channelId, (patch) =>
+          onProgress?.({ channelId, name, phase: "repair_ts", ...patch }),
+        );
       }
       let rows = await store.listDiscordMessagesInTimeRange(channelId, fromMs, toMs);
       if (!rows.length && (fromMs > 0 || toMs > 0)) {
@@ -592,12 +643,14 @@ export async function runDiscordBackfillScan(opts) {
         });
       }
       log.info(`[${name}] 库内 ${rows.length} 条 (${periodKey}) scroll=${pull.pagesDone}`);
+      onProgress?.({ channelId, name, phase: "parse_start", messageTotal: rows.length });
       const replay = await replayDiscordChannelMessages(rows, channelId, {
         maxBacktests: maxBacktestsPerChannel,
         channelName: name,
         store,
         fromMs,
         toMs,
+        onProgress: (p) => onProgress?.({ channelId, name, ...p }),
       });
       const deduped = dedupeBackfillGroupCards({
         channelId,

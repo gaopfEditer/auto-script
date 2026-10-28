@@ -396,7 +396,7 @@ export function createBitgetClient(creds) {
 
     async ping() {
 
-      return signedRequest("GET", "/api/v2/spot/public/time", null, null);
+      return signedRequest("GET", "/api/v2/public/time", null, null);
 
     },
 

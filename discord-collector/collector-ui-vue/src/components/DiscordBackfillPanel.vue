@@ -47,6 +47,7 @@ const rebacktestRunning = ref(false);
 const lastRebacktestFinishedAt = ref("");
 const pollForRebacktest = ref(false);
 const skipBacktestCache = ref(false);
+const runProgress = ref("");
 const detailOpen = ref(false);
 /** @type {import("vue").Ref<Record<string, unknown> | null>} */
 const detailGroup = ref(null);
@@ -429,15 +430,28 @@ async function loadResults() {
 /** @param {Record<string, unknown>} data */
 function applyPayload(data) {
   const list = Array.isArray(data.groups) ? data.groups : [];
-  rows.value = [...list].sort(
-    (a, b) =>
-      dedupedSignalCount(b) - dedupedSignalCount(a) ||
-      Number(b.tradeLikeCount ?? 0) - Number(a.tradeLikeCount ?? 0),
-  );
   generatedAt.value = String(data.generatedAt ?? "");
   fromMs.value = Number(data.fromMs) || 0;
   toMs.value = Number(data.toMs) || 0;
   if (!note.value) note.value = "";
+  const sorted = [...list].sort(
+    (a, b) =>
+      Number(b.parsedSignalCount ?? b.cardEmitCount ?? 0) -
+        Number(a.parsedSignalCount ?? a.cardEmitCount ?? 0) ||
+      Number(b.tradeLikeCount ?? 0) - Number(a.tradeLikeCount ?? 0),
+  );
+  let cardN = 0;
+  for (const g of sorted) {
+    if (Array.isArray(g.cards)) cardN += g.cards.length;
+  }
+  if (cardN > 600) {
+    note.value = note.value || `共 ${cardN} 张卡片，表格渲染中…`;
+    setTimeout(() => {
+      rows.value = sorted;
+    }, 0);
+  } else {
+    rows.value = sorted;
+  }
 }
 
 /** @param {Record<string, unknown> | null | undefined} lastRun */
@@ -486,20 +500,47 @@ function applyRebacktestStatus(rb) {
   }
 }
 
+function formatRunProgress(progress) {
+  if (!progress || typeof progress !== "object") return "";
+  const p = /** @type {Record<string, unknown>} */ (progress);
+  const name = String(p.name ?? p.channelId ?? "").trim();
+  const phase = String(p.phase ?? "");
+  if (phase === "scroll") {
+    return `${name} · CDP 上滚第 ${Number(p.pagesDone ?? 0) + 1} 页`;
+  }
+  if (phase === "repair_ts") {
+    const r = Number(p.repaired ?? 0);
+    const t = Number(p.repairTotal ?? 0);
+    return t > 0 ? `${name} · 补时间戳 ${r}/${t}` : `${name} · 补时间戳…`;
+  }
+  if (phase === "parse" || phase === "parse_start") {
+    const i = Number(p.messageIndex ?? 0);
+    const t = Number(p.messageTotal ?? 0);
+    const sig = Number(p.parsedSignalCount ?? 0);
+    if (t > 0) return `${name} · 解析 ${i}/${t} 条 · 信号 ${sig}`;
+    if (phase === "parse_start") return `${name} · 开始解析…`;
+  }
+  if (phase === "start") return `${name} · 准备拉取/解析…`;
+  if (phase === "db_only") return `${name} · 仅库内解析（无 CDP）`;
+  return name ? `${name} · ${phase || "进行中"}` : phase || "";
+}
+
 async function refreshStatus() {
   try {
     const st = await fetchDiscordBackfillStatus();
     running.value = Boolean(st.running);
     cdpReady.value = st.cdpScrollReady === true;
     if (st.running && st.period) runPeriod.value = String(st.period);
+    if (st.running && st.progress) {
+      runProgress.value = formatRunProgress(st.progress);
+    } else if (!st.running) {
+      runProgress.value = "";
+    }
     applyRebacktestStatus(
       st.rebacktest && typeof st.rebacktest === "object"
         ? /** @type {Record<string, unknown>} */ (st.rebacktest)
         : null,
     );
-    if (rebacktestRunning.value) {
-      await loadResults();
-    }
     if (!st.running && !rebacktestRunning.value && pollTimer) {
       if (!pollForRebacktest.value) {
         runPeriod.value = "";
@@ -686,6 +727,10 @@ onUnmounted(() => {
         正在获取数据（拉取/解析信号，不算盈亏）
         <template v-if="runPeriod">
           · {{ BACKFILL_PERIOD_OPTIONS.find((o) => o.id === runPeriod)?.label ?? runPeriod }}
+        </template>
+        <template v-if="runProgress">
+          <br />
+          <span class="run-progress">{{ runProgress }}</span>
         </template>
       </p>
 
@@ -1009,6 +1054,12 @@ code {
   background: rgba(88, 101, 242, 0.15);
   color: #e3e5e8;
   font-size: 0.85rem;
+}
+.run-progress {
+  font-size: 0.78rem;
+  color: #b5bac1;
+  margin-top: 0.25rem;
+  display: inline-block;
 }
 .warn {
   color: #faa61a;

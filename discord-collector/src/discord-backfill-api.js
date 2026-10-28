@@ -167,18 +167,21 @@ export function registerDiscordBackfillRoutes(app, deps) {
       });
     }
     let groups = Array.isArray(data.groups) ? data.groups : [];
-    try {
-      groups = await ensureDiscordBackfillGroupsCards(deps.store, groups, {
-        fromMs: Number(data.fromMs) || 0,
-        toMs: Number(data.toMs) || 0,
-      });
-      const changed = JSON.stringify(groups) !== JSON.stringify(data.groups);
-      if (changed && !runId && file) {
-        const nextPayload = { ...data, groups, cardsHydratedAt: new Date().toISOString() };
-        fs.writeFileSync(file, JSON.stringify(nextPayload, null, 2), "utf8");
+    const skipHydrate = Boolean(jobState.promise) || Boolean(rebacktestJob?.running);
+    if (!skipHydrate) {
+      try {
+        groups = await ensureDiscordBackfillGroupsCards(deps.store, groups, {
+          fromMs: Number(data.fromMs) || 0,
+          toMs: Number(data.toMs) || 0,
+        });
+        const changed = JSON.stringify(groups) !== JSON.stringify(data.groups);
+        if (changed && !runId && file) {
+          const nextPayload = { ...data, groups, cardsHydratedAt: new Date().toISOString() };
+          fs.writeFileSync(file, JSON.stringify(nextPayload, null, 2), "utf8");
+        }
+      } catch (e) {
+        log.warn(`Discord 回溯卡片时间补全失败: ${String(/** @type {Error} */ (e).message ?? e)}`);
       }
-    } catch (e) {
-      log.warn(`Discord 回溯卡片时间补全失败: ${String(/** @type {Error} */ (e).message ?? e)}`);
     }
     res.json({
       ok: true,
@@ -369,6 +372,12 @@ export function registerDiscordBackfillRoutes(app, deps) {
               );
             } catch {
               /* ignore */
+            }
+            const idx = Number(patch.messageIndex ?? 0);
+            if (patch.phase === "parse" && idx > 0 && idx % 500 === 0) {
+              log.info(
+                `Discord 回溯 ${String(patch.name ?? patch.channelId ?? "")}: 解析 ${idx}/${patch.messageTotal ?? "?"} 信号=${patch.parsedSignalCount ?? 0}`,
+              );
             }
             if (jobState.abort) throw new Error("用户停止");
           },

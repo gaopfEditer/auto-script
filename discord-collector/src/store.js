@@ -864,8 +864,9 @@ export async function openStore(cfg, log) {
   /**
    * 将 created_at_ms=0 的历史行按 message_id / raw_json.timestamp 补全。
    * @param {string} channelId
+   * @param {(patch: { repaired?: number; repairTotal?: number }) => void} [onProgress]
    */
-  async function repairDiscordMessageCreatedAtForChannel(channelId) {
+  async function repairDiscordMessageCreatedAtForChannel(channelId, onProgress) {
     const cid = String(channelId ?? "").trim();
     if (!cid) return { updated: 0 };
     const [rows] = await pool.query(
@@ -875,6 +876,7 @@ export async function openStore(cfg, log) {
       [cid],
     );
     if (!rows?.length) return { updated: 0 };
+    const total = rows.length;
     let updated = 0;
     for (const row of rows) {
       const ms = resolveDiscordMessageCreatedAtMs({
@@ -888,6 +890,12 @@ export async function openStore(cfg, log) {
         [ms, String(row.message_id)],
       );
       updated += 1;
+      if (updated % 50 === 0 || updated === total) {
+        onProgress?.({ repaired: updated, repairTotal: total });
+        if (updated % 100 === 0) {
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
     }
     return { updated };
   }

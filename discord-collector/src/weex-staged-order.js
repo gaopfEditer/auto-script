@@ -69,6 +69,52 @@ function buildTpPlans(totalSize, takeProfits, ratios, contractMeta) {
  * @param {ReturnType<typeof import("./weex-api.js").createWeexClient>} client
  * @param {{ parsed: Record<string, unknown>; channelTrade: Record<string, unknown>; cardId: number; dryRun: boolean }} input
  */
+
+/**
+ * 开仓后若 TP/SL 未完整挂上：市价平掉，避免裸仓。
+ * @param {ReturnType<typeof import("./weex-api.js").createWeexClient>} client
+ * @param {Record<string, unknown>} record
+ * @param {string} symbol
+ * @param {string} reason
+ */
+async function closeWeexNakedPosition(client, record, symbol, reason) {
+  record.nakedCloseReason = reason;
+  const cardId = record.cardId ?? "";
+  const alertBase = `WEEX 裸仓处置 card=#${cardId} ${symbol} reason=${reason}`;
+  try {
+    record.closeResponse = await client.closePositions({ symbol });
+    record.nakedPositionClosed = true;
+    record.status = "naked_closed";
+  } catch (e) {
+    record.nakedPositionCloseError = String(/** @type {Error} */ (e).message ?? e);
+    record.status = "naked_close_failed";
+  }
+  // Telegram 告警（与 Bitget 裸仓策略一致）；可用 WEEX_SKIP_TELEGRAM_ALERT=1 或 BITGET_SKIP_TELEGRAM_ALERT=1 跳过
+  if (process.env.WEEX_SKIP_TELEGRAM_ALERT !== "1" && process.env.BITGET_SKIP_TELEGRAM_ALERT !== "1") {
+    try {
+      const { createLogger } = await import("./logger.js");
+      const { createSystemTelegramAlert } = await import("./discord-system-telegram.js");
+      const log = createLogger("weex-tpsl");
+      const tg = createSystemTelegramAlert(log);
+      const suffix =
+        record.status === "naked_close_failed"
+          ? `\n平仓失败: ${record.nakedPositionCloseError}`
+          : "\n已市价平仓";
+      await tg.notify(`${alertBase}${suffix}`, { kind: "weex_naked_position" });
+    } catch (e) {
+      try {
+        const { createLogger } = await import("./logger.js");
+        createLogger("weex-tpsl").warn(
+          `WEEX Telegram 告警发送失败: ${String(/** @type {Error} */ (e).message ?? e)}`
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return record;
+}
+
 export async function executeWeexStagedMarketOpen(client, input) {
   const parsed = input.parsed;
   const channelTrade = input.channelTrade;
@@ -157,52 +203,59 @@ export async function executeWeexStagedMarketOpen(client, input) {
 
   try {
     const slPrice = formatWeexPrice(initialSl, contractMeta);
+    const tpPrice = formatWeexPrice(initialTp, contractMeta);
+    // 无有效止损价则拒开，绝不下无 SL 市价单
+    if (!slPrice || !tpPrice) {
+      return {
+        ok: false,
+        reason: "tpsl_price_format_failed",
+        error: "无法格式化止盈/止损价，拒开仓",
+        record,
+      };
+    }
     const openResp = await client.placeMarketOrder({
       symbol,
       side,
       holdSide,
       size,
       clientOid: `wx-open-${input.cardId}-${Date.now()}`,
-      slTriggerPrice: slPrice || undefined,
+      slTriggerPrice: slPrice,
     });
     record.openOrderId = openResp?.orderId ?? null;
     record.openResponse = openResp;
-    if (slPrice) {
-      record.presetStopLossPrice = slPrice;
-      record.initialSlPrice = Number(slPrice);
-    }
-    const tpPrice = formatWeexPrice(initialTp, contractMeta);
-    if (tpPrice) {
-      try {
-        const tpResp = await client.placeTpSlOrder({
-          symbol,
-          holdSide,
-          planType: "TAKE_PROFIT",
-          triggerPrice: tpPrice,
-          quantity: size,
-          clientOid: `wx-tp-init-${input.cardId}-${Date.now()}`,
-        });
-        record.presetStopSurplusPrice = tpPrice;
-        record.tpOrderId = tpResp?.orderId ?? tpResp?.clientAlgoId ?? "tp_plan";
-        record.tpResponse = tpResp;
-      } catch (e) {
-        return {
-          ok: false,
-          reason: "take_profit_not_attached",
-          error: String(/** @type {Error} */ (e).message ?? e),
-          record,
-        };
-      }
+    record.presetStopLossPrice = slPrice;
+    record.initialSlPrice = Number(slPrice);
+    try {
+      const tpResp = await client.placeTpSlOrder({
+        symbol,
+        holdSide,
+        planType: "TAKE_PROFIT",
+        triggerPrice: tpPrice,
+        quantity: size,
+        clientOid: `wx-tp-init-${input.cardId}-${Date.now()}`,
+      });
+      record.presetStopSurplusPrice = tpPrice;
+      record.tpOrderId = tpResp?.orderId ?? tpResp?.clientAlgoId ?? "tp_plan";
+      record.tpResponse = tpResp;
+    } catch (e) {
+      await closeWeexNakedPosition(client, record, symbol, "take_profit_not_attached");
+      return {
+        ok: false,
+        reason: "take_profit_not_attached",
+        error: String(/** @type {Error} */ (e).message ?? e),
+        record,
+      };
     }
   } catch (e) {
     return { ok: false, reason: "open_failed", error: String(/** @type {Error} */ (e).message ?? e) };
   }
 
   if ((!record.presetStopLossPrice || !record.presetStopSurplusPrice) && !input.dryRun) {
+    await closeWeexNakedPosition(client, record, symbol, "tpsl_not_attached");
     return {
       ok: false,
       reason: "tpsl_not_attached",
-      error: "市价开仓未附带完整止盈止损",
+      error: "市价开仓未附带完整止盈止损，已尝试市价平仓",
       record,
     };
   }
