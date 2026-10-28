@@ -238,6 +238,14 @@ const ALL_TFS = ["15m", "1h", "4h", "1d"] as const;
 const QUICK_SYMBOLS = ["BTC", "ETH", "QQQ", "SNDK", "DOGE", "UNI", "NEAR"] as const;
 const BT_UI_CACHE_KEY = "oi_mornitor.btc_backtest.ui_controls.v1";
 
+function formatNetworkErr(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  if (/Failed to fetch|NetworkError|Load failed|network error/i.test(raw)) {
+    return "连不上本机回测接口（8765）。多半是 OI 服务刚重启或瞬时断连，不是币安封禁；请硬刷新后重试。若仍失败再查 oi_mornitor 是否在跑。";
+  }
+  return raw;
+}
+
 type BtUiCache = {
   selectedSymbols?: string[];
   symbolFilter?: string[];
@@ -494,7 +502,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
         setSelectedId(firstPass.id);
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(formatNetworkErr(e));
     } finally {
       setLoading(false);
     }
@@ -672,7 +680,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
         throw new Error(d?.error || symErrs.join("；") || `HTTP ${r.status}`);
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(formatNetworkErr(e));
     } finally {
       setRunningMode(null);
       setProgressText("");
@@ -762,7 +770,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
         throw new Error(d?.error || symErrs.join("；") || `HTTP ${r.status}`);
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(formatNetworkErr(e));
     } finally {
       setRunningMode(null);
       setProgressText("");

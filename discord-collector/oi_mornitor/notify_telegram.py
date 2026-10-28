@@ -489,8 +489,24 @@ def format_volume_price_card_message(alert: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _mirror_volume_price_to_main(alert: dict[str, Any], text: str) -> bool:
+    from oi_mornitor.main_card_policy import is_main_volume_price_eligible
+    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    if not text.strip():
+        return False
+    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
+        return False
+    primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip()
+    if primary and primary == MAIN_CARD_TELEGRAM_CHAT_ID.strip():
+        return False
+    if not is_main_volume_price_eligible(alert):
+        return False
+    return _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
+
+
 def send_volume_price_card_telegram(alert: dict[str, Any]) -> bool:
-    """正式量价 → 仅形态群（OI_CANDLE_CARD）；MAIN 只收蜡烛/结构，不收量价确认/推进。"""
+    """正式量价 → 形态群；白名单币另镜像 MAIN 群。"""
     from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
 
     if alert.get("observation_only") or not alert.get("vp_formal"):
@@ -505,7 +521,29 @@ def send_volume_price_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     text = _message_with_confluence(alert, format_volume_price_card_message(alert))
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
-    return _send_card_text_with_fallback(alert, text, primary) if primary else False
+    ok = _send_card_text_with_fallback(alert, text, primary) if primary else False
+    if ok:
+        _mirror_volume_price_to_main(alert, text)
+    return ok
+
+
+def send_main_volume_price_card_telegram(alert: dict[str, Any]) -> bool:
+    """仅推 MAIN 群（形态群未开或只满足 MAIN 量价口径时）。"""
+    from oi_mornitor.main_card_policy import is_main_volume_price_eligible
+    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
+        return False
+    if not is_main_volume_price_eligible(alert):
+        return False
+    from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
+
+    if not passes_push_mtf_gate(alert):
+        return False
+    if not _confluence_gate_or_observation(alert):
+        return False
+    text = _message_with_confluence(alert, format_volume_price_card_message(alert))
+    return _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
 
 def send_pattern_oi_telegram(alert: dict[str, Any]) -> bool:
     """同步发送；未配置或关闭时返回 False。
@@ -560,3 +598,7 @@ async def send_structure_card_telegram_async(alert: dict[str, Any]) -> bool:
 
 async def send_volume_price_card_telegram_async(alert: dict[str, Any]) -> bool:
     return await asyncio.to_thread(send_volume_price_card_telegram, alert)
+
+
+async def send_main_volume_price_card_telegram_async(alert: dict[str, Any]) -> bool:
+    return await asyncio.to_thread(send_main_volume_price_card_telegram, alert)

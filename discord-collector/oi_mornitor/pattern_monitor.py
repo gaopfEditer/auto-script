@@ -74,15 +74,22 @@ from oi_mornitor.signal_policy import is_disabled_pattern_interval
 from oi_mornitor.symbol_aliases import is_stablecoin_symbol
 from oi_mornitor.telegram_push_toggles import (
     is_candle_push_enabled,
+    is_main_push_enabled,
     is_structure_push_enabled,
 )
-from oi_mornitor.main_card_policy import main_card_equity_symbols, main_card_intervals_for_symbol
+from oi_mornitor.main_card_policy import (
+    main_card_equity_symbols,
+    main_card_intervals_for_symbol,
+    main_card_whitelist_symbols,
+)
 from oi_mornitor.notify_telegram import (
     send_candle_card_telegram_async,
     send_ma144_main_card_telegram_async,
     send_main_card_telegram_async,
+    send_main_volume_price_card_telegram_async,
     send_pattern_oi_telegram_async,
     send_structure_card_telegram_async,
+    send_volume_price_card_telegram_async,
 )
 from oi_mornitor.tv_alert_sync import symbols_on_n_boards
 
@@ -1378,12 +1385,14 @@ class PatternMonitorEngine:
 
         try:
             from oi_mornitor.config import MAIN_CARD_INTERVALS
-            from oi_mornitor.notify_telegram import send_volume_price_card_telegram_async
             from oi_mornitor.pattern_alert_ticker import record_ticker_from_alerts
             from oi_mornitor.volume_price.ticker_bridge import scan_volume_price_ticker_alerts
 
             vp_alerts: list[dict[str, Any]] = []
             try:
+                vp_symbols = sorted(
+                    set(symbols) | {s.upper() for s in main_card_whitelist_symbols()}
+                )
                 vp_tfs = tuple(
                     x for x in ("15m", "1h", "4h") if x in MAIN_CARD_INTERVALS
                 ) or ("15m",)
@@ -1396,7 +1405,7 @@ class PatternMonitorEngine:
                     fetch_pattern_klines_batch(
                         session,
                         base_url=base_url,
-                        symbols=symbols,
+                        symbols=vp_symbols,
                         interval="1h",
                         limit=vp_1h_limit,
                     ),
@@ -1408,14 +1417,34 @@ class PatternMonitorEngine:
                         fetch_pattern_klines_batch(
                             session,
                             base_url=base_url,
-                            symbols=symbols,
+                            symbols=vp_symbols,
                             interval="4h",
                             limit=min(120, PATTERN_KLINE_LIMIT),
                         ),
                         timeout=45,
                     )
+                vp_15m_map: dict[str, list] = {}
+                if "15m" in vp_tfs:
+                    vp_15m_map = {
+                        s: klines_map[s]
+                        for s in vp_symbols
+                        if s in (klines_map or {})
+                    }
+                    missing_15m = [s for s in vp_symbols if s not in vp_15m_map]
+                    if missing_15m:
+                        extra_15m = await asyncio.wait_for(
+                            fetch_pattern_klines_batch(
+                                session,
+                                base_url=base_url,
+                                symbols=missing_15m,
+                                interval="15m",
+                                limit=min(120, PATTERN_KLINE_LIMIT),
+                            ),
+                            timeout=60,
+                        )
+                        vp_15m_map = {**vp_15m_map, **(extra_15m or {})}
                 oi_maps: dict[tuple[str, str], dict[int, float]] = {}
-                oi_syms = [s for s in symbols if s in (klines_map or {})][:80]
+                oi_syms = [s for s in vp_symbols if s in (vp_15m_map or klines_map or {})][:80]
                 oi_sem = asyncio.Semaphore(6)
 
                 async def _oi_one(sym: str, iv: str) -> None:
@@ -1440,7 +1469,7 @@ class PatternMonitorEngine:
                     await asyncio.gather(*oi_tasks, return_exceptions=True)
 
                 vp_alerts = scan_volume_price_ticker_alerts(
-                    klines_map,
+                    vp_15m_map or None,
                     klines_map_1h=klines_1h_map,
                     klines_map_4h=klines_4h_map or None,
                     signal_tfs=vp_tfs,
@@ -1468,15 +1497,19 @@ class PatternMonitorEngine:
                     if vk in pushed_main:
                         continue
                     try:
-                        if await send_volume_price_card_telegram_async(va):
+                        if is_candle_push_enabled():
+                            ok_vp = await send_volume_price_card_telegram_async(va)
+                        else:
+                            ok_vp = await send_main_volume_price_card_telegram_async(va)
+                        if ok_vp:
                             pushed_main.add(vk)
                             n_main_vp += 1
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning("MAIN 量价推送失败: %s", exc)
+                        logger.warning("量价 TG 推送失败: %s", exc)
                 if len(pushed_main) > 5000:
                     self._main_vp_pushed_keys = set(list(pushed_main)[-2000:])
                 if n_main_vp:
-                    logger.info("形态群量价推送 %d 条（不进 MAIN 群）", n_main_vp)
+                    logger.info("量价 TG 推送 %d 条（形态群 + 白名单镜像 MAIN）", n_main_vp)
 
             n_vp = record_ticker_from_alerts(vp_alerts)
             n_vp_stats = 0
@@ -1594,11 +1627,27 @@ class PatternMonitorEngine:
             self._card_seen.popitem(last=False)
         return False
 
+    def _normalize_emit_side(self, side: str) -> str:
+        s = str(side or "").strip().lower()
+        if s in ("bull", "long", "多"):
+            return "long"
+        if s in ("bear", "short", "空"):
+            return "short"
+        return s
+
+    def _mark_card_emit(self, sym: str, iv: str, side: str, close_ts: int) -> None:
+        """入库后即记冷却（不依赖 TG 是否发送成功）。"""
+        s = self._normalize_emit_side(side)
+        if s not in ("long", "short"):
+            return
+        self._card_last_emit[f"{sym}:{iv}:{s}"] = int(close_ts)
+
     def _card_emit_throttled(self, sym: str, iv: str, side: str, close_ts: int) -> bool:
         """同币同周期同方向在 CARD_PUSH_COOLDOWN_BARS 根 K 内只推一次。"""
         if CARD_PUSH_COOLDOWN_BARS <= 0:
             return False
-        key = f"{sym}:{iv}:{side}"
+        s = self._normalize_emit_side(side)
+        key = f"{sym}:{iv}:{s}"
         last = self._card_last_emit.get(key)
         if last is None:
             return False
@@ -1812,24 +1861,29 @@ class PatternMonitorEngine:
                 from oi_mornitor.pattern_emit_gate import ingest_live_pattern_alert
 
                 ingest_live_pattern_alert(alert)
+                self._mark_card_emit(sym, iv, side, close_ts)
                 out.append(alert)
                 logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 card_vol_ok = bool(alert.get("card_vol_ok", True))
                 ok = False
-                if card_vol_ok:
+                if card_vol_ok and is_candle_push_enabled():
                     try:
                         ok = await send_candle_card_telegram_async(alert)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
-                        ok = False
-                else:
+                elif not card_vol_ok:
                     try:
                         ok = await send_main_card_telegram_async(alert)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("Telegram MAIN 形态卡片失败 %s: %s", sym, exc)
-                        ok = False
+                if is_main_push_enabled() and not ok:
+                    try:
+                        if await send_main_card_telegram_async(alert):
+                            ok = True
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Telegram MAIN 形态卡片失败 %s: %s", sym, exc)
                 if ok:
-                    self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
+                    self._mark_card_emit(sym, iv, side, close_ts)
             return out
 
         async def _emit_structure(
@@ -1918,6 +1972,7 @@ class PatternMonitorEngine:
                 from oi_mornitor.pattern_emit_gate import ingest_live_pattern_alert
 
                 ingest_live_pattern_alert(alert)
+                self._mark_card_emit(sym, iv, side, close_ts)
                 out.append(alert)
                 logger.info("📩 结构卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 try:
@@ -2121,6 +2176,7 @@ class PatternMonitorEngine:
                 from oi_mornitor.pattern_emit_gate import ingest_live_pattern_alert
 
                 ingest_live_pattern_alert(alert)
+                self._mark_card_emit(sym, iv, side, close_ts)
                 out.append(alert)
                 logger.info("📐 144均线 MAIN %s %s %s @%s", sym, type_label, iv, close_ts)
                 try:
@@ -2129,7 +2185,7 @@ class PatternMonitorEngine:
                     logger.warning("Telegram 144均线 MAIN 失败 %s: %s", sym, exc)
                     ok = False
                 if ok:
-                    self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
+                    self._mark_card_emit(sym, iv, side, close_ts)
             return out
 
         results = await asyncio.gather(

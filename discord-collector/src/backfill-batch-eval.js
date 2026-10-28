@@ -21,7 +21,7 @@ import { resolveDiscordMessageCreatedAtMs } from "./discord-gateway.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 
 /** 回测逻辑或 profile 变更时递增，使磁盘缓存失效 */
-export const BACKFILL_BACKTEST_ENGINE_VERSION = "6";
+export const BACKFILL_BACKTEST_ENGINE_VERSION = "7";
 
 /** @param {string} msg @param {string} [symbol] */
 function softenKlineErrorForUi(msg, symbol) {
@@ -157,6 +157,10 @@ export function buildVirtualArchiveCard(signal, meta = {}) {
   const rawContent = String(signal.preview ?? signal.body ?? payload.body ?? "").trim();
   const channelId = String(meta.channelId ?? payload.channelId ?? signal.channelId ?? "").trim();
   const channelName = String(meta.channelName ?? payload.channelName ?? "").trim();
+  const parser = String(signal.parser ?? payload.parser ?? "").trim();
+  const slPctHint = signal.slPctHint ?? payload.slPctHint;
+  const oralMarketDefaults = signal.oralMarketDefaults ?? payload.oralMarketDefaults;
+  const tpPartialRatios = signal.tpPartialRatios ?? payload.tpPartialRatios;
 
   const execution = normalizeExecution(
     {
@@ -188,11 +192,22 @@ export function buildVirtualArchiveCard(signal, meta = {}) {
     signal_at: signalAt,
     execution_json: execution,
     parsed_json: {
+      parser: parser || undefined,
       symbol,
       direction: directionLabel,
       entry: entry || undefined,
       stopLoss: stopLoss || undefined,
       targets: targets.length ? targets : undefined,
+      slPctHint: slPctHint != null ? slPctHint : undefined,
+      oralMarketDefaults: oralMarketDefaults ? true : undefined,
+      tpPartialRatios: Array.isArray(tpPartialRatios) ? tpPartialRatios : undefined,
+      exitPlan:
+        oralMarketDefaults
+          ? {
+              takeProfitSizePcts: Array.isArray(tpPartialRatios) ? tpPartialRatios : [0.3, 0.3, 0.4],
+              defaultApplied: true,
+            }
+          : undefined,
     },
     source_ref: payload.sourceRef ?? signal.sourceRef ?? null,
   };

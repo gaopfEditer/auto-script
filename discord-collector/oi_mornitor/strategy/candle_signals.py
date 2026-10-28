@@ -667,7 +667,56 @@ def _candle_card_hits_at_index(
             "card_vol_ok": card_vol_ok,
             "main_mirror_vol_ok": main_vol_ok,
         })
+    if len(hits) > 1:
+        hits = _collapse_opposite_candle_hits_on_bar(hits, row, df, idx)
     return hits
+
+
+def _collapse_opposite_candle_hits_on_bar(
+    hits: list[dict[str, Any]],
+    row: Any,
+    df: pd.DataFrame,
+    idx: int,
+) -> list[dict[str, Any]]:
+    """同一根 K 上射击之星与倒锤子只保留经典形态更强的一侧。"""
+    if len(hits) <= 1:
+        return hits
+    sides = {str(h.get("kind") or "") for h in hits}
+    if sides <= {"shooting_star"} or sides <= {"inverted_hammer"}:
+        return hits
+    bar = {
+        "open": float(row["open"]),
+        "high": float(row["high"]),
+        "low": float(row["low"]),
+        "close": float(row["close"]),
+    }
+    prev = df.iloc[idx - 1] if idx > 0 else None
+    prev_b = (
+        {
+            "open": float(prev["open"]),
+            "high": float(prev["high"]),
+            "low": float(prev["low"]),
+            "close": float(prev["close"]),
+        }
+        if prev is not None
+        else None
+    )
+
+    def _strength(hit: dict[str, Any]) -> float:
+        kind = str(hit.get("kind") or "")
+        o, h, l, c = bar["open"], bar["high"], bar["low"], bar["close"]
+        body = abs(c - o)
+        if body <= 0:
+            return 0.0
+        uw = h - max(o, c)
+        lw = min(o, c) - l
+        if kind == "shooting_star":
+            return uw / body
+        if kind == "inverted_hammer":
+            return lw / body
+        return 0.0
+
+    return [max(hits, key=_strength)]
 
 
 def iter_candle_card_hits_in_range(

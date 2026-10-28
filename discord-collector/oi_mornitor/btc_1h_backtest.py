@@ -1529,7 +1529,25 @@ async def _load_klines_and_oi(
         except Exception:
             raw_disk = None
 
-    if not force_refresh and raw_disk and (time.time() - float(raw_disk.get("ts") or 0) < 14400):
+    use_raw_cache = False
+    if raw_disk and (time.time() - float(raw_disk.get("ts") or 0) < 14400):
+        if not force_refresh:
+            use_raw_cache = True
+        else:
+            # force_refresh 但币安 418 冷却中：不要卡在 OI hist 精确等待，直接用本地 raw
+            try:
+                from oi_mornitor import http_backoff
+
+                if http_backoff.is_cooling("binance"):
+                    logger.warning(
+                        "Binance cooling — using raw kline/OI cache for %s despite force_refresh (remain=%.0fs)",
+                        api_symbol,
+                        http_backoff.cooldown_remaining("binance"),
+                    )
+                    use_raw_cache = True
+            except Exception:  # noqa: BLE001
+                pass
+    if use_raw_cache and raw_disk:
         return {
             "k15": raw_disk["k15"],
             "k1h": raw_disk["k1h"],

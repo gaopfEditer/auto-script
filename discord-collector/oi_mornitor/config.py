@@ -45,6 +45,14 @@ _force_env_from_dotenv(
         "OI_PATTERN_OI_COMBO_TELEGRAM",
         "OI_STATS_SETTLE_TELEGRAM",
         "CARD_PROXIMITY_TELEGRAM",
+        # 覆盖 collect:ui 父进程残留，避免错误 TELEGRAM_SEND_URL / 旧门禁
+        "TELEGRAM_SEND_URL",
+        "TELEGRAM_BOT_TOKEN",
+        "OI_PATTERN_PUSH_MTF_MIN",
+        "OI_CONFLUENCE_PUSH_MIN_TIER",
+        "OI_MAIN_CARD_DEFAULT_SYMBOLS",
+        "OI_MAIN_CARD_LONG_SYMBOLS",
+        "MAIN_CARD_TELEGRAM_CHAT_ID",
     )
 )
 
@@ -240,13 +248,19 @@ MAIN_CARD_TELEGRAM_CHAT_ID = (
     or ""
 ).strip()
 _MAIN_CARD_DEFAULT_ENV = (
-    "BTCUSDT,ETHUSDT,"
+    "BTCUSDT,ETHUSDT,SOLUSDT,"
     "QQQUSDT,SOXLUSDT,"
     "AAPLUSDT,MSFTUSDT,NVDAUSDT,AMZNUSDT,GOOGLUSDT,GOOGUSDT,METAUSDT,TSLAUSDT"
 )
+# 短线关注（默认 15m/1h/4h）；与 OI_MAIN_CARD_LONG_SYMBOLS 并列为 MAIN 白名单
 MAIN_CARD_DEFAULT_SYMBOLS = tuple(
     s.strip().upper()
     for s in os.getenv("OI_MAIN_CARD_DEFAULT_SYMBOLS", _MAIN_CARD_DEFAULT_ENV).split(",")
+    if s.strip()
+)
+MAIN_CARD_LONG_SYMBOLS = tuple(
+    s.strip().upper()
+    for s in os.getenv("OI_MAIN_CARD_LONG_SYMBOLS", "").split(",")
     if s.strip()
 )
 
@@ -260,7 +274,7 @@ MAIN_CARD_MAJOR_SYMBOLS = tuple(
 MAIN_CARD_MAJOR_INTERVALS = filter_active_intervals(
     tuple(
         x.strip().lower()
-        for x in os.getenv("OI_MAIN_CARD_MAJOR_INTERVALS", "15m,1h,4h,8h,1d").split(",")
+        for x in os.getenv("OI_MAIN_CARD_MAJOR_INTERVALS", "15m,1h,4h").split(",")
         if x.strip()
     )
 )

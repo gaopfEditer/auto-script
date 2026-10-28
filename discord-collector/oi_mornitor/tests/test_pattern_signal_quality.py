@@ -7,11 +7,38 @@ from unittest import mock
 
 import pandas as pd
 
-from oi_mornitor.pattern_alert_stats import alert_stats_key, record_alert_from_push, summarize
+from oi_mornitor.pattern_alert_stats import (
+    alert_stats_key,
+    pattern_stats_admission_blocked,
+    record_alert_from_push,
+    summarize,
+)
 from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
 from oi_mornitor.pattern_settle_profile import build_settle_plan, resolve_verify_delay_ms
 from oi_mornitor.pattern_signal_time import align_signal_at_ms, resolve_signal_at_from_alert
 from oi_mornitor.strategy.candle_signals import htf_trend_gate_ok
+
+
+class PatternStatsAdmissionTests(unittest.TestCase):
+    def test_opposite_side_lock_within_window(self) -> None:
+        t = 1_700_000_000_000
+        items = [
+            {
+                "tradeSymbol": "IRYSUSDT",
+                "interval": "15m",
+                "side": "short",
+                "signalAt": t,
+                "outcome": "pending",
+            }
+        ]
+        reason = pattern_stats_admission_blocked(
+            items,
+            trade_symbol="IRYSUSDT",
+            interval="15m",
+            side="long",
+            signal_at_ms=t + 10 * 60 * 1000,
+        )
+        self.assertEqual(reason, "opposite_side_lock")
 
 
 class AlertStatsKeyTests(unittest.TestCase):

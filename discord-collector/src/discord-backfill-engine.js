@@ -334,6 +334,10 @@ export async function replayDiscordChannelMessages(rows, channelId, opts = {}) {
         stopLoss: String(stopLoss ?? "").trim() || null,
         targets,
         preview: content.slice(0, 160),
+        parser: parsed.parser,
+        slPctHint: parsed.slPctHint,
+        oralMarketDefaults: parsed.oralMarketDefaults,
+        tpPartialRatios: parsed.tpPartialRatios,
         cardPayload: {
           symbol: sym,
           direction: dirNorm,
@@ -344,6 +348,10 @@ export async function replayDiscordChannelMessages(rows, channelId, opts = {}) {
           body: content.slice(0, 800),
           channelId,
           messageId,
+          parser: parsed.parser,
+          slPctHint: parsed.slPctHint,
+          oralMarketDefaults: parsed.oralMarketDefaults,
+          tpPartialRatios: parsed.tpPartialRatios,
         },
       };
       cards.push({ ...signal });

@@ -265,6 +265,10 @@ def _load_job_from_disk(job_id: str) -> AiBacktestJob | None:
         job.status = "error"
         job.error = job.error or "服务重启，任务中断；请重新运行回测"
         job.finished_at = time.time()
+        try:
+            _persist_job(job)
+        except Exception:  # noqa: BLE001
+            logger.debug("persist zombie job failed", exc_info=True)
     return job
 
 

@@ -257,6 +257,162 @@ def alert_stats_key(alert: dict[str, Any]) -> str:
     return f"{typ}:{sym}:{close_t}:{kind}:{side}"
 
 
+_INTERVAL_SEC: dict[str, int] = {
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "4h": 14400,
+    "1d": 86400,
+}
+_BAR_SLOT_MS_TOL = 90_000
+
+
+def _bar_close_ms_from_alert(alert: dict[str, Any]) -> int:
+    raw = alert.get("kline_close_time") or alert.get("time") or alert.get("kline_open_time")
+    try:
+        n = int(float(raw))
+    except (TypeError, ValueError):
+        return 0
+    if n <= 0:
+        return 0
+    if n < 1_000_000_000_000:
+        return n * 1000
+    return n
+
+
+def alert_stats_bar_slot_key(
+    *,
+    trade_symbol: str,
+    interval: str,
+    side: str,
+    signal_at_ms: int,
+) -> str:
+    sym = normalize_usdt_symbol(trade_symbol)
+    iv = str(interval or "").strip().lower()
+    s = str(side or "").strip().lower()
+    if s in ("bull", "bear"):
+        s = "long" if s == "bull" else "short"
+    if not sym or not iv or s not in ("long", "short") or signal_at_ms <= 0:
+        return ""
+    return f"{sym}:{iv}:{int(signal_at_ms)}:{s}"
+
+
+def _record_bar_slot_key(rec: dict[str, Any]) -> str:
+    sym = str(rec.get("tradeSymbol") or rec.get("symbol") or "")
+    iv = str(rec.get("interval") or "").strip().lower()
+    side = str(rec.get("side") or "").strip().lower()
+    if side == "多":
+        side = "long"
+    elif side == "空":
+        side = "short"
+    try:
+        signal_at = int(rec.get("signalAt") or 0)
+    except (TypeError, ValueError):
+        signal_at = 0
+    return alert_stats_bar_slot_key(
+        trade_symbol=sym,
+        interval=iv,
+        side=side,
+        signal_at_ms=signal_at,
+    )
+
+
+def _stats_same_side_cooldown_bars() -> int:
+    try:
+        return max(1, int(os.getenv("OI_PATTERN_STATS_SAME_SIDE_COOLDOWN_BARS", "4")))
+    except ValueError:
+        return 4
+
+
+def _stats_opposite_lock_bars() -> int:
+    try:
+        return max(2, int(os.getenv("OI_PATTERN_STATS_OPPOSITE_LOCK_BARS", "6")))
+    except ValueError:
+        return 6
+
+
+def find_stats_bar_slot_duplicate(
+    items: list[dict[str, Any]],
+    *,
+    trade_symbol: str,
+    interval: str,
+    side: str,
+    signal_at_ms: int,
+) -> dict[str, Any] | None:
+    """同币、同周期、同方向、同一根 K 收盘（含 ma144/candle 双通路）。"""
+    slot = alert_stats_bar_slot_key(
+        trade_symbol=trade_symbol,
+        interval=interval,
+        side=side,
+        signal_at_ms=signal_at_ms,
+    )
+    if not slot:
+        return None
+    for rec in items:
+        if _record_bar_slot_key(rec) == slot:
+            return rec
+        try:
+            other_at = int(rec.get("signalAt") or 0)
+        except (TypeError, ValueError):
+            continue
+        if (
+            normalize_usdt_symbol(str(rec.get("tradeSymbol") or rec.get("symbol") or ""))
+            == normalize_usdt_symbol(trade_symbol)
+            and str(rec.get("interval") or "").strip().lower() == str(interval or "").strip().lower()
+            and str(rec.get("side") or "").strip().lower() in (side, "long" if side == "long" else "short")
+            and abs(other_at - signal_at_ms) <= _BAR_SLOT_MS_TOL
+            and (
+                str(rec.get("side") or "").strip().lower() == side
+                or (side == "long" and str(rec.get("dir") or "") == "多")
+                or (side == "short" and str(rec.get("dir") or "") == "空")
+            )
+        ):
+            return rec
+    return None
+
+
+def pattern_stats_admission_blocked(
+    items: list[dict[str, Any]],
+    *,
+    trade_symbol: str,
+    interval: str,
+    side: str,
+    signal_at_ms: int,
+) -> str | None:
+    """入库前：同柱去重、同向冷却、反向互斥。"""
+    iv = str(interval or "").strip().lower()
+    bar_sec = _INTERVAL_SEC.get(iv, 900)
+    same_cd = _stats_same_side_cooldown_bars() * bar_sec * 1000
+    opp_lock = _stats_opposite_lock_bars() * bar_sec * 1000
+    sym_n = normalize_usdt_symbol(trade_symbol)
+
+    for rec in items:
+        if normalize_usdt_symbol(str(rec.get("tradeSymbol") or rec.get("symbol") or "")) != sym_n:
+            continue
+        if str(rec.get("interval") or "").strip().lower() != iv:
+            continue
+        try:
+            other_at = int(rec.get("signalAt") or 0)
+        except (TypeError, ValueError):
+            continue
+        if other_at <= 0:
+            continue
+        rec_side = str(rec.get("side") or "").strip().lower()
+        if rec_side == "多":
+            rec_side = "long"
+        elif rec_side == "空":
+            rec_side = "short"
+        dt = abs(other_at - signal_at_ms)
+        if rec_side == side and dt <= same_cd and dt > _BAR_SLOT_MS_TOL:
+            return "same_side_cooldown"
+        if rec_side != side and dt <= opp_lock:
+            return "opposite_side_lock"
+    return None
+
+
 def _display_symbol(symbol: str) -> str:
     return human_base_asset(symbol) or str(symbol or "").upper()
 
@@ -1047,6 +1203,39 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
 
     with _LOCK:
         items = _load()
+        slot_dup = find_stats_bar_slot_duplicate(
+            items,
+            trade_symbol=trade_symbol,
+            interval=interval,
+            side=side,
+            signal_at_ms=signal_at,
+        )
+        if slot_dup:
+            logger.debug(
+                "形态信号同柱已存在 %s %s %s @%s",
+                trade_symbol,
+                type_label,
+                interval,
+                signal_at,
+            )
+            return slot_dup
+        blocked = pattern_stats_admission_blocked(
+            items,
+            trade_symbol=trade_symbol,
+            interval=interval,
+            side=side,
+            signal_at_ms=signal_at,
+        )
+        if blocked:
+            logger.info(
+                "形态信号跳过入库 %s %s %s %s @%s",
+                blocked,
+                trade_symbol,
+                type_label,
+                interval,
+                signal_at,
+            )
+            return None
         existing = next((r for r in items if r.get("key") == key), None)
         if existing:
             # 已存在：只补缺字段，不覆盖已核结果

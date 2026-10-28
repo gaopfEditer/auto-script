@@ -99,8 +99,9 @@ def get_telegram_push_toggles() -> dict[str, Any]:
         },
         "hint": (
             "形态卡片推送由 oi_mornitor 扫描触发（collect:ui 自动守护 / pnpm run oi:start）。"
-            " candle → OI_CANDLE_CARD_TELEGRAM_CHAT_ID（形态需放量确认）；"
-            " main → 仅镜像蜡烛/结构形态卡片（白名单币+周期），不推量价确认/推进。"
+            " candle → OI_CANDLE_CARD_TELEGRAM_CHAT_ID；"
+            " main → MAIN_CARD_TELEGRAM_CHAT_ID（白名单币：射击之星/倒锤子 + 量价）；"
+            " 本文件 false 会覆盖 env，关 main 后 MAIN 群不会收到任何推送。"
         ),
     }
 

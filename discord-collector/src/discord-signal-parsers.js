@@ -1192,6 +1192,29 @@ function pangmaoCompactLine(joined) {
     .replace(/[，,。.!！?？、；;]+$/g, "");
 }
 
+/** @param {Record<string, unknown>} card @param {string} joined */
+function enrichPangmaoCardFromText(card, joined) {
+  const t = String(joined ?? "");
+  /** @type {Record<string, number>} */
+  const cnNums = { 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+  const pctCn = t.match(/([三四五六七八九十]|\d+)\s*个点\s*止损/);
+  if (pctCn) {
+    const n = cnNums[String(pctCn[1] ?? "")] ?? Number(pctCn[1]);
+    if (Number.isFinite(n) && n > 0) card.slPctHint = n / 100;
+  }
+  if (/止损上方\s*(?:五|5)\s*个点/.test(t)) card.slPctHint = 0.05;
+  const slPx = t.match(/([\d.]+)\s*止损/);
+  if (slPx && !String(card.stopLoss ?? "").trim()) card.stopLoss = slPx[1];
+  const ethNear = t.match(/以太坊?\s*([\d.]+)\s*附近\s*空/);
+  if (ethNear && !String(card.entry ?? "").trim()) {
+    card.entry = ethNear[1];
+    card.direction = card.direction || "做空";
+  }
+  card.oralMarketDefaults = true;
+  card.tpPartialRatios = [0.3, 0.3, 0.4];
+  return card;
+}
+
 function parsePangmaoInformalOpens(joined) {
   const compact = pangmaoCompactLine(joined);
   /** @type {Array<Record<string, unknown>>} */
@@ -1203,7 +1226,7 @@ function parsePangmaoInformalOpens(joined) {
       joined,
       orderMode: "market",
     });
-    if (card) out.push({ ...card, parser: "pangmao" });
+    if (card) out.push(enrichPangmaoCardFromText({ ...card, parser: "pangmao" }, joined));
   };
 
   const cnHead = compact.match(/^(闪迪|海力士)(?:现价格?)?(做多|做空)/);
@@ -1254,7 +1277,7 @@ export function parsePangmaoSignals(text) {
   /** @type {Array<Record<string, unknown>>} */
   const out = [];
   const pushUnique = (/** @type {Record<string, unknown>} */ card) => {
-    const stamped = { ...card, parser: "pangmao" };
+    const stamped = enrichPangmaoCardFromText({ ...card, parser: "pangmao" }, t);
     const sym = String(stamped.symbol ?? "").toUpperCase();
     const dir = String(stamped.direction ?? "");
     const ent = String(stamped.entry ?? "").trim() || "mkt";

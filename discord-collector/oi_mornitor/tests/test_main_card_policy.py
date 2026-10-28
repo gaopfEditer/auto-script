@@ -4,13 +4,14 @@ import unittest
 
 from oi_mornitor.main_card_policy import (
     is_main_card_mirror_eligible,
+    is_main_volume_price_eligible,
     is_volume_price_card,
     main_card_intervals_for_symbol,
 )
 
 
 class MainCardPolicyTests(unittest.TestCase):
-    def test_volume_price_excluded_from_main_mirror(self) -> None:
+    def test_volume_price_excluded_from_candle_mirror(self) -> None:
         vp = {
             "type": "volume_price_card",
             "symbol": "BTCUSDT",
@@ -20,6 +21,7 @@ class MainCardPolicyTests(unittest.TestCase):
         }
         self.assertTrue(is_volume_price_card(vp))
         self.assertFalse(is_main_card_mirror_eligible(vp))
+        self.assertTrue(is_main_volume_price_eligible(vp))
 
     def test_structure_excluded_from_main_mirror(self) -> None:
         struct = {
@@ -47,10 +49,11 @@ class MainCardPolicyTests(unittest.TestCase):
         self.assertIn("1w", ivs)
         self.assertNotIn("15m", ivs)
 
-    def test_major_intervals_include_15m_and_1d(self) -> None:
+    def test_major_intervals_short_line(self) -> None:
         ivs = main_card_intervals_for_symbol("BTCUSDT")
         self.assertIn("15m", ivs)
-        self.assertIn("1d", ivs)
+        self.assertIn("4h", ivs)
+        self.assertNotIn("1w", ivs)
 
 
 if __name__ == "__main__":

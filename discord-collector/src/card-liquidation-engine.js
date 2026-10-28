@@ -198,6 +198,52 @@ export function sanitizeLiquidationLevels(entry, isShort, tps, sl) {
   return applyDefaultTpSl(entry, isShort, validTps, validSl);
 }
 
+/** @param {Record<string, unknown>} card */
+function parsedFromCard(card) {
+  const p = card.parsedJson ?? card.parsed_json;
+  return p && typeof p === "object" && !Array.isArray(p)
+    ? /** @type {Record<string, unknown>} */ (p)
+    : {};
+}
+
+/**
+ * 胖猫口语市价：军长式 3/6/10% 分批止盈 + 文案止损或 12% 宽止损（避免默认 ±5% 秒扫）。
+ * @param {Record<string, unknown>} card
+ * @param {number} entry
+ * @param {boolean} isShort
+ * @param {number[]} tps
+ * @param {number | null} sl
+ */
+export function applyPangmaoOralLiquidationLevels(card, entry, isShort, tps, sl) {
+  const parsed = parsedFromCard(card);
+  if (String(parsed.parser ?? "") !== "pangmao" || !parsed.oralMarketDefaults) {
+    return null;
+  }
+  /** @type {number[]} */
+  let outTps = tps.length ? [...tps] : [];
+  let outSl = sl;
+  if (!outTps.length) {
+    for (const pct of [0.03, 0.06, 0.1]) {
+      outTps.push(isShort ? entry * (1 - pct) : entry * (1 + pct));
+    }
+  }
+  if (outSl == null) {
+    const slFromText = parsePrice(parsed.stopLoss);
+    if (slFromText != null && isValidSlLevel(entry, slFromText, isShort)) {
+      outSl = slFromText;
+    } else {
+      const hint = Number(parsed.slPctHint);
+      const pct = Number.isFinite(hint) && hint > 0 ? hint : 0.12;
+      outSl = isShort ? entry * (1 + pct) : entry * (1 - pct);
+    }
+  }
+  outTps = outTps.filter((tp) => isValidTpLevel(entry, tp, isShort));
+  if (!isValidSlLevel(entry, outSl, isShort)) {
+    outSl = isShort ? entry * 1.12 : entry * 0.88;
+  }
+  return { tps: outTps, sl: outSl };
+}
+
 /** @param {number} a @param {number} b @param {number} ref */
 function priceNear(a, b, ref) {
   const tol = Math.max(ref * 0.0005, 1e-8);
@@ -435,9 +481,15 @@ export function evaluateLiquidation(card, klines, opts) {
     tps = fixedLevels.tps.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0);
     sl = Number(fixedLevels.sl);
   } else {
-    const sanitized = sanitizeLiquidationLevels(entryPriceUsed, isShort, tps, sl);
-    tps = sanitized.tps;
-    sl = sanitized.sl;
+    const oral = applyPangmaoOralLiquidationLevels(card, entryPriceUsed, isShort, tps, sl);
+    if (oral) {
+      tps = oral.tps;
+      sl = oral.sl;
+    } else {
+      const sanitized = sanitizeLiquidationLevels(entryPriceUsed, isShort, tps, sl);
+      tps = sanitized.tps;
+      sl = sanitized.sl;
+    }
   }
 
   const exitPlan = resolveCardExitPlan(card, execution);

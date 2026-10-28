@@ -106,21 +106,38 @@ def is_cooling(scope: str = "binance") -> bool:
     return cooldown_remaining(scope) > 0
 
 
+# 冷却期最长阻塞秒数；超过则 fail-fast，避免 AI 回测/雷达卡在「进行中」十几分钟
+COOLDOWN_BLOCK_MAX_SEC = float(os.getenv("OI_HTTP_COOLDOWN_BLOCK_MAX_SEC", "5"))
+
+
 async def wait_global_cooldown(*, label: str = "", scope: str = "binance") -> float:
-    """若该 scope 冷却中则阻塞到结束。返回实际等待秒数。"""
+    """若该 scope 冷却中：短冷却可等，长冷却（币安 418 精确解封常达数分钟）立即返回剩余秒数，不阻塞。
+
+    返回值 > 0 表示仍在冷却；调用方应跳过该所请求并走缓存/备选所。
+    """
     rem = cooldown_remaining(scope)
     if rem <= 0:
         return 0.0
     tag = f" · {label}" if label else ""
+    if rem > COOLDOWN_BLOCK_MAX_SEC:
+        logger.warning(
+            "HTTP 冷却[%s] 中，跳过阻塞等待（剩余 %.0fs > 上限 %.0fs）（%s）%s",
+            scope,
+            rem,
+            COOLDOWN_BLOCK_MAX_SEC,
+            _cooldown_reason.get(scope) or "throttle",
+            tag,
+        )
+        return rem
     logger.warning(
-        "HTTP 冷却[%s] 中，精确等待 %.0fs（%s）%s",
+        "HTTP 冷却[%s] 中，短等 %.0fs（%s）%s",
         scope,
         rem,
         _cooldown_reason.get(scope) or "throttle",
         tag,
     )
     await asyncio.sleep(rem)
-    return rem
+    return 0.0
 
 
 async def mark_cooldown(delay_sec: float, reason: str, *, scope: str = "binance") -> None:
@@ -186,9 +203,12 @@ async def get_json(
     last_status = 0
 
     for attempt in range(attempts):
-        # 仅币安请求遵守币安冷却；其它所互不阻塞
+        # 仅币安请求遵守币安冷却；其它所互不阻塞。
+        # 长冷却 fail-fast：返回 418/None，让回测用本地 raw 缓存、K 线走备选所，UI 不再卡死。
         if respect_cooldown and scope == "binance":
-            await wait_global_cooldown(label=tag, scope="binance")
+            rem = await wait_global_cooldown(label=tag, scope="binance")
+            if rem > 0 or is_cooling("binance"):
+                return 418, None
 
         try:
             async with session.get(url, timeout=to) as resp:

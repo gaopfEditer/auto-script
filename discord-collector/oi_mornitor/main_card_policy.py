@@ -6,6 +6,7 @@ from typing import Any
 from oi_mornitor.config import (
     MAIN_CARD_DEFAULT_SYMBOLS,
     MAIN_CARD_EQUITY_INTERVALS,
+    MAIN_CARD_LONG_SYMBOLS,
     MAIN_CARD_MAJOR_INTERVALS,
     MAIN_CARD_MAJOR_SYMBOLS,
     MAIN_CARD_TYPE_PREFIXES,
@@ -13,25 +14,53 @@ from oi_mornitor.config import (
 from oi_mornitor.focus_symbols import normalize_focus_symbol
 from oi_mornitor.signal_policy import is_blocked_ticker_alert, normalize_type_label
 
-# MAIN 群 TG 镜像：仅射击之星 / 倒锤子（不含结构、量价）
+# MAIN 群 TG 镜像：仅射击之星 / 倒锤子（不含结构）
 _MAIN_CANDLE_TYPE_PREFIXES: tuple[str, ...] = (
     "射击之星",
     "倒锤子",
 )
 
-_MAIN_SYMBOLS: frozenset[str] | None = None
+_MAIN_SHORT: frozenset[str] | None = None
+_MAIN_LONG: frozenset[str] | None = None
+_MAIN_ALL: frozenset[str] | None = None
 _MAIN_MAJORS: frozenset[str] | None = None
 
 
-def _main_card_symbols() -> frozenset[str]:
-    global _MAIN_SYMBOLS
-    if _MAIN_SYMBOLS is None:
-        _MAIN_SYMBOLS = frozenset(
+def _short_symbols() -> frozenset[str]:
+    global _MAIN_SHORT
+    if _MAIN_SHORT is None:
+        _MAIN_SHORT = frozenset(
             s
             for s in (normalize_focus_symbol(x) for x in MAIN_CARD_DEFAULT_SYMBOLS)
             if s
         )
-    return _MAIN_SYMBOLS
+    return _MAIN_SHORT
+
+
+def _long_symbols() -> frozenset[str]:
+    global _MAIN_LONG
+    if _MAIN_LONG is None:
+        if MAIN_CARD_LONG_SYMBOLS:
+            _MAIN_LONG = frozenset(
+                s
+                for s in (normalize_focus_symbol(x) for x in MAIN_CARD_LONG_SYMBOLS)
+                if s
+            )
+        else:
+            _MAIN_LONG = frozenset()
+    return _MAIN_LONG
+
+
+def _main_card_symbols() -> frozenset[str]:
+    """MAIN 白名单：OI_MAIN_CARD_DEFAULT_SYMBOLS ∪ OI_MAIN_CARD_LONG_SYMBOLS（未配 LONG 时仅 DEFAULT）。"""
+    global _MAIN_ALL
+    if _MAIN_ALL is None:
+        longs = _long_symbols()
+        if longs:
+            _MAIN_ALL = _short_symbols() | longs
+        else:
+            _MAIN_ALL = _short_symbols()
+    return _MAIN_ALL
 
 
 def _main_major_symbols() -> frozenset[str]:
@@ -45,27 +74,63 @@ def _main_major_symbols() -> frozenset[str]:
     return _MAIN_MAJORS
 
 
+def main_card_whitelist_symbols() -> frozenset[str]:
+    return _main_card_symbols()
+
+
+def is_main_short_symbol(symbol: str) -> bool:
+    """短线池（OI_MAIN_CARD_DEFAULT_SYMBOLS）。"""
+    n = normalize_focus_symbol(symbol)
+    return bool(n) and n in _short_symbols()
+
+
+def is_main_long_symbol(symbol: str) -> bool:
+    """长线池（OI_MAIN_CARD_LONG_SYMBOLS）；未配置 LONG 时等价于白名单内非主流币。"""
+    n = normalize_focus_symbol(symbol)
+    if not n:
+        return False
+    longs = _long_symbols()
+    if longs:
+        return n in longs
+    return n in _main_card_symbols() and n not in _main_major_symbols()
+
+
 def main_card_equity_symbols() -> frozenset[str]:
-    """MAIN 白名单内、非 BTC/ETH/SOL 的美股代币等。"""
+    """MAIN 长线/美股代币扫描集合（形态 jobs、144 均线等）。"""
+    longs = _long_symbols()
+    if longs:
+        return longs
     return _main_card_symbols() - _main_major_symbols()
 
 
 def is_main_card_symbol(symbol: str) -> bool:
-    """MAIN 群仅推送 env `OI_MAIN_CARD_DEFAULT_SYMBOLS` 中的币种（不含 focus 文件扩展）。"""
     n = normalize_focus_symbol(symbol)
     return bool(n) and n in _main_card_symbols()
 
 
 def is_main_major_symbol(symbol: str) -> bool:
+    """短线主流：在 DEFAULT 短线池且（在 MAJORS 或整池仅短线三币）。"""
     n = normalize_focus_symbol(symbol)
-    return bool(n) and n in _main_major_symbols()
+    if not n or not is_main_short_symbol(n):
+        return False
+    if _long_symbols():
+        return n in _main_major_symbols()
+    return n in _main_major_symbols()
 
 
 def main_card_intervals_for_symbol(symbol: str) -> frozenset[str]:
-    """主流 BTC/ETH/SOL 与美股代币使用不同周期集合。"""
+    """短线 DEFAULT → MAJOR 周期；长线 LONG → EQUITY 周期。"""
     if not is_main_card_symbol(symbol):
         return frozenset()
-    if is_main_major_symbol(symbol):
+    n = normalize_focus_symbol(symbol)
+    longs = _long_symbols()
+    if longs:
+        if n in longs:
+            return frozenset(x.strip().lower() for x in MAIN_CARD_EQUITY_INTERVALS if x)
+        if n in _short_symbols():
+            return frozenset(x.strip().lower() for x in MAIN_CARD_MAJOR_INTERVALS if x)
+        return frozenset()
+    if n in _main_major_symbols():
         return frozenset(x.strip().lower() for x in MAIN_CARD_MAJOR_INTERVALS if x)
     return frozenset(x.strip().lower() for x in MAIN_CARD_EQUITY_INTERVALS if x)
 
@@ -120,7 +185,6 @@ def is_main_pattern_card(alert: dict[str, Any]) -> bool:
 
 
 def is_volume_price_card(alert: dict[str, Any]) -> bool:
-    """量价 ticker 卡片（量价确认/推进等），不进 MAIN 群。"""
     if not isinstance(alert, dict):
         return False
     if str(alert.get("type") or "") == "volume_price_card":
@@ -129,6 +193,26 @@ def is_volume_price_card(alert: dict[str, Any]) -> bool:
         return True
     lab = _type_label_of(alert)
     return lab.startswith("量价确认") or lab.startswith("量价推进")
+
+
+def is_main_volume_price_eligible(alert: dict[str, Any]) -> bool:
+    """MAIN 群量价：白名单币 + 分档周期（引擎目前仅 15m/1h/4h）。"""
+    if not isinstance(alert, dict):
+        return False
+    if not is_volume_price_card(alert):
+        return False
+    if alert.get("observation_only") or not alert.get("vp_formal"):
+        return False
+    sym = str(alert.get("symbol") or "")
+    if not is_main_card_symbol(sym):
+        return False
+    iv = str(alert.get("interval") or "").strip().lower()
+    allowed = main_card_intervals_for_symbol(sym)
+    if iv not in allowed:
+        return False
+    if is_blocked_ticker_alert(alert):
+        return False
+    return True
 
 
 def is_main_card_mirror_eligible(alert: dict[str, Any]) -> bool:
