@@ -57,6 +57,7 @@ import {
   isAutoTradeExcludedMajorSymbol,
   shouldPushToTradePlatform,
 } from "./trade-platform-toggles.js";
+import { fitCompositeSourceType } from "./card-source-filter.js";
 
 /** Discord 雪花频道 ID（排除 api/youtube 等占位） */
 function isDiscordChannelId(id) {
@@ -132,6 +133,8 @@ export const SOURCE_TYPES = /** @type {const} */ ([
   "x",
   "api",
   "manual",
+  /** 币安 Square 等外部列表（python-ai-operate:binance_square） */
+  "binance_square",
 ]);
 
 /** 与 discord_signal_cards.source_type VARCHAR(32) 对齐 */
@@ -160,8 +163,7 @@ export function normalizeCardSourceType(raw) {
     const project = s.slice(0, colon).trim();
     const platform = normalizeSourcePlatform(s.slice(colon + 1));
     if (project && platform) {
-      const out = `${project}:${platform}`;
-      return out.length > MAX_CARD_SOURCE_TYPE_LEN ? out.slice(0, MAX_CARD_SOURCE_TYPE_LEN) : out;
+      return fitCompositeSourceType(project, platform);
     }
   }
   return normalizeSourcePlatform(s);

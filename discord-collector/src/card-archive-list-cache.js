@@ -2,7 +2,8 @@
  * 卡片归档列表服务端缓存：archiveCardToClient 只算一次，多前端分发。
  * 支持 sinceId 增量追加。
  */
-import { archiveCardToClient, resolveCardChannelName, resolveSourcePlatform, normalizeCardSourceType } from "./card-archive-service.js";
+import { archiveCardToClient, resolveCardChannelName } from "./card-archive-service.js";
+import { cardSourceTypeMatchesAnyFilter } from "./card-source-filter.js";
 
 /**
  * @param {string[] | undefined} sourceTypes
@@ -22,11 +23,7 @@ function normalizeArchiveSourceTypes(sourceTypes, sourceType) {
  * @param {string[]} sourceTypes
  */
 export function archiveCardMatchesSourceTypes(cardSourceType, sourceTypes) {
-  const list = normalizeArchiveSourceTypes(sourceTypes);
-  if (!list.length) return true;
-  const st = normalizeCardSourceType(cardSourceType);
-  const platform = resolveSourcePlatform(st);
-  return list.some((want) => st === want || platform === want);
+  return cardSourceTypeMatchesAnyFilter(cardSourceType, sourceTypes);
 }
 
 /**
