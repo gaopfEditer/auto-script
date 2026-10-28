@@ -59,7 +59,7 @@ curl -s "http://127.0.0.1:3851/api/v1/cards?from=2026-08-01T00:00:00.000Z&to=202
 | `days` | 近 N 天（默认 30；与 `from`/`to` 二选一） |
 | `from` | 起始时间 ISO（信号时间 `signalAt`，缺省 `createdAt`） |
 | `to` | 结束时间 ISO（默认当前） |
-| `sources` | 来源列表，逗号分隔，如 `discord,telegram,x`（也可用 `source` 单值） |
+| `sources` | 来源列表，逗号分隔，如 `discord,telegram,x`（也可用 `source` 单值）。`x` 会同时匹配 `source_type=x` 与 `python-ai-operate:x`；`python-ai-operate` 匹配全部 `python-ai-operate:*` |
 | `channelId` | 博主 / 频道 id（也可用 `channel_id`） |
 | `symbol` | 币种，如 `BTC`（也可用 `coin`） |
 | `status` | 卡片状态，通常 `active` |
@@ -93,7 +93,21 @@ curl -s "http://127.0.0.1:3851/api/v1/cards/sources" \
   -H "X-Cards-Api-Key: your-secret-key"
 ```
 
-响应：`{ ok, sources: ["discord","youtube","telegram","x","api","manual"] }`
+响应：`{ ok, sources: ["discord","youtube","telegram","x","python-ai-operate","binance_square","api","manual"], note }`
+
+筛选示例（python-ai-operate 实时推卡，对端常见 `source: x` 或 `python-ai-operate:x`）：
+
+```bash
+# 今天仅 X / 实时列表信号（不含 Discord 频道卡）
+curl -s "http://127.0.0.1:3851/api/v1/cards?from=$(date -u +%Y-%m-%dT00:00:00.000Z)&sources=x" \
+  -H "X-Cards-Api-Key: your-secret-key"
+
+# 全部 python-ai-operate 前缀（含 x / telegram / binance_square 等后缀）
+curl -s "http://127.0.0.1:3851/api/v1/cards?days=1&sources=python-ai-operate" \
+  -H "X-Cards-Api-Key: your-secret-key"
+```
+
+UI：卡片归档页 `/cards` 勾选 **X / Twitter** 或 **python-ai-operate 全部**（默认仍含 Discord，需取消其它来源时只用 API `sources=x`）。
 
 ---
 
@@ -167,7 +181,7 @@ curl -s -X POST "http://127.0.0.1:3851/api/v1/cards" \
 | `channelId` | string | 频道 id（默认 `api`） |
 | `channelName` | string | 频道名称 |
 | `channelAvatar` | string | 频道头像 URL |
-| `source` | string | 来源：`x` / `telegram` / …（也可用 `sourceType`） |
+| `source` | string | 来源：`x` / `telegram` / `python-ai-operate:x` / …（也可用 `sourceType`；twitter → x） |
 | `body` | string | 原文（也可用 `content`、`rawContent`） |
 | `images` | string[] | 图片 URL（也可用 `image`） |
 | `symbol` | string | 币种 |

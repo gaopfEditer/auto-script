@@ -20,15 +20,15 @@ import {
   filterSignalCardsByUiStatus,
   summarizeCardsByOutcome,
 } from "./card-eval-outcome.js";
-import { parseArchiveRangeMs } from "./card-archive-api.js";
+import { parseArchiveRangeMs, resolveArchiveListSourceTypes } from "./card-archive-api.js";
 
 /** @param {import("express").Request} req */
 function parseListFilters(req) {
-  const sourceType = String(req.query.source ?? req.query.source_type ?? req.query.sourceType ?? "").trim();
+  const sourceTypes = resolveArchiveListSourceTypes(req);
   const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
   const channelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
   return {
-    sourceType: sourceType || undefined,
+    sourceTypes: sourceTypes.length ? sourceTypes : undefined,
     symbol: symbol || undefined,
     channelId: channelId || undefined,
   };
@@ -106,7 +106,7 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
           fromMs,
           toMs,
           limit: 500,
-          sourceType: listFilters.sourceType,
+          sourceTypes: listFilters.sourceTypes,
           symbol: listFilters.symbol,
         });
         const allCards = rows.map((r) => signalCardToClient(r));
@@ -141,7 +141,7 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
         fromMs,
         toMs,
         limit,
-        sourceType: listFilters.sourceType,
+        sourceTypes: listFilters.sourceTypes,
         symbol: listFilters.symbol,
       });
       const allCards = rows.map((r) => signalCardToClient(r));

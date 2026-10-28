@@ -18,6 +18,17 @@ import { signalCardToClient } from "./discord-signal-card-service.js";
 import { createCardArchiveListCache } from "./card-archive-list-cache.js";
 import { requireLocalRequest } from "./local-request.js";
 import { formatPipelineLog } from "./signal-pipeline-log.js";
+import {
+  parseArchiveSourceTypesList,
+  resolveArchiveBodySourceTypes,
+  resolveArchiveListSourceTypes,
+} from "./card-source-filter.js";
+
+export {
+  parseArchiveSourceTypesList,
+  resolveArchiveBodySourceTypes,
+  resolveArchiveListSourceTypes,
+} from "./card-source-filter.js";
 
 /**
  * 卡片正文：优先 body / content / 原文 / 正文，兼容 rawContent / description。
@@ -185,50 +196,6 @@ function parseLiquidateRangeMs(body) {
 }
 
 /**
- * @param {unknown} raw
- * @returns {string[]}
- */
-export function parseArchiveSourceTypesList(raw) {
-  /** @type {string[]} */
-  const out = [];
-  const add = (v) => {
-    const s = String(v ?? "").trim().toLowerCase();
-    if (s) out.push(s);
-  };
-  if (Array.isArray(raw)) {
-    for (const x of raw) add(x);
-  } else {
-    const s = String(raw ?? "").trim();
-    if (s) {
-      for (const part of s.split(/[,;\s]+/)) add(part);
-    }
-  }
-  return [...new Set(out)];
-}
-
-/**
- * @param {import("express").Request} req
- */
-export function resolveArchiveListSourceTypes(req) {
-  const fromSources = parseArchiveSourceTypesList(req.query.sources);
-  if (fromSources.length) return fromSources;
-  const single = String(
-    req.query.source ?? req.query.source_type ?? req.query.sourceType ?? ""
-  ).trim().toLowerCase();
-  return single ? [single] : [];
-}
-
-/**
- * @param {Record<string, unknown>} body
- */
-export function resolveArchiveBodySourceTypes(body) {
-  const fromSources = parseArchiveSourceTypesList(body.sources);
-  if (fromSources.length) return fromSources;
-  const single = String(body.source ?? body.sourceType ?? body.source_type ?? "").trim().toLowerCase();
-  return single ? [single] : [];
-}
-
-/**
  * @param {import("express").Request} req
  * @param {import("express").Response} res
  * @param {import("express").NextFunction} next
@@ -347,7 +314,18 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
   function sourcesHandler(_req, res) {
     res.json({
       ok: true,
-      sources: ["discord", "youtube", "telegram", "x", "api", "manual"],
+      sources: [
+        "discord",
+        "youtube",
+        "telegram",
+        "x",
+        "python-ai-operate",
+        "binance_square",
+        "api",
+        "manual",
+      ],
+      note:
+        "列表筛选 sources=x 会匹配 source_type 为 x 或 python-ai-operate:x；sources=python-ai-operate 匹配全部 python-ai-operate:*",
     });
   }
 

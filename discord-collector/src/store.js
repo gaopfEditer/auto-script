@@ -6,6 +6,7 @@ import { bindCommunitySqliteToStore, openCommunitySqliteStore } from "./communit
 import { config } from "./config.js";
 import { minDiscordSnowflakeId } from "./discord-show-history-cache.js";
 import { serializeRawJsonColumnForMysql } from "./mysql-json.js";
+import { buildSourceTypesWhereClause } from "./card-source-filter.js";
 
 /**
  * @typedef {{ host: string; port: number; user: string; password: string; database: string }} MysqlConfig
@@ -1107,12 +1108,11 @@ export async function openStore(cfg, log) {
       params.push(status);
     }
     if (srcList.length) {
-      const parts = [];
-      for (const st of srcList) {
-        parts.push("(LOWER(sc.source_type) = ? OR LOWER(sc.source_type) LIKE ?)");
-        params.push(st, `%:${st}`);
+      const { whereParts, params: srcParams } = buildSourceTypesWhereClause(srcList);
+      if (whereParts.length) {
+        where.push(`(${whereParts.join(" OR ")})`);
+        params.push(...srcParams);
       }
-      where.push(`(${parts.join(" OR ")})`);
     }
     if (symbol) {
       const sym = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;

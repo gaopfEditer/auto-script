@@ -10,7 +10,9 @@ export const SOURCE_OPTIONS = [
   { value: "discord", label: "Discord" },
   { value: "youtube", label: "YouTube" },
   { value: "telegram", label: "Telegram" },
-  { value: "x", label: "X / Twitter" },
+  { value: "x", label: "X / Twitter（含 python-ai-operate 实时）" },
+  { value: "python-ai-operate", label: "python-ai-operate 全部" },
+  { value: "binance_square", label: "币安 Square" },
   { value: "api", label: "外部 API" },
   { value: "manual", label: "手动" },
 ];
@@ -70,10 +72,15 @@ export function normalizeArchiveSourceList(extra) {
 export function cardMatchesArchiveSources(cardSourceType, sources) {
   if (!sources?.length) return true;
   const st = String(cardSourceType ?? "").trim().toLowerCase();
-  const platform = st.includes(":") ? st.split(":").pop() : st;
   return sources.some((s) => {
     const want = String(s).trim().toLowerCase();
-    return want && (st === want || platform === want);
+    if (!want) return false;
+    if (st === want) return true;
+    if (want === "python-ai-operate") {
+      return st === want || st.startsWith("python-ai-operate:");
+    }
+    const platform = st.includes(":") ? st.split(":").pop() : st;
+    return platform === want;
   });
 }
 
