@@ -164,6 +164,33 @@ def signal_to_card_payload(
     return payload
 
 
+def operate_capture_source(platform: str) -> str:
+    """
+    python-ai-operate 信号抓取 → discord-collector `POST /api/v1/cards` 的 source 字段。
+    与 card-archive-service 的 `python-ai-operate:平台` 约定一致（/cards 来源筛选用平台段 x / binance）。
+    """
+    raw = (platform or "").strip().lower()
+    if raw in ("twitter", "x", "tweet"):
+        return "python-ai-operate:x"
+    if raw in ("binance", "bn", "square", "币安"):
+        return "python-ai-operate:binance"
+    slug = re.sub(r"[^a-z0-9._-]", "", raw)[:12] or "api"
+    return f"python-ai-operate:{slug}"
+
+
+def merge_operate_capture_payload(payload: dict[str, Any], *, platform: str) -> dict[str, Any]:
+    """补全 source，供 python-ai-operate / 币安广场抓取等调用方使用。"""
+    out = dict(payload)
+    if not str(out.get("source") or "").strip():
+        out["source"] = operate_capture_source(platform)
+    return out
+
+
+def post_operate_capture_card(payload: dict[str, Any], *, platform: str) -> dict[str, Any]:
+    """python-ai-operate 抓取信号建卡（写入与 /cards 相同的归档表）。"""
+    return post_card(merge_operate_capture_payload(payload, platform=platform))
+
+
 def post_card(payload: dict[str, Any]) -> dict[str, Any]:
     """同步 POST /api/v1/cards；成功返回 JSON，失败抛异常。"""
     key = get_cards_api_key()
