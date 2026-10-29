@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch, onUnmounted } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
+import { subscribeCollectorSocket } from "../composables/useCollectorSocket.js";
 import SignalCardItem from "../components/SignalCardItem.vue";
 import SignalEvaluationForm from "../components/SignalEvaluationForm.vue";
 import {
@@ -20,6 +21,9 @@ import {
   PERIOD_OPTIONS,
   normalizeArchiveSourceList,
   archivePeriodShowsWeekDividers,
+  DEFAULT_ARCHIVE_EXTRA_SOURCES,
+  cardMatchesArchiveSources,
+  formatArchiveSourceLabel,
 } from "../lib/cardArchiveFilters.js";
 import {
   archiveListClientKey,
@@ -55,7 +59,7 @@ const { toasts: newCardToasts } = useNewCardNotifications();
 const canManageCards = isLocalClient();
 const { hideKolName, toggleHideKol, maskKolName } = useHideKolName();
 
-const extraSources = ref(/** @type {string[]} */ ([]));
+const extraSources = ref(/** @type {string[]} */ ([...DEFAULT_ARCHIVE_EXTRA_SOURCES]));
 const channelId = ref("");
 const symbol = ref("");
 const period = ref(/** @type {string | number} */ ("today"));
@@ -120,7 +124,7 @@ const groupedBySource = computed(() => {
   /** @type {Record<string, number>} */
   const m = {};
   for (const c of cards.value) {
-    const k = c.sourceType || "unknown";
+    const k = formatArchiveSourceLabel(c.sourceType);
     m[k] = (m[k] ?? 0) + 1;
   }
   return m;
@@ -132,6 +136,70 @@ const showWeekDividers = computed(() => archivePeriodShowsWeekDividers(period.va
 function periodQuery() {
   return buildArchivePeriodQuery(period.value);
 }
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard | Record<string, unknown>} card */
+function archiveCardSignalMs(card) {
+  const raw = card.signalAt ?? card.createdAt ?? card.created_at;
+  const ms = new Date(String(raw ?? "")).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/** @param {import("../lib/cardArchiveApi.js").ArchiveCard | Record<string, unknown>} card */
+function cardMatchesCurrentListFilters(card) {
+  if (!cardMatchesArchiveSources(card.sourceType ?? card.source_type, activeSources.value)) {
+    return false;
+  }
+  const ch = String(channelId.value ?? "").trim();
+  if (ch && String(card.channelId ?? card.channel_id ?? "").trim() !== ch) return false;
+  const sym = symbol.value.trim().toUpperCase();
+  if (sym) {
+    const cs = String(card.symbol ?? "")
+      .trim()
+      .toUpperCase();
+    const bare = sym.replace(/USDT$/, "");
+    const csBare = cs.replace(/USDT$/, "");
+    if (cs !== sym && cs !== bare && csBare !== bare && !cs.startsWith(bare)) return false;
+  }
+  const pq = periodQuery();
+  const fromMs = pq.from ? new Date(String(pq.from)).getTime() : NaN;
+  if (Number.isFinite(fromMs) && fromMs > 0) {
+    const t = archiveCardSignalMs(card);
+    if (t > 0 && t < fromMs) return false;
+  } else {
+    const d = Number(pq.days);
+    if (Number.isFinite(d) && d > 0 && d < 3650) {
+      const t = archiveCardSignalMs(card);
+      if (t > 0 && t < Date.now() - d * 86400000) return false;
+    }
+  }
+  return true;
+}
+
+/** @param {Record<string, unknown>} msg */
+function onCardSocketMsg(msg) {
+  if (msg.channel !== "meta") return;
+  const kind = String(msg.kind ?? "");
+  if (kind === "signal_card_deleted") {
+    const cardId = Number(msg.cardId);
+    if (!Number.isFinite(cardId) || cardId <= 0) return;
+    if (cards.value.some((c) => c.id === cardId)) {
+      cards.value = cards.value.filter((c) => c.id !== cardId);
+      writeArchiveListCache(currentListCacheKey(), cards.value);
+    }
+    return;
+  }
+  if (
+    (kind === "signal_card_created" || kind === "card_archived" || kind === "signal_card_updated") &&
+    msg.card &&
+    typeof msg.card === "object"
+  ) {
+    const card = /** @type {import("../lib/cardArchiveApi.js").ArchiveCard} */ (msg.card);
+    if (!cardMatchesCurrentListFilters(card)) return;
+    applyCardUpdate(card);
+  }
+}
+
+let unsubCardSocket = /** @type {null | (() => void)} */ (null);
 
 function currentListCacheKey() {
   return archiveListClientKey({
@@ -528,6 +596,7 @@ watch(
 
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
+  unsubCardSocket = subscribeCollectorSocket(onCardSocketMsg);
   try {
     await fetchSignalConfig();
   } catch {
@@ -539,6 +608,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown);
+  unsubCardSocket?.();
+  unsubCardSocket = null;
 });
 </script>
 
@@ -549,7 +620,9 @@ onUnmounted(() => {
         <h2>卡片归档</h2>
         <RouterLink to="/eval" class="link">Discord 信号频道 →</RouterLink>
       </div>
-      <p class="hint">默认包含 Discord 信号卡片，可勾选其它来源一并展示；支持按博主、币种、时间筛选。</p>
+      <p class="hint">
+        默认包含 Discord、Telegram 实时建卡与 python-ai-operate 抓取的推特/币安信号；可取消勾选隐藏；支持按博主、币种、时间筛选。
+      </p>
 
       <div class="field source-field">
         <span>来源</span>
@@ -739,7 +812,7 @@ onUnmounted(() => {
                 {{ selectedSourceLink.label }} ·
                 {{ hideKolName ? "*****" : selectedSourceLink.displayName }}
               </RouterLink>
-              <template v-else>{{ selected.sourceType }}</template>
+              <template v-else>{{ formatArchiveSourceLabel(selected.sourceType) }}</template>
               <template v-if="selected.channelName">
                 · 频道 {{ hideKolName ? "*****" : selected.channelName }}
               </template>

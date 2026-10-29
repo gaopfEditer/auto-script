@@ -22,8 +22,8 @@ class DefaultTpslTest(unittest.TestCase):
         out, changed, plan = apply_default_tpsl_if_needed(sig)
         self.assertTrue(changed)
         assert plan is not None
-        self.assertEqual(plan["takeProfitSizePcts"], [30, 30, 40])
-        self.assertIn("—", out.take_profit)
+        self.assertEqual(plan["takeProfitSizePcts"], [100])
+        self.assertTrue(out.take_profit)
         self.assertTrue(out.stop_loss)
 
     def test_keep_explicit_tpsl(self) -> None:

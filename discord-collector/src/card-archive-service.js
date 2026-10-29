@@ -130,6 +130,7 @@ export const SOURCE_TYPES = /** @type {const} */ ([
   "youtube",
   "telegram",
   "x",
+  "binance",
   "api",
   "manual",
 ]);
