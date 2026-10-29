@@ -86,7 +86,7 @@ export function classifyCardEval(card) {
 /**
  * @param {Array<ReturnType<typeof archiveCardToClient>>} cards
  */
-function aggregateMetrics(cards) {
+export function aggregateMetrics(cards) {
   let winCount = 0;
   let lossCount = 0;
   let pendingCount = 0;

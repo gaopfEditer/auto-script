@@ -313,6 +313,13 @@ export const config = {
     const n = Number(v);
     return Number.isFinite(n) ? n : v;
   })(),
+  /** 主群卡片通知（listen 建卡 / OI MAIN 推送）；与 TELEGRAM_PUSH_CHAT_ID 一致时 digest 口径对齐 */
+  mainCardTelegramChatId: (() => {
+    const v = String(process.env.MAIN_CARD_TELEGRAM_CHAT_ID ?? "").trim();
+    if (!v) return "";
+    const n = Number(v);
+    return Number.isFinite(n) ? n : v;
+  })(),
   telegramSendTimeoutMs: Number(process.env.TELEGRAM_SEND_TIMEOUT_MS ?? 15_000),
   /** 默认 true：全量 WS/API 日志与 UI；设 DISCORD_DEBUG_MODE=0 为精简模式 */
   debugMode: ["0", "false", "no", "off"].includes(
