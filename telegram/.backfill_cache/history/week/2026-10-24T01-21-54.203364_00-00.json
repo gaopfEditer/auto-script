@@ -1,0 +1,5648 @@
+{
+  "ok": true,
+  "replayMode": "trade_card_pusher",
+  "period": "week",
+  "periodDays": 7,
+  "fromMs": 1792200088735,
+  "toMs": 1792804888735,
+  "generatedAt": "2026-10-24T01:21:54.203364+00:00",
+  "configFile": "/Users/maotouying/frontend/code/1.operations/auto-script/telegram/backfill_groups.json",
+  "selectedChatIds": [
+    "-1001766481463",
+    "-1003938902957",
+    "-1001720924085",
+    "-1002666021235",
+    "-1003962150986",
+    "-1001908181865",
+    "-1002355647897",
+    "-1002404948215",
+    "-1002438953921",
+    "-1001976446916"
+  ],
+  "groupCount": 10,
+  "groups": [
+    {
+      "chatId": "-1001766481463",
+      "name": "砸锅卖铁去炒币",
+      "avatar": "avatar/1001766481463.png",
+      "ok": true,
+      "messageCount": 60,
+      "tradeLikeCount": 27,
+      "cardEmitCount": 27,
+      "parsedSignalCount": 27,
+      "symbols": {
+        "ICNT": 5,
+        "IRYS": 3,
+        "GWEI": 2,
+        "QNT": 2,
+        "AVA": 2,
+        "VVV": 2,
+        "CVX": 2,
+        "BAT": 2,
+        "UB": 2,
+        "WLD": 2,
+        "MEW": 2,
+        "CPO": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-17T04:08:55+00:00",
+          "preview": "#ICNT 三十倍拿下！漲幅61%"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-18T06:38:21+00:00",
+          "preview": "#ICNT 輕倉市價空 0.1925"
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-18T06:40:35+00:00",
+          "preview": "止损：0.2007 #ICNT 三十倍拿下！漲幅61% #ICNT 輕倉市價空 0.1925 止損：0.2007"
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "at": "2026-10-19T02:15:30+00:00",
+          "preview": "#GWEI 市价多 0.02197 止損：0.2007 #GWEI 市價多 0.02197"
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "at": "2026-10-19T02:19:48+00:00",
+          "preview": "止盈：0.0231-0.0245 止损：0.0208 止損：0.2007 #GWEI 市價多 0.02197 止盈：0.0231-0.0245 止損：0.0208"
+        },
+        {
+          "phase": "full",
+          "symbol": "QNT",
+          "direction": "多",
+          "at": "2026-10-19T07:39:10+00:00",
+          "preview": "#QNT 市价多 200.58 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 #QNT 市價多 200.58"
+        },
+        {
+          "phase": "full",
+          "symbol": "QNT",
+          "direction": "多",
+          "at": "2026-10-19T07:43:14+00:00",
+          "preview": "止盈：208.8-217.6 止损：193 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 #QNT 市價多 200.58 止盈：208.8-217.6 止損：193"
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-19T08:17:14+00:00",
+          "preview": "#ICNT 市价多 0.1709 #ICNT 輕倉市價空 0.1925 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 止盈：208.8-217.6 止損：193 #ICNT 市價多 0.1709"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-17T04:08:55+00:00",
+          "at": "2026-10-17T04:08:55+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#ICNT 三十倍拿下！漲幅61%",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-17T04:08:55Z",
+            "body": "#ICNT 三十倍拿下！漲幅61%",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18322"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-18T06:38:21+00:00",
+          "at": "2026-10-18T06:38:21+00:00",
+          "entry": "0.1925",
+          "stopLoss": "0.2021",
+          "targets": [
+            "0.1829—0.1771—0.1694"
+          ],
+          "preview": "#ICNT 輕倉市價空 0.1925",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "short",
+            "entry": "0.1925",
+            "stopLoss": "0.2021",
+            "targets": [
+              "0.1829—0.1771—0.1694"
+            ],
+            "signalAt": "2026-10-18T06:38:21Z",
+            "body": "#ICNT 輕倉市價空 0.1925",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18325"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-18T06:40:35+00:00",
+          "at": "2026-10-18T06:40:35+00:00",
+          "entry": "0.1925",
+          "stopLoss": "0.2007",
+          "targets": [
+            "0.1829—0.1771—0.1694"
+          ],
+          "preview": "止损：0.2007 #ICNT 三十倍拿下！漲幅61% #ICNT 輕倉市價空 0.1925 止損：0.2007",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "short",
+            "entry": "0.1925",
+            "stopLoss": "0.2007",
+            "targets": [
+              "0.1829—0.1771—0.1694"
+            ],
+            "signalAt": "2026-10-18T06:40:35Z",
+            "body": "止损：0.2007\n#ICNT 三十倍拿下！漲幅61%\n#ICNT 輕倉市價空 0.1925\n止損：0.2007",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18326,18325"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T02:15:30+00:00",
+          "at": "2026-10-19T02:15:30+00:00",
+          "entry": "0.02197",
+          "stopLoss": "0.2007",
+          "targets": [
+            "0.02307—0.02373—0.02461"
+          ],
+          "preview": "#GWEI 市价多 0.02197 止損：0.2007 #GWEI 市價多 0.02197",
+          "cardPayload": {
+            "symbol": "GWEI",
+            "direction": "long",
+            "entry": "0.02197",
+            "stopLoss": "0.2007",
+            "targets": [
+              "0.02307—0.02373—0.02461"
+            ],
+            "signalAt": "2026-10-19T02:15:30Z",
+            "body": "#GWEI 市价多 0.02197\n止損：0.2007\n#GWEI 市價多 0.02197",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18332,18326"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T02:19:48+00:00",
+          "at": "2026-10-19T02:19:48+00:00",
+          "entry": "0.02197",
+          "stopLoss": "0.0208",
+          "targets": [
+            "0.0231",
+            "0.0245"
+          ],
+          "preview": "止盈：0.0231-0.0245 止损：0.0208 止損：0.2007 #GWEI 市價多 0.02197 止盈：0.0231-0.0245 止損：0.0208",
+          "cardPayload": {
+            "symbol": "GWEI",
+            "direction": "long",
+            "entry": "0.02197",
+            "stopLoss": "0.0208",
+            "targets": [
+              "0.0231",
+              "0.0245"
+            ],
+            "signalAt": "2026-10-19T02:19:48Z",
+            "body": "止盈：0.0231-0.0245\n止损：0.0208\n止損：0.2007\n#GWEI 市價多 0.02197\n止盈：0.0231-0.0245\n止損：0.0208",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18333,18332,18326"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "QNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T07:39:10+00:00",
+          "at": "2026-10-19T07:39:10+00:00",
+          "entry": "200.58",
+          "stopLoss": "0.0208",
+          "targets": [
+            "0.0231",
+            "0.0245"
+          ],
+          "preview": "#QNT 市价多 200.58 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 #QNT 市價多 200.58",
+          "cardPayload": {
+            "symbol": "QNT",
+            "direction": "long",
+            "entry": "200.58",
+            "stopLoss": "0.0208",
+            "targets": [
+              "0.0231",
+              "0.0245"
+            ],
+            "signalAt": "2026-10-19T07:39:10Z",
+            "body": "#QNT 市价多 200.58\n止損：0.2007\n止盈：0.0231-0.0245\n止損：0.0208\n#QNT 市價多 200.58",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18344,18333,18326"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "QNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T07:43:14+00:00",
+          "at": "2026-10-19T07:43:14+00:00",
+          "entry": "200.58",
+          "stopLoss": "193",
+          "targets": [
+            "208.8",
+            "217.6"
+          ],
+          "preview": "止盈：208.8-217.6 止损：193 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 #QNT 市價多 200.58 止盈：208.8-217.6 止損：193",
+          "cardPayload": {
+            "symbol": "QNT",
+            "direction": "long",
+            "entry": "200.58",
+            "stopLoss": "193",
+            "targets": [
+              "208.8",
+              "217.6"
+            ],
+            "signalAt": "2026-10-19T07:43:14Z",
+            "body": "止盈：208.8-217.6\n止损：193\n止損：0.2007\n止盈：0.0231-0.0245\n止損：0.0208\n#QNT 市價多 200.58\n止盈：208.8-217.6\n止損：193",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18345,18344,18333,18326"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T08:17:14+00:00",
+          "at": "2026-10-19T08:17:14+00:00",
+          "entry": "0.1709",
+          "stopLoss": "193",
+          "targets": [
+            "208.8",
+            "217.6"
+          ],
+          "preview": "#ICNT 市价多 0.1709 #ICNT 輕倉市價空 0.1925 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 止盈：208.8-217.6 止損：193 #ICNT 市價多 0.1709",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "long",
+            "entry": "0.1709",
+            "stopLoss": "193",
+            "targets": [
+              "208.8",
+              "217.6"
+            ],
+            "signalAt": "2026-10-19T08:17:14Z",
+            "body": "#ICNT 市价多 0.1709\n#ICNT 輕倉市價空 0.1925\n止損：0.2007\n止盈：0.0231-0.0245\n止損：0.0208\n止盈：208.8-217.6\n止損：193\n#ICNT 市價多 0.1709",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18346,18345,18333,18326"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ICNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T08:18:35+00:00",
+          "at": "2026-10-19T08:18:35+00:00",
+          "entry": "0.1709",
+          "stopLoss": "0.1637",
+          "targets": [
+            "208.8",
+            "217.6"
+          ],
+          "preview": "止损：0.1637 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 止盈：208.8-217.6 止損：193 #ICNT 市價多 0.1709 止損：0.1637",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "long",
+            "entry": "0.1709",
+            "stopLoss": "0.1637",
+            "targets": [
+              "208.8",
+              "217.6"
+            ],
+            "signalAt": "2026-10-19T08:18:35Z",
+            "body": "止损：0.1637\n止損：0.2007\n止盈：0.0231-0.0245\n止損：0.0208\n止盈：208.8-217.6\n止損：193\n#ICNT 市價多 0.1709\n止損：0.1637",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18347,18346,18345,18333,18326"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "AVA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T02:13:09+00:00",
+          "at": "2026-10-20T02:13:09+00:00",
+          "entry": "0.3935",
+          "stopLoss": "0.1637",
+          "targets": [
+            "208.8",
+            "217.6"
+          ],
+          "preview": "#AVA 市价空 0.3935 止盈：208.8-217.6 止損：193 止損：0.1637 #AVA 市價空 0.3935",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "short",
+            "entry": "0.3935",
+            "stopLoss": "0.1637",
+            "targets": [
+              "208.8",
+              "217.6"
+            ],
+            "signalAt": "2026-10-20T02:13:09Z",
+            "body": "#AVA 市价空 0.3935\n止盈：208.8-217.6\n止損：193\n止損：0.1637\n#AVA 市價空 0.3935",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18354,18347,18345"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "AVA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T02:15:07+00:00",
+          "at": "2026-10-20T02:15:07+00:00",
+          "entry": "0.3935",
+          "stopLoss": "0.412",
+          "targets": [
+            "0.3761",
+            "0.3565",
+            "0.329"
+          ],
+          "preview": "止盈：0.3761-0.3565-0.329 止损：0.412 止盈：208.8-217.6 止損：193 止損：0.1637 #AVA 市價空 0.3935 止盈：0.3761-0.3565-0.329 止損：0.412",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "short",
+            "entry": "0.3935",
+            "stopLoss": "0.412",
+            "targets": [
+              "0.3761",
+              "0.3565",
+              "0.329"
+            ],
+            "signalAt": "2026-10-20T02:15:07Z",
+            "body": "止盈：0.3761-0.3565-0.329\n止损：0.412\n止盈：208.8-217.6\n止損：193\n止損：0.1637\n#AVA 市價空 0.3935\n止盈：0.3761-0.3565-0.329\n止損：0.412",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18355,18354,18347,18345"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "VVV",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T07:23:35+00:00",
+          "at": "2026-10-20T07:23:35+00:00",
+          "entry": "24.497",
+          "stopLoss": "0.412",
+          "targets": [
+            "0.3761",
+            "0.3565",
+            "0.329"
+          ],
+          "preview": "#VVV 市价空 24.497 止盈：0.3761-0.3565-0.329 止損：0.412 #VVV 市價空 24.497",
+          "cardPayload": {
+            "symbol": "VVV",
+            "direction": "short",
+            "entry": "24.497",
+            "stopLoss": "0.412",
+            "targets": [
+              "0.3761",
+              "0.3565",
+              "0.329"
+            ],
+            "signalAt": "2026-10-20T07:23:35Z",
+            "body": "#VVV 市价空 24.497\n止盈：0.3761-0.3565-0.329\n止損：0.412\n#VVV 市價空 24.497",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18360,18355"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "VVV",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T07:24:38+00:00",
+          "at": "2026-10-20T07:24:38+00:00",
+          "entry": "24.497",
+          "stopLoss": "25.724",
+          "targets": [
+            "23.26",
+            "21.67"
+          ],
+          "preview": "止盈：23.26-21.67 止损：25.724 止盈：0.3761-0.3565-0.329 止損：0.412 #VVV 市價空 24.497 止盈：23.26-21.67 止損：25.724",
+          "cardPayload": {
+            "symbol": "VVV",
+            "direction": "short",
+            "entry": "24.497",
+            "stopLoss": "25.724",
+            "targets": [
+              "23.26",
+              "21.67"
+            ],
+            "signalAt": "2026-10-20T07:24:38Z",
+            "body": "止盈：23.26-21.67\n止损：25.724\n止盈：0.3761-0.3565-0.329\n止損：0.412\n#VVV 市價空 24.497\n止盈：23.26-21.67\n止損：25.724",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18361,18360,18355"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "CVX",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T02:07:58+00:00",
+          "at": "2026-10-21T02:07:58+00:00",
+          "entry": "2.549",
+          "stopLoss": "25.724",
+          "targets": [
+            "23.26",
+            "21.67"
+          ],
+          "preview": "#CVX 市价多 2.549 止盈：0.3761-0.3565-0.329 止損：0.412 止盈：23.26-21.67 止損：25.724 #CVX 市價多 2.549",
+          "cardPayload": {
+            "symbol": "CVX",
+            "direction": "long",
+            "entry": "2.549",
+            "stopLoss": "25.724",
+            "targets": [
+              "23.26",
+              "21.67"
+            ],
+            "signalAt": "2026-10-21T02:07:58Z",
+            "body": "#CVX 市价多  2.549\n止盈：0.3761-0.3565-0.329\n止損：0.412\n止盈：23.26-21.67\n止損：25.724\n#CVX 市價多  2.549",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18365,18361,18355"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "CVX",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T02:16:53+00:00",
+          "at": "2026-10-21T02:16:53+00:00",
+          "entry": "2.549",
+          "stopLoss": "2.43",
+          "targets": [
+            "23.26",
+            "21.67"
+          ],
+          "preview": "止损：2.43 止盈：0.3761-0.3565-0.329 止損：0.412 止盈：23.26-21.67 止損：25.724 #CVX 市價多 2.549 止損：2.43",
+          "cardPayload": {
+            "symbol": "CVX",
+            "direction": "long",
+            "entry": "2.549",
+            "stopLoss": "2.43",
+            "targets": [
+              "23.26",
+              "21.67"
+            ],
+            "signalAt": "2026-10-21T02:16:53Z",
+            "body": "止损：2.43\n止盈：0.3761-0.3565-0.329\n止損：0.412\n止盈：23.26-21.67\n止損：25.724\n#CVX 市價多  2.549\n止損：2.43",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18366,18365,18361,18355"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BAT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T07:13:43+00:00",
+          "at": "2026-10-21T07:13:43+00:00",
+          "entry": "0.18543",
+          "stopLoss": "2.43",
+          "targets": [
+            "23.26",
+            "21.67"
+          ],
+          "preview": "#BAT 市价多 0.18543 止盈：23.26-21.67 止損：25.724 止損：2.43 #BAT 市價多 0.18543",
+          "cardPayload": {
+            "symbol": "BAT",
+            "direction": "long",
+            "entry": "0.18543",
+            "stopLoss": "2.43",
+            "targets": [
+              "23.26",
+              "21.67"
+            ],
+            "signalAt": "2026-10-21T07:13:43Z",
+            "body": "#BAT  市价多 0.18543\n止盈：23.26-21.67\n止損：25.724\n止損：2.43\n#BAT  市價多 0.18543",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18369,18366,18361"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BAT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T07:19:23+00:00",
+          "at": "2026-10-21T07:19:23+00:00",
+          "entry": "0.18543",
+          "stopLoss": "0.177",
+          "targets": [
+            "0.193",
+            "0.2043",
+            "0.2219"
+          ],
+          "preview": "止盈：0.193-0.2043-0.2219 止损：0.177 止盈：23.26-21.67 止損：25.724 止損：2.43 #BAT 市價多 0.18543 止盈：0.193-0.2043-0.2219 止損：0.177",
+          "cardPayload": {
+            "symbol": "BAT",
+            "direction": "long",
+            "entry": "0.18543",
+            "stopLoss": "0.177",
+            "targets": [
+              "0.193",
+              "0.2043",
+              "0.2219"
+            ],
+            "signalAt": "2026-10-21T07:19:23Z",
+            "body": "止盈：0.193-0.2043-0.2219\n止损：0.177\n止盈：23.26-21.67\n止損：25.724\n止損：2.43\n#BAT  市價多 0.18543\n止盈：0.193-0.2043-0.2219\n止損：0.177",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18370,18369,18366,18361"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "UB",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T01:40:21+00:00",
+          "at": "2026-10-22T01:40:21+00:00",
+          "entry": "0.13162",
+          "stopLoss": "0.177",
+          "targets": [
+            "0.193",
+            "0.2043",
+            "0.2219"
+          ],
+          "preview": "#UB 市价空 0.13162 止損：2.43 止盈：0.193-0.2043-0.2219 止損：0.177 #UB 市價空 0.13162",
+          "cardPayload": {
+            "symbol": "UB",
+            "direction": "short",
+            "entry": "0.13162",
+            "stopLoss": "0.177",
+            "targets": [
+              "0.193",
+              "0.2043",
+              "0.2219"
+            ],
+            "signalAt": "2026-10-22T01:40:21Z",
+            "body": "#UB 市价空 0.13162\n止損：2.43\n止盈：0.193-0.2043-0.2219\n止損：0.177\n#UB 市價空 0.13162",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18373,18370,18366"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "UB",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T01:42:32+00:00",
+          "at": "2026-10-22T01:42:32+00:00",
+          "entry": "0.13162",
+          "stopLoss": "0.137",
+          "targets": [
+            "0.12624",
+            "0.1182"
+          ],
+          "preview": "止盈：0.12624-0.1182 止损：0.137 止損：2.43 止盈：0.193-0.2043-0.2219 止損：0.177 #UB 市價空 0.13162 止盈：0.12624-0.1182 止損：0.137",
+          "cardPayload": {
+            "symbol": "UB",
+            "direction": "short",
+            "entry": "0.13162",
+            "stopLoss": "0.137",
+            "targets": [
+              "0.12624",
+              "0.1182"
+            ],
+            "signalAt": "2026-10-22T01:42:32Z",
+            "body": "止盈：0.12624-0.1182\n止损：0.137\n止損：2.43\n止盈：0.193-0.2043-0.2219\n止損：0.177\n#UB 市價空 0.13162\n止盈：0.12624-0.1182\n止損：0.137",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18374,18373,18370,18366"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T07:23:01+00:00",
+          "at": "2026-10-22T07:23:01+00:00",
+          "entry": "0.01993",
+          "stopLoss": "0.137",
+          "targets": [
+            "0.12624",
+            "0.1182"
+          ],
+          "preview": "#IRYS 市价多 0.01993 止損：2.43 止盈：0.193-0.2043-0.2219 止損：0.177 止盈：0.12624-0.1182 止損：0.137 #IRYS 市價多 0.01993",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "long",
+            "entry": "0.01993",
+            "stopLoss": "0.137",
+            "targets": [
+              "0.12624",
+              "0.1182"
+            ],
+            "signalAt": "2026-10-22T07:23:01Z",
+            "body": "#IRYS 市价多 0.01993\n止損：2.43\n止盈：0.193-0.2043-0.2219\n止損：0.177\n止盈：0.12624-0.1182\n止損：0.137\n#IRYS 市價多 0.01993",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18375,18374,18370,18366"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T07:24:46+00:00",
+          "at": "2026-10-22T07:24:46+00:00",
+          "entry": "0.01993",
+          "stopLoss": "0.0189",
+          "targets": [
+            "0.021",
+            "0.0223",
+            "0.024"
+          ],
+          "preview": "止盈：0.021-0.0223-0.024 止损：0.0189 止盈：0.193-0.2043-0.2219 止損：0.177 止盈：0.12624-0.1182 止損：0.137 #IRYS 市價多 0.01993 止盈：0.021-0.0223-0.024 止損：0.0189",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "long",
+            "entry": "0.01993",
+            "stopLoss": "0.0189",
+            "targets": [
+              "0.021",
+              "0.0223",
+              "0.024"
+            ],
+            "signalAt": "2026-10-22T07:24:46Z",
+            "body": "止盈：0.021-0.0223-0.024\n止损：0.0189\n止盈：0.193-0.2043-0.2219\n止損：0.177\n止盈：0.12624-0.1182\n止損：0.137\n#IRYS 市價多 0.01993\n止盈：0.021-0.0223-0.024\n止損：0.0189",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18376,18375,18374,18370"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "IRYS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T01:51:20+00:00",
+          "at": "2026-10-23T01:51:20+00:00",
+          "entry": "0.01993",
+          "stopLoss": "0.0189",
+          "targets": [
+            "1"
+          ],
+          "preview": "止盈：0.12624-0.1182 止損：0.137 #IRYS 市價多 0.01993 止盈：0.021-0.0223-0.024 止損：0.0189 #PROM TP1",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "long",
+            "entry": "0.01993",
+            "stopLoss": "0.0189",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-23T01:51:20Z",
+            "body": "止盈：0.12624-0.1182\n止損：0.137\n#IRYS 市價多 0.01993\n止盈：0.021-0.0223-0.024\n止損：0.0189\n#PROM TP1",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18382,18376,18375,18374"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "CPO",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T01:57:37+00:00",
+          "at": "2026-10-23T01:57:37+00:00",
+          "entry": "市价",
+          "stopLoss": "0.0189",
+          "targets": [
+            "s:",
+            "t.me",
+            "potatoouu"
+          ],
+          "preview": "CPO｜金秋王牌局 - 每日提供5-10单精准策略，助您轻鬆把握市场機會！ - 每天七位直播老師喊单，勝率高達85%以上，帶您穩操勝券！ 1. 一对一專属指導，隨时解答您的疑問，投資路上不再迷茫！ 2. 深度分析主流币、潛力币、山寨币行情，精准捕捉暴涨機會！ 3. 定期推薦“潛力币”、“翻倍币”，尤其擅长捕捉短线飆升…",
+          "cardPayload": {
+            "symbol": "CPO",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0.0189",
+            "targets": [
+              "s:",
+              "t.me",
+              "potatoouu"
+            ],
+            "signalAt": "2026-10-23T01:57:37Z",
+            "body": "止盈：0.12624-0.1182\n止損：0.137\n止盈：0.021-0.0223-0.024\n止損：0.0189\n#PROM TP1",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18384,18382,18376,18374"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "WLD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T02:00:37+00:00",
+          "at": "2026-10-23T02:00:37+00:00",
+          "entry": "0.5553",
+          "stopLoss": "0.0189",
+          "targets": [
+            "1"
+          ],
+          "preview": "#WLD 市价空 0.5553 止盈：0.12624-0.1182 止損：0.137 止盈：0.021-0.0223-0.024 止損：0.0189 #PROM TP1 #WLD 市價空 0.5553",
+          "cardPayload": {
+            "symbol": "WLD",
+            "direction": "short",
+            "entry": "0.5553",
+            "stopLoss": "0.0189",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-23T02:00:37Z",
+            "body": "#WLD 市价空 0.5553\n止盈：0.12624-0.1182\n止損：0.137\n止盈：0.021-0.0223-0.024\n止損：0.0189\n#PROM TP1\n#WLD 市價空 0.5553",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18385,18382,18376,18374"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "WLD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T02:21:55+00:00",
+          "at": "2026-10-23T02:21:55+00:00",
+          "entry": "0.5553",
+          "stopLoss": "0.0189",
+          "targets": [
+            "1"
+          ],
+          "preview": "#WLD 市价空 0.5553 止盈：0.021-0.0223-0.024 止損：0.0189 #PROM TP1 #WLD 市價空 0.5553 止盈：0.538—0.513 止损：0.5725",
+          "cardPayload": {
+            "symbol": "WLD",
+            "direction": "short",
+            "entry": "0.5553",
+            "stopLoss": "0.0189",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-23T02:21:55Z",
+            "body": "#WLD 市价空 0.5553\n止盈：0.021-0.0223-0.024\n止損：0.0189\n#PROM TP1\n#WLD 市價空 0.5553\n止盈：0.538—0.513\n止损：0.5725",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18385,18382,18376,18374,18386"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "MEW",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T06:53:09+00:00",
+          "at": "2026-10-23T06:53:09+00:00",
+          "entry": "0.0004907",
+          "stopLoss": "0.5725",
+          "targets": [
+            "0.538",
+            "0.513"
+          ],
+          "preview": "#MEW 市价空 0.0004907 #PROM TP1 止盈：0.538—0.513 止损：0.5725 #MEW 市價空 0.0004907",
+          "cardPayload": {
+            "symbol": "MEW",
+            "direction": "short",
+            "entry": "0.0004907",
+            "stopLoss": "0.5725",
+            "targets": [
+              "0.538",
+              "0.513"
+            ],
+            "signalAt": "2026-10-23T06:53:09Z",
+            "body": "#MEW 市价空 0.0004907\n#PROM TP1\n止盈：0.538—0.513\n止损：0.5725\n#MEW 市價空 0.0004907",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18388,18386,18382"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "MEW",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T07:03:04+00:00",
+          "at": "2026-10-23T07:03:04+00:00",
+          "entry": "0.0004907",
+          "stopLoss": "0.5725",
+          "targets": [
+            "0.538",
+            "0.513"
+          ],
+          "preview": "#MEW 市价空 0.0004907 #PROM TP1 止盈：0.538—0.513 止损：0.5725 #MEW 市價空 0.0004907 止損：0.0005105",
+          "cardPayload": {
+            "symbol": "MEW",
+            "direction": "short",
+            "entry": "0.0004907",
+            "stopLoss": "0.5725",
+            "targets": [
+              "0.538",
+              "0.513"
+            ],
+            "signalAt": "2026-10-23T07:03:04Z",
+            "body": "#MEW 市价空 0.0004907\n#PROM TP1\n止盈：0.538—0.513\n止损：0.5725\n#MEW 市價空 0.0004907\n止損：0.0005105",
+            "channelId": "-1001766481463",
+            "sourceRef": "tg:-1001766481463:18388,18386,18382,18389"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1003938902957",
+      "name": "Nine Call",
+      "avatar": "avatar/1003169740057.png",
+      "ok": true,
+      "messageCount": 29,
+      "tradeLikeCount": 18,
+      "cardEmitCount": 18,
+      "parsedSignalCount": 18,
+      "symbols": {
+        "BIRB": 4,
+        "ERA": 2,
+        "OKX": 2,
+        "DNA": 2,
+        "BMT": 2,
+        "COM": 2,
+        "ICNT": 1,
+        "WAL": 1,
+        "AGENT": 1,
+        "IRYS": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": null,
+          "at": "2026-10-17T03:08:38+00:00",
+          "preview": "icnt复盘+后续看法 https://x.com/nine_defi/status/2111293076987912467?s=46"
+        },
+        {
+          "phase": "update",
+          "symbol": "WAL",
+          "direction": "多",
+          "at": "2026-10-18T04:00:49+00:00",
+          "preview": "买了wal，窄止损 尝试"
+        },
+        {
+          "phase": "full",
+          "symbol": "ERA",
+          "direction": "多",
+          "at": "2026-10-18T04:27:18+00:00",
+          "preview": "买了era，窄止损 尝试"
+        },
+        {
+          "phase": "initial",
+          "symbol": "OKX",
+          "direction": null,
+          "at": "2026-10-20T11:13:13+00:00",
+          "preview": "可以参与下okx的这个活动 行情差，这些活动能薅就薅 https://x.com/nine_defi/status/2112500988666065400?s=46"
+        },
+        {
+          "phase": "update",
+          "symbol": "OKX",
+          "direction": null,
+          "at": "2026-10-20T14:02:36+00:00",
+          "preview": "可以参与下okx的这个活动 行情差，这些活动能薅就薅 https://x.com/nine_defi/status/2112500988666065400?s=46"
+        },
+        {
+          "phase": "initial",
+          "symbol": "DNA",
+          "direction": "多",
+          "at": "2026-10-21T01:33:51+00:00",
+          "preview": "买了dna，赌后续合约或韩所 要么亏10个点，要么赚50个点 今天不上会走"
+        },
+        {
+          "phase": "update",
+          "symbol": "DNA",
+          "direction": "多",
+          "at": "2026-10-21T02:34:55+00:00",
+          "preview": "买了dna，赌后续合约或韩所 买了dna，赌后续合约或韩所 要么亏10个点，要么赚50个点 今天不上会走"
+        },
+        {
+          "phase": "full",
+          "symbol": "BMT",
+          "direction": "多",
+          "at": "2026-10-22T00:14:55+00:00",
+          "preview": "买了点bmt， 窄止损，尝试"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-17T03:08:38+00:00",
+          "at": "2026-10-17T03:08:38+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_defi",
+            "status",
+            "2111293076987"
+          ],
+          "preview": "icnt复盘+后续看法 https://x.com/nine_defi/status/2111293076987912467?s=46",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_defi",
+              "status",
+              "2111293076987"
+            ],
+            "signalAt": "2026-10-17T03:08:38Z",
+            "body": "icnt复盘+后续看法\nhttps://x.com/nine_defi/status/2111293076987912467?s=46",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2312"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "WAL",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-18T04:00:49+00:00",
+          "at": "2026-10-18T04:00:49+00:00",
+          "entry": "市价",
+          "stopLoss": "尝试",
+          "targets": [],
+          "preview": "买了wal，窄止损 尝试",
+          "cardPayload": {
+            "symbol": "WAL",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "尝试",
+            "targets": [],
+            "signalAt": "2026-10-18T04:00:49Z",
+            "body": "买了wal，窄止损 尝试",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2350"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ERA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-18T04:27:18+00:00",
+          "at": "2026-10-18T04:27:18+00:00",
+          "entry": "市价",
+          "stopLoss": "尝试",
+          "targets": [],
+          "preview": "买了era，窄止损 尝试",
+          "cardPayload": {
+            "symbol": "ERA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "尝试",
+            "targets": [],
+            "signalAt": "2026-10-18T04:27:18Z",
+            "body": "买了era，窄止损 尝试",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2351"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "OKX",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-20T11:13:13+00:00",
+          "at": "2026-10-20T11:13:13+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_defi",
+            "status",
+            "2112500988666"
+          ],
+          "preview": "可以参与下okx的这个活动 行情差，这些活动能薅就薅 https://x.com/nine_defi/status/2112500988666065400?s=46",
+          "cardPayload": {
+            "symbol": "OKX",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_defi",
+              "status",
+              "2112500988666"
+            ],
+            "signalAt": "2026-10-20T11:13:13Z",
+            "body": "可以参与下okx的这个活动\n行情差，这些活动能薅就薅\nhttps://x.com/nine_defi/status/2112500988666065400?s=46",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2371"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "OKX",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-20T14:02:36+00:00",
+          "at": "2026-10-20T14:02:36+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_defi",
+            "status",
+            "2112500988666"
+          ],
+          "preview": "可以参与下okx的这个活动 行情差，这些活动能薅就薅 https://x.com/nine_defi/status/2112500988666065400?s=46",
+          "cardPayload": {
+            "symbol": "OKX",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_defi",
+              "status",
+              "2112500988666"
+            ],
+            "signalAt": "2026-10-20T14:02:36Z",
+            "body": "可以参与下okx的这个活动\n行情差，这些活动能薅就薅\nhttps://x.com/nine_defi/status/2112500988666065400?s=46",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2371,2374"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "DNA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T01:33:51+00:00",
+          "at": "2026-10-21T01:33:51+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "买了dna，赌后续合约或韩所 要么亏10个点，要么赚50个点 今天不上会走",
+          "cardPayload": {
+            "symbol": "DNA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-21T01:33:51Z",
+            "body": "买了dna，赌后续合约或韩所",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2377"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "DNA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T02:34:55+00:00",
+          "at": "2026-10-21T02:34:55+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_DeFi",
+            "status",
+            "2112734174193"
+          ],
+          "preview": "买了dna，赌后续合约或韩所 买了dna，赌后续合约或韩所 要么亏10个点，要么赚50个点 今天不上会走",
+          "cardPayload": {
+            "symbol": "DNA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_DeFi",
+              "status",
+              "2112734174193"
+            ],
+            "signalAt": "2026-10-21T02:34:55Z",
+            "body": "买了dna，赌后续合约或韩所\n买了dna，赌后续合约或韩所",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2377,2379,2374"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BMT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T00:14:55+00:00",
+          "at": "2026-10-22T00:14:55+00:00",
+          "entry": "市价",
+          "stopLoss": "，尝试",
+          "targets": [],
+          "preview": "买了点bmt， 窄止损，尝试",
+          "cardPayload": {
+            "symbol": "BMT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "，尝试",
+            "targets": [],
+            "signalAt": "2026-10-22T00:14:55Z",
+            "body": "买了点bmt， 窄止损，尝试",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2396"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BIRB",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T02:52:37+00:00",
+          "at": "2026-10-22T02:52:37+00:00",
+          "entry": "市价",
+          "stopLoss": "，尝试",
+          "targets": [],
+          "preview": "买了点birb， 窄止损，尝试",
+          "cardPayload": {
+            "symbol": "BIRB",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "，尝试",
+            "targets": [],
+            "signalAt": "2026-10-22T02:52:37Z",
+            "body": "买了点birb， 窄止损，尝试",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2402"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "COM",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-22T03:17:06+00:00",
+          "at": "2026-10-22T03:17:06+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_DeFi",
+            "status",
+            "2113107260339"
+          ],
+          "preview": "玩法策略，如何玩： https://x.com/nine_DeFi/status/2113107260339831007?s=20",
+          "cardPayload": {
+            "symbol": "COM",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_DeFi",
+              "status",
+              "2113107260339"
+            ],
+            "signalAt": "2026-10-22T03:17:06Z",
+            "body": "玩法策略，如何玩：\nhttps://x.com/nine_DeFi/status/2113107260339831007?s=20",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2403,2379,2374"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "COM",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-23T03:10:45+00:00",
+          "at": "2026-10-23T03:10:45+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_DeFi",
+            "status",
+            "2113107260339"
+          ],
+          "preview": "玩法策略，如何玩： https://x.com/nine_DeFi/status/2113107260339831007?s=20",
+          "cardPayload": {
+            "symbol": "COM",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_DeFi",
+              "status",
+              "2113107260339"
+            ],
+            "signalAt": "2026-10-23T03:10:45Z",
+            "body": "玩法策略，如何玩：\nhttps://x.com/nine_DeFi/status/2113107260339831007?s=20",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2403,2379,2374,2418"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "AGENT",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-23T08:02:10+00:00",
+          "at": "2026-10-23T08:02:10+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_DeFi",
+            "status",
+            "2113541271721"
+          ],
+          "preview": "币安钱包 Agent ID 教程： https://x.com/nine_DeFi/status/2113541271721816350?s=20",
+          "cardPayload": {
+            "symbol": "AGENT",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_DeFi",
+              "status",
+              "2113541271721"
+            ],
+            "signalAt": "2026-10-23T08:02:10Z",
+            "body": "币安钱包  Agent ID 教程：\nhttps://x.com/nine_DeFi/status/2113541271721816350?s=20",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2422"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "BMT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T08:07:22+00:00",
+          "at": "2026-10-23T08:07:22+00:00",
+          "entry": "市价",
+          "stopLoss": "，尝试",
+          "targets": [],
+          "preview": "买了bmt，仓位比较小 买了点bmt， 窄止损，尝试 买了bmt，仓位比较小 目测不如irys强",
+          "cardPayload": {
+            "symbol": "BMT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "，尝试",
+            "targets": [],
+            "signalAt": "2026-10-23T08:07:22Z",
+            "body": "买了bmt，仓位比较小\n买了点bmt， 窄止损，尝试\n买了bmt，仓位比较小",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2423,2396"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "IRYS",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-23T08:37:34+00:00",
+          "at": "2026-10-23T08:37:34+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_DeFi",
+            "status",
+            "2113550231245"
+          ],
+          "preview": "irys 复盘+后续价格点位 https://x.com/nine_DeFi/status/2113550231245885865?s=20",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_DeFi",
+              "status",
+              "2113550231245"
+            ],
+            "signalAt": "2026-10-23T08:37:34Z",
+            "body": "irys 复盘+后续价格点位\nhttps://x.com/nine_DeFi/status/2113550231245885865?s=20",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2425"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "BIRB",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T14:14:05+00:00",
+          "at": "2026-10-23T14:14:05+00:00",
+          "entry": "市价",
+          "stopLoss": "稍微大了点，仓位小 尝试",
+          "targets": [],
+          "preview": "重新买了birb，赌突破 止损稍微大了点，仓位小 尝试",
+          "cardPayload": {
+            "symbol": "BIRB",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "稍微大了点，仓位小 尝试",
+            "targets": [],
+            "signalAt": "2026-10-23T14:14:05Z",
+            "body": "重新买了birb，赌突破\n止损稍微大了点，仓位小 尝试",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2435"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BIRB",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T15:52:51+00:00",
+          "at": "2026-10-23T15:52:51+00:00",
+          "entry": "市价",
+          "stopLoss": "稍微大了点，仓位小 尝试",
+          "targets": [],
+          "preview": "重新买了birb，赌突破 止损稍微大了点，仓位小 尝试 涨幅榜都是我们的币😆 说下这个birb： 看能不能稳住突破周线，突破空间会大点",
+          "cardPayload": {
+            "symbol": "BIRB",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "稍微大了点，仓位小 尝试",
+            "targets": [],
+            "signalAt": "2026-10-23T15:52:51Z",
+            "body": "重新买了birb，赌突破\n止损稍微大了点，仓位小 尝试",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2447,2435"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BIRB",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-24T00:59:16+00:00",
+          "at": "2026-10-24T00:59:16+00:00",
+          "entry": "市价",
+          "stopLoss": "稍微大了点，仓位小 尝试",
+          "targets": [
+            "s:",
+            "x.com",
+            "nine_defi",
+            "status",
+            "2113797286123"
+          ],
+          "preview": "重新买了birb，赌突破 止损稍微大了点，仓位小 尝试 涨幅榜都是我们的币😆 说下这个birb： 看能不能稳住突破周线，突破空间会大点 birb后续看法： https://x.com/nine_defi/status/2113797286123999359?s=46",
+          "cardPayload": {
+            "symbol": "BIRB",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "稍微大了点，仓位小 尝试",
+            "targets": [
+              "s:",
+              "x.com",
+              "nine_defi",
+              "status",
+              "2113797286123"
+            ],
+            "signalAt": "2026-10-24T00:59:16Z",
+            "body": "重新买了birb，赌突破\n止损稍微大了点，仓位小 尝试",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2530,2447,2435"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ERA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-24T01:13:57+00:00",
+          "at": "2026-10-24T01:13:57+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "买了点era ，这个币回踩没看到 赌的是后续突破的拉升 纯当这几天赚钱，消费了🤣",
+          "cardPayload": {
+            "symbol": "ERA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-24T01:13:57Z",
+            "body": "买了点era ，这个币回踩没看到",
+            "channelId": "-1003938902957",
+            "sourceRef": "tg:-1003938902957:2554"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1001720924085",
+      "name": "Leo-加密貨幣頻道",
+      "avatar": "avatar/1001720924085.jpeg",
+      "ok": true,
+      "messageCount": 23,
+      "tradeLikeCount": 16,
+      "cardEmitCount": 16,
+      "parsedSignalCount": 16,
+      "symbols": {
+        "BTC": 6,
+        "GRASS": 5,
+        "GWEI": 3,
+        "ELAS": 1,
+        "ELSA": 1
+      },
+      "samples": [
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "at": "2026-10-19T03:05:41+00:00",
+          "preview": "#GWEI 小級別反轉三角突破，市价轻仓入多，止盈：0.02297-0.02427-0.0257 #GWEI 小級別反轉三角突破，市價輕倉入多，止盈：0.02297-0.02427-0.0257"
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "at": "2026-10-19T04:42:00+00:00",
+          "preview": "#GWEI 小級別反轉三角突破，市價輕倉入多，止盈：0.02297-0.02427-0.0257 #GWEI TP1完成"
+        },
+        {
+          "phase": "initial",
+          "symbol": "BTC",
+          "direction": "空",
+          "at": "2026-10-19T07:20:42+00:00",
+          "preview": "#BTC 目前4小時處於下降楔形，有突破跡象，屬於多頭結構信號，但必須留意假突破，需要關注成交量與回測確認，是否成立。 短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。 下方支撐在80500-79700附近，若楔形嘗試突破失敗回測，首要關注位置，短期的密集買盤區，流動性位置，也是本輪上漲回…"
+        },
+        {
+          "phase": "update",
+          "symbol": "BTC",
+          "direction": "空",
+          "at": "2026-10-19T10:12:41+00:00",
+          "preview": "#BTC 📉 SL：85500 #BTC 目前4小時處於下降楔形，有突破跡象，屬於多頭結構信號，但必須留意假突破，需要關注成交量與回測確認，是否成立。 短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。 下方支撐在80500-79700附近，若楔形嘗試突破失敗回測，首要關注位置，短期的密集買…"
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "at": "2026-10-20T02:47:44+00:00",
+          "preview": "#GRASS 小級別反轉上升三角突破，市价轻仓入多，止盈：0.6337-0.657-0.679 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679"
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "at": "2026-10-20T09:21:19+00:00",
+          "preview": "#GRASS 止损帶在0.582 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582"
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "at": "2026-10-20T14:02:38+00:00",
+          "preview": "#GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582 #GRASS TP1完成✔️"
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "at": "2026-10-21T03:48:39+00:00",
+          "preview": "#NEAR 市价轻仓入多，止盈：5.1397-5.307-5.5 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582 #GRASS TP1完成✔️ #NEAR 市價輕倉入多，止盈：5.1397-5.307-5…"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T03:05:41+00:00",
+          "at": "2026-10-19T03:05:41+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "0.02297",
+            "0.02427",
+            "0.0257"
+          ],
+          "preview": "#GWEI 小級別反轉三角突破，市价轻仓入多，止盈：0.02297-0.02427-0.0257 #GWEI 小級別反轉三角突破，市價輕倉入多，止盈：0.02297-0.02427-0.0257",
+          "cardPayload": {
+            "symbol": "GWEI",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "0.02297",
+              "0.02427",
+              "0.0257"
+            ],
+            "signalAt": "2026-10-19T03:05:41Z",
+            "body": "#GWEI\n小級別反轉三角突破，市价轻仓入多，止盈：0.02297-0.02427-0.0257\n#GWEI\n小級別反轉三角突破，市價輕倉入多，止盈：0.02297-0.02427-0.0257",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11807"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T04:42:00+00:00",
+          "at": "2026-10-19T04:42:00+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1完成"
+          ],
+          "preview": "#GWEI 小級別反轉三角突破，市價輕倉入多，止盈：0.02297-0.02427-0.0257 #GWEI TP1完成",
+          "cardPayload": {
+            "symbol": "GWEI",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1完成"
+            ],
+            "signalAt": "2026-10-19T04:42:00Z",
+            "body": "#GWEI\n小級別反轉三角突破，市價輕倉入多，止盈：0.02297-0.02427-0.0257\n#GWEI TP1完成",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11808,11807"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T07:20:42+00:00",
+          "at": "2026-10-19T07:20:42+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#BTC 目前4小時處於下降楔形，有突破跡象，屬於多頭結構信號，但必須留意假突破，需要關注成交量與回測確認，是否成立。 短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。 下方支撐在80500-79700附近，若楔形嘗試突破失敗回測，首要關注位置，短期的密集買盤區，流動性位置，也是本輪上漲回…",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-19T07:20:42Z",
+            "body": "#BTC\n短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11809"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T10:12:41+00:00",
+          "at": "2026-10-19T10:12:41+00:00",
+          "entry": "市价",
+          "stopLoss": "85500",
+          "targets": [],
+          "preview": "#BTC 📉 SL：85500 #BTC 目前4小時處於下降楔形，有突破跡象，屬於多頭結構信號，但必須留意假突破，需要關注成交量與回測確認，是否成立。 短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。 下方支撐在80500-79700附近，若楔形嘗試突破失敗回測，首要關注位置，短期的密集買…",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "85500",
+            "targets": [],
+            "signalAt": "2026-10-19T10:12:41Z",
+            "body": "#BTC 📉\nSL：85500\n#BTC\n短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。\n#BTC 📉\nSL：85500",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11810,11809"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T02:47:44+00:00",
+          "at": "2026-10-20T02:47:44+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "0.6337",
+            "0.657",
+            "0.679"
+          ],
+          "preview": "#GRASS 小級別反轉上升三角突破，市价轻仓入多，止盈：0.6337-0.657-0.679 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679",
+          "cardPayload": {
+            "symbol": "GRASS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "0.6337",
+              "0.657",
+              "0.679"
+            ],
+            "signalAt": "2026-10-20T02:47:44Z",
+            "body": "#GRASS\n小級別反轉上升三角突破，市价轻仓入多，止盈：0.6337-0.657-0.679\n#GRASS\n小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11812"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T09:21:19+00:00",
+          "at": "2026-10-20T09:21:19+00:00",
+          "entry": "市价",
+          "stopLoss": "帶在0.582",
+          "targets": [
+            "0.6337",
+            "0.657",
+            "0.679"
+          ],
+          "preview": "#GRASS 止损帶在0.582 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582",
+          "cardPayload": {
+            "symbol": "GRASS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "帶在0.582",
+            "targets": [
+              "0.6337",
+              "0.657",
+              "0.679"
+            ],
+            "signalAt": "2026-10-20T09:21:19Z",
+            "body": "#GRASS\n止损帶在0.582\n#GRASS\n小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679\n#GRASS\n止損帶在0.582",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11813,11812"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T14:02:38+00:00",
+          "at": "2026-10-20T14:02:38+00:00",
+          "entry": "市价",
+          "stopLoss": "帶在0.582",
+          "targets": [
+            "1完成✔️"
+          ],
+          "preview": "#GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582 #GRASS TP1完成✔️",
+          "cardPayload": {
+            "symbol": "GRASS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "帶在0.582",
+            "targets": [
+              "1完成✔️"
+            ],
+            "signalAt": "2026-10-20T14:02:38Z",
+            "body": "#GRASS\n小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679\n#GRASS\n止損帶在0.582\n#GRASS TP1完成✔️",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11815,11813,11812"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T03:48:39+00:00",
+          "at": "2026-10-21T03:48:39+00:00",
+          "entry": "市价",
+          "stopLoss": "帶在0.582",
+          "targets": [
+            "5.1397",
+            "5.307",
+            "5.5"
+          ],
+          "preview": "#NEAR 市价轻仓入多，止盈：5.1397-5.307-5.5 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582 #GRASS TP1完成✔️ #NEAR 市價輕倉入多，止盈：5.1397-5.307-5…",
+          "cardPayload": {
+            "symbol": "GRASS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "帶在0.582",
+            "targets": [
+              "5.1397",
+              "5.307",
+              "5.5"
+            ],
+            "signalAt": "2026-10-21T03:48:39Z",
+            "body": "#NEAR\n市价轻仓入多，止盈：5.1397-5.307-5.5\n#GRASS\n小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679\n#GRASS\n止損帶在0.582\n#GRASS TP1完成✔️\n#NEAR\n市價輕倉入多，止盈：5.1397-5.307-5.5",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11816,11815,11813,11812"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T07:13:13+00:00",
+          "at": "2026-10-21T07:13:13+00:00",
+          "entry": "市价",
+          "stopLoss": "帶在0.582",
+          "targets": [
+            "1完成",
+            "点讚🙂"
+          ],
+          "preview": "#NEAR TP1完成，点讚🙂 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582 #GRASS TP1完成✔️ #NEAR 市價輕倉入多，止盈：5.1397-5.307-5.5 #NEAR TP1完成，點讚🙂",
+          "cardPayload": {
+            "symbol": "GRASS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "帶在0.582",
+            "targets": [
+              "1完成",
+              "点讚🙂"
+            ],
+            "signalAt": "2026-10-21T07:13:13Z",
+            "body": "#NEAR TP1完成，点讚🙂\n#GRASS\n小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679\n#GRASS\n止損帶在0.582\n#GRASS TP1完成✔️\n#NEAR\n市價輕倉入多，止盈：5.1397-5.307-5.5\n#NEAR TP1完成，點讚🙂",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11817,11816,11815,11813,11812"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T10:19:33+00:00",
+          "at": "2026-10-21T10:19:33+00:00",
+          "entry": "市价",
+          "stopLoss": "85500",
+          "targets": [
+            "1完成",
+            "点讚🙂"
+          ],
+          "preview": "#BTC 上方目前空单已入场正常按点位持仓，做好風控即可。只有放量突破4小时阻力訂单块，才有望走高，否則看持續承壓，維持震蕩反復。 #BTC 目前4小時處於下降楔形，有突破跡象，屬於多頭結構信號，但必須留意假突破，需要關注成交量與回測確認，是否成立。 短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續…",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "85500",
+            "targets": [
+              "1完成",
+              "点讚🙂"
+            ],
+            "signalAt": "2026-10-21T10:19:33Z",
+            "body": "#BTC\n上方目前空单已入场正常按点位持仓，做好風控即可。只有放量突破4小时阻力訂单块，才有望走高，否則看持續承壓，維持震蕩反復。\n#BTC\n短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。\n#BTC 📉\nSL：85500\n#NEAR\n市價輕倉入多，止盈：5.1397-5.307-5.5\n#NEAR TP1完成，點讚🙂\n#BTC\n上方目前空單已入場正常按點位持倉，做好風控即可。只有放量突破4小時阻力訂單塊，才有望走高，否則看持續承壓，維持震蕩反復。",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11818,11817,11810,11809"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T15:21:22+00:00",
+          "at": "2026-10-21T15:21:22+00:00",
+          "entry": "市价",
+          "stopLoss": "85500",
+          "targets": [
+            "2已完成"
+          ],
+          "preview": "#BTC 📉 入場：83580-84380 TP：82550-81200-79800 SL：85500 #NEAR 市價輕倉入多，止盈：5.1397-5.307-5.5 #NEAR TP1完成，點讚🙂 #BTC 昨日晚間伴隨消息面走出放量突破扎空，目前反彈進入前面提到的壓力區間，屬於關鍵位選擇方向，這裡拋壓還算集中，…",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "85500",
+            "targets": [
+              "2已完成"
+            ],
+            "signalAt": "2026-10-21T15:21:22Z",
+            "body": "#BTC 📉\nSL：85500\n#NEAR\n市價輕倉入多，止盈：5.1397-5.307-5.5\n#NEAR TP1完成，點讚🙂\n#BTC\n上方目前空單已入場正常按點位持倉，做好風控即可。只有放量突破4小時阻力訂單塊，才有望走高，否則看持續承壓，維持震蕩反復。\n#NEAR TP2已完成",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11819,11818,11817,11810"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T06:36:26+00:00",
+          "at": "2026-10-22T06:36:26+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1已完成✔️"
+          ],
+          "preview": "#NEAR 市價輕倉入多，止盈：5.1397-5.307-5.5 #NEAR TP1完成，點讚🙂 #BTC 昨日晚間伴隨消息面走出放量突破扎空，目前反彈進入前面提到的壓力區間，屬於關鍵位選擇方向，這裡拋壓還算集中，需要重點關注結構關鍵位的得失。 下方短支撐關注81800-81000的回測，若在目前位置承壓，那麼會再次…",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1已完成✔️"
+            ],
+            "signalAt": "2026-10-22T06:36:26Z",
+            "body": "#NEAR\n市價輕倉入多，止盈：5.1397-5.307-5.5\n#NEAR TP1完成，點讚🙂\n#BTC\n上方目前空單已入場正常按點位持倉，做好風控即可。只有放量突破4小時阻力訂單塊，才有望走高，否則看持續承壓，維持震蕩反復。\n#NEAR TP2已完成\n#BTC TP1已完成✔️",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11824,11819,11818,11817"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T06:47:47+00:00",
+          "at": "2026-10-22T06:47:47+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "1"
+          ],
+          "preview": "#GWEI 完成TP1 #GRASS 翻倍，完成TP1 #NEAR 兩倍，完成TP2 #BTC 1500点，完成TP1 #HYPE 思路驗證，完成翻倍 #NEAR 市價輕倉入多，止盈：5.1397-5.307-5.5 #NEAR TP1完成，點讚🙂 #NEAR TP2已完成 #本週實盤交易如下： #GWEI 完成TP…",
+          "cardPayload": {
+            "symbol": "GWEI",
+            "direction": "long",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-22T06:47:47Z",
+            "body": "#GWEI  完成TP1\n#GRASS 翻倍，完成TP1\n#NEAR 兩倍，完成TP2\n#BTC  1500点，完成TP1\n#HYPE 思路驗證，完成翻倍\n#NEAR\n市價輕倉入多，止盈：5.1397-5.307-5.5\n#NEAR TP1完成，點讚🙂\n#NEAR TP2已完成\n#GWEI  完成TP1\n#GRASS 翻倍，完成TP1\n#NEAR 兩倍，完成TP2\n#BTC  1500點，完成TP1\n#HYPE 思路驗證，完成翻倍",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11825,11819,11817,11816"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T01:47:02+00:00",
+          "at": "2026-10-23T01:47:02+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "2完成",
+            "2800点"
+          ],
+          "preview": "#BTC TP2完成，2800点 #NEAR 市價輕倉入多，止盈：5.1397-5.307-5.5 #NEAR TP1完成，點讚🙂 #BTC 昨日晚間伴隨消息面走出放量突破扎空，目前反彈進入前面提到的壓力區間，屬於關鍵位選擇方向，這裡拋壓還算集中，需要重點關注結構關鍵位的得失。 下方短支撐關注81800-81000的…",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "2完成",
+              "2800点"
+            ],
+            "signalAt": "2026-10-23T01:47:02Z",
+            "body": "#BTC TP2完成，2800点\n#NEAR\n市價輕倉入多，止盈：5.1397-5.307-5.5\n#NEAR TP1完成，點讚🙂\n#BTC\n上方目前空單已入場正常按點位持倉，做好風控即可。只有放量突破4小時阻力訂單塊，才有望走高，否則看持續承壓，維持震蕩反復。\n#NEAR TP2已完成\n#BTC TP1已完成✔️\n#BTC TP2完成，2800點",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11827,11824,11819,11818,11817"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ELAS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T01:51:53+00:00",
+          "at": "2026-10-23T01:51:53+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "0.077",
+            "0.08117",
+            "0.0857"
+          ],
+          "preview": "#ELAS 小时上升三角突破跡象，市价轻仓入多，止盈：0.077-0.08117-0.0857 #NEAR TP1完成，點讚🙂 #NEAR TP2已完成 #ELAS 小時上升三角突破跡象，市價輕倉入多，止盈：0.077-0.08117-0.0857",
+          "cardPayload": {
+            "symbol": "ELAS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "0.077",
+              "0.08117",
+              "0.0857"
+            ],
+            "signalAt": "2026-10-23T01:51:53Z",
+            "body": "#ELAS\n小时上升三角突破跡象，市价轻仓入多，止盈：0.077-0.08117-0.0857\n#NEAR TP1完成，點讚🙂\n#NEAR TP2已完成\n#ELAS\n小時上升三角突破跡象，市價輕倉入多，止盈：0.077-0.08117-0.0857",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11829,11819,11817"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ELSA",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-23T08:39:57+00:00",
+          "at": "2026-10-23T08:39:57+00:00",
+          "entry": null,
+          "stopLoss": "放0.0667",
+          "targets": [
+            "2已完成"
+          ],
+          "preview": "#ELSA 市價進補倉，回成本出掉補倉 止損放0.0667",
+          "cardPayload": {
+            "symbol": "ELSA",
+            "direction": "",
+            "entry": null,
+            "stopLoss": "放0.0667",
+            "targets": [
+              "2已完成"
+            ],
+            "signalAt": "2026-10-23T08:39:57Z",
+            "body": "#ELSA\n止損放0.0667",
+            "channelId": "-1001720924085",
+            "sourceRef": "tg:-1001720924085:11830,11819"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1002666021235",
+      "name": "Ashley的旺財情報局",
+      "avatar": "avatar/1002666021235.jpeg",
+      "ok": true,
+      "messageCount": 1481,
+      "tradeLikeCount": 71,
+      "cardEmitCount": 32,
+      "parsedSignalCount": 32,
+      "symbols": {
+        "AVA": 7,
+        "ICNT": 6,
+        "MAGMA": 3,
+        "IRYS": 3,
+        "EPIC": 2,
+        "CT": 2,
+        "JCT": 2,
+        "WLD": 2,
+        "INJ": 2,
+        "TIA": 1,
+        "DOOD": 1,
+        "LUMIA": 1
+      },
+      "samples": [
+        {
+          "phase": "full",
+          "symbol": "EPIC",
+          "direction": "多",
+          "at": "2026-10-17T07:05:20+00:00",
+          "preview": "#EPIC 轻仓市价多 每單止盈止損寫清楚👀 每單都有出場及止盈提醒⚠️ 不模糊｜不馬後炮｜重紀律｜重風控 #EPIC 輕倉市價多"
+        },
+        {
+          "phase": "full",
+          "symbol": "EPIC",
+          "direction": "多",
+          "at": "2026-10-17T07:45:03+00:00",
+          "preview": "止盈：0.3301-0.395 止损：0.2243 每單止盈止損寫清楚👀 每單都有出場及止盈提醒⚠️ 不模糊｜不馬後炮｜重紀律｜重風控 #EPIC 輕倉市價多 止盈：0.3301-0.395 止損：0.2243"
+        },
+        {
+          "phase": "full",
+          "symbol": "TIA",
+          "direction": "空",
+          "at": "2026-10-18T02:16:03+00:00",
+          "preview": "#TIA轻仓空 止盈：0.3301-0.395 止損：0.2243 #TIA輕倉空 入場價格：0.635-0.645"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-19T02:53:01+00:00",
+          "preview": "#icnt 市價小倉空"
+        },
+        {
+          "phase": "initial",
+          "symbol": "AVA",
+          "direction": "多",
+          "at": "2026-10-19T03:17:35+00:00",
+          "preview": "AVA多單➕125.29🛍"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-19T05:04:46+00:00",
+          "preview": "ICNT第一止盈➕214.32🛍 頻道的空單吃一波，VIP群轉頭多單再吃一波 這誰受得了❔ 你還在觀望，別人兜里的錢已經焐燙啦‼️ 進群咨詢助理老師 @Kevinzz7"
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-19T06:21:59+00:00",
+          "preview": "#icnt 市价小仓空 #NEAR 4.8附近可進空單 #icnt 市價小倉空 ICNT 一發出來就跌？？？兄弟們，我真的不是莊家😂 ICNT第一止盈➕214.32🛍 頻道的空單吃一波，VIP群轉頭多單再吃一波 這誰受得了❔ 你還在觀望，別人兜里的錢已經焐燙啦‼️ 進群咨詢助理老師 @Kevinzz7"
+        },
+        {
+          "phase": "update",
+          "symbol": "AVA",
+          "direction": "多",
+          "at": "2026-10-19T07:24:03+00:00",
+          "preview": "AVA多单➕125.29🛍 AVA多單➕125.29🛍"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "full",
+          "symbol": "EPIC",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-17T07:05:20+00:00",
+          "at": "2026-10-17T07:05:20+00:00",
+          "entry": "市价",
+          "stopLoss": "寫清楚👀",
+          "targets": [],
+          "preview": "#EPIC 轻仓市价多 每單止盈止損寫清楚👀 每單都有出場及止盈提醒⚠️ 不模糊｜不馬後炮｜重紀律｜重風控 #EPIC 輕倉市價多",
+          "cardPayload": {
+            "symbol": "EPIC",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "寫清楚👀",
+            "targets": [],
+            "signalAt": "2026-10-17T07:05:20Z",
+            "body": "#EPIC  轻仓市价多\n每單止盈止損寫清楚👀\n每單都有出場及止盈提醒⚠️\n#EPIC  輕倉市價多",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:40980,40936"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "EPIC",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-17T07:45:03+00:00",
+          "at": "2026-10-17T07:45:03+00:00",
+          "entry": "市价",
+          "stopLoss": "0.2243",
+          "targets": [
+            "0.3301",
+            "0.395"
+          ],
+          "preview": "止盈：0.3301-0.395 止损：0.2243 每單止盈止損寫清楚👀 每單都有出場及止盈提醒⚠️ 不模糊｜不馬後炮｜重紀律｜重風控 #EPIC 輕倉市價多 止盈：0.3301-0.395 止損：0.2243",
+          "cardPayload": {
+            "symbol": "EPIC",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0.2243",
+            "targets": [
+              "0.3301",
+              "0.395"
+            ],
+            "signalAt": "2026-10-17T07:45:03Z",
+            "body": "止盈：0.3301-0.395\n止损：0.2243\n每單止盈止損寫清楚👀\n每單都有出場及止盈提醒⚠️\n#EPIC  輕倉市價多\n止盈：0.3301-0.395\n止損：0.2243",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41022,40980,40936"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "TIA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-18T02:16:03+00:00",
+          "at": "2026-10-18T02:16:03+00:00",
+          "entry": "市价",
+          "stopLoss": "0.2243",
+          "targets": [
+            "0.3301",
+            "0.395"
+          ],
+          "preview": "#TIA轻仓空 止盈：0.3301-0.395 止損：0.2243 #TIA輕倉空 入場價格：0.635-0.645",
+          "cardPayload": {
+            "symbol": "TIA",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0.2243",
+            "targets": [
+              "0.3301",
+              "0.395"
+            ],
+            "signalAt": "2026-10-18T02:16:03Z",
+            "body": "#TIA轻仓空\n止盈：0.3301-0.395\n止損：0.2243\n#TIA輕倉空",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41116,41022"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T02:53:01+00:00",
+          "at": "2026-10-19T02:53:01+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#icnt 市價小倉空",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-19T02:53:01Z",
+            "body": "#icnt 市價小倉空",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41295"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "AVA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T03:17:35+00:00",
+          "at": "2026-10-19T03:17:35+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "AVA多單➕125.29🛍",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-19T03:17:35Z",
+            "body": "AVA多單➕125.29🛍",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41326"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T05:04:46+00:00",
+          "at": "2026-10-19T05:04:46+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "ICNT第一止盈➕214.32🛍 頻道的空單吃一波，VIP群轉頭多單再吃一波 這誰受得了❔ 你還在觀望，別人兜里的錢已經焐燙啦‼️ 進群咨詢助理老師 @Kevinzz7",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-19T05:04:46Z",
+            "body": "ICNT第一止盈➕214.32🛍\n頻道的空單吃一波，VIP群轉頭多單再吃一波",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41363"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T06:21:59+00:00",
+          "at": "2026-10-19T06:21:59+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1拿下"
+          ],
+          "preview": "#icnt 市价小仓空 #NEAR 4.8附近可進空單 #icnt 市價小倉空 ICNT 一發出來就跌？？？兄弟們，我真的不是莊家😂 ICNT第一止盈➕214.32🛍 頻道的空單吃一波，VIP群轉頭多單再吃一波 這誰受得了❔ 你還在觀望，別人兜里的錢已經焐燙啦‼️ 進群咨詢助理老師 @Kevinzz7",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1拿下"
+            ],
+            "signalAt": "2026-10-19T06:21:59Z",
+            "body": "#icnt 市价小仓空\n#NEAR  4.8附近可進空單\n#icnt 市價小倉空\nICNT第一止盈➕214.32🛍\n頻道的空單吃一波，VIP群轉頭多單再吃一波",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41295,41369"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "AVA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T07:24:03+00:00",
+          "at": "2026-10-19T07:24:03+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1拿下"
+          ],
+          "preview": "AVA多单➕125.29🛍 AVA多單➕125.29🛍",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1拿下"
+            ],
+            "signalAt": "2026-10-19T07:24:03Z",
+            "body": "AVA多单➕125.29🛍\nAVA多單➕125.29🛍",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41326,41487"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T07:50:13+00:00",
+          "at": "2026-10-19T07:50:13+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "2拿下"
+          ],
+          "preview": "ICNT第一止盈➕214.32🛍 频道的空单吃一波，VIP群轉头多单再吃一波 ICNT 一發出來就跌？？？兄弟們，我真的不是莊家😂 ICNT第一止盈➕214.32🛍 頻道的空單吃一波，VIP群轉頭多單再吃一波 這誰受得了❔ 你還在觀望，別人兜里的錢已經焐燙啦‼️ 進群咨詢助理老師 @Kevinzz7",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "2拿下"
+            ],
+            "signalAt": "2026-10-19T07:50:13Z",
+            "body": "ICNT第一止盈➕214.32🛍\n频道的空单吃一波，VIP群轉头多单再吃一波\nICNT第一止盈➕214.32🛍\n頻道的空單吃一波，VIP群轉頭多單再吃一波",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41363,41528,41369"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "CT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T08:34:59+00:00",
+          "at": "2026-10-19T08:34:59+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#CT 市價輕倉多",
+          "cardPayload": {
+            "symbol": "CT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-19T08:34:59Z",
+            "body": "#CT 市價輕倉多",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41549"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "CT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T08:44:47+00:00",
+          "at": "2026-10-19T08:44:47+00:00",
+          "entry": "市价",
+          "stopLoss": "0.365",
+          "targets": [
+            "0.4079",
+            "0.43"
+          ],
+          "preview": "止盈：0.4079-0.43 止损：0.365 #CT 市價輕倉多 止盈：0.4079-0.43 止損：0.365",
+          "cardPayload": {
+            "symbol": "CT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0.365",
+            "targets": [
+              "0.4079",
+              "0.43"
+            ],
+            "signalAt": "2026-10-19T08:44:47Z",
+            "body": "止盈：0.4079-0.43\n止损：0.365\n#CT 市價輕倉多\n止盈：0.4079-0.43\n止損：0.365",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41562,41549"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "AVA",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-19T12:08:18+00:00",
+          "at": "2026-10-19T12:08:18+00:00",
+          "entry": null,
+          "stopLoss": "0.365",
+          "targets": [
+            "3拿下",
+            "五倍盈利"
+          ],
+          "preview": "#AVA TP3拿下 五倍盈利",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "",
+            "entry": null,
+            "stopLoss": "0.365",
+            "targets": [
+              "3拿下",
+              "五倍盈利"
+            ],
+            "signalAt": "2026-10-19T12:08:18Z",
+            "body": "#AVA  TP3拿下 五倍盈利",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41639,41562"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "AVA",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-19T23:23:22+00:00",
+          "at": "2026-10-19T23:23:22+00:00",
+          "entry": null,
+          "stopLoss": "0.365",
+          "targets": [
+            "3拿下",
+            "五倍盈利"
+          ],
+          "preview": "止盈：0.4079-0.43 止損：0.365 #AVA TP3拿下 五倍盈利",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "",
+            "entry": null,
+            "stopLoss": "0.365",
+            "targets": [
+              "3拿下",
+              "五倍盈利"
+            ],
+            "signalAt": "2026-10-19T23:23:22Z",
+            "body": "止盈：0.4079-0.43\n止損：0.365\n#AVA  TP3拿下 五倍盈利",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41639,41562,41675"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "AVA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T02:13:57+00:00",
+          "at": "2026-10-20T02:13:57+00:00",
+          "entry": "市价",
+          "stopLoss": "0.365",
+          "targets": [
+            "3拿下",
+            "五倍盈利"
+          ],
+          "preview": "#AVA 轻仓市价空 止盈：0.4079-0.43 止損：0.365 #AVA TP3拿下 五倍盈利 #AVA 輕倉市價空",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0.365",
+            "targets": [
+              "3拿下",
+              "五倍盈利"
+            ],
+            "signalAt": "2026-10-20T02:13:57Z",
+            "body": "#AVA 轻仓市价空\n止盈：0.4079-0.43\n止損：0.365\n#AVA  TP3拿下 五倍盈利\n#AVA 輕倉市價空",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41679,41639,41562"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-20T02:46:42+00:00",
+          "at": "2026-10-20T02:46:42+00:00",
+          "entry": "翻倍获利",
+          "stopLoss": "0.422",
+          "targets": [
+            "0.3759",
+            "0.3535",
+            "0.331"
+          ],
+          "preview": "止盈：0.3759-0.3535-0.331 止損：0.422",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "",
+            "entry": "翻倍获利",
+            "stopLoss": "0.422",
+            "targets": [
+              "0.3759",
+              "0.3535",
+              "0.331"
+            ],
+            "signalAt": "2026-10-20T02:46:42Z",
+            "body": "止盈：0.3759-0.3535-0.331\n止損：0.422",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41729,41693"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "JCT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T04:10:55+00:00",
+          "at": "2026-10-21T04:10:55+00:00",
+          "entry": "市价",
+          "stopLoss": "0.422",
+          "targets": [
+            "0.3759",
+            "0.3535",
+            "0.331"
+          ],
+          "preview": "#JCT 轻仓空 止盈：0.3759-0.3535-0.331 止損：0.422 #JCT 輕倉空 入場價格：0.00475",
+          "cardPayload": {
+            "symbol": "JCT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0.422",
+            "targets": [
+              "0.3759",
+              "0.3535",
+              "0.331"
+            ],
+            "signalAt": "2026-10-21T04:10:55Z",
+            "body": "#JCT 轻仓空\n止盈：0.3759-0.3535-0.331\n止損：0.422\n#JCT 輕倉空",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41826,41729"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "JCT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T06:24:32+00:00",
+          "at": "2026-10-21T06:24:32+00:00",
+          "entry": "市价",
+          "stopLoss": "0.0052",
+          "targets": [
+            "0.004135",
+            "0.003519"
+          ],
+          "preview": "止盈：0.004135-0.003519 止损：0.0052 止盈：0.3759-0.3535-0.331 止損：0.422 #JCT 輕倉空 入場價格：0.00475 止盈：0.004135-0.003519 止損：0.0052",
+          "cardPayload": {
+            "symbol": "JCT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0.0052",
+            "targets": [
+              "0.004135",
+              "0.003519"
+            ],
+            "signalAt": "2026-10-21T06:24:32Z",
+            "body": "止盈：0.004135-0.003519\n止损：0.0052\n止盈：0.3759-0.3535-0.331\n止損：0.422\n#JCT 輕倉空\n止盈：0.004135-0.003519\n止損：0.0052",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41911,41826,41729"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ICNT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T06:42:20+00:00",
+          "at": "2026-10-21T06:42:20+00:00",
+          "entry": "市价",
+          "stopLoss": "0.0052",
+          "targets": [
+            "0.004135",
+            "0.003519"
+          ],
+          "preview": "#ICNT 轻仓空 止盈：0.3759-0.3535-0.331 止損：0.422 止盈：0.004135-0.003519 止損：0.0052 #ICNT 輕倉空 入場價格：0.2134",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0.0052",
+            "targets": [
+              "0.004135",
+              "0.003519"
+            ],
+            "signalAt": "2026-10-21T06:42:20Z",
+            "body": "#ICNT 轻仓空\n止盈：0.3759-0.3535-0.331\n止損：0.422\n止盈：0.004135-0.003519\n止損：0.0052\n#ICNT 輕倉空",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:41943,41911,41729"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "DOOD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T07:52:55+00:00",
+          "at": "2026-10-21T07:52:55+00:00",
+          "entry": "市价",
+          "stopLoss": "0.0052",
+          "targets": [
+            "0.004135",
+            "0.003519"
+          ],
+          "preview": "#DOOD 轻仓空 止盈：0.004135-0.003519 止損：0.0052 #DOOD 輕倉空 入場價格：0.003087",
+          "cardPayload": {
+            "symbol": "DOOD",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0.0052",
+            "targets": [
+              "0.004135",
+              "0.003519"
+            ],
+            "signalAt": "2026-10-21T07:52:55Z",
+            "body": "#DOOD 轻仓空\n止盈：0.004135-0.003519\n止損：0.0052\n#DOOD 輕倉空",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42061,41911"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "AVA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T03:40:26+00:00",
+          "at": "2026-10-22T03:40:26+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#AVA 市價空",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-22T03:40:26Z",
+            "body": "#AVA 市價空",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42151"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "AVA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T03:48:35+00:00",
+          "at": "2026-10-22T03:48:35+00:00",
+          "entry": "浮盈中",
+          "stopLoss": "0.379",
+          "targets": [
+            "0.345",
+            "0.323",
+            "0.289"
+          ],
+          "preview": "止盈：0.345-0.323-0.289 止损：0.379 #AVA 市價空 進場浮盈中 止盈：0.345-0.323-0.289 止損：0.379",
+          "cardPayload": {
+            "symbol": "AVA",
+            "direction": "short",
+            "entry": "浮盈中",
+            "stopLoss": "0.379",
+            "targets": [
+              "0.345",
+              "0.323",
+              "0.289"
+            ],
+            "signalAt": "2026-10-22T03:48:35Z",
+            "body": "止盈：0.345-0.323-0.289\n止损：0.379\n#AVA 市價空\n止盈：0.345-0.323-0.289\n止損：0.379",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42153,42152,42151"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "LUMIA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T06:26:17+00:00",
+          "at": "2026-10-22T06:26:17+00:00",
+          "entry": "市价",
+          "stopLoss": "0.379",
+          "targets": [
+            "0.345",
+            "0.323",
+            "0.289"
+          ],
+          "preview": "#LUMIA 轻仓市价多 進場浮盈中 止盈：0.345-0.323-0.289 止損：0.379 #LUMIA 輕倉市價多",
+          "cardPayload": {
+            "symbol": "LUMIA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0.379",
+            "targets": [
+              "0.345",
+              "0.323",
+              "0.289"
+            ],
+            "signalAt": "2026-10-22T06:26:17Z",
+            "body": "#LUMIA 轻仓市价多\n止盈：0.345-0.323-0.289\n止損：0.379\n#LUMIA 輕倉市價多",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42166,42153,42152"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "MAGMA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T06:55:53+00:00",
+          "at": "2026-10-22T06:55:53+00:00",
+          "entry": "市价",
+          "stopLoss": "0.379",
+          "targets": [
+            "0.345",
+            "0.323",
+            "0.289"
+          ],
+          "preview": "#MAGMA 轻仓市价多 進場浮盈中 止盈：0.345-0.323-0.289 止損：0.379 #MAGMA 輕倉市價多",
+          "cardPayload": {
+            "symbol": "MAGMA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0.379",
+            "targets": [
+              "0.345",
+              "0.323",
+              "0.289"
+            ],
+            "signalAt": "2026-10-22T06:55:53Z",
+            "body": "#MAGMA 轻仓市价多\n止盈：0.345-0.323-0.289\n止損：0.379\n#MAGMA 輕倉市價多",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42179,42153,42152"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "WLD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T02:00:28+00:00",
+          "at": "2026-10-23T02:00:28+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#WLD 輕倉市價空",
+          "cardPayload": {
+            "symbol": "WLD",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-23T02:00:28Z",
+            "body": "#WLD 輕倉市價空",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42480"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "WLD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T02:17:53+00:00",
+          "at": "2026-10-23T02:17:53+00:00",
+          "entry": "市价",
+          "stopLoss": "0.5726",
+          "targets": [
+            "0.5440",
+            "0.5175"
+          ],
+          "preview": "止盈：0.5440—0.5175 止损：0.5726 #WLD 輕倉市價空 止盈：0.5440—0.5175 止損：0.5726",
+          "cardPayload": {
+            "symbol": "WLD",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0.5726",
+            "targets": [
+              "0.5440",
+              "0.5175"
+            ],
+            "signalAt": "2026-10-23T02:17:53Z",
+            "body": "止盈：0.5440—0.5175\n止损：0.5726\n#WLD 輕倉市價空\n止盈：0.5440—0.5175\n止損：0.5726",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42481,42480"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "INJ",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T02:29:54+00:00",
+          "at": "2026-10-23T02:29:54+00:00",
+          "entry": "市价",
+          "stopLoss": "0.5726",
+          "targets": [
+            "0.5440",
+            "0.5175"
+          ],
+          "preview": "#INJ 轻仓市价多 止盈：0.5440—0.5175 止損：0.5726 #INJ 輕倉市價多",
+          "cardPayload": {
+            "symbol": "INJ",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0.5726",
+            "targets": [
+              "0.5440",
+              "0.5175"
+            ],
+            "signalAt": "2026-10-23T02:29:54Z",
+            "body": "#INJ 轻仓市价多\n止盈：0.5440—0.5175\n止損：0.5726\n#INJ 輕倉市價多",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42483,42481"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "INJ",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T02:31:25+00:00",
+          "at": "2026-10-23T02:31:25+00:00",
+          "entry": "市价",
+          "stopLoss": "7.841",
+          "targets": [
+            "8.278",
+            "8.446"
+          ],
+          "preview": "止盈：8.278—8.446 止损：7.841 止盈：0.5440—0.5175 止損：0.5726 #INJ 輕倉市價多 止盈：8.278—8.446 止損：7.841",
+          "cardPayload": {
+            "symbol": "INJ",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "7.841",
+            "targets": [
+              "8.278",
+              "8.446"
+            ],
+            "signalAt": "2026-10-23T02:31:25Z",
+            "body": "止盈：8.278—8.446\n止损：7.841\n止盈：0.5440—0.5175\n止損：0.5726\n#INJ 輕倉市價多\n止盈：8.278—8.446\n止損：7.841",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42486,42483,42481"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T03:05:38+00:00",
+          "at": "2026-10-23T03:05:38+00:00",
+          "entry": "市价",
+          "stopLoss": "7.841",
+          "targets": [
+            "8.278",
+            "8.446"
+          ],
+          "preview": "#IRYS 轻仓多 止盈：0.5440—0.5175 止損：0.5726 止盈：8.278—8.446 止損：7.841 #IRYS 輕倉多 入場價格：0.2685",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "7.841",
+            "targets": [
+              "8.278",
+              "8.446"
+            ],
+            "signalAt": "2026-10-23T03:05:38Z",
+            "body": "#IRYS 轻仓多\n止盈：0.5440—0.5175\n止損：0.5726\n止盈：8.278—8.446\n止損：7.841\n#IRYS 輕倉多",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42490,42486,42481"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "MAGMA",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-23T08:16:00+00:00",
+          "at": "2026-10-23T08:16:00+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "1拿下"
+          ],
+          "preview": "#PROM TP1 #MAGMA TP1拿下",
+          "cardPayload": {
+            "symbol": "MAGMA",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "1拿下"
+            ],
+            "signalAt": "2026-10-23T08:16:00Z",
+            "body": "#PROM TP1\n#MAGMA TP1拿下",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42611,42609"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "IRYS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T09:18:37+00:00",
+          "at": "2026-10-23T09:18:37+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1"
+          ],
+          "preview": "今日IRYS是真猛，涨幅37%，還在衝🚀 #PROM TP1 今日IRYS是真猛，漲幅37%，還在衝🚀",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-23T09:18:37Z",
+            "body": "#PROM TP1",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42626,42609"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "MAGMA",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-23T11:10:19+00:00",
+          "at": "2026-10-23T11:10:19+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "1拿下"
+          ],
+          "preview": "#PROM TP1 #MAGMA TP1拿下 #MAGMA TP2拿下",
+          "cardPayload": {
+            "symbol": "MAGMA",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "1拿下"
+            ],
+            "signalAt": "2026-10-23T11:10:19Z",
+            "body": "#PROM TP1\n#MAGMA TP1拿下\n#MAGMA TP2拿下",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42611,42609,42662"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "IRYS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T23:18:54+00:00",
+          "at": "2026-10-23T23:18:54+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1"
+          ],
+          "preview": "今日IRYS是真猛，涨幅37%，還在衝🚀 今日IRYS是真猛，漲幅37%，還在衝🚀 💥昨日#IRYS，直接乾到漲幅榜第一！ 🚀收益突破 ▫️0️⃣0️⃣0️⃣0️⃣🛍🛍➕❗️❗️❗️ 起床不是收米，而是吃大肉！！ 這不是預測未來， 這是已經發生的戰績！ 🔥 精準選幣，結果自然會說話！ Ashley 頻道——下一波，繼…",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-23T23:18:54Z",
+            "body": "💥昨日#IRYS，直接乾到漲幅榜第一！",
+            "channelId": "-1002666021235",
+            "sourceRef": "tg:-1002666021235:42626,42609,42690"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1003962150986",
+      "name": "熊貓說交易🐼",
+      "avatar": "avatar/1003962150986.jpeg",
+      "ok": true,
+      "messageCount": 43,
+      "tradeLikeCount": 1,
+      "cardEmitCount": 1,
+      "parsedSignalCount": 1,
+      "symbols": {
+        "IRYS": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "IRYS",
+          "direction": null,
+          "at": "2026-10-22T06:32:04+00:00",
+          "preview": "#IRYS tp1拿下"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "initial",
+          "symbol": "IRYS",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-22T06:32:04+00:00",
+          "at": "2026-10-22T06:32:04+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1拿下"
+          ],
+          "preview": "#IRYS tp1拿下",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1拿下"
+            ],
+            "signalAt": "2026-10-22T06:32:04Z",
+            "body": "#IRYS\ntp1拿下",
+            "channelId": "-1003962150986",
+            "sourceRef": "tg:-1003962150986:625,622"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1001908181865",
+      "name": "Aura_幣圈策略",
+      "avatar": "avatar/1001908181865.png",
+      "ok": true,
+      "messageCount": 33,
+      "tradeLikeCount": 11,
+      "cardEmitCount": 11,
+      "parsedSignalCount": 11,
+      "symbols": {
+        "BASED": 3,
+        "ALT": 3,
+        "STRK": 1,
+        "SKHYNIX": 1,
+        "AURA": 1,
+        "DOOD": 1,
+        "CL": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "STRK",
+          "direction": null,
+          "at": "2026-10-17T04:32:52+00:00",
+          "preview": "#頻道高倍盈利 💰 STRK 本單最高10倍收益🤑 更多寶石信號聯係👇 https://t.me/xiaoya_ccm"
+        },
+        {
+          "phase": "update",
+          "symbol": "BASED",
+          "direction": "空",
+          "at": "2026-10-18T04:19:01+00:00",
+          "preview": "币種： BASED/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.05170—0.05480 ✔️获利目标：0.04815—0.04400—0.03885 ❌止损位置：0.05790 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.0…"
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "空",
+          "at": "2026-10-18T09:41:25+00:00",
+          "preview": "TP3完成🤪 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 #頻道高倍盈利 💰 STRK TP3完成🤪 底倉1800%"
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "多",
+          "at": "2026-10-19T02:55:27+00:00",
+          "preview": "💰 BASED 一覺醒來抵達原定TP1了 记得帶保本持有↗️別讓利潤回吐 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 #頻道高倍盈利 💰 STRK TP3完成🤪 底倉1…"
+        },
+        {
+          "phase": "full",
+          "symbol": "SKHYNIX",
+          "direction": "多",
+          "at": "2026-10-20T03:06:00+00:00",
+          "preview": "💰 SKHYNIX 1D 海力士自從高位回落後，日綫級別持續走弱，目前已來到前方低位区域，并回踩850—900前低位支撐後出現了初步的止跌反应 ↗️交易思路：觀察底部築底爲主，若前低不再下破，并伴隨低点上移提高，高点持續突破，底部確認可信度提高，届时进场爲最優解 #頻道高倍盈利 💰 STRK TP3完成🤪 底倉180…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "AURA",
+          "direction": "多",
+          "at": "2026-10-21T01:45:25+00:00",
+          "preview": "一次給出兩個交易思路、一個交易信號全部盈利⬆️ 超標Aura把市場當自己家，取錢來了"
+        },
+        {
+          "phase": "full",
+          "symbol": "DOOD",
+          "direction": "空",
+          "at": "2026-10-21T06:28:58+00:00",
+          "preview": "币種： DOOD/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.003060—0.003245 ✔️获利目标：0.002735—0.002160—0.001545 ❌止损位置：0.003430 高風險單❗️ 幣種： DOOD/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.003060—0.0032…"
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "at": "2026-10-22T02:21:21+00:00",
+          "preview": "币種： ALT/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.01249—0.012795 ✔️获利目标：0.011721—0.011221—0.009971 ❌止损位置：0.013245 本單墜機❌但不要氣餒 按照固定資金下單，尊重市場，永远不要重倉某個幣種！🧠 等待合適的進場機會，當市場給出機會時，我會…"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "initial",
+          "symbol": "STRK",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-17T04:32:52+00:00",
+          "at": "2026-10-17T04:32:52+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "t.me",
+            "xiaoya_ccm"
+          ],
+          "preview": "#頻道高倍盈利 💰 STRK 本單最高10倍收益🤑 更多寶石信號聯係👇 https://t.me/xiaoya_ccm",
+          "cardPayload": {
+            "symbol": "STRK",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "t.me",
+              "xiaoya_ccm"
+            ],
+            "signalAt": "2026-10-17T04:32:52Z",
+            "body": "#頻道高倍盈利\n💰 STRK\n本單最高10倍收益🤑\n更多寶石信號聯係👇\nhttps://t.me/xiaoya_ccm",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7776"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "BASED",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-18T04:19:01+00:00",
+          "at": "2026-10-18T04:19:01+00:00",
+          "entry": "0.05170-0.05480",
+          "stopLoss": "0.05790",
+          "targets": [
+            "0.04815—0.04400—0.03885"
+          ],
+          "preview": "币種： BASED/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.05170—0.05480 ✔️获利目标：0.04815—0.04400—0.03885 ❌止损位置：0.05790 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.0…",
+          "cardPayload": {
+            "symbol": "BASED",
+            "direction": "short",
+            "entry": "0.05170-0.05480",
+            "stopLoss": "0.05790",
+            "targets": [
+              "0.04815—0.04400—0.03885"
+            ],
+            "signalAt": "2026-10-18T04:19:01Z",
+            "body": "币種： BASED/USDT\n方向：👇👇👇📉\n策略属性：市价\n📌进场点：0.05170—0.05480\n✔️获利目标：0.04815—0.04400—0.03885\n❌止损位置：0.05790\n幣種： BASED/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.05170—0.05480\n✔️獲利目標：0.04815—0.04400—0.03885\n❌止損位置：0.05790",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7778"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-18T09:41:25+00:00",
+          "at": "2026-10-18T09:41:25+00:00",
+          "entry": "0.05170-0.05480",
+          "stopLoss": "0.05790",
+          "targets": [
+            "3完成🤪"
+          ],
+          "preview": "TP3完成🤪 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 #頻道高倍盈利 💰 STRK TP3完成🤪 底倉1800%",
+          "cardPayload": {
+            "symbol": "BASED",
+            "direction": "short",
+            "entry": "0.05170-0.05480",
+            "stopLoss": "0.05790",
+            "targets": [
+              "3完成🤪"
+            ],
+            "signalAt": "2026-10-18T09:41:25Z",
+            "body": "TP3完成🤪\n幣種： BASED/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.05170—0.05480\n✔️獲利目標：0.04815—0.04400—0.03885\n❌止損位置：0.05790\nTP3完成🤪",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7779,7778"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T02:55:27+00:00",
+          "at": "2026-10-19T02:55:27+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1了"
+          ],
+          "preview": "💰 BASED 一覺醒來抵達原定TP1了 记得帶保本持有↗️別讓利潤回吐 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 #頻道高倍盈利 💰 STRK TP3完成🤪 底倉1…",
+          "cardPayload": {
+            "symbol": "BASED",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1了"
+            ],
+            "signalAt": "2026-10-19T02:55:27Z",
+            "body": "幣種： BASED/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.05170—0.05480\n✔️獲利目標：0.04815—0.04400—0.03885\n❌止損位置：0.05790\nTP3完成🤪",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7781,7780,7779"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "SKHYNIX",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T03:06:00+00:00",
+          "at": "2026-10-20T03:06:00+00:00",
+          "entry": "爲最優解",
+          "stopLoss": null,
+          "targets": [
+            "3完成🤪"
+          ],
+          "preview": "💰 SKHYNIX 1D 海力士自從高位回落後，日綫級別持續走弱，目前已來到前方低位区域，并回踩850—900前低位支撐後出現了初步的止跌反应 ↗️交易思路：觀察底部築底爲主，若前低不再下破，并伴隨低点上移提高，高点持續突破，底部確認可信度提高，届时进场爲最優解 #頻道高倍盈利 💰 STRK TP3完成🤪 底倉180…",
+          "cardPayload": {
+            "symbol": "SKHYNIX",
+            "direction": "long",
+            "entry": "爲最優解",
+            "stopLoss": null,
+            "targets": [
+              "3完成🤪"
+            ],
+            "signalAt": "2026-10-20T03:06:00Z",
+            "body": "TP3完成🤪",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7787,7779"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "AURA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T01:45:25+00:00",
+          "at": "2026-10-21T01:45:25+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "一次給出兩個交易思路、一個交易信號全部盈利⬆️ 超標Aura把市場當自己家，取錢來了",
+          "cardPayload": {
+            "symbol": "AURA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-21T01:45:25Z",
+            "body": "一次給出兩個交易思路、一個交易信號全部盈利⬆️\n超標Aura把市場當自己家，取錢來了",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7795"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "DOOD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T06:28:58+00:00",
+          "at": "2026-10-21T06:28:58+00:00",
+          "entry": "0.003060-0.003245",
+          "stopLoss": "0.003430",
+          "targets": [
+            "0.002735—0.002160—0.001545"
+          ],
+          "preview": "币種： DOOD/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.003060—0.003245 ✔️获利目标：0.002735—0.002160—0.001545 ❌止损位置：0.003430 高風險單❗️ 幣種： DOOD/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.003060—0.0032…",
+          "cardPayload": {
+            "symbol": "DOOD",
+            "direction": "short",
+            "entry": "0.003060-0.003245",
+            "stopLoss": "0.003430",
+            "targets": [
+              "0.002735—0.002160—0.001545"
+            ],
+            "signalAt": "2026-10-21T06:28:58Z",
+            "body": "币種： DOOD/USDT\n方向：👇👇👇📉\n策略属性：市价\n📌进场点：0.003060—0.003245\n✔️获利目标：0.002735—0.002160—0.001545\n❌止损位置：0.003430\n幣種： DOOD/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.003060—0.003245\n✔️獲利目標：0.002735—0.002160—0.001545\n❌止損位置：0.003430",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7797"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T02:21:21+00:00",
+          "at": "2026-10-22T02:21:21+00:00",
+          "entry": "0.01249-0.012795",
+          "stopLoss": "0.013245",
+          "targets": [
+            "0.011721—0.011221—0.009971"
+          ],
+          "preview": "币種： ALT/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.01249—0.012795 ✔️获利目标：0.011721—0.011221—0.009971 ❌止损位置：0.013245 本單墜機❌但不要氣餒 按照固定資金下單，尊重市場，永远不要重倉某個幣種！🧠 等待合適的進場機會，當市場給出機會時，我會…",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "short",
+            "entry": "0.01249-0.012795",
+            "stopLoss": "0.013245",
+            "targets": [
+              "0.011721—0.011221—0.009971"
+            ],
+            "signalAt": "2026-10-22T02:21:21Z",
+            "body": "币種： ALT/USDT\n方向：👇👇👇📉\n策略属性：市价\n📌进场点：0.01249—0.012795\n✔️获利目标：0.011721—0.011221—0.009971\n❌止损位置：0.013245\n幣種： ALT/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.01249—0.012795\n✔️獲利目標：0.011721—0.011221—0.009971\n❌止損位置：0.013245",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7799,7798"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T03:42:58+00:00",
+          "at": "2026-10-22T03:42:58+00:00",
+          "entry": "做反彈多。持續走弱承接力度不足則順趨勢做空",
+          "stopLoss": "0.013245",
+          "targets": [
+            "1"
+          ],
+          "preview": "#频道二倍盈利 💰 ALT 直接減仓做TP1 恢復信號盈利中🐂 本單墜機❌但不要氣餒 按照固定資金下單，尊重市場，永远不要重倉某個幣種！🧠 等待合適的進場機會，當市場給出機會時，我會嘗試進場并分享出來 幣種： ALT/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.01249—0.012795 ✔️獲利目標：…",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "short",
+            "entry": "做反彈多。持續走弱承接力度不足則順趨勢做空",
+            "stopLoss": "0.013245",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-22T03:42:58Z",
+            "body": "幣種： ALT/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.01249—0.012795\n✔️獲利目標：0.011721—0.011221—0.009971\n❌止損位置：0.013245\n↗️交易思路：主看目前支撐的承接力度，若不出現强勁下跌動能并企穩，可進場做反彈多。持續走弱承接力度不足則順趨勢做空",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7802,7801,7800,7799,7798"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T06:03:15+00:00",
+          "at": "2026-10-22T06:03:15+00:00",
+          "entry": "做反彈多。持續走弱承接力度不足則順趨勢做空",
+          "stopLoss": "0.013245",
+          "targets": [
+            "10"
+          ],
+          "preview": "#频道高倍盈利 💰 ALT 穩穩拿下TP2 10倍收益只需一個上午🐂 本單墜機❌但不要氣餒 按照固定資金下單，尊重市場，永远不要重倉某個幣種！🧠 等待合適的進場機會，當市場給出機會時，我會嘗試進場并分享出來 幣種： ALT/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.01249—0.012795 ✔️獲利…",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "short",
+            "entry": "做反彈多。持續走弱承接力度不足則順趨勢做空",
+            "stopLoss": "0.013245",
+            "targets": [
+              "10"
+            ],
+            "signalAt": "2026-10-22T06:03:15Z",
+            "body": "幣種： ALT/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.01249—0.012795\n✔️獲利目標：0.011721—0.011221—0.009971\n❌止損位置：0.013245\n↗️交易思路：主看目前支撐的承接力度，若不出現强勁下跌動能并企穩，可進場做反彈多。持續走弱承接力度不足則順趨勢做空",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7803,7802,7801,7800,7799"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "CL",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T06:33:02+00:00",
+          "at": "2026-10-23T06:33:02+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "💰 CL 4小時 CL近期在86.9觸底後低點逐步提高，目前已構築出圓弧底結構，但仍處於前高壓力帶下方🐂未確認有效突破 ↗️交易思路：等待突破頸綫前的回調📊",
+          "cardPayload": {
+            "symbol": "CL",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-23T06:33:02Z",
+            "body": "💰 CL 4小時\nCL近期在86.9觸底後低點逐步提高，目前已構築出圓弧底結構，但仍處於前高壓力帶下方🐂未確認有效突破\n↗️交易思路：等待突破頸綫前的回調📊",
+            "channelId": "-1001908181865",
+            "sourceRef": "tg:-1001908181865:7811"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1002355647897",
+      "name": "[KAI]的幣圈策略分享",
+      "avatar": "avatar/1002355647897.png",
+      "ok": true,
+      "messageCount": 36,
+      "tradeLikeCount": 9,
+      "cardEmitCount": 9,
+      "parsedSignalCount": 9,
+      "symbols": {
+        "ICNT": 3,
+        "BAT": 1,
+        "PHA": 1,
+        "AXIS": 1,
+        "MOODENG": 1,
+        "RUNE": 1,
+        "REZ": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "BAT",
+          "direction": "多",
+          "at": "2026-10-18T09:02:33+00:00",
+          "preview": "#BAT 多空雙殺 一個幣 兩個方向都精準拿捏 慧根不如會跟🥹🥹🥹"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-19T03:34:58+00:00",
+          "preview": "#ICNT 風險小多"
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-19T05:13:21+00:00",
+          "preview": "#ICNT 風險小多 #ICNT 止盈：0.194–0.2074"
+        },
+        {
+          "phase": "initial",
+          "symbol": "PHA",
+          "direction": "多",
+          "at": "2026-10-20T03:08:12+00:00",
+          "preview": "#PHA 風險小多"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-21T06:25:05+00:00",
+          "preview": "#ICNT 波動就是很簡單的提款機🏧 一個15min短多摸頂 一個15min反手做空"
+        },
+        {
+          "phase": "full",
+          "symbol": "AXIS",
+          "direction": "多",
+          "at": "2026-10-22T02:09:41+00:00",
+          "preview": "#AXIS 新币轻仓多 大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔️老師一對一策略指導 ✔️每日5-10高質量交易策略，勝率80-90% ⚡️⚡️⚡️⚡️⚡️⚡️⚡️⚡️ 💬上車私…"
+        },
+        {
+          "phase": "full",
+          "symbol": "MOODENG",
+          "direction": "空",
+          "at": "2026-10-23T02:11:53+00:00",
+          "preview": "#MOODENG 打开空調 讓動物回暖😏 （河馬已布局） 大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔️老師一對一策略指導 ✔️每日5-10高質量交易策略，勝率80-90% ⚡️⚡️…"
+        },
+        {
+          "phase": "full",
+          "symbol": "RUNE",
+          "direction": "多",
+          "at": "2026-10-23T02:26:15+00:00",
+          "preview": "大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔️老師一對一策略指導 ✔️每日5-10高質量交易策略，勝率80-90% ⚡️⚡️⚡️⚡️⚡️⚡️⚡️⚡️ 💬上車私訊：https://t.…"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "initial",
+          "symbol": "BAT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-18T09:02:33+00:00",
+          "at": "2026-10-18T09:02:33+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#BAT 多空雙殺 一個幣 兩個方向都精準拿捏 慧根不如會跟🥹🥹🥹",
+          "cardPayload": {
+            "symbol": "BAT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-18T09:02:33Z",
+            "body": "#BAT  多空雙殺",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8029"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T03:34:58+00:00",
+          "at": "2026-10-19T03:34:58+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#ICNT 風險小多",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-19T03:34:58Z",
+            "body": "#ICNT  風險小多",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8031"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T05:13:21+00:00",
+          "at": "2026-10-19T05:13:21+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "0.194",
+            "0.2074"
+          ],
+          "preview": "#ICNT 風險小多 #ICNT 止盈：0.194–0.2074",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "0.194",
+              "0.2074"
+            ],
+            "signalAt": "2026-10-19T05:13:21Z",
+            "body": "#ICNT  風險小多\n#ICNT\n止盈：0.194–0.2074",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8034,8031"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "PHA",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T03:08:12+00:00",
+          "at": "2026-10-20T03:08:12+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#PHA 風險小多",
+          "cardPayload": {
+            "symbol": "PHA",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-20T03:08:12Z",
+            "body": "#PHA  風險小多",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8039"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T06:25:05+00:00",
+          "at": "2026-10-21T06:25:05+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#ICNT 波動就是很簡單的提款機🏧 一個15min短多摸頂 一個15min反手做空",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-21T06:25:05Z",
+            "body": "#ICNT\n一個15min反手做空",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8050"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "AXIS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T02:09:41+00:00",
+          "at": "2026-10-22T02:09:41+00:00",
+          "entry": "市价",
+          "stopLoss": "）",
+          "targets": [],
+          "preview": "#AXIS 新币轻仓多 大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔️老師一對一策略指導 ✔️每日5-10高質量交易策略，勝率80-90% ⚡️⚡️⚡️⚡️⚡️⚡️⚡️⚡️ 💬上車私…",
+          "cardPayload": {
+            "symbol": "AXIS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "）",
+            "targets": [],
+            "signalAt": "2026-10-22T02:09:41Z",
+            "body": "#AXIS  新币轻仓多\n✔️精准點位直達（開倉/止盈/止損）\n#AXIS  新幣輕倉多",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8055,8053"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "MOODENG",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T02:11:53+00:00",
+          "at": "2026-10-23T02:11:53+00:00",
+          "entry": "市价",
+          "stopLoss": "）",
+          "targets": [],
+          "preview": "#MOODENG 打开空調 讓動物回暖😏 （河馬已布局） 大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔️老師一對一策略指導 ✔️每日5-10高質量交易策略，勝率80-90% ⚡️⚡️…",
+          "cardPayload": {
+            "symbol": "MOODENG",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "）",
+            "targets": [],
+            "signalAt": "2026-10-23T02:11:53Z",
+            "body": "#MOODENG\n打开空調 讓動物回暖😏 （河馬已布局）\n✔️精准點位直達（開倉/止盈/止損）\n#MOODENG\n打開空調 讓動物回暖😏 （河馬已佈局）",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8062,8053"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "RUNE",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T02:26:15+00:00",
+          "at": "2026-10-23T02:26:15+00:00",
+          "entry": "市价",
+          "stopLoss": "）",
+          "targets": [],
+          "preview": "大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔️老師一對一策略指導 ✔️每日5-10高質量交易策略，勝率80-90% ⚡️⚡️⚡️⚡️⚡️⚡️⚡️⚡️ 💬上車私訊：https://t.…",
+          "cardPayload": {
+            "symbol": "RUNE",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "）",
+            "targets": [],
+            "signalAt": "2026-10-23T02:26:15Z",
+            "body": "✔️精准點位直達（開倉/止盈/止損）\n#RUNE  風險小多",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8063,8053"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "REZ",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T08:35:39+00:00",
+          "at": "2026-10-23T08:35:39+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#REZ 繼續風險多",
+          "cardPayload": {
+            "symbol": "REZ",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-23T08:35:39Z",
+            "body": "#REZ 繼續風險多",
+            "channelId": "-1002355647897",
+            "sourceRef": "tg:-1002355647897:8065"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1002404948215",
+      "name": "Fly-幣圈頭號玩家",
+      "avatar": "avatar/1002404948215.png",
+      "ok": true,
+      "messageCount": 33,
+      "tradeLikeCount": 11,
+      "cardEmitCount": 11,
+      "parsedSignalCount": 11,
+      "symbols": {
+        "BASED": 3,
+        "ALT": 3,
+        "STRK": 1,
+        "SKHYNIX": 1,
+        "FLY": 1,
+        "DOOD": 1,
+        "CL": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "STRK",
+          "direction": null,
+          "at": "2026-10-17T04:33:46+00:00",
+          "preview": "💰 STRK 本單最高10倍收益🤑 更多寶石信號聯係👇 https://t.me/zhuli_wahahaha"
+        },
+        {
+          "phase": "update",
+          "symbol": "BASED",
+          "direction": "空",
+          "at": "2026-10-18T04:19:08+00:00",
+          "preview": "币種： BASED/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.05170—0.05480 ✔️获利目标：0.04815—0.04400—0.03885 ❌止损位置：0.05790 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.0…"
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "空",
+          "at": "2026-10-18T09:41:48+00:00",
+          "preview": "TP3完成🤪 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 💰 STRK TP3完成🤪 底倉1800%"
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "多",
+          "at": "2026-10-19T02:55:47+00:00",
+          "preview": "💰 BASED 一覺醒來抵達原定TP1了 记得帶保本持有↗️別讓利潤回吐 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 💰 STRK TP3完成🤪 底倉1800% 💰 B…"
+        },
+        {
+          "phase": "full",
+          "symbol": "SKHYNIX",
+          "direction": "多",
+          "at": "2026-10-20T03:06:35+00:00",
+          "preview": "💰 SKHYNIX 1D 海力士自從高位回落後，日綫級別持續走弱，目前已來到前方低位区域，并回踩850—900前低位支撐後出現了初步的止跌反应 ↗️交易思路：觀察底部築底爲主，若前低不再下破，并伴隨低点上移提高，高点持續突破，底部確認可信度提高，届时进场爲最優解 💰 STRK TP3完成🤪 底倉1800% 💰 SKH…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "FLY",
+          "direction": "多",
+          "at": "2026-10-21T01:45:46+00:00",
+          "preview": "一次給出兩個交易思路、一個交易信號全部盈利⬆️ 超標Fly把市場當自己家，取錢來了"
+        },
+        {
+          "phase": "full",
+          "symbol": "DOOD",
+          "direction": "空",
+          "at": "2026-10-21T06:29:05+00:00",
+          "preview": "币種： DOOD/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.003060—0.003245 ✔️获利目标：0.002735—0.002160—0.001545 ❌止损位置：0.003430 高風險單❗️ 幣種： DOOD/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.003060—0.0032…"
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "at": "2026-10-22T02:21:29+00:00",
+          "preview": "币種： ALT/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.01249—0.012795 ✔️获利目标：0.011721—0.011221—0.009971 ❌止损位置：0.013245 本單墜機❌但不要氣餒 按照固定資金下單，尊重市場，永远不要重倉某個幣種！🧠 等待合適的進場機會，當市場給出機會時，我會…"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "initial",
+          "symbol": "STRK",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-17T04:33:46+00:00",
+          "at": "2026-10-17T04:33:46+00:00",
+          "entry": null,
+          "stopLoss": null,
+          "targets": [
+            "s:",
+            "t.me",
+            "zhuli_wahahaha"
+          ],
+          "preview": "💰 STRK 本單最高10倍收益🤑 更多寶石信號聯係👇 https://t.me/zhuli_wahahaha",
+          "cardPayload": {
+            "symbol": "STRK",
+            "direction": "",
+            "entry": null,
+            "stopLoss": null,
+            "targets": [
+              "s:",
+              "t.me",
+              "zhuli_wahahaha"
+            ],
+            "signalAt": "2026-10-17T04:33:46Z",
+            "body": "💰 STRK\n本單最高10倍收益🤑\n更多寶石信號聯係👇\nhttps://t.me/zhuli_wahahaha",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8644"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "BASED",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-18T04:19:08+00:00",
+          "at": "2026-10-18T04:19:08+00:00",
+          "entry": "0.05170-0.05480",
+          "stopLoss": "0.05790",
+          "targets": [
+            "0.04815—0.04400—0.03885"
+          ],
+          "preview": "币種： BASED/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.05170—0.05480 ✔️获利目标：0.04815—0.04400—0.03885 ❌止损位置：0.05790 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.0…",
+          "cardPayload": {
+            "symbol": "BASED",
+            "direction": "short",
+            "entry": "0.05170-0.05480",
+            "stopLoss": "0.05790",
+            "targets": [
+              "0.04815—0.04400—0.03885"
+            ],
+            "signalAt": "2026-10-18T04:19:08Z",
+            "body": "币種： BASED/USDT\n方向：👇👇👇📉\n策略属性：市价\n📌进场点：0.05170—0.05480\n✔️获利目标：0.04815—0.04400—0.03885\n❌止损位置：0.05790\n幣種： BASED/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.05170—0.05480\n✔️獲利目標：0.04815—0.04400—0.03885\n❌止損位置：0.05790",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8646"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-18T09:41:48+00:00",
+          "at": "2026-10-18T09:41:48+00:00",
+          "entry": "0.05170-0.05480",
+          "stopLoss": "0.05790",
+          "targets": [
+            "3完成🤪"
+          ],
+          "preview": "TP3完成🤪 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 💰 STRK TP3完成🤪 底倉1800%",
+          "cardPayload": {
+            "symbol": "BASED",
+            "direction": "short",
+            "entry": "0.05170-0.05480",
+            "stopLoss": "0.05790",
+            "targets": [
+              "3完成🤪"
+            ],
+            "signalAt": "2026-10-18T09:41:48Z",
+            "body": "TP3完成🤪\n幣種： BASED/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.05170—0.05480\n✔️獲利目標：0.04815—0.04400—0.03885\n❌止損位置：0.05790\nTP3完成🤪",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8647,8646"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-19T02:55:47+00:00",
+          "at": "2026-10-19T02:55:47+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1了"
+          ],
+          "preview": "💰 BASED 一覺醒來抵達原定TP1了 记得帶保本持有↗️別讓利潤回吐 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 💰 STRK TP3完成🤪 底倉1800% 💰 B…",
+          "cardPayload": {
+            "symbol": "BASED",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1了"
+            ],
+            "signalAt": "2026-10-19T02:55:47Z",
+            "body": "幣種： BASED/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.05170—0.05480\n✔️獲利目標：0.04815—0.04400—0.03885\n❌止損位置：0.05790\nTP3完成🤪",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8649,8648,8647"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "SKHYNIX",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T03:06:35+00:00",
+          "at": "2026-10-20T03:06:35+00:00",
+          "entry": "爲最優解",
+          "stopLoss": null,
+          "targets": [
+            "3完成🤪"
+          ],
+          "preview": "💰 SKHYNIX 1D 海力士自從高位回落後，日綫級別持續走弱，目前已來到前方低位区域，并回踩850—900前低位支撐後出現了初步的止跌反应 ↗️交易思路：觀察底部築底爲主，若前低不再下破，并伴隨低点上移提高，高点持續突破，底部確認可信度提高，届时进场爲最優解 💰 STRK TP3完成🤪 底倉1800% 💰 SKH…",
+          "cardPayload": {
+            "symbol": "SKHYNIX",
+            "direction": "long",
+            "entry": "爲最優解",
+            "stopLoss": null,
+            "targets": [
+              "3完成🤪"
+            ],
+            "signalAt": "2026-10-20T03:06:35Z",
+            "body": "TP3完成🤪",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8655,8647"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "FLY",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-21T01:45:46+00:00",
+          "at": "2026-10-21T01:45:46+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "一次給出兩個交易思路、一個交易信號全部盈利⬆️ 超標Fly把市場當自己家，取錢來了",
+          "cardPayload": {
+            "symbol": "FLY",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-21T01:45:46Z",
+            "body": "一次給出兩個交易思路、一個交易信號全部盈利⬆️\n超標Fly把市場當自己家，取錢來了",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8662"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "DOOD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T06:29:05+00:00",
+          "at": "2026-10-21T06:29:05+00:00",
+          "entry": "0.003060-0.003245",
+          "stopLoss": "0.003430",
+          "targets": [
+            "0.002735—0.002160—0.001545"
+          ],
+          "preview": "币種： DOOD/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.003060—0.003245 ✔️获利目标：0.002735—0.002160—0.001545 ❌止损位置：0.003430 高風險單❗️ 幣種： DOOD/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.003060—0.0032…",
+          "cardPayload": {
+            "symbol": "DOOD",
+            "direction": "short",
+            "entry": "0.003060-0.003245",
+            "stopLoss": "0.003430",
+            "targets": [
+              "0.002735—0.002160—0.001545"
+            ],
+            "signalAt": "2026-10-21T06:29:05Z",
+            "body": "币種： DOOD/USDT\n方向：👇👇👇📉\n策略属性：市价\n📌进场点：0.003060—0.003245\n✔️获利目标：0.002735—0.002160—0.001545\n❌止损位置：0.003430\n幣種： DOOD/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.003060—0.003245\n✔️獲利目標：0.002735—0.002160—0.001545\n❌止損位置：0.003430",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8665"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T02:21:29+00:00",
+          "at": "2026-10-22T02:21:29+00:00",
+          "entry": "0.01249-0.012795",
+          "stopLoss": "0.013245",
+          "targets": [
+            "0.011721—0.011221—0.009971"
+          ],
+          "preview": "币種： ALT/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.01249—0.012795 ✔️获利目标：0.011721—0.011221—0.009971 ❌止损位置：0.013245 本單墜機❌但不要氣餒 按照固定資金下單，尊重市場，永远不要重倉某個幣種！🧠 等待合適的進場機會，當市場給出機會時，我會…",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "short",
+            "entry": "0.01249-0.012795",
+            "stopLoss": "0.013245",
+            "targets": [
+              "0.011721—0.011221—0.009971"
+            ],
+            "signalAt": "2026-10-22T02:21:29Z",
+            "body": "币種： ALT/USDT\n方向：👇👇👇📉\n策略属性：市价\n📌进场点：0.01249—0.012795\n✔️获利目标：0.011721—0.011221—0.009971\n❌止损位置：0.013245\n幣種： ALT/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.01249—0.012795\n✔️獲利目標：0.011721—0.011221—0.009971\n❌止損位置：0.013245",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8667,8666"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T03:43:26+00:00",
+          "at": "2026-10-22T03:43:26+00:00",
+          "entry": "做反彈多。持續走弱承接力度不足則順趨勢做空",
+          "stopLoss": "0.013245",
+          "targets": [
+            "1"
+          ],
+          "preview": "💰 ALT 直接減仓做TP1 恢復信號盈利中🐂 本單墜機❌但不要氣餒 按照固定資金下單，尊重市場，永远不要重倉某個幣種！🧠 等待合適的進場機會，當市場給出機會時，我會嘗試進場并分享出來 幣種： ALT/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.01249—0.012795 ✔️獲利目標：0.011721…",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "short",
+            "entry": "做反彈多。持續走弱承接力度不足則順趨勢做空",
+            "stopLoss": "0.013245",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-22T03:43:26Z",
+            "body": "幣種： ALT/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.01249—0.012795\n✔️獲利目標：0.011721—0.011221—0.009971\n❌止損位置：0.013245\n↗️交易思路：主看目前支撐的承接力度，若不出現强勁下跌動能并企穩，可進場做反彈多。持續走弱承接力度不足則順趨勢做空",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8670,8669,8668,8667,8666"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T06:03:59+00:00",
+          "at": "2026-10-22T06:03:59+00:00",
+          "entry": "做反彈多。持續走弱承接力度不足則順趨勢做空",
+          "stopLoss": "0.013245",
+          "targets": [
+            "10"
+          ],
+          "preview": "本單墜機❌但不要氣餒 按照固定資金下單，尊重市場，永远不要重倉某個幣種！🧠 等待合適的進場機會，當市場給出機會時，我會嘗試進場并分享出來 幣種： ALT/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.01249—0.012795 ✔️獲利目標：0.011721—0.011221—0.009971 ❌止損位置…",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "short",
+            "entry": "做反彈多。持續走弱承接力度不足則順趨勢做空",
+            "stopLoss": "0.013245",
+            "targets": [
+              "10"
+            ],
+            "signalAt": "2026-10-22T06:03:59Z",
+            "body": "幣種： ALT/USDT\n方向：👇👇👇📉\n策略屬性：市價\n📌進場點：0.01249—0.012795\n✔️獲利目標：0.011721—0.011221—0.009971\n❌止損位置：0.013245\n↗️交易思路：主看目前支撐的承接力度，若不出現强勁下跌動能并企穩，可進場做反彈多。持續走弱承接力度不足則順趨勢做空",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8671,8670,8669,8668,8667"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "CL",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T06:33:21+00:00",
+          "at": "2026-10-23T06:33:21+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "💰 CL 4小時 CL近期在86.9觸底後低點逐步提高，目前已構築出圓弧底結構，但仍處於前高壓力帶下方🐂未確認有效突破 ↗️交易思路：等待突破頸綫前的回調📊",
+          "cardPayload": {
+            "symbol": "CL",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-23T06:33:21Z",
+            "body": "💰 CL 4小時\nCL近期在86.9觸底後低點逐步提高，目前已構築出圓弧底結構，但仍處於前高壓力帶下方🐂未確認有效突破\n↗️交易思路：等待突破頸綫前的回調📊",
+            "channelId": "-1002404948215",
+            "sourceRef": "tg:-1002404948215:8679"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1002438953921",
+      "name": "陈哥交易",
+      "avatar": "avatar/1002404948215.png",
+      "ok": true,
+      "messageCount": 23,
+      "tradeLikeCount": 6,
+      "cardEmitCount": 6,
+      "parsedSignalCount": 6,
+      "symbols": {
+        "SOL": 3,
+        "BTC": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "待补充",
+          "direction": null,
+          "at": "2026-10-17T10:07:48+00:00",
+          "preview": "📝 AERO – LONG 🔜 入场价: 0.8968 📌 目标价: 0.9059, 0.9209, 0.9374, 0.9898 🙅‍♂️ 止损价: 0.8516 ✏️ 第一止盈后，止损移至入场价。"
+        },
+        {
+          "phase": "update",
+          "symbol": null,
+          "direction": null,
+          "at": "2026-10-19T11:55:39+00:00",
+          "preview": "🙅‍♂️ 止损价: 0.8516 ✏️ 第一止盈后，止损移至入场价。 📝 AERO – LONG 🔜 入场价: 0.8968 📌 目标价: 0.9059, 0.9209, 0.9374, 0.9898 🙅‍♂️ 止损价: 0.8516 ✏️ 第一止盈后，止损移至入场价。 📝 MINA – LONG 🔜 入场价: 0.…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "SOL",
+          "direction": null,
+          "at": "2026-10-20T10:42:37+00:00",
+          "preview": "#SOL SOL 正在支撑区域上方形成新的盘整区间，短线趋势向上。BTC 已经来到支撑位. 🔴 入场价：103.87 📌 目标价：104.94, 107.40, 112.60 🙅‍♂️ 止损价：99.61"
+        },
+        {
+          "phase": "update",
+          "symbol": "SOL",
+          "direction": null,
+          "at": "2026-10-21T11:20:28+00:00",
+          "preview": "#SOL 🙅‍♂️ 止损价：99.61 📝 MINA – LONG 🔜 入场价: 0.07305 📌 目标价: 0.07379, 0.07508, 0.07650, 0.08123 🙅‍♂️ 止损价: 0.06936 ✏️ 第一止盈后，止损移至入场价。 #SOL SOL 正在支撑区域上方形成新的盘整区间，短线趋势向上…"
+        },
+        {
+          "phase": "update",
+          "symbol": "SOL",
+          "direction": null,
+          "at": "2026-10-22T11:19:07+00:00",
+          "preview": "#SOL 🙅‍♂️ 止损价：99.61 #SOL SOL 正在支撑区域上方形成新的盘整区间，短线趋势向上。BTC 已经来到支撑位. 🔴 入场价：103.87 📌 目标价：104.94, 107.40, 112.60 🙅‍♂️ 止损价：99.61 📝 VIRTUAL – LONG 🔜 入场价: 0.6906 📌 目标价…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "BTC",
+          "direction": null,
+          "at": "2026-10-23T10:33:27+00:00",
+          "preview": "📝 AR – LONG 🔜 入场价: 3.706 📌 目标价: 3.744, 3.807, 3.880, 4.103 🙅‍♂️ 止损价: 3.517 ✏️ 第一止盈后，止损移至入场价。"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "initial",
+          "symbol": "待补充",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-17T10:07:48+00:00",
+          "at": "2026-10-17T10:07:48+00:00",
+          "entry": "价。",
+          "stopLoss": "价: 0.8516",
+          "targets": [],
+          "preview": "📝 AERO – LONG 🔜 入场价: 0.8968 📌 目标价: 0.9059, 0.9209, 0.9374, 0.9898 🙅‍♂️ 止损价: 0.8516 ✏️ 第一止盈后，止损移至入场价。",
+          "cardPayload": {
+            "symbol": "待补充",
+            "direction": "",
+            "entry": "价。",
+            "stopLoss": "价: 0.8516",
+            "targets": [],
+            "signalAt": "2026-10-17T10:07:48Z",
+            "body": "🙅‍♂️ 止损价: 0.8516\n✏️ 第一止盈后，止损移至入场价。",
+            "channelId": "-1002438953921",
+            "sourceRef": "tg:-1002438953921:1120"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": null,
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-19T11:55:39+00:00",
+          "at": "2026-10-19T11:55:39+00:00",
+          "entry": "价。",
+          "stopLoss": "价: 0.8516",
+          "targets": [],
+          "preview": "🙅‍♂️ 止损价: 0.8516 ✏️ 第一止盈后，止损移至入场价。 📝 AERO – LONG 🔜 入场价: 0.8968 📌 目标价: 0.9059, 0.9209, 0.9374, 0.9898 🙅‍♂️ 止损价: 0.8516 ✏️ 第一止盈后，止损移至入场价。 📝 MINA – LONG 🔜 入场价: 0.…",
+          "cardPayload": {
+            "symbol": "",
+            "direction": "",
+            "entry": "价。",
+            "stopLoss": "价: 0.8516",
+            "targets": [],
+            "signalAt": "2026-10-19T11:55:39Z",
+            "body": "🙅‍♂️ 止损价: 0.8516\n✏️ 第一止盈后，止损移至入场价。\n🙅‍♂️ 止损价: 0.8516\n✏️ 第一止盈后，止损移至入场价。\n🙅‍♂️ 止损价: 0.06936\n✏️ 第一止盈后，止损移至入场价。",
+            "channelId": "-1002438953921",
+            "sourceRef": "tg:-1002438953921:1120,1128"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "SOL",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-20T10:42:37+00:00",
+          "at": "2026-10-20T10:42:37+00:00",
+          "entry": "价。",
+          "stopLoss": "价：99.61",
+          "targets": [],
+          "preview": "#SOL SOL 正在支撑区域上方形成新的盘整区间，短线趋势向上。BTC 已经来到支撑位. 🔴 入场价：103.87 📌 目标价：104.94, 107.40, 112.60 🙅‍♂️ 止损价：99.61",
+          "cardPayload": {
+            "symbol": "SOL",
+            "direction": "",
+            "entry": "价。",
+            "stopLoss": "价：99.61",
+            "targets": [],
+            "signalAt": "2026-10-20T10:42:37Z",
+            "body": "#SOL\n🙅‍♂️ 止损价：99.61",
+            "channelId": "-1002438953921",
+            "sourceRef": "tg:-1002438953921:1134,1128"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "SOL",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-21T11:20:28+00:00",
+          "at": "2026-10-21T11:20:28+00:00",
+          "entry": "价。",
+          "stopLoss": "价：99.61",
+          "targets": [],
+          "preview": "#SOL 🙅‍♂️ 止损价：99.61 📝 MINA – LONG 🔜 入场价: 0.07305 📌 目标价: 0.07379, 0.07508, 0.07650, 0.08123 🙅‍♂️ 止损价: 0.06936 ✏️ 第一止盈后，止损移至入场价。 #SOL SOL 正在支撑区域上方形成新的盘整区间，短线趋势向上…",
+          "cardPayload": {
+            "symbol": "SOL",
+            "direction": "",
+            "entry": "价。",
+            "stopLoss": "价：99.61",
+            "targets": [],
+            "signalAt": "2026-10-21T11:20:28Z",
+            "body": "#SOL\n🙅‍♂️ 止损价：99.61\n🙅‍♂️ 止损价: 0.06936\n✏️ 第一止盈后，止损移至入场价。\n#SOL\n🙅‍♂️ 止损价：99.61\n🙅‍♂️ 止损价: 0.6558\n✏️ 第一止盈后，止损移至入场价。",
+            "channelId": "-1002438953921",
+            "sourceRef": "tg:-1002438953921:1134,1128,1138"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "SOL",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-22T11:19:07+00:00",
+          "at": "2026-10-22T11:19:07+00:00",
+          "entry": "价。",
+          "stopLoss": "价：99.61",
+          "targets": [],
+          "preview": "#SOL 🙅‍♂️ 止损价：99.61 #SOL SOL 正在支撑区域上方形成新的盘整区间，短线趋势向上。BTC 已经来到支撑位. 🔴 入场价：103.87 📌 目标价：104.94, 107.40, 112.60 🙅‍♂️ 止损价：99.61 📝 VIRTUAL – LONG 🔜 入场价: 0.6906 📌 目标价…",
+          "cardPayload": {
+            "symbol": "SOL",
+            "direction": "",
+            "entry": "价。",
+            "stopLoss": "价：99.61",
+            "targets": [],
+            "signalAt": "2026-10-22T11:19:07Z",
+            "body": "#SOL\n🙅‍♂️ 止损价：99.61\n#SOL\n🙅‍♂️ 止损价：99.61\n🙅‍♂️ 止损价: 0.6558\n✏️ 第一止盈后，止损移至入场价。",
+            "channelId": "-1002438953921",
+            "sourceRef": "tg:-1002438953921:1134,1128,1138,1142,1139"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "BTC",
+          "direction": null,
+          "directionNorm": null,
+          "signalAt": "2026-10-23T10:33:27+00:00",
+          "at": "2026-10-23T10:33:27+00:00",
+          "entry": "价。",
+          "stopLoss": "价: 3.517",
+          "targets": [],
+          "preview": "📝 AR – LONG 🔜 入场价: 3.706 📌 目标价: 3.744, 3.807, 3.880, 4.103 🙅‍♂️ 止损价: 3.517 ✏️ 第一止盈后，止损移至入场价。",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "",
+            "entry": "价。",
+            "stopLoss": "价: 3.517",
+            "targets": [],
+            "signalAt": "2026-10-23T10:33:27Z",
+            "body": "🙅‍♂️ 止损价: 3.517\n✏️ 第一止盈后，止损移至入场价。",
+            "channelId": "-1002438953921",
+            "sourceRef": "tg:-1002438953921:1144,1142,1139,1138"
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1001976446916",
+      "name": "熬惯合约",
+      "avatar": "avatar/1002404948215.png",
+      "ok": true,
+      "messageCount": 108,
+      "tradeLikeCount": 43,
+      "cardEmitCount": 40,
+      "parsedSignalCount": 40,
+      "symbols": {
+        "BTC": 9,
+        "IRYS": 6,
+        "CT": 5,
+        "IOST": 5,
+        "ALT": 3,
+        "ARIA": 3,
+        "ICNT": 2,
+        "ERA": 2,
+        "DOOD": 2,
+        "ETH": 1,
+        "HBAR": 1,
+        "ZEC": 1
+      },
+      "samples": [
+        {
+          "phase": "full",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-17T05:38:56+00:00",
+          "preview": "#ICNTUSDT 挂单空 📉 止盈：0.237-0.227-0.217 止损：0.273 点点👍，来个挂单，要么进场吃💩，要么进场爆赚的那种 #ICNTUSDT 挂单空 📉 杠杆：50x 分批进场：0.255-0.263 止盈：0.237-0.227-0.217 止损：0.273 总仓位：3%左右即可，分批进场，周…"
+        },
+        {
+          "phase": "full",
+          "symbol": "ETH",
+          "direction": "多",
+          "at": "2026-10-18T01:53:27+00:00",
+          "preview": "#ETHUSDT 挂单多 📈 止盈：2225-2300-2375 止损：2075 点点👍，来个挂单，要么进场吃💩，要么进场爆赚的那种 #ETHUSDT 挂单多 📈 杠杆：100x-150x 分批进场：2150-2125 止盈：2225-2300-2375 止损：2075 挂着 取消会通知🫡"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-18T03:10:20+00:00",
+          "preview": "#ICNT 涨幅8%📈"
+        },
+        {
+          "phase": "initial",
+          "symbol": "HBAR",
+          "direction": "空",
+          "at": "2026-10-19T02:18:17+00:00",
+          "preview": "VIP内部群周一早上睡醒先收米拿下💵💵 #HBARUSDT 空单 75x 331,58%🚀"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ERA",
+          "direction": "空",
+          "at": "2026-10-19T02:41:12+00:00",
+          "preview": "#ERA 现价空（预留好补仓位）"
+        },
+        {
+          "phase": "update",
+          "symbol": "ERA",
+          "direction": "空",
+          "at": "2026-10-19T02:46:39+00:00",
+          "preview": "止盈：0,06845-0,06625-0,06363 止损：0,0772 #ERA 现价空（预留好补仓位） 补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772"
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "at": "2026-10-19T07:20:04+00:00",
+          "preview": "#BTCUSDT 挂单空 📉 止盈：82000-80500-79000 止损：85000 补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772 点点👍，来个主流币挂单挂挂 #BTCUSDT 挂单空 📉 杠杆：100x-150x 分批进场：83500-84000 止盈：8200…"
+        },
+        {
+          "phase": "full",
+          "symbol": "CT",
+          "direction": "空",
+          "at": "2026-10-19T07:55:02+00:00",
+          "preview": "补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772 点点👍，来个主流币挂单挂挂 #CT 现价空（ 波动大，轻仓即可，预留好补仓位 ）"
+        }
+      ],
+      "cards": [
+        {
+          "phase": "full",
+          "symbol": "ICNT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-17T05:38:56+00:00",
+          "at": "2026-10-17T05:38:56+00:00",
+          "entry": "空 📉",
+          "stopLoss": "0.273",
+          "targets": [
+            "0.237",
+            "0.227",
+            "0.217"
+          ],
+          "preview": "#ICNTUSDT 挂单空 📉 止盈：0.237-0.227-0.217 止损：0.273 点点👍，来个挂单，要么进场吃💩，要么进场爆赚的那种 #ICNTUSDT 挂单空 📉 杠杆：50x 分批进场：0.255-0.263 止盈：0.237-0.227-0.217 止损：0.273 总仓位：3%左右即可，分批进场，周…",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "short",
+            "entry": "空 📉",
+            "stopLoss": "0.273",
+            "targets": [
+              "0.237",
+              "0.227",
+              "0.217"
+            ],
+            "signalAt": "2026-10-17T05:38:56Z",
+            "body": "#ICNTUSDT    挂单空 📉\n止盈：0.237-0.227-0.217\n止损：0.273\n#ICNTUSDT    挂单空 📉\n止盈：0.237-0.227-0.217\n止损：0.273",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4239,4238"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ETH",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-18T01:53:27+00:00",
+          "at": "2026-10-18T01:53:27+00:00",
+          "entry": "多 📈",
+          "stopLoss": "2075",
+          "targets": [
+            "2225",
+            "2300",
+            "2375"
+          ],
+          "preview": "#ETHUSDT 挂单多 📈 止盈：2225-2300-2375 止损：2075 点点👍，来个挂单，要么进场吃💩，要么进场爆赚的那种 #ETHUSDT 挂单多 📈 杠杆：100x-150x 分批进场：2150-2125 止盈：2225-2300-2375 止损：2075 挂着 取消会通知🫡",
+          "cardPayload": {
+            "symbol": "ETH",
+            "direction": "long",
+            "entry": "多 📈",
+            "stopLoss": "2075",
+            "targets": [
+              "2225",
+              "2300",
+              "2375"
+            ],
+            "signalAt": "2026-10-18T01:53:27Z",
+            "body": "#ETHUSDT    挂单多 📈\n止盈：2225-2300-2375\n止损：2075\n#ETHUSDT    挂单多 📈\n止盈：2225-2300-2375\n止损：2075",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4246,4238"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-18T03:10:20+00:00",
+          "at": "2026-10-18T03:10:20+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#ICNT 涨幅8%📈",
+          "cardPayload": {
+            "symbol": "ICNT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-18T03:10:20Z",
+            "body": "#ICNT   涨幅8%📈",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4253,4238"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "HBAR",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T02:18:17+00:00",
+          "at": "2026-10-19T02:18:17+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "VIP内部群周一早上睡醒先收米拿下💵💵 #HBARUSDT 空单 75x 331,58%🚀",
+          "cardPayload": {
+            "symbol": "HBAR",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-19T02:18:17Z",
+            "body": "#HBARUSDT   空单   75x  331,58%🚀",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4264"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "ERA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T02:41:12+00:00",
+          "at": "2026-10-19T02:41:12+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#ERA 现价空（预留好补仓位）",
+          "cardPayload": {
+            "symbol": "ERA",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-19T02:41:12Z",
+            "body": "#ERA   现价空（预留好补仓位）",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4266"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "ERA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T02:46:39+00:00",
+          "at": "2026-10-19T02:46:39+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0772",
+          "targets": [
+            "0",
+            "06845",
+            "0",
+            "06625",
+            "0",
+            "06363"
+          ],
+          "preview": "止盈：0,06845-0,06625-0,06363 止损：0,0772 #ERA 现价空（预留好补仓位） 补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772",
+          "cardPayload": {
+            "symbol": "ERA",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,0772",
+            "targets": [
+              "0",
+              "06845",
+              "0",
+              "06625",
+              "0",
+              "06363"
+            ],
+            "signalAt": "2026-10-19T02:46:39Z",
+            "body": "止盈：0,06845-0,06625-0,06363\n止损：0,0772\n#ERA   现价空（预留好补仓位）\n止盈：0,06845-0,06625-0,06363\n止损：0,0772",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4267,4266"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T07:20:04+00:00",
+          "at": "2026-10-19T07:20:04+00:00",
+          "entry": "空 📉",
+          "stopLoss": "85000",
+          "targets": [
+            "82000",
+            "80500",
+            "79000"
+          ],
+          "preview": "#BTCUSDT 挂单空 📉 止盈：82000-80500-79000 止损：85000 补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772 点点👍，来个主流币挂单挂挂 #BTCUSDT 挂单空 📉 杠杆：100x-150x 分批进场：83500-84000 止盈：8200…",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "空 📉",
+            "stopLoss": "85000",
+            "targets": [
+              "82000",
+              "80500",
+              "79000"
+            ],
+            "signalAt": "2026-10-19T07:20:04Z",
+            "body": "#BTCUSDT    挂单空 📉\n止盈：82000-80500-79000\n止损：85000\n止盈：0,06845-0,06625-0,06363\n止损：0,0772\n#BTCUSDT    挂单空 📉\n止盈：82000-80500-79000\n止损：85000",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4273,4271,4267"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "CT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T07:55:02+00:00",
+          "at": "2026-10-19T07:55:02+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0772",
+          "targets": [
+            "0",
+            "06845",
+            "0",
+            "06625",
+            "0",
+            "06363"
+          ],
+          "preview": "补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772 点点👍，来个主流币挂单挂挂 #CT 现价空（ 波动大，轻仓即可，预留好补仓位 ）",
+          "cardPayload": {
+            "symbol": "CT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,0772",
+            "targets": [
+              "0",
+              "06845",
+              "0",
+              "06625",
+              "0",
+              "06363"
+            ],
+            "signalAt": "2026-10-19T07:55:02Z",
+            "body": "止盈：0,06845-0,06625-0,06363\n止损：0,0772\n#CT    现价空（ 波动大，轻仓即可，预留好补仓位 ）",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4274,4271,4267"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "CT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T07:57:09+00:00",
+          "at": "2026-10-19T07:57:09+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0772",
+          "targets": [
+            "1"
+          ],
+          "preview": "补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772 点点👍，来个主流币挂单挂挂 #CT 现价空（ 波动大，轻仓即可，预留好补仓位 ） #CT 直接TP1止盈即可",
+          "cardPayload": {
+            "symbol": "CT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,0772",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-19T07:57:09Z",
+            "body": "止盈：0,06845-0,06625-0,06363\n止损：0,0772\n#CT    现价空（ 波动大，轻仓即可，预留好补仓位 ）\n#CT   直接TP1止盈即可",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4276,4274,4271,4267"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "CT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-19T15:53:20+00:00",
+          "at": "2026-10-19T15:53:20+00:00",
+          "entry": "市价",
+          "stopLoss": "，不追涨杀跌，只做有逻辑、有结构的交易 ✔️",
+          "targets": [
+            "1"
+          ],
+          "preview": "#CT 空单（20x） 跌幅20% +402.34%🚀 #ERA 空单（25x） 跌幅3% +90.73%🚀 （可惜正好保本扫了跌穿了这单） 节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交易 ✔️ 点点👍，来个主流币挂单挂挂 #CT 现价空（ 波动大，轻仓即可，预留好补仓位 ） #CT …",
+          "cardPayload": {
+            "symbol": "CT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "，不追涨杀跌，只做有逻辑、有结构的交易 ✔️",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-19T15:53:20Z",
+            "body": "#CT   空单（20x）  跌幅20% +402.34%🚀\n#ERA   空单（25x）  跌幅3% +90.73%🚀 （可惜正好保本扫了跌穿了这单）\n节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交易 ✔️\n#CT    现价空（ 波动大，轻仓即可，预留好补仓位 ）\n#CT   直接TP1止盈即可\n#CT   空单（20x）  跌幅20% +402.34%🚀\n#ERA   空单（25x）  跌幅3% +90.73%🚀 （可惜正好保本扫了跌穿了这单）\n节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交易 ✔️",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4280,4276,4274,4271"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "CT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T02:07:17+00:00",
+          "at": "2026-10-20T02:07:17+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1"
+          ],
+          "preview": "#CT 现价空（ 波动大，轻仓即可，预留好补仓位 ） #CT 直接TP1止盈即可 不嘴炮只看结果👇 #CT 空单（20x） 跌幅20% +402.34%🚀 #ERA 空单（25x） 跌幅3% +90.73%🚀 （可惜正好保本扫了跌穿了这单） 节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交…",
+          "cardPayload": {
+            "symbol": "CT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-20T02:07:17Z",
+            "body": "#CT    现价空（ 波动大，轻仓即可，预留好补仓位 ）\n#CT   直接TP1止盈即可\n#CT   空单（20x）  跌幅20% +402.34%🚀\n#ERA   空单（25x）  跌幅3% +90.73%🚀 （可惜正好保本扫了跌穿了这单）\n节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交易 ✔️\n#CT    现价多（ 预留好补仓位 ）",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4285,4276"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "CT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T02:13:55+00:00",
+          "at": "2026-10-20T02:13:55+00:00",
+          "entry": "市价",
+          "stopLoss": "0,313",
+          "targets": [
+            "0",
+            "36",
+            "0",
+            "373",
+            "0",
+            "388"
+          ],
+          "preview": "止盈：0,36-0,373-0,388 止损：0,313 #CT 现价空（ 波动大，轻仓即可，预留好补仓位 ） #CT 直接TP1止盈即可 不嘴炮只看结果👇 #CT 空单（20x） 跌幅20% +402.34%🚀 #ERA 空单（25x） 跌幅3% +90.73%🚀 （可惜正好保本扫了跌穿了这单） 节奏清晰，执行到位…",
+          "cardPayload": {
+            "symbol": "CT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0,313",
+            "targets": [
+              "0",
+              "36",
+              "0",
+              "373",
+              "0",
+              "388"
+            ],
+            "signalAt": "2026-10-20T02:13:55Z",
+            "body": "止盈：0,36-0,373-0,388\n止损：0,313\n#CT    现价空（ 波动大，轻仓即可，预留好补仓位 ）\n#CT   直接TP1止盈即可\n#CT   空单（20x）  跌幅20% +402.34%🚀\n#ERA   空单（25x）  跌幅3% +90.73%🚀 （可惜正好保本扫了跌穿了这单）\n节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交易 ✔️\n#CT    现价多（ 预留好补仓位 ）\n止盈：0,36-0,373-0,388\n止损：0,313",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4286,4285,4276"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T06:30:26+00:00",
+          "at": "2026-10-20T06:30:26+00:00",
+          "entry": "）",
+          "stopLoss": "0,313",
+          "targets": [
+            "0",
+            "36",
+            "0",
+            "373",
+            "0",
+            "388"
+          ],
+          "preview": "补仓：0,3246 止盈：0,36-0,373-0,388 止损：0,313 #BTCUSDT 现价多（ 短线交易分批进场 ）",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "long",
+            "entry": "）",
+            "stopLoss": "0,313",
+            "targets": [
+              "0",
+              "36",
+              "0",
+              "373",
+              "0",
+              "388"
+            ],
+            "signalAt": "2026-10-20T06:30:26Z",
+            "body": "止盈：0,36-0,373-0,388\n止损：0,313\n#BTCUSDT    现价多（ 短线交易分批进场 ）",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4292,4286"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T06:34:49+00:00",
+          "at": "2026-10-20T06:34:49+00:00",
+          "entry": "）",
+          "stopLoss": "80500",
+          "targets": [
+            "83000"
+          ],
+          "preview": "止盈：83000 止损：80500 补仓：0,3246 止盈：0,36-0,373-0,388 止损：0,313 #BTCUSDT 现价多（ 短线交易分批进场 ） 补仓：81100 止盈：83000 止损：80500",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "long",
+            "entry": "）",
+            "stopLoss": "80500",
+            "targets": [
+              "83000"
+            ],
+            "signalAt": "2026-10-20T06:34:49Z",
+            "body": "止盈：83000\n止损：80500\n止盈：0,36-0,373-0,388\n止损：0,313\n#BTCUSDT    现价多（ 短线交易分批进场 ）\n止盈：83000\n止损：80500",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4293,4292,4286"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T08:39:56+00:00",
+          "at": "2026-10-20T08:39:56+00:00",
+          "entry": "市价",
+          "stopLoss": "放在0,01135上方",
+          "targets": [
+            "83000"
+          ],
+          "preview": "补仓：0,3246 止盈：0,36-0,373-0,388 止损：0,313 补仓：81100 止盈：83000 止损：80500 #ALT 已摸到日线压力，可以现价尝试一手空单 分批进场 现价 - 0,1105 止损放在0,01135上方",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "放在0,01135上方",
+            "targets": [
+              "83000"
+            ],
+            "signalAt": "2026-10-20T08:39:56Z",
+            "body": "止盈：0,36-0,373-0,388\n止损：0,313\n止盈：83000\n止损：80500\n#ALT     已摸到日线压力，可以现价尝试一手空单\n分批进场 现价 - 0,1105 止损放在0,01135上方",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4295,4293,4286"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T09:10:35+00:00",
+          "at": "2026-10-20T09:10:35+00:00",
+          "entry": "市价",
+          "stopLoss": "放在0,01135上方",
+          "targets": [
+            "1️⃣"
+          ],
+          "preview": "补仓：81100 止盈：83000 止损：80500 #ALT 已摸到日线压力，可以现价尝试一手空单 分批进场 现价 - 0,1105 止损放在0,01135上方 #ALT 自行TP1️⃣止盈",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "放在0,01135上方",
+            "targets": [
+              "1️⃣"
+            ],
+            "signalAt": "2026-10-20T09:10:35Z",
+            "body": "止盈：83000\n止损：80500\n#ALT     已摸到日线压力，可以现价尝试一手空单\n分批进场 现价 - 0,1105 止损放在0,01135上方\n#ALT   自行TP1️⃣止盈",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4298,4295,4293"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T09:36:14+00:00",
+          "at": "2026-10-20T09:36:14+00:00",
+          "entry": "市价",
+          "stopLoss": "80500",
+          "targets": [
+            "1️⃣"
+          ],
+          "preview": "补仓：81100 止盈：83000 止损：80500 #ALT 已摸到日线压力，可以现价尝试一手空单 分批进场 现价 - 0,1105 止损放在0,01135上方 #ALT 自行TP1️⃣止盈 #ALT 下跌7%📉 还得是做空啊，明天开始做多健扣掉了",
+          "cardPayload": {
+            "symbol": "ALT",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "80500",
+            "targets": [
+              "1️⃣"
+            ],
+            "signalAt": "2026-10-20T09:36:14Z",
+            "body": "止盈：83000\n止损：80500\n#ALT     已摸到日线压力，可以现价尝试一手空单\n分批进场 现价 - 0,1105 止损放在0,01135上方\n#ALT   自行TP1️⃣止盈\n#ALT   下跌7%📉\n还得是做空啊，明天开始做多健扣掉了",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4299,4298,4293"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-20T14:08:36+00:00",
+          "at": "2026-10-20T14:08:36+00:00",
+          "entry": "）",
+          "stopLoss": "80500",
+          "targets": [
+            "1️⃣"
+          ],
+          "preview": "#BTCUSDT 现价多（ 短线交易分批进场 ） 补仓：81100 止盈：83000 止损：80500 #BTCUSDT 手动TP1️⃣止盈减仓，🉑留点仓位",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "long",
+            "entry": "）",
+            "stopLoss": "80500",
+            "targets": [
+              "1️⃣"
+            ],
+            "signalAt": "2026-10-20T14:08:36Z",
+            "body": "#BTCUSDT    现价多（ 短线交易分批进场 ）\n止盈：83000\n止损：80500\n#BTCUSDT  手动TP1️⃣止盈减仓，🉑留点仓位",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4302,4293,4292"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T14:29:35+00:00",
+          "at": "2026-10-20T14:29:35+00:00",
+          "entry": "市价",
+          "stopLoss": "80500",
+          "targets": [
+            "1️⃣"
+          ],
+          "preview": "补仓：81100 止盈：83000 止损：80500 #BTCUSDT 手动TP1️⃣止盈减仓，🉑留点仓位 #BTCUSDT 剩余的仓位，如果你是死空头，那么83400附近找位置跑就行，反之死多头就狠狠去看84000突破吧",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "80500",
+            "targets": [
+              "1️⃣"
+            ],
+            "signalAt": "2026-10-20T14:29:35Z",
+            "body": "止盈：83000\n止损：80500\n#BTCUSDT  手动TP1️⃣止盈减仓，🉑留点仓位\n#BTCUSDT   剩余的仓位，如果你是死空头，那么83400附近找位置跑就行，反之死多头就狠狠去看84000突破吧",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4303,4302,4293"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-20T15:15:53+00:00",
+          "at": "2026-10-20T15:15:53+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [
+            "1️⃣"
+          ],
+          "preview": "#BTCUSDT 手动TP1️⃣止盈减仓，🉑留点仓位 #BTCUSDT 剩余的仓位，如果你是死空头，那么83400附近找位置跑就行，反之死多头就狠狠去看84000突破吧 #BTCUSDT 83400这不就正正好好精准逃顶了嘛 可惜接空单差100点接到，不然就多空双吃了，空单就先不接了，明天再来重新看看位置🫡",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [
+              "1️⃣"
+            ],
+            "signalAt": "2026-10-20T15:15:53Z",
+            "body": "#BTCUSDT  手动TP1️⃣止盈减仓，🉑留点仓位\n#BTCUSDT   剩余的仓位，如果你是死空头，那么83400附近找位置跑就行，反之死多头就狠狠去看84000突破吧\n#BTCUSDT   83400这不就正正好好精准逃顶了嘛\n可惜接空单差100点接到，不然就多空双吃了，空单就先不接了，明天再来重新看看位置🫡",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4304,4303,4302"
+          }
+        },
+        {
+          "phase": "initial",
+          "symbol": "DOOD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T01:47:31+00:00",
+          "at": "2026-10-21T01:47:31+00:00",
+          "entry": "市价",
+          "stopLoss": null,
+          "targets": [],
+          "preview": "#DOOD 现价空（波动大，轻仓即可，预留好补仓位）",
+          "cardPayload": {
+            "symbol": "DOOD",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": null,
+            "targets": [],
+            "signalAt": "2026-10-21T01:47:31Z",
+            "body": "#DOOD    现价空（波动大，轻仓即可，预留好补仓位）",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4314"
+          }
+        },
+        {
+          "phase": "update",
+          "symbol": "DOOD",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T01:51:08+00:00",
+          "at": "2026-10-21T01:51:08+00:00",
+          "entry": "市价",
+          "stopLoss": "0,003",
+          "targets": [],
+          "preview": "#DOOD 现价空（波动大，轻仓即可，预留好补仓位） 止损：0,003",
+          "cardPayload": {
+            "symbol": "DOOD",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,003",
+            "targets": [],
+            "signalAt": "2026-10-21T01:51:08Z",
+            "body": "#DOOD    现价空（波动大，轻仓即可，预留好补仓位）\n止损：0,003",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4316,4314"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IOST",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T06:19:14+00:00",
+          "at": "2026-10-21T06:19:14+00:00",
+          "entry": "市价",
+          "stopLoss": "0,003",
+          "targets": [],
+          "preview": "止损：0,003 #IOST 现价空（ 预留好补仓位 ）",
+          "cardPayload": {
+            "symbol": "IOST",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,003",
+            "targets": [],
+            "signalAt": "2026-10-21T06:19:14Z",
+            "body": "止损：0,003\n#IOST    现价空（ 预留好补仓位 ）",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4325,4316"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IOST",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T06:23:06+00:00",
+          "at": "2026-10-21T06:23:06+00:00",
+          "entry": "市价",
+          "stopLoss": "0,001465",
+          "targets": [
+            "0",
+            "0012955",
+            "0",
+            "001255",
+            "0",
+            "001205"
+          ],
+          "preview": "止损：0,003 #IOST 现价空（ 预留好补仓位 ） 止盈：0,0012955-0,001255-0,001205 止损：0,001465",
+          "cardPayload": {
+            "symbol": "IOST",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,001465",
+            "targets": [
+              "0",
+              "0012955",
+              "0",
+              "001255",
+              "0",
+              "001205"
+            ],
+            "signalAt": "2026-10-21T06:23:06Z",
+            "body": "止损：0,003\n#IOST    现价空（ 预留好补仓位 ）\n止盈：0,0012955-0,001255-0,001205\n止损：0,001465",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4327,4325,4316"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IOST",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-21T06:47:27+00:00",
+          "at": "2026-10-21T06:47:27+00:00",
+          "entry": "市价",
+          "stopLoss": "0,001465",
+          "targets": [
+            "0",
+            "0012955",
+            "0",
+            "001255",
+            "0",
+            "001205"
+          ],
+          "preview": "#IOST 现价空（ 预留好补仓位 ） 止盈：0,0012955-0,001255-0,001205 止损：0,001465 #IOST - ₮0.0012593 (21.30%) , 19分钟跌 -10.22% , 日内回调 -10.73% [72] 🔥",
+          "cardPayload": {
+            "symbol": "IOST",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,001465",
+            "targets": [
+              "0",
+              "0012955",
+              "0",
+              "001255",
+              "0",
+              "001205"
+            ],
+            "signalAt": "2026-10-21T06:47:27Z",
+            "body": "#IOST    现价空（ 预留好补仓位 ）\n止盈：0,0012955-0,001255-0,001205\n止损：0,001465\n#IOST - ₮0.0012593 (21.30%) , 19分钟跌 -10.22% , 日内回调 -10.73% [72] 🔥",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4331,4327,4325"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ARIA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T02:27:01+00:00",
+          "at": "2026-10-22T02:27:01+00:00",
+          "entry": "市价",
+          "stopLoss": "发布，从不模糊喊单‼️",
+          "targets": [],
+          "preview": "行情愈发狗屎，VIP内部群依旧在坚持发车第一线💵💵 #NEARUSDT 多单 50x 193,87%🚀 每单精确的止盈止损发布，从不模糊喊单‼️ 行情时刻在变化，我们时刻在调整，友友们保持信任，长期共赢💰 #ARIA 现价空（ 预留好补仓位 ）",
+          "cardPayload": {
+            "symbol": "ARIA",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "发布，从不模糊喊单‼️",
+            "targets": [],
+            "signalAt": "2026-10-22T02:27:01Z",
+            "body": "#NEARUSDT   多单   50x  193,87%🚀\n每单精确的止盈止损发布，从不模糊喊单‼️\n#ARIA     现价空（ 预留好补仓位 ）",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4346,4339"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ARIA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T02:33:12+00:00",
+          "at": "2026-10-22T02:33:12+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0672",
+          "targets": [
+            "0",
+            "05835",
+            "0",
+            "054",
+            "0",
+            "0502"
+          ],
+          "preview": "止盈：0,05835-0,054-0,0502 止损：0,0672 行情愈发狗屎，VIP内部群依旧在坚持发车第一线💵💵 #NEARUSDT 多单 50x 193,87%🚀 每单精确的止盈止损发布，从不模糊喊单‼️ 行情时刻在变化，我们时刻在调整，友友们保持信任，长期共赢💰 #ARIA 现价空（ 预留好补仓位 ） 补仓…",
+          "cardPayload": {
+            "symbol": "ARIA",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,0672",
+            "targets": [
+              "0",
+              "05835",
+              "0",
+              "054",
+              "0",
+              "0502"
+            ],
+            "signalAt": "2026-10-22T02:33:12Z",
+            "body": "止盈：0,05835-0,054-0,0502\n止损：0,0672\n#NEARUSDT   多单   50x  193,87%🚀\n每单精确的止盈止损发布，从不模糊喊单‼️\n#ARIA     现价空（ 预留好补仓位 ）\n止盈：0,05835-0,054-0,0502\n止损：0,0672",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4347,4346,4339"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T02:39:01+00:00",
+          "at": "2026-10-22T02:39:01+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0672",
+          "targets": [
+            "0",
+            "05835",
+            "0",
+            "054",
+            "0",
+            "0502"
+          ],
+          "preview": "#IRYS 摸！摸的就是涨幅榜第一，成功下跌7%📉 行情愈发狗屎，VIP内部群依旧在坚持发车第一线💵💵 #NEARUSDT 多单 50x 193,87%🚀 每单精确的止盈止损发布，从不模糊喊单‼️ 行情时刻在变化，我们时刻在调整，友友们保持信任，长期共赢💰 补仓：0,065 止盈：0,05835-0,054-0,05…",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,0672",
+            "targets": [
+              "0",
+              "05835",
+              "0",
+              "054",
+              "0",
+              "0502"
+            ],
+            "signalAt": "2026-10-22T02:39:01Z",
+            "body": "#IRYS    摸！摸的就是涨幅榜第一，成功下跌7%📉\n#NEARUSDT   多单   50x  193,87%🚀\n每单精确的止盈止损发布，从不模糊喊单‼️\n止盈：0,05835-0,054-0,0502\n止损：0,0672\n#IRYS    摸！摸的就是涨幅榜第一，成功下跌7%📉",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4348,4347,4339"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ARIA",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T06:22:48+00:00",
+          "at": "2026-10-22T06:22:48+00:00",
+          "entry": "浮盈2%",
+          "stopLoss": "0,0672",
+          "targets": [
+            "1"
+          ],
+          "preview": "#ARIA 现价空（ 预留好补仓位 ） 补仓：0,065 止盈：0,05835-0,054-0,0502 止损：0,0672 #ARIA 进场浮盈2% #ARIA 手动TP1止盈",
+          "cardPayload": {
+            "symbol": "ARIA",
+            "direction": "short",
+            "entry": "浮盈2%",
+            "stopLoss": "0,0672",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-22T06:22:48Z",
+            "body": "#ARIA     现价空（ 预留好补仓位 ）\n止盈：0,05835-0,054-0,0502\n止损：0,0672\n#ARIA     进场浮盈2%\n#ARIA     手动TP1止盈",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4355,4350,4347,4346"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T08:40:19+00:00",
+          "at": "2026-10-22T08:40:19+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0672",
+          "targets": [
+            "0",
+            "05835",
+            "0",
+            "054",
+            "0",
+            "0502"
+          ],
+          "preview": "补仓：0,065 止盈：0,05835-0,054-0,0502 止损：0,0672 #BTCUSDT 现价多 ( 短线交易，吃波反抽，预留好补仓位 )",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0,0672",
+            "targets": [
+              "0",
+              "05835",
+              "0",
+              "054",
+              "0",
+              "0502"
+            ],
+            "signalAt": "2026-10-22T08:40:19Z",
+            "body": "止盈：0,05835-0,054-0,0502\n止损：0,0672\n#BTCUSDT    现价多 ( 短线交易，吃波反抽，预留好补仓位 )",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4356,4347"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-22T08:44:28+00:00",
+          "at": "2026-10-22T08:44:28+00:00",
+          "entry": "市价",
+          "stopLoss": "80500",
+          "targets": [
+            "83000",
+            "84000"
+          ],
+          "preview": "止盈：83000-84000 止损：80500 补仓：0,065 止盈：0,05835-0,054-0,0502 止损：0,0672 #BTCUSDT 现价多 ( 短线交易，吃波反抽，预留好补仓位 ) 补仓：81300 止盈：83000-84000 止损：80500",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "80500",
+            "targets": [
+              "83000",
+              "84000"
+            ],
+            "signalAt": "2026-10-22T08:44:28Z",
+            "body": "止盈：83000-84000\n止损：80500\n止盈：0,05835-0,054-0,0502\n止损：0,0672\n#BTCUSDT    现价多 ( 短线交易，吃波反抽，预留好补仓位 )\n止盈：83000-84000\n止损：80500",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4357,4356,4347"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "ZEC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-22T08:51:13+00:00",
+          "at": "2026-10-22T08:51:13+00:00",
+          "entry": "市价",
+          "stopLoss": "80500",
+          "targets": [
+            "83000",
+            "84000"
+          ],
+          "preview": "补仓：0,065 止盈：0,05835-0,054-0,0502 止损：0,0672 补仓：81300 止盈：83000-84000 止损：80500 VIP内部群空单已拿下💵💵 #ZECUSDT 空单 75x 329,93%🚀",
+          "cardPayload": {
+            "symbol": "ZEC",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "80500",
+            "targets": [
+              "83000",
+              "84000"
+            ],
+            "signalAt": "2026-10-22T08:51:13Z",
+            "body": "止盈：0,05835-0,054-0,0502\n止损：0,0672\n止盈：83000-84000\n止损：80500\nVIP内部群空单已拿下💵💵\n#ZECUSDT   空单   75x  329,93%🚀",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4358,4357,4347"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T02:15:22+00:00",
+          "at": "2026-10-23T02:15:22+00:00",
+          "entry": "市价",
+          "stopLoss": "80500",
+          "targets": [
+            "83000",
+            "84000"
+          ],
+          "preview": "补仓：81300 止盈：83000-84000 止损：80500 #IRYS 现价空（波动大，轻仓即可）",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "80500",
+            "targets": [
+              "83000",
+              "84000"
+            ],
+            "signalAt": "2026-10-23T02:15:22Z",
+            "body": "止盈：83000-84000\n止损：80500\n#IRYS    现价空（波动大，轻仓即可）",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4370,4357"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T02:19:02+00:00",
+          "at": "2026-10-23T02:19:02+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0284",
+          "targets": [
+            "0",
+            "02445",
+            "0",
+            "02344",
+            "0",
+            "02232"
+          ],
+          "preview": "#IRYS 现价空（波动大，轻仓即可） 止盈：0,02445-0,02344-0,02232 止损：0,0284",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,0284",
+            "targets": [
+              "0",
+              "02445",
+              "0",
+              "02344",
+              "0",
+              "02232"
+            ],
+            "signalAt": "2026-10-23T02:19:02Z",
+            "body": "#IRYS    现价空（波动大，轻仓即可）\n止盈：0,02445-0,02344-0,02232\n止损：0,0284",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4371,4370"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T03:25:04+00:00",
+          "at": "2026-10-23T03:25:04+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0284",
+          "targets": [
+            "1"
+          ],
+          "preview": "#IRYS 现价空（波动大，轻仓即可） 止盈：0,02445-0,02344-0,02232 止损：0,0284 #IRYS 手动TP1止盈减仓",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "short",
+            "entry": "市价",
+            "stopLoss": "0,0284",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-23T03:25:04Z",
+            "body": "#IRYS    现价空（波动大，轻仓即可）\n止盈：0,02445-0,02344-0,02232\n止损：0,0284\n#IRYS     手动TP1止盈减仓",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4374,4371,4370"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T03:28:59+00:00",
+          "at": "2026-10-23T03:28:59+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0284",
+          "targets": [
+            "1"
+          ],
+          "preview": "#IRYS 现价空（波动大，轻仓即可） 止盈：0,02445-0,02344-0,02232 止损：0,0284 #IRYS 手动TP1止盈减仓 #IRYS 下跌7%📉 谁懂这种做空涨幅榜第一疯币，大难不死劫后余生的感觉😁",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0,0284",
+            "targets": [
+              "1"
+            ],
+            "signalAt": "2026-10-23T03:28:59Z",
+            "body": "#IRYS    现价空（波动大，轻仓即可）\n止盈：0,02445-0,02344-0,02232\n止损：0,0284\n#IRYS     手动TP1止盈减仓\n#IRYS    下跌7%📉\n谁懂这种做空涨幅榜第一疯币，大难不死劫后余生的感觉😁",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4376,4374,4371"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IOST",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T07:38:42+00:00",
+          "at": "2026-10-23T07:38:42+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0284",
+          "targets": [
+            "0",
+            "02445",
+            "0",
+            "02344",
+            "0",
+            "02232"
+          ],
+          "preview": "止盈：0,02445-0,02344-0,02232 止损：0,0284 #IOST 现价多",
+          "cardPayload": {
+            "symbol": "IOST",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0,0284",
+            "targets": [
+              "0",
+              "02445",
+              "0",
+              "02344",
+              "0",
+              "02232"
+            ],
+            "signalAt": "2026-10-23T07:38:42Z",
+            "body": "止盈：0,02445-0,02344-0,02232\n止损：0,0284\n#IOST   现价多",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4380,4371"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IOST",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T07:43:37+00:00",
+          "at": "2026-10-23T07:43:37+00:00",
+          "entry": "市价",
+          "stopLoss": "0,0007985",
+          "targets": [
+            "0",
+            "0008822",
+            "0",
+            "0009125",
+            "0",
+            "0009445"
+          ],
+          "preview": "止盈：0,02445-0,02344-0,02232 止损：0,0284 #IOST 现价多 止盈：0,0008822-0,0009125-0,0009445 止损：0,0007985",
+          "cardPayload": {
+            "symbol": "IOST",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "0,0007985",
+            "targets": [
+              "0",
+              "0008822",
+              "0",
+              "0009125",
+              "0",
+              "0009445"
+            ],
+            "signalAt": "2026-10-23T07:43:37Z",
+            "body": "止盈：0,02445-0,02344-0,02232\n止损：0,0284\n#IOST   现价多\n止盈：0,0008822-0,0009125-0,0009445\n止损：0,0007985",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4381,4380,4371"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "directionNorm": "short",
+          "signalAt": "2026-10-23T16:05:05+00:00",
+          "at": "2026-10-23T16:05:05+00:00",
+          "entry": "空📉",
+          "stopLoss": "85000",
+          "targets": [
+            "81800",
+            "80300",
+            "78800"
+          ],
+          "preview": "#BTCUSDT 挂单空📉 止盈：81800-80300-78800 止损：85000 止盈：0,0008822-0,0009125-0,0009445 止损：0,0007985 #BTCUSDT 挂单空📉 杠杆：100x-150x 分批进场：83400-83900 止盈：81800-80300-78800 止损：8…",
+          "cardPayload": {
+            "symbol": "BTC",
+            "direction": "short",
+            "entry": "空📉",
+            "stopLoss": "85000",
+            "targets": [
+              "81800",
+              "80300",
+              "78800"
+            ],
+            "signalAt": "2026-10-23T16:05:05Z",
+            "body": "#BTCUSDT    挂单空📉\n止盈：81800-80300-78800\n止损：85000\n止盈：0,0008822-0,0009125-0,0009445\n止损：0,0007985\n#BTCUSDT    挂单空📉\n止盈：81800-80300-78800\n止损：85000",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4386,4381"
+          }
+        },
+        {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "多",
+          "directionNorm": "long",
+          "signalAt": "2026-10-23T16:09:17+00:00",
+          "at": "2026-10-23T16:09:17+00:00",
+          "entry": "市价",
+          "stopLoss": "，不追涨杀跌，只做有逻辑、有结构的交易 ✔️",
+          "targets": [
+            "0",
+            "0008822",
+            "0",
+            "0009125",
+            "0",
+            "0009445"
+          ],
+          "preview": "#IRYS 空单（20x） 跌幅7% +158.36%🚀 #IOST 多单（25x） 成本离场 节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交易 ✔️ #IRYS 手动TP1止盈减仓 #IRYS 下跌7%📉 谁懂这种做空涨幅榜第一疯币，大难不死劫后余生的感觉😁 止盈：0,0008822-…",
+          "cardPayload": {
+            "symbol": "IRYS",
+            "direction": "long",
+            "entry": "市价",
+            "stopLoss": "，不追涨杀跌，只做有逻辑、有结构的交易 ✔️",
+            "targets": [
+              "0",
+              "0008822",
+              "0",
+              "0009125",
+              "0",
+              "0009445"
+            ],
+            "signalAt": "2026-10-23T16:09:17Z",
+            "body": "#IRYS   空单（20x）  跌幅7% +158.36%🚀\n#IOST   多单（25x）  成本离场\n节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交易 ✔️\n#IRYS     手动TP1止盈减仓\n#IRYS    下跌7%📉\n谁懂这种做空涨幅榜第一疯币，大难不死劫后余生的感觉😁\n止盈：0,0008822-0,0009125-0,0009445\n止损：0,0007985\n#IRYS   空单（20x）  跌幅7% +158.36%🚀\n#IOST   多单（25x）  成本离场\n节奏清晰，执行到位。每一单都清晰止盈止损，不追涨杀跌，只做有逻辑、有结构的交易 ✔️",
+            "channelId": "-1001976446916",
+            "sourceRef": "tg:-1001976446916:4387,4381,4376,4374"
+          }
+        }
+      ],
+      "error": null
+    }
+  ],
+  "ranking": [
+    {
+      "chatId": "-1001976446916",
+      "name": "熬惯合约",
+      "cardEmitCount": 40,
+      "parsedSignalCount": 40,
+      "tradeLikeCount": 43,
+      "messageCount": 108
+    },
+    {
+      "chatId": "-1002666021235",
+      "name": "Ashley的旺財情報局",
+      "cardEmitCount": 32,
+      "parsedSignalCount": 32,
+      "tradeLikeCount": 71,
+      "messageCount": 1481
+    },
+    {
+      "chatId": "-1001766481463",
+      "name": "砸锅卖铁去炒币",
+      "cardEmitCount": 27,
+      "parsedSignalCount": 27,
+      "tradeLikeCount": 27,
+      "messageCount": 60
+    },
+    {
+      "chatId": "-1003938902957",
+      "name": "Nine Call",
+      "cardEmitCount": 18,
+      "parsedSignalCount": 18,
+      "tradeLikeCount": 18,
+      "messageCount": 29
+    },
+    {
+      "chatId": "-1001720924085",
+      "name": "Leo-加密貨幣頻道",
+      "cardEmitCount": 16,
+      "parsedSignalCount": 16,
+      "tradeLikeCount": 16,
+      "messageCount": 23
+    },
+    {
+      "chatId": "-1001908181865",
+      "name": "Aura_幣圈策略",
+      "cardEmitCount": 11,
+      "parsedSignalCount": 11,
+      "tradeLikeCount": 11,
+      "messageCount": 33
+    },
+    {
+      "chatId": "-1002404948215",
+      "name": "Fly-幣圈頭號玩家",
+      "cardEmitCount": 11,
+      "parsedSignalCount": 11,
+      "tradeLikeCount": 11,
+      "messageCount": 33
+    },
+    {
+      "chatId": "-1002355647897",
+      "name": "[KAI]的幣圈策略分享",
+      "cardEmitCount": 9,
+      "parsedSignalCount": 9,
+      "tradeLikeCount": 9,
+      "messageCount": 36
+    },
+    {
+      "chatId": "-1002438953921",
+      "name": "陈哥交易",
+      "cardEmitCount": 6,
+      "parsedSignalCount": 6,
+      "tradeLikeCount": 6,
+      "messageCount": 23
+    },
+    {
+      "chatId": "-1003962150986",
+      "name": "熊貓說交易🐼",
+      "cardEmitCount": 1,
+      "parsedSignalCount": 1,
+      "tradeLikeCount": 1,
+      "messageCount": 43
+    }
+  ]
+}
