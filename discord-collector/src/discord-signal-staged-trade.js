@@ -1,5 +1,5 @@
 /**
- * 山寨之王 / seven 分阶段交易：市价开仓 → 20 分钟内 TP/SL 补充 → 分批止盈；5 分钟内反手。
+ * 山寨之王 / seven / 胖猫社区 分阶段交易：市价开仓 → 20 分钟内 TP/SL 补充 → 分批止盈；5 分钟内反手。
  */
 import { normalizeSymbol } from "./card-fields.js";
 import { shouldSkipNumericDuplicate } from "./discord-signal-numeric-dedup.js";

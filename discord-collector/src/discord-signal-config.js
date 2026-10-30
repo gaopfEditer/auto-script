@@ -1,5 +1,6 @@
 /**
  * Discord 信号频道配置：解析器、语言风格、Telegram 默认风格。
+ * 进卡路径与频道无关：DISCORD_SIGNAL_CHANNEL_IDS（非空覆盖）或本表 keys → isSignalChannel → ingest onMessage；无 per-channel 回填脚本。
  */
 import { config } from "./config.js";
 
