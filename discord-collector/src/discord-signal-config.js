@@ -3,7 +3,7 @@
  */
 import { config } from "./config.js";
 
-/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"biquan_suozhang"|"unknown_trader"|"altcoin_king"|"junzhang"|"generic"} ParserKind */
+/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"biquan_suozhang"|"unknown_trader"|"altcoin_king"|"junzhang"|"pangmao"|"generic"} ParserKind */
 
 /**
  * @typedef {{
@@ -85,6 +85,12 @@ export const DEFAULT_SIGNAL_CHANNELS = {
   "1444963474718462085": {
     name: "军长",
     parser: "junzhang",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1562351038277619783": {
+    name: "胖猫社区",
+    parser: "pangmao",
     styles: ["cn_formal", "cn_brief"],
     telegramStyle: "cn_brief",
   },

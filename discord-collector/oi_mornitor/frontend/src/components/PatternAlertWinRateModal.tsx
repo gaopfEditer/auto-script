@@ -334,13 +334,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
 
   const activeExtraFilters = useMemo(() => {
     const parts: string[] = [];
-    if (confluenceTier !== "all") {
-      parts.push(
-        confluenceTier === "D"
-          ? "综合分=仅 D"
-          : `综合分≥${confluenceTier}`,
-      );
-    }
+    if (confluenceTier !== "all") parts.push(`综合评分=${confluenceTier}`);
     if (mcapTierFilter !== "all") parts.push(`梯队=${mcapTierFilter.toUpperCase()}`);
     if (mtfOnly) parts.push("仅 MTF 共振");
     return parts;
@@ -717,21 +711,20 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
               ))}
             </select>
           </label>
-          <label className="pattern-wr-type-filter" title="与结构形态回测同源 signal_confluence">
-            <span>综合分</span>
+          <label className="pattern-wr-type-filter" title="综合评分精确筛选（A/B/C）；与其它筛选项取交集">
+            <span>综合评分</span>
             <select
               value={confluenceTier}
               onChange={(e) => {
                 setConfluenceTier(e.target.value);
                 setPage(1);
               }}
-              aria-label="按综合分档位筛选"
+              aria-label="按综合评分 A/B/C 筛选"
             >
-              <option value="all">全部档位</option>
-              <option value="A">A 档</option>
-              <option value="B">B 档及以上</option>
-              <option value="C">C 档及以上</option>
-              <option value="D">仅 D 档</option>
+              <option value="all">全部</option>
+              <option value="A">A</option>
+              <option value="B">B</option>
+              <option value="C">C</option>
             </select>
           </label>
           <label className="pattern-wr-mtf-filter" title="15m/1h/4h 同币同向、同形态族，4h 内 ≥2 周期">
@@ -757,7 +750,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                 <>
                   <br />
                   <span className="pattern-wr-empty-hint">
-                    已启用：{activeExtraFilters.join(" · ")}（下拉笔数已与列表同口径；可改「综合分」为全部档位）
+                    已启用：{activeExtraFilters.join(" · ")}（筛选项取交集；可逐项改回「全部」）
                   </span>
                 </>
               ) : null}

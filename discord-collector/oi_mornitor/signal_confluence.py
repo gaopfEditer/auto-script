@@ -647,13 +647,34 @@ def filter_items_by_confluence(
     items: list[dict[str, Any]],
     *,
     min_tier: str | None = None,
+    exact_tier: str | None = None,
     mtf_resonance_only: bool = False,
 ) -> list[dict[str, Any]]:
+    """综合分筛选。
+
+    - exact_tier: A/B/C/D 精确匹配（形态信号列表「综合评分」）
+    - min_tier: 最低档（回测「B 档及以上」）；与 exact_tier 互斥，exact 优先
+    - mtf_resonance_only: 仅保留已标注多周期共振的行（需先 attach）
+    各条件独立 AND；未启用的维度不参与过滤。
+    """
     out = list(items)
     if mtf_resonance_only:
         from oi_mornitor.pattern_mtf_resonance import has_mtf_resonance
 
         out = [it for it in out if has_mtf_resonance(it)]
+    exact_raw = str(exact_tier or "").strip().upper()
+    if exact_raw and exact_raw != "ALL":
+        out = [
+            it
+            for it in out
+            if str(
+                (it.get("confluence") or {}).get("tier")
+                if isinstance(it.get("confluence"), dict)
+                else "C"
+            ).upper()
+            == exact_raw
+        ]
+        return out
     min_raw = str(min_tier or "all").strip().upper()
     if min_raw and min_raw != "ALL":
         if min_raw == "D":

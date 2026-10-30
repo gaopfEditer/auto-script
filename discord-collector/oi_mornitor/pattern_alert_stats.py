@@ -656,23 +656,38 @@ def _apply_tier_filters(
     mtf_resonance_only: bool,
     mcap_tier_filter: str,
     skip_mcap: bool = False,
+    mtf_peer_rows: list[dict[str, Any]] | None = None,
+    confluence_exact: bool = False,
 ) -> list[dict[str, Any]]:
-    """MTF + 综合分 + 市值梯队（下拉计数与列表同口径）。"""
+    """MTF + 综合评分 + 市值梯队（各维度独立 AND；下拉计数与列表同口径）。
+
+    mtf_peer_rows: 共振 peer 池。必须宽于 rows 的周期/形态筛选，否则
+    「仅多周期共振」与单周期 AND 会恒为空。
+    confluence_exact: True 时按 A/B/C/D 精确匹配（列表「综合评分」）。
+    """
     from oi_mornitor.mcap_tier import attach_mcap_tier, filter_by_mcap_tier
     from oi_mornitor.pattern_mtf_resonance import attach_mtf_resonance
     from oi_mornitor.signal_confluence import attach_signal_confluence, filter_items_by_confluence
 
     out = list(rows)
-    attach_mtf_resonance(out)
+    peers = mtf_peer_rows if mtf_peer_rows is not None else out
+    attach_mtf_resonance(out, peer_records=peers)
     attach_signal_confluence(out)
     attach_mcap_tier(out)
     conf = str(confluence_min_tier or "all").strip() or "all"
     mcap_f = str(mcap_tier_filter or "all").strip() or "all"
-    out = filter_items_by_confluence(
-        out,
-        min_tier=conf,
-        mtf_resonance_only=mtf_resonance_only,
-    )
+    if confluence_exact:
+        out = filter_items_by_confluence(
+            out,
+            exact_tier=conf,
+            mtf_resonance_only=mtf_resonance_only,
+        )
+    else:
+        out = filter_items_by_confluence(
+            out,
+            min_tier=conf,
+            mtf_resonance_only=mtf_resonance_only,
+        )
     if not skip_mcap:
         out = filter_by_mcap_tier(out, mcap_tier=mcap_f)
     from oi_mornitor.signal_confluence import sort_records_by_confluence_score
@@ -694,8 +709,12 @@ def list_alert_stats_page(
     mtf_resonance_only: bool = False,
     confluence_min_tier: str | None = None,
     mcap_tier_filter: str | None = None,
+    confluence_exact: bool = True,
 ) -> dict[str, Any]:
-    """分页列表；type/interval/session/daytype Options 互相联动。"""
+    """分页列表；各筛选项独立 AND；type/interval/session/daytype Options 联动。
+
+    confluence_exact 默认 True：综合评分按 A/B/C/D 精确匹配（与回测 min 档区分）。
+    """
     page = max(1, int(page or 1))
     size = min(100, max(1, int(page_size or _PAGE_SIZE_DEFAULT)))
     conf_tier = str(confluence_min_tier or "all").strip() or "all"
@@ -704,6 +723,17 @@ def list_alert_stats_page(
         mtf_resonance_only
         or conf_tier.lower() != "all"
         or mcap_f.lower() != "all"
+    )
+    # 共振 peer 池：不按周期/形态收窄，保留同币异周期 peer；
+    # 仍尊重 asset/symbol，避免跨市场误配。
+    mtf_peer_pool = filter_alert_stats(
+        time_filter=None,
+        session_filter=None,
+        daytype_filter=None,
+        type_label=None,
+        interval=None,
+        symbol=symbol,
+        asset_class=asset_class,
     )
 
     def _tier_rows(base: list[dict[str, Any]], *, skip_mcap: bool = False) -> list[dict[str, Any]]:
@@ -715,6 +745,8 @@ def list_alert_stats_page(
             mtf_resonance_only=mtf_resonance_only,
             mcap_tier_filter=mcap_f,
             skip_mcap=skip_mcap,
+            mtf_peer_rows=mtf_peer_pool,
+            confluence_exact=confluence_exact,
         )
 
     # 基础时间窗（不含时段/日期类型，供下拉联动）
@@ -797,7 +829,7 @@ def list_alert_stats_page(
             sort_records_by_confluence_score,
         )
 
-        attach_mtf_resonance(filtered)
+        attach_mtf_resonance(filtered, peer_records=mtf_peer_pool)
         attach_signal_confluence(filtered)
         filtered = sort_records_by_confluence_score(filtered)
     mcap_opts = list_mcap_tier_options(

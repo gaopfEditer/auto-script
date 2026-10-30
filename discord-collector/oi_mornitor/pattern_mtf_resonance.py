@@ -174,9 +174,19 @@ def has_mtf_resonance(rec: dict[str, Any]) -> bool:
         return False
 
 
-def attach_mtf_resonance(records: list[dict[str, Any]]) -> None:
-    """就地写入 mtfResonance 字段（无共振则删除旧字段）。"""
-    by_key = compute_mtf_resonance_by_key(records)
+def attach_mtf_resonance(
+    records: list[dict[str, Any]],
+    *,
+    peer_records: list[dict[str, Any]] | None = None,
+) -> None:
+    """就地写入 mtfResonance 字段（无共振则删除旧字段）。
+
+    peer_records: 用于计算共振的 peer 池。默认用 records 自身。
+    列表筛选应传入未按周期/形态收窄的全量（或更宽）池，否则「仅多周期共振」
+    与单周期筛选取交集时会因池内缺少异周期 peer 而恒为空。
+    """
+    pool = peer_records if peer_records is not None else records
+    by_key = compute_mtf_resonance_by_key(pool)
     for r in records:
         if not isinstance(r, dict):
             continue
