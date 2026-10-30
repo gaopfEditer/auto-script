@@ -618,6 +618,9 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     if (parsed && chCfg.parser === "junzhang" && parsed.signalPhase === "tpsl") {
       parsed = await enrichStagedFromRecentCard(store, channelId, parsed, JUNZHANG_SL_LINK_MS);
     }
+    if (parsed && chCfg.parser === "pangmao" && parsed.signalPhase === "tpsl") {
+      parsed = await enrichStagedFromRecentCard(store, channelId, parsed);
+    }
     if (!parsed) {
       log.info(`信号未识别 channel=${channelId} parser=${chCfg.parser} preview=${content.slice(0, 80)}`);
       return { skipped: "parse_failed" };

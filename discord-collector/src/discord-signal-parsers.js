@@ -29,7 +29,8 @@ function matchAll(text, re) {
  */
 const CN_SYMBOL_ALIASES = [
   { names: ["比特币"], symbol: "BTC" },
-  { names: ["以太币", "以太坊"], symbol: "ETH" },
+  { names: ["以太币", "以太坊", "以太"], symbol: "ETH" },
+  { names: ["闪迪"], symbol: "SNDK" },
 ];
 
 /** @param {string} text */
@@ -156,6 +157,12 @@ const SIGNAL_PATTERN_SETS = {
     /参考价格|[A-Z0-9]+[：:]\s*[\d.]+/i,
     /止损\s*[\d.]/,
     /\d+\.\d+/,
+  ],
+  pangmao: [
+    /([A-Za-z]{2,12}|闪迪|以太坊?|比特币)/,
+    /(做多|做空|多|空)/,
+    /(现价格?|现在价格?|低位|继续|附近|目标|止损)/,
+    /\d/,
   ],
   generic: [
     /(做多|做空|LONG|SHORT|多|空)/i,
@@ -823,6 +830,125 @@ export function parseJunzhang(text) {
   };
 }
 
+
+/**
+ * 胖猫社区：极简口语开仓 + 另条止损/目标。
+ * 例：`jct低位做多` / `order现价格做多` / `magma做空` / `闪迪现价格做空`
+ *     `以太坊2426附近空，2450止损` / `0.059止损` / `目标0.048`
+ * @param {string} text
+ */
+export function parsePangmao(text) {
+  const joined = lines(text).join("\n");
+  const compact = joined.replace(/\s+/g, "");
+
+  // 长文策略/复盘不建卡（含多方案编号）
+  if (/[①②③]/.test(joined) || /策略[：:]/.test(joined) || /复盘整理/.test(joined)) {
+    return null;
+  }
+  // 纯聊天关键词
+  if (/滚仓|吃肉|拿住|保护|千万不要学|兄弟们/.test(joined) && !/(做多|做空)/.test(joined)) {
+    return null;
+  }
+
+  const stopLossAbs =
+    matchLine(joined, /([\d.]+)\s*止损/) ||
+    matchLine(joined, /止损\s*[：:]?\s*([\d.]+)/i) ||
+    matchLine(joined, /止[損损]\s*[：:]?\s*([\d.]+)/i);
+  const takeProfitAbs =
+    matchLine(joined, /目标\s*[：:]?\s*([\d.]+)/) ||
+    matchLine(joined, /第一目标\s*[：:]?\s*([\d.]+)/) ||
+    matchLine(joined, /止盈\s*[：:]?\s*([\d.]+)/);
+  const relativeSlNote =
+    matchLine(joined, /(止损[^，。\n]{0,20}点[^，。\n]{0,10})/) ||
+    matchLine(joined, /([一二三四五六七八九十\d]+个?点\s*止损)/) ||
+    matchLine(joined, /(止损上方[^，。\n]+)/);
+
+  // 仅止损 / 仅目标
+  const hasOpenKeyword = /(做多|做空|现价|低位|继续|附近)/.test(joined);
+  if ((stopLossAbs || takeProfitAbs) && !hasOpenKeyword) {
+    if (!stopLossAbs && !takeProfitAbs) return null;
+    if (/^止损$/.test(compact)) return null;
+    return {
+      parser: "pangmao",
+      symbol: "",
+      asset: "",
+      direction: "",
+      entry: "",
+      stopLoss: stopLossAbs || "",
+      takeProfits: takeProfitAbs ? [takeProfitAbs] : [],
+      targets: takeProfitAbs ? [takeProfitAbs] : [],
+      signalPhase: "tpsl",
+      awaitingTpsl: false,
+      title: stopLossAbs ? "胖猫 · 止损" : "胖猫 · 目标",
+    };
+  }
+
+  let symbol = matchSymbolFromText(joined);
+  let direction = "";
+  let entry = "";
+
+  const cnNear = joined.match(/(以太坊?|比特币|闪迪)\s*([\d.]+)\s*附近\s*([多空])/);
+  if (cnNear) {
+    symbol = matchSymbolFromText(cnNear[1]) || symbol;
+    entry = cnNear[2];
+    direction = cnNear[3] === "空" ? "做空" : "做多";
+  }
+
+  if (!direction) {
+    const openM =
+      compact.match(
+        /([A-Za-z][A-Za-z0-9]{1,14}|闪迪|以太坊?|比特币)(?:也值得|现价格?|现在价格?|现在|现价|低位|继续)?(做多|做空)/i
+      ) ||
+      joined.match(
+        /([A-Za-z][A-Za-z0-9]{1,14}|闪迪|以太坊?|比特币)\s*(?:也值得|现价格?|现在价格?|现在|现价|低位|继续)?\s*(做多|做空)/i
+      );
+    if (openM) {
+      const rawSym = String(openM[1]);
+      symbol = matchSymbolFromText(rawSym) || rawSym.toUpperCase();
+      if (symbol === "闪迪") symbol = "SNDK";
+      if (/^以太/.test(rawSym)) symbol = "ETH";
+      if (rawSym === "比特币") symbol = "BTC";
+      direction = /空/.test(openM[2]) ? "做空" : "做多";
+    }
+  }
+
+  if (!direction) {
+    const cnOpen = joined.match(
+      /(闪迪|以太坊?|比特币)(?:现价格?|现在价格?|现在|现价|低位|继续)?(做多|做空|[多空])/
+    );
+    if (cnOpen) {
+      symbol = matchSymbolFromText(cnOpen[1]) || symbol;
+      const d = cnOpen[2];
+      direction = /空/.test(d) ? "做空" : /多/.test(d) ? "做多" : "";
+    }
+  }
+
+  if (!symbol || !direction) return null;
+  symbol = String(symbol).toUpperCase().replace(/USDT$/i, "");
+
+  const takeProfits = takeProfitAbs ? [takeProfitAbs] : [];
+  const stopLoss = stopLossAbs || "";
+  const noteParts = [];
+  if (relativeSlNote && !stopLoss) noteParts.push(relativeSlNote);
+  const hasTpsl = takeProfits.length > 0 && Boolean(stopLoss);
+
+  return {
+    parser: "pangmao",
+    symbol,
+    asset: symbol,
+    direction,
+    entry: entry || "",
+    stopLoss,
+    takeProfits,
+    targets: takeProfits,
+    orderMode: "market",
+    signalPhase: hasTpsl ? "full" : "open",
+    awaitingTpsl: !hasTpsl,
+    note: noteParts.join("；"),
+    title: `${symbol} · 胖猫`,
+  };
+}
+
 /**
  * @param {string} text
  * @param {import("./discord-signal-config.js").ParserKind} kind
@@ -849,6 +975,10 @@ export function parseSignalText(text, kind) {
   }
   if (kind === "altcoin_king" && isSimpleTpslText(t)) {
     return parseAltcoinKing(t);
+  }
+  if (kind === "pangmao") {
+    const r = parsePangmao(t);
+    if (r) return r;
   }
 
   if (!looksLikeSignal(t, kind)) return null;
@@ -878,6 +1008,8 @@ export function parseSignalText(text, kind) {
       return parseAltcoinKing(t);
     case "junzhang":
       return parseJunzhang(t);
+    case "pangmao":
+      return parsePangmao(t);
     default:
       return (
         parseDabiaoke(t) ||
@@ -890,6 +1022,7 @@ export function parseSignalText(text, kind) {
         parseUnknownTrader(t) ||
         parseAltcoinKing(t) ||
         parseJunzhang(t) ||
+        parsePangmao(t) ||
         parseTwOpg(t) ||
         parseBinanceKillers(t)
       );

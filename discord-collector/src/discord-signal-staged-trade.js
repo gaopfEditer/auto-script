@@ -1,5 +1,5 @@
 /**
- * 山寨之王 / seven 分阶段交易：市价开仓 → 20 分钟内 TP/SL 补充 → 分批止盈；5 分钟内反手。
+ * 山寨之王 / seven / 胖猫社区 分阶段交易：市价开仓 → 20 分钟内 TP/SL 补充 → 分批止盈；5 分钟内反手。
  */
 import { normalizeSymbol } from "./card-fields.js";
 import { shouldSkipNumericDuplicate } from "./discord-signal-numeric-dedup.js";
@@ -19,11 +19,15 @@ export const STAGED_INITIAL_SL_PCT = 4.3;
 export const STAGED_TP_PARTIAL_RATIOS = [0.3, 0.3, 1];
 
 /** @type {Set<string>} */
-export const STAGED_TRADE_PARSERS = new Set(["altcoin_king", "tw_opg"]);
+export const STAGED_TRADE_PARSERS = new Set(["altcoin_king", "tw_opg", "pangmao"]);
 
 /** @param {string} channelId */
 export function isStagedTradeChannel(channelId) {
-  return channelId === "1444963506431463474" || channelId === "1444963372134301827";
+  return (
+    channelId === "1444963506431463474" ||
+    channelId === "1444963372134301827" ||
+    channelId === "1562351038277619783"
+  );
 }
 
 /** @param {Record<string, unknown> | null | undefined} parsed */

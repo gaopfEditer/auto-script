@@ -314,6 +314,9 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
         mtf_resonance_only = False
     conf_tier = str(q.get("confluenceTier") or q.get("confluenceMinTier") or "all").strip() or "all"
     mcap_tier = str(q.get("mcapTier") or q.get("mcapTierFilter") or "all").strip() or "all"
+    # 列表默认精确 A/B/C；回测仍走 min 档。confluenceExact=0 可退回「及以上」
+    exact_raw = str(q.get("confluenceExact") or q.get("exactTier") or "1").strip().lower()
+    confluence_exact = exact_raw not in ("0", "false", "no", "off", "min")
     payload = list_alert_stats_page(
         page=page,
         page_size=page_size,
@@ -327,6 +330,7 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
         mtf_resonance_only=mtf_resonance_only,
         confluence_min_tier=conf_tier,
         mcap_tier_filter=mcap_tier,
+        confluence_exact=confluence_exact,
     )
     return _json_response({"ok": True, **payload})
 

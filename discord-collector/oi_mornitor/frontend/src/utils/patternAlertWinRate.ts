@@ -551,7 +551,7 @@ export async function fetchAlertStatsPage(opts: {
   symbol?: string;
   assetClassFilter?: AlertStatsAssetFilter;
   mtfResonanceOnly?: boolean;
-  /** 与结构回测同源：A / B（及以上）/ C / D（仅 D）/ all */
+  /** 综合评分精确档：A / B / C / D / all */
   confluenceMinTier?: string;
   mcapTierFilter?: string;
 }): Promise<AlertStatsPageResult> {
@@ -582,6 +582,8 @@ export async function fetchAlertStatsPage(opts: {
   }
   const confTier = String(opts.confluenceMinTier || "all").trim() || "all";
   if (confTier !== "all") params.set("confluenceTier", confTier);
+  // 综合评分按 A/B/C 精确匹配（与回测「B 及以上」区分）
+  params.set("confluenceExact", "1");
   const mcapF = String(opts.mcapTierFilter || "all").trim() || "all";
   if (mcapF !== "all") params.set("mcapTier", mcapF);
   const empty: AlertStatsPageResult = {
