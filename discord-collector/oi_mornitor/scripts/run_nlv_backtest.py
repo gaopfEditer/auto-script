@@ -19,6 +19,7 @@ def main() -> int:
     parser.add_argument("--symbols", default="", help="逗号分隔；空=按 universe")
     parser.add_argument("--interval", default="1h")
     parser.add_argument("--kinds", default="", help="rev_vol_buy,rev_vol_sell；空=全部")
+    parser.add_argument("--exit-plan", default="scaled", help="fixed_2r|fixed_3r|scaled")
     parser.add_argument("--stop", type=float, default=None, help="已弃用（保留兼容）；止损现为插针极值")
     parser.add_argument("--leverage", type=float, default=None, help="报告杠杆，默认 20")
     parser.add_argument("--limit-bars", type=int, default=0)
@@ -43,11 +44,13 @@ def main() -> int:
         leverage=args.leverage,
         limit_bars=args.limit_bars,
         kinds=kinds,
+        exit_plan=args.exit_plan,
     )
     d = res.to_dict()
     summary = {
         "category": d.get("categoryLabel"),
         "universe": d.get("universe"),
+        "exit_plan": d.get("exit_plan"),
         "interval": d.get("interval"),
         "symbols": d.get("symbols"),
         "item_count": d.get("item_count"),

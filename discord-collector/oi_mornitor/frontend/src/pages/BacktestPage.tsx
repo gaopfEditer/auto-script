@@ -281,6 +281,7 @@ function fmtCompactNum(n: number | null | undefined): string {
 
 type NlvKindOption = { id: string; label: string; side?: string };
 type NlvUniverseOption = { id: string; label: string };
+type NlvExitPlanOption = { id: string; label: string; desc?: string };
 type NlvSummary = {
   total?: number;
   wins?: number;
@@ -601,8 +602,14 @@ export function BacktestPage() {
   const [nlvUniverse, setNlvUniverse] = useState("majors");
   const [nlvInterval, setNlvInterval] = useState("1h");
   const [nlvIntervals, setNlvIntervals] = useState<string[]>(["15m", "1h", "4h"]);
+  const [nlvExitPlans, setNlvExitPlans] = useState<NlvExitPlanOption[]>([
+    { id: "fixed_2r", label: "全平 2R" },
+    { id: "fixed_3r", label: "全平 3R" },
+    { id: "scaled", label: "分批 1.5R+3R" },
+  ]);
+  const [nlvExitPlan, setNlvExitPlan] = useState("scaled");
   const [nlvSettleRules, setNlvSettleRules] = useState(
-    "NLV 已收盘信号 → 下一根开盘 · 插针极值止损 · 20x",
+    "NLV 已收盘 → 下一根开盘 · 插针止损 · 风险 0.2%–2% · 可选 2R/3R/分批 · 20x",
   );
   const [nlvLoading, setNlvLoading] = useState(false);
   const [nlvJob, setNlvJob] = useState<NlvJob | null>(null);
@@ -619,8 +626,12 @@ export function BacktestPage() {
         if (Array.isArray(body.intervals) && body.intervals.length) {
           setNlvIntervals(body.intervals as string[]);
         }
+        if (Array.isArray(body.exitPlans) && body.exitPlans.length) {
+          setNlvExitPlans(body.exitPlans as NlvExitPlanOption[]);
+        }
         if (body.defaultInterval) setNlvInterval(String(body.defaultInterval));
         if (body.defaultUniverse) setNlvUniverse(String(body.defaultUniverse));
+        if (body.defaultExitPlan) setNlvExitPlan(String(body.defaultExitPlan));
         if (body.settleRules) setNlvSettleRules(String(body.settleRules));
       })
       .catch(() => undefined);
@@ -1084,6 +1095,7 @@ export function BacktestPage() {
         body: JSON.stringify({
           universe: nlvUniverse,
           interval: nlvInterval,
+          exitPlan: nlvExitPlan,
         }),
       });
       const body = await r.json();
@@ -1463,8 +1475,8 @@ export function BacktestPage() {
           <section className="bt-section">
             <h2 className="bt-section-title">3. 新高/新低末端+放量</h2>
             <p className="bt-rules">
-              独立回测类别（NLV / revVol）：已收盘信号 → 下一根开盘入场 · 插针极值止损（多=信号棒低 / 空=信号棒高）· 报告 20x。
-              可先选主流烟雾测，再按第一/二/三梯队整泡对比胜率。
+              NLV：已收盘 → 下一根开盘 · 插针极值止损（多=low / 空=high）· 风险过滤 0.2%–2% ·
+              盈亏比可选 2R / 3R / 分批1.5R+3R · 报告统一 20x。可按梯队整泡对比。
             </p>
             <label className="bt-field">
               <span>币种宇宙</span>
@@ -1482,6 +1494,16 @@ export function BacktestPage() {
                 {nlvIntervals.map((iv) => (
                   <option key={iv} value={iv}>
                     {iv}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="bt-field">
+              <span>盈亏比方案</span>
+              <select value={nlvExitPlan} onChange={(e) => setNlvExitPlan(e.target.value)}>
+                {nlvExitPlans.map((p) => (
+                  <option key={p.id} value={p.id} title={p.desc || p.label}>
+                    {p.label}
                   </option>
                 ))}
               </select>
@@ -1616,7 +1638,7 @@ export function BacktestPage() {
                   <span className="bt-muted">
                     {(nlvJob.categoryLabel || "NLV")}
                     {nlvJob.result?.universe ? ` · ${nlvJob.result.universe}` : nlvJob.params?.universe ? ` · ${String(nlvJob.params.universe)}` : ""}
-                    {nlvJob.result?.interval ? ` · ${nlvJob.result.interval}` : nlvJob.params?.interval ? ` · ${String(nlvJob.params.interval)}` : ""}
+                    {nlvJob.result?.interval ? ` · ${nlvJob.result.interval}` : nlvJob.params?.interval ? ` · ${String(nlvJob.params.interval)}` : ""}{nlvJob.params?.exitPlan ? ` · ${String(nlvJob.params.exitPlan)}` : ""}
                     {nlvJob.itemCount != null ? ` · ${nlvJob.itemCount} 笔` : ""}
                     {nlvJob.result?.elapsed_sec != null ? ` · ${nlvJob.result.elapsed_sec}s` : ""}
                   </span>

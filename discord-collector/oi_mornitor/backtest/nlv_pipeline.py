@@ -3,7 +3,8 @@
 口径与 sequoia_pipeline / 币圈用户约定对齐：
 - 信号：range_extreme_volume（50 根 HHV/LLV 末端 + vol MA120 + degree±0.2 + lookback 冷却）
 - 仅已收盘 K 出信号；下一根开盘价入场（OI_BT next_bar_open + 滑点）
-- 结算：settle_signal_by_5m_bars + 信号棒插针极值止损（多=low / 空=high，无额外 buffer）；报告统一 20x 杠杆
+- 结算：插针极值止损 + 可选盈亏比（fixed_2r / fixed_3r / scaled 1.5R+3R）；风险过滤 0.2%–2%
+- 报告统一 20x 杠杆（summarize_nlv_report）
 - 落盘：data/nlv_backtest/（latest_summary.json + job JSON）
 - 汇总：summarize_nlv_report（统一 reportLeverage，避免胜率库对 BTC/ETH/SOL 再乘 100x）
 - 不推 Telegram；可按市值梯队 t1/t2/t3 选宇宙，便于后续整泡对比
@@ -39,7 +40,7 @@ from oi_mornitor.mcap_tier import (
     tier_catalog_for_api,
 )
 from oi_mornitor.pattern_entry import resolve_backtest_entry_price
-from oi_mornitor.pattern_settle import BATCH_WEIGHTS, RUNNER_TRAIL_PCT, settle_signal_by_5m_bars
+from oi_mornitor.pattern_settle import settle_signal_by_5m_bars
 from oi_mornitor.pattern_settle_profile import SettlePlan, resolve_verify_delay_ms
 from oi_mornitor.range_extreme_volume import (
     LOOKBACK,
@@ -60,6 +61,39 @@ NLV_BT_SL_PCT = env_float("OI_NLV_BT_SL_PCT", 0.0, min_val=0.0)
 NLV_SL_MODE = "pin_extreme"
 NLV_BT_LEVERAGE = env_float("OI_NLV_BT_LEVERAGE", SEQUOIA_BT_LEVERAGE, min_val=1.0)
 NLV_BT_MARGIN_CNY = env_float("OI_NLV_BT_MARGIN_CNY", SEQUOIA_BT_MARGIN_CNY, min_val=0.0)
+# 入场过滤：插针风险占价格比（小止损 thesis）
+NLV_MIN_RISK_PCT = env_float("OI_NLV_MIN_RISK_PCT", 0.2, min_val=0.0)
+NLV_MAX_RISK_PCT = env_float("OI_NLV_MAX_RISK_PCT", 2.0, min_val=0.01)
+NLV_EXIT_PLANS: dict[str, dict[str, Any]] = {
+    "fixed_2r": {
+        "id": "fixed_2r",
+        "label": "全平 2R",
+        "tp1_r": 2.0,
+        "tp2_r": 2.0,
+        "weights": (1.0, 0.0, 0.0),
+        "breakeven_after_tp1": False,
+        "desc": "止损=插针极值；全仓 +2R 止盈",
+    },
+    "fixed_3r": {
+        "id": "fixed_3r",
+        "label": "全平 3R",
+        "tp1_r": 3.0,
+        "tp2_r": 3.0,
+        "weights": (1.0, 0.0, 0.0),
+        "breakeven_after_tp1": False,
+        "desc": "止损=插针极值；全仓 +3R 止盈",
+    },
+    "scaled": {
+        "id": "scaled",
+        "label": "分批 1.5R+3R",
+        "tp1_r": 1.5,
+        "tp2_r": 3.0,
+        "weights": (0.5, 0.5, 0.0),
+        "breakeven_after_tp1": True,
+        "desc": "50% 在 +1.5R 平仓并将止损移至成本；余 50% 盯 +3R；跌破插针/成本则停",
+    },
+}
+NLV_DEFAULT_EXIT_PLAN = "scaled"
 # vol MA120 + lookback → 默认暖机略大于 MA_VOL
 NLV_BT_WARMUP = env_int("OI_NLV_BT_WARMUP", max(MA_VOL + LOOKBACK + 2, 130), min_val=40)
 
@@ -166,6 +200,26 @@ def _signal_close_ms(df: pd.DataFrame, bi: int) -> int:
 
 
 
+def resolve_exit_plan(raw: str | None) -> str:
+    key = str(raw or NLV_DEFAULT_EXIT_PLAN).strip().lower()
+    aliases = {
+        "2r": "fixed_2r",
+        "fixed2": "fixed_2r",
+        "full_2r": "fixed_2r",
+        "3r": "fixed_3r",
+        "fixed3": "fixed_3r",
+        "full_3r": "fixed_3r",
+        "scale": "scaled",
+        "batch": "scaled",
+        "1.5r+3r": "scaled",
+        "scaled_1_5_3": "scaled",
+    }
+    key = aliases.get(key, key)
+    if key not in NLV_EXIT_PLANS:
+        return NLV_DEFAULT_EXIT_PLAN
+    return key
+
+
 def _pin_extreme_plan(
     *,
     entry: float,
@@ -173,43 +227,64 @@ def _pin_extreme_plan(
     signal_high: float,
     signal_low: float,
     verify_delay_ms: int,
+    exit_plan: str = NLV_DEFAULT_EXIT_PLAN,
+    min_risk_pct: float | None = None,
+    max_risk_pct: float | None = None,
 ) -> SettlePlan | None:
-    """插针极值止损：多=信号棒 low，空=信号棒 high；无额外 buffer（与结构 invalid 原价入计划一致）。
+    """插针极值止损 + 可选盈亏比方案。
 
-    TP 仍按 1R/2R（与 sequoia 固定计划同形），核实窗沿用 resolve_verify_delay_ms。
-    若入场价已穿越插针（多 entry<=low / 空 entry>=high）则返回 None，跳过该信号。
+    R = |entry − pin|（多=entry−low，空=high−entry）。
+    过滤：R/price 须在 [min_risk_pct, max_risk_pct]%（默认 0.2–2.0）。
+    入场已穿越插针 → None。
     """
     is_short = str(side).lower() in ("short", "bear")
     entry_f = float(entry)
     if entry_f <= 0:
         return None
+    plan_id = resolve_exit_plan(exit_plan)
+    meta = NLV_EXIT_PLANS[plan_id]
+    lo = float(NLV_MIN_RISK_PCT if min_risk_pct is None else min_risk_pct)
+    hi = float(NLV_MAX_RISK_PCT if max_risk_pct is None else max_risk_pct)
+    if hi < lo:
+        lo, hi = hi, lo
+
     if is_short:
         sl = float(signal_high)
         if sl <= entry_f:
             return None
         risk = sl - entry_f
-        tp1 = entry_f - risk * 1.0
-        tp2 = entry_f - risk * 2.0
     else:
         sl = float(signal_low)
         if sl >= entry_f:
             return None
         risk = entry_f - sl
-        tp1 = entry_f + risk * 1.0
-        tp2 = entry_f + risk * 2.0
-    if risk <= 0 or (risk / entry_f) < 1e-8:
+    if risk <= 0:
         return None
+    risk_pct = risk / entry_f * 100.0
+    if risk_pct < lo or risk_pct > hi:
+        return None
+
+    tp1_r = float(meta["tp1_r"])
+    tp2_r = float(meta["tp2_r"])
+    weights = tuple(meta["weights"])  # type: ignore[arg-type]
+    if is_short:
+        tp1 = entry_f - risk * tp1_r
+        tp2 = entry_f - risk * tp2_r
+    else:
+        tp1 = entry_f + risk * tp1_r
+        tp2 = entry_f + risk * tp2_r
+
     return SettlePlan(
-        profile_id="nlv_pin_extreme",
+        profile_id=f"nlv_pin_{plan_id}",
         sl_price=sl,
         tp1_price=tp1,
         tp2_price=tp2,
-        batch_weights=BATCH_WEIGHTS,
-        runner_trail_pct=RUNNER_TRAIL_PCT,
+        batch_weights=weights,  # type: ignore[arg-type]
+        runner_trail_pct=0.0,  # 无 runner；第三档权重应为 0
         verify_delay_ms=int(verify_delay_ms),
         risk_r=risk,
-        tp1_r=1.0,
-        tp2_r=2.0,
+        tp1_r=tp1_r,
+        tp2_r=tp2_r,
     )
 
 
@@ -219,6 +294,7 @@ class NlvPipelineResult:
     sl_pct: float
     symbols: list[str]
     universe: str = "majors"
+    exit_plan: str = NLV_DEFAULT_EXIT_PLAN
     items: list[dict[str, Any]] = field(default_factory=list)
     by_kind: dict[str, Any] = field(default_factory=dict)
     by_mcap_tier: dict[str, Any] = field(default_factory=dict)
@@ -235,6 +311,7 @@ class NlvPipelineResult:
             "category": self.category,
             "categoryLabel": self.category_label,
             "universe": self.universe,
+            "exit_plan": self.exit_plan,
             "interval": self.interval,
             "sl_pct": self.sl_pct,
             "symbols": self.symbols,
@@ -402,8 +479,11 @@ def run_nlv_pipeline(
     out_dir: Path | str | None = None,
     limit_bars: int = 0,
     kinds: Sequence[str] | None = None,
+    exit_plan: str | None = None,
+    min_risk_pct: float | None = None,
+    max_risk_pct: float | None = None,
 ) -> NlvPipelineResult:
-    """本地 parquet → NLV 信号 → next_bar 入场 → 插针极值 SL / 20x 报告 → 落盘。"""
+    """本地 parquet → NLV 信号 → next_bar 入场 → 插针极值 SL + 可选盈亏比方案 / 20x 报告。"""
     t0 = time.time()
     # sl_pct 参数保留兼容，但默认不再驱动止损
     sl = float(NLV_BT_SL_PCT if sl_pct is None else sl_pct)
@@ -412,6 +492,10 @@ def run_nlv_pipeline(
     warm = int(NLV_BT_WARMUP if warmup is None else warmup)
     iv = str(interval or DEFAULT_INTERVAL).strip() or DEFAULT_INTERVAL
     univ = str(universe or "majors").strip().lower() or "majors"
+    plan_id = resolve_exit_plan(exit_plan)
+    plan_meta = NLV_EXIT_PLANS[plan_id]
+    risk_lo = float(NLV_MIN_RISK_PCT if min_risk_pct is None else min_risk_pct)
+    risk_hi = float(NLV_MAX_RISK_PCT if max_risk_pct is None else max_risk_pct)
 
     kind_allow = {
         str(k).strip().lower()
@@ -489,6 +573,9 @@ def run_nlv_pipeline(
                 signal_high=signal_high,
                 signal_low=signal_low,
                 verify_delay_ms=verify_ms,
+                exit_plan=plan_id,
+                min_risk_pct=risk_lo,
+                max_risk_pct=risk_hi,
             )
             if plan is None:
                 continue
@@ -501,6 +588,7 @@ def run_nlv_pipeline(
                 bars_5m=bars_5m,
                 now_ms=settle_end,
                 plan=plan,
+                breakeven_after_tp1=bool(plan_meta.get("breakeven_after_tp1")),
                 fee_pct_per_side=OI_BT_FEE_PCT,
                 slippage_pct_per_side=OI_BT_SLIPPAGE_PCT,
             )
@@ -542,6 +630,8 @@ def run_nlv_pipeline(
                     "riskR": plan.risk_r,
                     "error": settled.get("error"),
                     "slMode": NLV_SL_MODE,
+                    "exitPlan": plan_id,
+                    "exitPlanLabel": plan_meta.get("label"),
                     "slPct": round(sl_dist_pct, 4),  # 开仓时插针风险距离%
                     "invalidLevel": signal_low if side == "long" else signal_high,
                     "signalBarHigh": signal_high,
@@ -597,6 +687,7 @@ def run_nlv_pipeline(
         sl_pct=0.0,  # 非固定%；详见 params.sl_mode
         symbols=used_syms,
         universe=univ,
+        exit_plan=plan_id,
         items=items,
         by_kind=by_kind,
         by_mcap_tier=by_tier,
@@ -614,6 +705,11 @@ def run_nlv_pipeline(
         "sl_mode": NLV_SL_MODE,
         "sl_rule": "long→signal_bar.low / short→signal_bar.high（无额外 buffer）",
         "sl_pct_legacy": sl,  # 兼容字段；不再驱动止损
+        "exit_plan": plan_id,
+        "exit_plan_label": plan_meta.get("label"),
+        "exit_plan_desc": plan_meta.get("desc"),
+        "min_risk_pct": risk_lo,
+        "max_risk_pct": risk_hi,
         "warmup": warm,
         "interval": iv,
         "fee_pct": OI_BT_FEE_PCT,
@@ -624,10 +720,10 @@ def run_nlv_pipeline(
         "telegram": False,
         "closed_bar_only": True,
         "entry": "next_bar_open",
-        "tp": "1R/2R + runner（相对插针风险）",
+        "tp": plan_meta.get("desc"),
     }
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    job_path = out / f"nlv_{univ}_{iv}_pin_{stamp}.json"
+    job_path = out / f"nlv_{univ}_{iv}_{plan_id}_{stamp}.json"
     latest = out / "latest_summary.json"
     disk = dict(payload)
     if len(disk.get("items") or []) > 500:
@@ -710,16 +806,30 @@ def nlv_options() -> dict[str, Any]:
             {"id": "all_tiers", "label": "一+二+三梯队名单"},
         ],
         "defaultUniverse": "majors",
+        "exitPlans": [
+            {
+                "id": p["id"],
+                "label": p["label"],
+                "desc": p["desc"],
+                "tp1R": p["tp1_r"],
+                "tp2R": p["tp2_r"],
+                "breakevenAfterTp1": p["breakeven_after_tp1"],
+            }
+            for p in NLV_EXIT_PLANS.values()
+        ],
+        "defaultExitPlan": NLV_DEFAULT_EXIT_PLAN,
+        "minRiskPct": NLV_MIN_RISK_PCT,
+        "maxRiskPct": NLV_MAX_RISK_PCT,
         "settleRules": (
-            "NLV 已收盘信号 → 下一根开盘入场 · 插针极值止损"
-            "（多=信号棒最低价 / 空=信号棒最高价，无额外 buffer）· "
-            "TP=1R/2R · 报告 20x 杠杆 · AICoin 50 根新高/新低末端 + vol MA120 + degree±0.2"
+            "NLV 已收盘 → 下一根开盘 · 插针极值止损（多=low/空=high）· "
+            f"风险过滤 {NLV_MIN_RISK_PCT:g}%–{NLV_MAX_RISK_PCT:g}% · "
+            "盈亏比可选：全平2R / 全平3R / 分批1.5R+3R（默认）· 报告统一 20x"
         ),
         "slMode": NLV_SL_MODE,
         "slRule": "long→signal low / short→signal high（at extreme, no buffer）",
         "slPct": None,
         "leverage": NLV_BT_LEVERAGE,
-        "mcapTiers": tier_catalog_for_api(),
+"mcapTiers": tier_catalog_for_api(),
         "klinesRoot": str(root),
         "outDir": str(_OUT_DIR),
     }
@@ -874,6 +984,9 @@ async def _run_nlv_job(job: NlvBacktestJob) -> None:
                 warmup=int(p["warmup"]) if p.get("warmup") is not None else None,
                 limit_bars=int(p.get("limitBars") or 0),
                 kinds=p.get("kinds"),
+                exit_plan=str(p.get("exitPlan") or NLV_DEFAULT_EXIT_PLAN),
+                min_risk_pct=float(p["minRiskPct"]) if p.get("minRiskPct") is not None else None,
+                max_risk_pct=float(p["maxRiskPct"]) if p.get("maxRiskPct") is not None else None,
             )
 
         result = await loop.run_in_executor(None, _call)
@@ -926,6 +1039,11 @@ async def start_nlv_backtest(params: dict[str, Any] | None = None) -> NlvBacktes
             "interval": str(body.get("interval") or DEFAULT_INTERVAL),
             "symbols": symbols,
             "kinds": kinds,
+            "exitPlan": resolve_exit_plan(
+                body.get("exitPlan") or body.get("exit_plan") or body.get("plan")
+            ),
+            "minRiskPct": body.get("minRiskPct", body.get("min_risk_pct")),
+            "maxRiskPct": body.get("maxRiskPct", body.get("max_risk_pct")),
             "slPct": body.get("slPct", body.get("sl_pct")),
             "leverage": body.get("leverage"),
             "marginCny": body.get("marginCny", body.get("margin_cny")),
