@@ -5,6 +5,7 @@
 - 仅已收盘 K 出信号；下一根开盘价入场（OI_BT next_bar_open + 滑点）
 - 结算：settle_signal_by_5m_bars + 信号棒插针极值止损（多=low / 空=high，无额外 buffer）；报告统一 20x 杠杆
 - 落盘：data/nlv_backtest/（latest_summary.json + job JSON）
+- 汇总：summarize_nlv_report（统一 reportLeverage，避免胜率库对 BTC/ETH/SOL 再乘 100x）
 - 不推 Telegram；可按市值梯队 t1/t2/t3 选宇宙，便于后续整泡对比
 """
 from __future__ import annotations
@@ -29,7 +30,6 @@ from oi_mornitor.backtest.sequoia_pipeline import (
     resolve_klines_root,
 )
 from oi_mornitor.backtest_kline_store import BacktestKlineStore
-from oi_mornitor.backtest_metrics import summarize_backtest_extended, summarize_by_dimensions
 from oi_mornitor.backtest_trade_config import OI_BT_FEE_PCT, OI_BT_SLIPPAGE_PCT
 from oi_mornitor.env_parse import env_float, env_int
 from oi_mornitor.mcap_tier import (
@@ -250,6 +250,145 @@ class NlvPipelineResult:
         }
 
 
+
+def _price_move(it: dict[str, Any]) -> float | None:
+    for k in ("priceMovePct", "netMovePct", "movePct"):
+        if it.get(k) is None:
+            continue
+        try:
+            return float(it[k])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _initial_risk_pct(it: dict[str, Any]) -> float | None:
+    """插针初始风险%（入场→invalid）；不用结算后抬到成本的 slPrice。"""
+    try:
+        entry = float(it.get("entry") or 0)
+    except (TypeError, ValueError):
+        return None
+    if entry <= 0:
+        return None
+    inv = it.get("invalidLevel")
+    if inv is None:
+        inv = it.get("initialSlPrice")
+    try:
+        inv_f = float(inv) if inv is not None else None
+    except (TypeError, ValueError):
+        inv_f = None
+    if inv_f is None or inv_f <= 0:
+        # fallback: 记录的 slPct（开仓时风险距离）
+        try:
+            sp = float(it.get("slPct") or 0)
+        except (TypeError, ValueError):
+            sp = 0.0
+        return sp if sp > 0 else None
+    return abs(entry - inv_f) / entry * 100.0
+
+
+def summarize_nlv_report(
+    items: list[dict[str, Any]],
+    *,
+    leverage: float = NLV_BT_LEVERAGE,
+) -> dict[str, Any]:
+    """NLV 专用汇总：禁止走胜率库 _rec_pnl_pct（BTC/ETH/SOL 会再乘 100x）。
+
+    - totalPnlPct = Σ(价格涨跌% × reportLeverage)，与 UI「合计(20x)」一致
+    - totalPricePct = Σ 价格涨跌%（未杠杆）
+    - expectancyR / sumR 用插针初始风险，不受 TP1 后保本改 SL 污染
+    - profitFactor 用价格涨跌绝对值比（与杠杆无关）
+    """
+    lev = float(leverage) if leverage and leverage > 0 else float(NLV_BT_LEVERAGE)
+    headline = [
+        it
+        for it in items
+        if str(it.get("outcome") or "") not in ("flat", "error", "")
+    ]
+    pending = wins = losses = 0
+    errors = sum(1 for it in items if str(it.get("outcome") or "") == "error")
+    flats = sum(1 for it in items if str(it.get("outcome") or "") == "flat")
+
+    price_list: list[float] = []
+    win_prices: list[float] = []
+    loss_prices: list[float] = []
+    rs: list[float] = []
+    risks: list[float] = []
+
+    for it in headline:
+        oc = str(it.get("outcome") or "")
+        if oc == "pending":
+            pending += 1
+            continue
+        pm = _price_move(it)
+        if oc == "take_profit":
+            wins += 1
+        elif oc == "stop_loss":
+            losses += 1
+        if pm is None:
+            continue
+        price_list.append(pm)
+        if pm > 0:
+            win_prices.append(pm)
+        elif pm < 0:
+            loss_prices.append(pm)
+        risk_pct = _initial_risk_pct(it)
+        if risk_pct is not None and risk_pct > 1e-9:
+            risks.append(risk_pct)
+            rs.append(pm / risk_pct)
+
+    settled = wins + losses
+    gross_win = sum(win_prices)
+    gross_loss = abs(sum(loss_prices))
+    pf = (gross_win / gross_loss) if gross_loss > 1e-12 else None
+    sum_price = sum(price_list) if price_list else 0.0
+    sum_20 = sum_price * lev
+    exp_r = (sum(rs) / len(rs)) if rs else None
+    sum_r = sum(rs) if rs else None
+
+    # max DD on unlevered price equity curve (start 100)
+    equity = 100.0
+    peak = 100.0
+    max_dd = 0.0
+    for pm in price_list:
+        equity *= 1.0 + pm / 100.0
+        peak = max(peak, equity)
+        dd = (peak - equity) / peak * 100.0 if peak > 0 else 0.0
+        max_dd = max(max_dd, dd)
+
+    return {
+        "total": len(headline),
+        "pending": pending,
+        "wins": wins,
+        "losses": losses,
+        "flats": flats,
+        "errors": errors,
+        "winRate": (wins / settled) if settled else None,
+        # UI 主字段：统一报告杠杆（默认 20x）简单加总，非复利账户
+        "totalPnlPct": round(sum_20, 2) if price_list else None,
+        "totalPricePct": round(sum_price, 4) if price_list else None,
+        "avgPricePct": round(sum_price / len(price_list), 4) if price_list else None,
+        "avgWinPricePct": round(sum(win_prices) / len(win_prices), 4) if win_prices else None,
+        "avgLossPricePct": round(sum(loss_prices) / len(loss_prices), 4) if loss_prices else None,
+        "medianRiskPct": (
+            round(sorted(risks)[len(risks) // 2], 4) if risks else None
+        ),
+        "avgRiskPct": round(sum(risks) / len(risks), 4) if risks else None,
+        "expectancyR": round(exp_r, 3) if exp_r is not None else None,
+        "sumR": round(sum_r, 3) if sum_r is not None else None,
+        "profitFactor": round(pf, 3) if pf is not None else None,
+        "maxDrawdownPct": round(max_dd, 3),
+        "reportLeverage": lev,
+        "pnlBasis": "sum(priceMovePct × reportLeverage)；非胜率库 100x/20x 混乘",
+        "observationExcluded": 0,
+        "flatErrorExcluded": errors + flats,
+        "leverageHint": (
+            f"NLV 报告统一 {lev:g}x · 合计=各笔价格涨跌%×{lev:g} 简单加总（非复利）· "
+            "期望R=价格涨跌%/插针初始风险%"
+        ),
+    }
+
+
 def run_nlv_pipeline(
     *,
     symbols: Sequence[str] | None = None,
@@ -395,28 +534,43 @@ def run_nlv_pipeline(
                     "pnlPct": pnl20 if pnl20 is not None else settled.get("pnlPct"),
                     "pnlPct20x": pnl20,
                     "exitPrice": settled.get("exitPrice"),
-                    "slPrice": settled.get("slPrice") or plan.sl_price,
+                    # 展示/统计用初始插针止损；结算过程可能把 SL 抬到成本
+                    "slPrice": plan.sl_price,
+                    "initialSlPrice": plan.sl_price,
+                    "exitSlPrice": settled.get("slPrice"),
                     "tp1Price": settled.get("tp1Price") or plan.tp1_price,
+                    "riskR": plan.risk_r,
                     "error": settled.get("error"),
                     "slMode": NLV_SL_MODE,
-                    "slPct": round(sl_dist_pct, 4),  # 实际风险距离%（非固定止损%）
+                    "slPct": round(sl_dist_pct, 4),  # 开仓时插针风险距离%
                     "invalidLevel": signal_low if side == "long" else signal_high,
                     "signalBarHigh": signal_high,
                     "signalBarLow": signal_low,
                     "profileId": plan.profile_id,
                     "reportLeverage": lev,
+                    # 供误用 _rec_pnl_pct 时也不要按 100x：标记 equity 无效；仍以 summarize_nlv_report 为准
+                    "assetClass": "crypto",
                     "category": "nlv",
                     "categoryLabel": "新高/新低末端+放量",
                 }
             )
 
     items.sort(key=lambda x: int(x.get("signalAt") or 0))
-    summary = summarize_backtest_extended(items) if items else {}
-    by_dim = (
-        summarize_by_dimensions(items, key_fields=("typeLabel", "interval", "mcapTier"))
-        if items
-        else []
-    )
+    summary = summarize_nlv_report(items, leverage=lev) if items else {}
+    by_dim: list[dict[str, Any]] = []
+    if items:
+        groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for it in items:
+            key = (
+                str(it.get("typeLabel") or "—"),
+                str(it.get("interval") or "—"),
+                str(it.get("mcapTier") or "—"),
+            )
+            groups.setdefault(key, []).append(it)
+        for key, bucket in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            row = {"count": len(bucket), **summarize_nlv_report(bucket, leverage=lev)}
+            row["typeLabel"], row["interval"], row["mcapTier"] = key
+            by_dim.append(row)
     by_kind: dict[str, Any] = {}
     for opt in NLV_KIND_OPTIONS:
         kid = opt["id"]
@@ -424,7 +578,7 @@ def run_nlv_pipeline(
         by_kind[kid] = {
             "type_label": opt["label"],
             "count": len(bucket),
-            "summary": summarize_backtest_extended(bucket) if bucket else {},
+            "summary": summarize_nlv_report(bucket, leverage=lev) if bucket else {},
             "leverage": leverage_report(bucket, leverage=lev, margin_cny=margin),
         }
     by_tier: dict[str, Any] = {}
@@ -433,7 +587,7 @@ def run_nlv_pipeline(
         by_tier[tid] = {
             "label": mcap_tier_label(tid),
             "count": len(bucket),
-            "summary": summarize_backtest_extended(bucket) if bucket else {},
+            "summary": summarize_nlv_report(bucket, leverage=lev) if bucket else {},
             "leverage": leverage_report(bucket, leverage=lev, margin_cny=margin),
         }
 
@@ -497,6 +651,8 @@ def run_nlv_pipeline(
         "total": len(items),
         "winRate": summary.get("winRate"),
         "totalPnlPct": summary.get("totalPnlPct"),
+        "totalPricePct": summary.get("totalPricePct"),
+        "expectancyR": summary.get("expectancyR"),
         "profitFactor": summary.get("profitFactor"),
         "wins": summary.get("wins"),
         "losses": summary.get("losses"),

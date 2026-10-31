@@ -287,9 +287,17 @@ type NlvSummary = {
   losses?: number;
   winRate?: number | null;
   totalPnlPct?: number | null;
+  totalPricePct?: number | null;
+  avgWinPricePct?: number | null;
+  avgLossPricePct?: number | null;
+  avgRiskPct?: number | null;
+  medianRiskPct?: number | null;
   profitFactor?: number | null;
   expectancyR?: number | null;
+  sumR?: number | null;
   maxDrawdownPct?: number | null;
+  reportLeverage?: number | null;
+  leverageHint?: string;
 };
 type NlvJob = {
   id: string;
@@ -1615,6 +1623,7 @@ export function BacktestPage() {
                   {nlvJob.error ? <span className="bt-error">{nlvJob.error}</span> : null}
                 </div>
                 {nlvJob.summary ? (
+                  <>
                   <div className="bt-summary-grid">
                     <div className="bt-stat">
                       <span className="bt-stat-val">
@@ -1637,22 +1646,59 @@ export function BacktestPage() {
                       <span className="bt-stat-lab">笔数</span>
                     </div>
                     <div className="bt-stat">
-                      <span className="bt-stat-val">
+                      <span className={`bt-stat-val ${(nlvJob.summary.totalPnlPct ?? 0) >= 0 ? "up" : "down"}`}>
                         {nlvJob.summary.totalPnlPct == null
                           ? "—"
                           : `${nlvJob.summary.totalPnlPct.toFixed(1)}%`}
                       </span>
-                      <span className="bt-stat-lab">合计(20x)</span>
+                      <span className="bt-stat-lab">合计(20x加总)</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className={`bt-stat-val ${(nlvJob.summary.expectancyR ?? 0) >= 0 ? "up" : "down"}`}>
+                        {nlvJob.summary.expectancyR == null
+                          ? "—"
+                          : nlvJob.summary.expectancyR.toFixed(2)}
+                      </span>
+                      <span className="bt-stat-lab">期望R</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className={`bt-stat-val ${(nlvJob.summary.totalPricePct ?? 0) >= 0 ? "up" : "down"}`}>
+                        {nlvJob.summary.totalPricePct == null
+                          ? "—"
+                          : `${nlvJob.summary.totalPricePct.toFixed(2)}%`}
+                      </span>
+                      <span className="bt-stat-lab">未杠杆合计</span>
                     </div>
                     <div className="bt-stat">
                       <span className="bt-stat-val">
-                        {nlvJob.leverage?.win_rate == null
+                        {nlvJob.summary.avgWinPricePct == null
                           ? "—"
-                          : `${nlvJob.leverage.win_rate.toFixed(1)}%`}
+                          : `+${nlvJob.summary.avgWinPricePct.toFixed(2)}%`}
                       </span>
-                      <span className="bt-stat-lab">价格胜率</span>
+                      <span className="bt-stat-lab">均盈%</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {nlvJob.summary.avgLossPricePct == null
+                          ? "—"
+                          : `${nlvJob.summary.avgLossPricePct.toFixed(2)}%`}
+                      </span>
+                      <span className="bt-stat-lab">均亏%</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {nlvJob.summary.medianRiskPct == null
+                          ? "—"
+                          : `${nlvJob.summary.medianRiskPct.toFixed(2)}%`}
+                      </span>
+                      <span className="bt-stat-lab">中位插针风险</span>
                     </div>
                   </div>
+                  <p className="bt-rules">
+                    {nlvJob.summary.leverageHint ||
+                      "合计(20x)=各笔价格涨跌%×20 简单加总（非复利账户曲线）；期望R 按插针初始止损距离。"}
+                  </p>
+                  </>
                 ) : null}
                 {nlvJob.byKind ? (
                   <div className="bt-interval-grid" style={{ marginTop: 10 }}>
