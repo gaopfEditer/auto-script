@@ -664,12 +664,22 @@ MOONSHOT_STATE_DB = Path(
 
 # —— Sequoia-X 风格选币（加密适配；默认扫描关，优先回测/胜率）——
 # 实现：strategy_sequoia/；文档：docs/sequoia-strategies.md
-from oi_mornitor.strategy_sequoia.config import (  # noqa: E402
-    SEQUOIA_INTERVALS,
-    SEQUOIA_MTF_MIN,
-    SEQUOIA_SCAN_ENABLED,
-    SEQUOIA_STRATEGY_IDS,
-    SEQUOIA_TELEGRAM,
-    is_sequoia_scan_enabled,
-)
+try:
+    from oi_mornitor.strategy_sequoia.config import (  # noqa: E402
+        SEQUOIA_INTERVALS,
+        SEQUOIA_MTF_MIN,
+        SEQUOIA_SCAN_ENABLED,
+        SEQUOIA_STRATEGY_IDS,
+        SEQUOIA_TELEGRAM,
+        is_sequoia_scan_enabled,
+    )
+except Exception:  # noqa: BLE001 — 包未落地时不阻断主雷达
+    SEQUOIA_INTERVALS = ("15m",)
+    SEQUOIA_MTF_MIN = 1
+    SEQUOIA_SCAN_ENABLED = False
+    SEQUOIA_STRATEGY_IDS = ()
+    SEQUOIA_TELEGRAM = False
+
+    def is_sequoia_scan_enabled() -> bool:
+        return False
 
