@@ -236,6 +236,18 @@ interface Props {
 
 const ALL_TFS = ["15m", "1h", "4h", "1d"] as const;
 const QUICK_SYMBOLS = ["BTC", "ETH", "QQQ", "SNDK", "DOGE", "UNI", "NEAR"] as const;
+
+/** 与后端 AI_SIGNAL_SOURCE_OPTIONS / structure_backtest.KIND_OPTIONS + NLV 对齐 */
+const AI_SIGNAL_SOURCE_OPTIONS: { id: string; label: string }[] = [
+  { id: "nlv", label: "NLV 新高/新低末端+放量" },
+  { id: "bottom_secondary_test", label: "底部二次探底确认" },
+  { id: "shooting_star", label: "射击之星" },
+  { id: "consecutive_flat_shooting_star", label: "连续走平射击之星" },
+  { id: "hs_vegas_break", label: "顶部 · 头肩顶" },
+  { id: "m_top_vegas_break", label: "顶部 · M顶" },
+  { id: "liquidity_sweep", label: "顶部 · 流动性掠夺" },
+];
+const ALL_AI_SIGNAL_KIND_IDS = AI_SIGNAL_SOURCE_OPTIONS.map((o) => o.id);
 const BT_UI_CACHE_KEY = "oi_mornitor.btc_backtest.ui_controls.v1";
 
 function formatNetworkErr(e: unknown): string {
@@ -254,6 +266,8 @@ type BtUiCache = {
   endLocal?: string;
   preferSkipLlm?: boolean;
   maxLlmSignals?: number;
+  selectedSignalKinds?: string[];
+  nlvExitPlan?: string;
   softAiTopN?: number;
   llmMode?: string;
 };
@@ -487,6 +501,26 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     typeof cachedUi.softAiTopN === "number" ? cachedUi.softAiTopN : 0,
   );
   const [llmMode, setLlmMode] = useState<string>(cachedUi.llmMode || "trader_only");
+  const [selectedSignalKinds, setSelectedSignalKinds] = useState<string[]>(() => {
+    const ks = Array.isArray(cachedUi.selectedSignalKinds)
+      ? cachedUi.selectedSignalKinds.map(String).filter((id) => ALL_AI_SIGNAL_KIND_IDS.includes(id))
+      : [];
+    return ks; // empty = legacy 全集（不注入 NLV）；点「全选」启用 7 源 AI 过滤
+  });
+  const [nlvExitPlan, setNlvExitPlan] = useState<string>(
+    typeof cachedUi.nlvExitPlan === "string" && cachedUi.nlvExitPlan
+      ? cachedUi.nlvExitPlan
+      : "scaled",
+  );
+  const toggleSignalKind = useCallback((id: string) => {
+    setSelectedSignalKinds((prev) => {
+      if (prev.includes(id)) {
+        const next = prev.filter((x) => x !== id);
+        return next; // allow empty → legacy full set / no NLV inject
+      }
+      return [...prev, id];
+    });
+  }, []);
 
   const loadBacktest = useCallback(async () => {
     setLoading(true);
@@ -564,8 +598,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       maxLlmSignals,
       softAiTopN,
       llmMode,
+      selectedSignalKinds,
+      nlvExitPlan,
     });
-  }, [selectedSymbols, symbolFilter, selectedTfs, startLocal, endLocal, maxLlmSignals, softAiTopN, llmMode]);
+  }, [selectedSymbols, symbolFilter, selectedTfs, startLocal, endLocal, maxLlmSignals, softAiTopN, llmMode, selectedSignalKinds, nlvExitPlan]);
 
   const applyBacktestPayload = useCallback((d: any) => {
     const itemCount = Array.isArray(d?.items) ? d.items.length : 0;
@@ -615,6 +651,8 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
         maxLlmSignals,
         softAiTopN,
         llmMode,
+        selectedSignalKinds,
+        nlvExitPlan,
       });
       const body = {
         symbols: syms,
@@ -628,6 +666,8 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
         max_llm_signals: maxLlmSignals,
         soft_ai_top_n: softAiTopN,
         include_tight_sl_signals: false,
+        signal_kinds: selectedSignalKinds,
+        exit_plan: selectedSignalKinds.includes("nlv") ? nlvExitPlan : undefined,
       };
       const r = await fetch("/api/ai-judge/backtest-btc/run", {
         method: "POST",
@@ -685,7 +725,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       setRunningMode(null);
       setProgressText("");
     }
-  }, [selectedSymbols, selectedTfs, startLocal, endLocal, symbolFilter, maxLlmSignals, softAiTopN, llmMode, applyBacktestPayload]);
+  }, [selectedSymbols, selectedTfs, startLocal, endLocal, symbolFilter, maxLlmSignals, softAiTopN, llmMode, selectedSignalKinds, nlvExitPlan, applyBacktestPayload]);
 
   /** 一键：BTC+ETH · 仅 15m · 门禁+小止损量化回测，并切到 15m小止损筛选 */
   const runTightSl15m = useCallback(async () => {
@@ -1162,7 +1202,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
           >
             {runningMode === "full"
               ? `⏳ ${progressText || `正在跑 AI（${llmMode === "full" ? "5席" : "trader_only"}）…`}`
-              : `🤖 跑 AI 回测 (${llmMode === "full" ? "完整5席" : "trader_only"})`}
+              : `🤖 跑 AI 回测 (${selectedSignalKinds.length ? selectedSignalKinds.length + "源→AI" : "全集"} · ${llmMode === "full" ? "完整5席" : "trader_only"})`}
           </button>
           <button
             type="button"
@@ -1351,6 +1391,88 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               );
             })}
           </div>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <div style={{ fontSize: 11.5, color: "#a0aec0", marginBottom: 6, fontWeight: 700 }}>
+            AI 过滤信号源（可多选 · 已选 {selectedSignalKinds.length}
+            {selectedSignalKinds.length === 0 ? " · 空=原形态全集/不注入NLV" : " · 仅这些种类进门禁/AI后再模拟"}）
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+            {AI_SIGNAL_SOURCE_OPTIONS.map((opt) => {
+              const on = selectedSignalKinds.includes(opt.id);
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => toggleSignalKind(opt.id)}
+                  title={opt.id}
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border: on ? "1px solid rgba(72,187,120,0.85)" : "1px solid rgba(160,174,192,0.28)",
+                    background: on ? "rgba(56,161,105,0.28)" : "rgba(45,55,72,0.55)",
+                    color: on ? "#9ae6b4" : "#e2e8f0",
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {on ? `✓ ${opt.label}` : opt.label}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setSelectedSignalKinds([...ALL_AI_SIGNAL_KIND_IDS])}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 8,
+                border: "1px solid rgba(99,179,237,0.45)",
+                background: "rgba(49,130,206,0.18)",
+                color: "#90cdf4",
+                fontSize: 11,
+                cursor: "pointer",
+              }}
+            >
+              全选
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedSignalKinds([])}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 8,
+                border: "1px solid rgba(160,174,192,0.35)",
+                background: "rgba(45,55,72,0.55)",
+                color: "#a0aec0",
+                fontSize: 11,
+                cursor: "pointer",
+              }}
+            >
+              清空(原集合)
+            </button>
+          </div>
+          {selectedSignalKinds.includes("nlv") && (
+            <label style={{ fontSize: 11, color: "#a0aec0", display: "flex", alignItems: "center", gap: 6 }}>
+              NLV 出场 RR
+              <select
+                value={nlvExitPlan}
+                onChange={(e) => setNlvExitPlan(e.target.value)}
+                style={{
+                  padding: "3px 6px",
+                  borderRadius: 6,
+                  background: "rgba(17,24,39,0.9)",
+                  color: "#e2e8f0",
+                  border: "1px solid rgba(160,174,192,0.35)",
+                  fontSize: 11,
+                }}
+              >
+                <option value="scaled">scaled（默认 50%@1.5R→BE + 50%@3R）</option>
+                <option value="fixed_2r">fixed_2r</option>
+                <option value="fixed_3r">fixed_3r</option>
+              </select>
+            </label>
+          )}
         </div>
         <div>
           <div style={{ fontSize: 11.5, color: "#a0aec0", marginBottom: 6, fontWeight: 700 }}>时间范围（Asia/Shanghai UTC+8）</div>

@@ -1389,12 +1389,21 @@ async def handle_ai_judge_btc_signal_sync(request: web.Request) -> web.Response:
 
 async def handle_ai_judge_backtest_btc_get(request: web.Request) -> web.Response:
     """获取多币种/多周期严格无未来数据回测结果（优先缓存；支持 query 过滤提示）。"""
-    from oi_mornitor.btc_1h_backtest import load_cached_btc_backtest, run_btc_backtest
+    from oi_mornitor.btc_1h_backtest import (
+        list_ai_signal_source_options,
+        load_cached_btc_backtest,
+        run_btc_backtest,
+    )
 
     cached = load_cached_btc_backtest()
     if cached:
-        return _json_response(cached)
+        out = dict(cached)
+        out.setdefault("signalSourceOptions", list_ai_signal_source_options())
+        return _json_response(out)
     res = await run_btc_backtest(symbol="BTCUSDT", timeframes=["1h"], days=7, skip_llm=True)
+    if isinstance(res, dict):
+        res = dict(res)
+        res.setdefault("signalSourceOptions", list_ai_signal_source_options())
     return _json_response(res)
 
 
@@ -1408,6 +1417,10 @@ async def handle_ai_judge_backtest_btc_run(request: web.Request) -> web.Response
       - skip_llm / force_refresh
       - llm_mode: trader_only|full（默认 trader_only，回测更快且必有做/不做结论）
       - max_llm_signals / soft_ai_top_n
+      - signal_kinds / signal_sources: 多选 AI 过滤信号源 id（nlv / bottom_secondary_test /
+        shooting_star / consecutive_flat_shooting_star / hs_vegas_break / m_top_vegas_break /
+        liquidity_sweep）；空=原形态全集且不注入 NLV
+      - exit_plan: NLV 插针 RR（fixed_2r / fixed_3r / scaled）
       - sync: true → 旧同步阻塞直到全部完成（脚本用）；默认 false → 立即返回 job_id，按币种渐进
     """
     from oi_mornitor.ai_btc_backtest_jobs import job_to_dict, start_ai_backtest_job
@@ -1459,6 +1472,18 @@ async def handle_ai_judge_backtest_btc_run(request: web.Request) -> web.Response
         if body.get("include_tight_sl_signals") is not None
         else (q.get("include_tight_sl_signals") in ("1", "true", "yes", "True"))
     )
+    signal_kinds_raw = body.get("signal_kinds") if body.get("signal_kinds") is not None else body.get("signal_sources")
+    if signal_kinds_raw is None and q.get("signal_kinds"):
+        signal_kinds_raw = q.get("signal_kinds")
+    try:
+        from oi_mornitor.btc_1h_backtest import _normalize_signal_kinds
+
+        signal_kinds = _normalize_signal_kinds(signal_kinds_raw)
+    except Exception:
+        signal_kinds = None
+    exit_plan = body.get("exit_plan") or body.get("nlv_exit_plan") or q.get("exit_plan")
+    if exit_plan is not None:
+        exit_plan = str(exit_plan).strip().lower() or None
     sync_flag = body.get("sync")
     if sync_flag is None:
         sync_flag = q.get("sync")
@@ -1468,7 +1493,7 @@ async def handle_ai_judge_backtest_btc_run(request: web.Request) -> web.Response
         sync_mode = bool(sync_flag)
 
     logger.info(
-        "backtest-btc/run start sync=%s symbols=%s tfs=%s start=%s end=%s skip_llm=%s force=%s llm_mode=%s max_llm=%s tight_sl=%s",
+        "backtest-btc/run start sync=%s symbols=%s tfs=%s start=%s end=%s skip_llm=%s force=%s llm_mode=%s max_llm=%s tight_sl=%s kinds=%s exit_plan=%s",
         sync_mode,
         symbols_list or symbol,
         timeframes,
@@ -1479,6 +1504,8 @@ async def handle_ai_judge_backtest_btc_run(request: web.Request) -> web.Response
         llm_mode,
         max_llm_signals,
         include_tight_sl_signals,
+        signal_kinds,
+        exit_plan,
     )
 
     if not sync_mode:
@@ -1496,6 +1523,8 @@ async def handle_ai_judge_backtest_btc_run(request: web.Request) -> web.Response
                 max_llm_signals=max_llm_signals,
                 soft_ai_top_n=soft_ai_top_n,
                 include_tight_sl_signals=include_tight_sl_signals,
+                signal_kinds=signal_kinds,
+                exit_plan=exit_plan,
             )
         except Exception as e:  # noqa: BLE001
             logger.exception("backtest-btc/run start job failed")
@@ -1522,6 +1551,8 @@ async def handle_ai_judge_backtest_btc_run(request: web.Request) -> web.Response
             max_llm_signals=max_llm_signals,
             soft_ai_top_n=soft_ai_top_n,
             include_tight_sl_signals=include_tight_sl_signals,
+            signal_kinds=signal_kinds,
+            exit_plan=exit_plan,
         )
     except Exception as e:  # noqa: BLE001
         logger.exception("backtest-btc/run failed")

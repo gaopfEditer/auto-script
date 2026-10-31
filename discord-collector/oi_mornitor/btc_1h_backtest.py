@@ -67,6 +67,116 @@ _EXTRA_ALIAS: dict[str, tuple[str, ...]] = {
 
 QUICK_SYMBOLS = ("BTC", "ETH", "QQQ", "SNDK", "DOGE", "UNI", "NEAR")
 
+# AI 回测可选信号源（与 structure_backtest.KIND_OPTIONS + NLV 对齐；多选过滤后再进门禁/AI）
+AI_SIGNAL_SOURCE_OPTIONS: list[dict[str, str]] = [
+    {"id": "nlv", "label": "新高/新低末端+放量 (NLV)", "side": "both"},
+    {"id": "bottom_secondary_test", "label": "底部二次探底确认", "side": "bull"},
+    {"id": "shooting_star", "label": "射击之星", "side": "bear"},
+    {"id": "consecutive_flat_shooting_star", "label": "连续走平射击之星", "side": "bear"},
+    {"id": "hs_vegas_break", "label": "顶部 · 头肩顶", "side": "bear"},
+    {"id": "m_top_vegas_break", "label": "顶部 · M顶", "side": "bear"},
+    {"id": "liquidity_sweep", "label": "顶部 · 流动性掠夺", "side": "bear"},
+]
+AI_SIGNAL_SOURCE_IDS = frozenset(o["id"] for o in AI_SIGNAL_SOURCE_OPTIONS)
+_NLV_KIND_IDS = frozenset({"nlv", "rev_vol_buy", "rev_vol_sell"})
+
+
+def list_ai_signal_source_options() -> list[dict[str, str]]:
+    return list(AI_SIGNAL_SOURCE_OPTIONS)
+
+
+def _normalize_signal_kinds(raw: Any) -> list[str] | None:
+    """None/empty → legacy（不过滤、不注入 NLV）；非空 → 仅保留所选 id。"""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        parts = [x.strip() for x in raw.replace("|", ",").split(",") if x.strip()]
+    elif isinstance(raw, (list, tuple, set)):
+        parts = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        return None
+    out: list[str] = []
+    for p_ in parts:
+        if p_ in AI_SIGNAL_SOURCE_IDS and p_ not in out:
+            out.append(p_)
+    return out or None
+
+
+def _kind_allowed(kind: str, allow: set[str] | None) -> bool:
+    if allow is None:
+        return True
+    k = str(kind or "")
+    if k in allow:
+        return True
+    if "nlv" in allow and k in _NLV_KIND_IDS:
+        return True
+    return False
+
+
+def _remap_chart_kind(kind: str, text: str) -> str:
+    """射击之星（2）→ consecutive_flat_shooting_star（与 structure_backtest id 对齐）。"""
+    if kind == "shooting_star" and ("射击之星（2）" in text or "（2）" in text):
+        return "consecutive_flat_shooting_star"
+    return kind
+
+
+def _build_nlv_trade_plan(
+    *,
+    side: str,
+    entry: float,
+    signal_high: float,
+    signal_low: float,
+    exit_plan: str | None = None,
+) -> dict[str, Any]:
+    """NLV 插针止损 + RR 方案 → simulate_tight_sl_outcome 兼容 dict。"""
+    try:
+        from oi_mornitor.backtest.nlv_pipeline import (
+            NLV_DEFAULT_EXIT_PLAN,
+            NLV_EXIT_PLANS,
+            _pin_extreme_plan,
+            resolve_exit_plan,
+        )
+    except Exception:
+        return {}
+    plan_id = resolve_exit_plan(exit_plan or NLV_DEFAULT_EXIT_PLAN)
+    settle = _pin_extreme_plan(
+        entry=float(entry),
+        side=side,
+        signal_high=float(signal_high),
+        signal_low=float(signal_low),
+        verify_delay_ms=0,
+        exit_plan=plan_id,
+    )
+    if settle is None:
+        return {}
+    side_n = "short" if str(side).lower() in ("short", "bear", "sell") else "long"
+    entry_f = float(entry)
+    sl = float(settle.sl_price)
+    risk = abs(entry_f - sl)
+    sl_pct = (risk / entry_f * 100.0) if entry_f > 0 else 0.0
+    meta = NLV_EXIT_PLANS[plan_id]
+    return {
+        "plan_kind": f"nlv_pin_{plan_id}",
+        "strategy_id": "nlv",
+        "matched": True,
+        "should_enter": True,
+        "side": side_n,
+        "entry": round(entry_f, 8),
+        "sl": round(sl, 8),
+        "tp": round(float(settle.tp1_price), 8),
+        "tp1": round(float(settle.tp1_price), 8),
+        "tp2": round(float(settle.tp2_price), 8),
+        "breakeven_price": round(entry_f, 8),
+        "sl_pct": round(sl_pct, 4),
+        "tp1_pct": round(abs(float(settle.tp1_price) - entry_f) / entry_f * 100.0, 4) if entry_f else 0.0,
+        "tp2_pct": round(abs(float(settle.tp2_price) - entry_f) / entry_f * 100.0, 4) if entry_f else 0.0,
+        "rr_tp1": float(meta.get("tp1_r") or settle.tp1_r or 0),
+        "rr_tp2": float(meta.get("tp2_r") or settle.tp2_r or 0),
+        "exit_plan": plan_id,
+        "trail": f"NLV 插针止损 · {meta.get('desc') or plan_id}",
+    }
+
+
 
 def resolve_backtest_symbol(raw: str) -> dict[str, str]:
     """Map user input (BTC / eth / DOGEUSDT / QQQ) → API USDT symbol + display base."""
@@ -221,11 +331,18 @@ def _cache_key(
     end_dt: datetime,
     *,
     include_tight_sl_signals: bool = False,
+    signal_kinds: list[str] | None = None,
+    exit_plan: str | None = None,
 ) -> str:
     tf_part = "-".join(timeframes) or "1h"
     s = start_dt.strftime("%Y%m%d%H%M")
     e = end_dt.strftime("%Y%m%d%H%M")
     mode = "tsl" if include_tight_sl_signals else "orig"
+    kinds = _normalize_signal_kinds(signal_kinds)
+    if kinds:
+        mode = mode + "_sk-" + "-".join(kinds)
+    if exit_plan:
+        mode = mode + "_ep-" + str(exit_plan).strip().lower()
     return f"{symbol}_{s}_{e}_{tf_part}_{mode}"
 
 
@@ -646,34 +763,58 @@ def _collect_tf_signals(
     cutoff_end_sec: int,
     api_symbol: str,
     include_tight_sl_signals: bool = False,
+    signal_kinds: list[str] | None = None,
+    exit_plan: str | None = None,
 ) -> dict[int, list[dict[str, Any]]]:
     """Collect pattern markers, structure signals, and alert_stats for one TF in window.
 
     When ``include_tight_sl_signals`` is True (only the dedicated 「15min小止损」 button),
     also inject 15m tight-SL resonance hits as signal sources. Main 「跑 AI 回测」 keeps
-    the original pattern/structure/alert signal set.
+    the original pattern/structure/alert signal set unless ``signal_kinds`` is set.
+
+    ``signal_kinds`` (multi-select from AI_SIGNAL_SOURCE_OPTIONS): when non-empty, only
+    keep matching kinds and optionally inject NLV (closed-bar → next-open entry meta).
     """
     by_time: dict[int, list[dict[str, Any]]] = {}
     iv_sec = TF_SEC[interval]
     base = human_base_asset(api_symbol)
+    allow = set(signal_kinds) if signal_kinds else None
+    want_nlv = bool(allow and "nlv" in allow)
 
     payload = build_pattern_chart_payload(klines, oi_by_time=oi_map)
     for m in payload.get("markers") or []:
         t_sec = int(m.get("time") or 0)
-        kind = str(m.get("kind") or "")
-        if cutoff_start_sec <= t_sec < cutoff_end_sec and kind in PATTERN_MARKER_KINDS:
-            side = "short" if kind in ("shooting_star", "continuous_upper_wick", "continuous_non_upper_wick") else "long"
-            by_time.setdefault(t_sec, []).append(
-                {
-                    "time": t_sec,
-                    "kind": kind,
-                    "text": str(m.get("text") or kind),
-                    "side": side,
-                    "oi_anomaly": bool(m.get("oi_anomaly")),
-                    "source": "chart_pattern",
-                    "timeframe": interval,
-                }
+        raw_kind = str(m.get("kind") or "")
+        text_m = str(m.get("text") or "")
+        kind = _remap_chart_kind(raw_kind, text_m)
+        # consecutive_flat is remapped from shooting_star markers; still accept PATTERN set
+        kind_ok = kind in PATTERN_MARKER_KINDS or kind == "consecutive_flat_shooting_star"
+        if not (cutoff_start_sec <= t_sec < cutoff_end_sec and kind_ok):
+            continue
+        if not _kind_allowed(kind, allow):
+            continue
+        side = (
+            "short"
+            if kind
+            in (
+                "shooting_star",
+                "consecutive_flat_shooting_star",
+                "continuous_upper_wick",
+                "continuous_non_upper_wick",
             )
+            else "long"
+        )
+        by_time.setdefault(t_sec, []).append(
+            {
+                "time": t_sec,
+                "kind": kind,
+                "text": text_m or kind,
+                "side": side,
+                "oi_anomaly": bool(m.get("oi_anomaly")),
+                "source": "chart_pattern",
+                "timeframe": interval,
+            }
+        )
 
     try:
         df = enrich_indicators(klines_to_df(klines))
@@ -682,6 +823,9 @@ def _collect_tf_signals(
             if 0 <= idx < len(df):
                 t_sec = int(df.iloc[idx]["open_time"]) // 1000
                 if cutoff_start_sec <= t_sec < cutoff_end_sec:
+                    kind = str(ev.get("kind") or "structure")
+                    if not _kind_allowed(kind, allow):
+                        continue
                     raw_side = str(ev.get("side") or "bull")
                     side = "short" if raw_side in ("bear", "short") else "long"
                     label = f"{ev.get('type_label', '结构信号')}({ev.get('pattern_label', '')})".rstrip("()")
@@ -690,7 +834,7 @@ def _collect_tf_signals(
                         existing.append(
                             {
                                 "time": t_sec,
-                                "kind": str(ev.get("kind") or "structure"),
+                                "kind": kind,
                                 "text": label,
                                 "side": side,
                                 "oi_anomaly": bool(ev.get("oi_anomaly")),
@@ -700,8 +844,10 @@ def _collect_tf_signals(
                         )
     except Exception as e:
         logger.warning("detect_structure_events on %s %s failed: %s", api_symbol, interval, e)
+        df = None
 
-    if ALERT_STATS_FILE.exists():
+    # alert_stats only in legacy (unfiltered) mode — not part of selectable AI sources
+    if allow is None and ALERT_STATS_FILE.exists():
         try:
             stats = json.loads(ALERT_STATS_FILE.read_text(encoding="utf-8"))
             for item in stats.get("items") or []:
@@ -777,8 +923,66 @@ def _collect_tf_signals(
         except Exception as e:
             logger.warning("scan_15m_tight_sl_signals on %s failed: %s", api_symbol, e)
 
-    return by_time
+    # NLV inject: closed-bar only, need next bar for entry; selectable source "nlv"
+    if want_nlv and interval in ("15m", "1h", "4h") and klines and len(klines) >= 40:
+        try:
+            from oi_mornitor.backtest.nlv_pipeline import NLV_BT_WARMUP
+            from oi_mornitor.range_extreme_volume import (
+                ohlcv_from_df,
+                range_extreme_signal_series,
+                rev_vol_label_zh,
+            )
 
+            df_nlv = klines_to_df(klines)
+            if df_nlv is not None and not df_nlv.empty and "open_time" in df_nlv.columns:
+                n = len(df_nlv)
+                warm = int(NLV_BT_WARMUP)
+                o, h, l, c, v = ohlcv_from_df(df_nlv)
+                sigs = range_extreme_signal_series(h, l, o, c, v)
+                last_i = n - 2  # closed bar + next open available
+                for bi in range(warm, max(warm, last_i + 1)):
+                    if bi > last_i:
+                        break
+                    sig = int(sigs[bi]) if bi < len(sigs) else 0
+                    if sig == 0:
+                        continue
+                    row = df_nlv.iloc[bi]
+                    t_sec = int(row["open_time"]) // 1000
+                    if not (cutoff_start_sec <= t_sec < cutoff_end_sec):
+                        continue
+                    kind = "rev_vol_buy" if sig == 1 else "rev_vol_sell"
+                    side = "long" if sig == 1 else "short"
+                    type_label = rev_vol_label_zh(sig)
+                    next_open = float(df_nlv.iloc[bi + 1]["open"])
+                    signal_close = float(row["close"])
+                    existing = by_time.setdefault(t_sec, [])
+                    if any(x.get("kind") in _NLV_KIND_IDS for x in existing):
+                        continue
+                    existing.insert(
+                        0,
+                        {
+                            "time": t_sec,
+                            "kind": kind,
+                            "text": f"NLV·{type_label}",
+                            "side": side,
+                            "oi_anomaly": False,
+                            "source": "nlv",
+                            "timeframe": interval,
+                            "nlv_meta": {
+                                "bar_index": bi,
+                                "signal_high": float(row["high"]),
+                                "signal_low": float(row["low"]),
+                                "signal_close": signal_close,
+                                "next_bar_open": next_open,
+                                "exit_plan": exit_plan,
+                            },
+                        },
+                    )
+        except Exception as e:
+            logger.warning("NLV inject on %s %s failed: %s", api_symbol, interval, e)
+
+    # Drop empty buckets
+    return {t: metas for t, metas in by_time.items() if metas}
 
 
 def _plan_from_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -1646,6 +1850,8 @@ async def _run_single_symbol_backtest(
     max_llm_signals: int = 12,
     soft_ai_top_n: int = 0,
     include_tight_sl_signals: bool = False,
+    signal_kinds: Any = None,
+    exit_plan: str | None = None,
 ) -> dict[str, Any]:
     """Run strict point-in-time backtest for ONE symbol across selected TFs and date range."""
     t0 = time.time()
@@ -1660,7 +1866,17 @@ async def _run_single_symbol_backtest(
     start_dt, end_dt, span_days = _resolve_window(days=days, start=start, end=end)
     cutoff_start_sec = int(start_dt.timestamp())
     cutoff_end_sec = int(end_dt.timestamp())
-    cache_key = _cache_key(api_symbol, tfs, start_dt, end_dt, include_tight_sl_signals=include_tight_sl_signals)
+    kinds_norm = _normalize_signal_kinds(signal_kinds)
+    exit_plan_norm = (str(exit_plan).strip().lower() if exit_plan else None) or None
+    cache_key = _cache_key(
+        api_symbol,
+        tfs,
+        start_dt,
+        end_dt,
+        include_tight_sl_signals=include_tight_sl_signals,
+        signal_kinds=kinds_norm,
+        exit_plan=exit_plan_norm,
+    )
     out_path = _result_path(cache_key)
 
     # Fast-path: reuse recent matching cache
@@ -1769,6 +1985,8 @@ async def _run_single_symbol_backtest(
             cutoff_end_sec=cutoff_end_sec,
             api_symbol=api_symbol,
             include_tight_sl_signals=include_tight_sl_signals,
+            signal_kinds=kinds_norm,
+            exit_plan=exit_plan_norm,
         )
         for t_sec, metas in by_time.items():
             if t_sec in open_idx.get(tf, {}):
@@ -1851,9 +2069,9 @@ async def _run_single_symbol_backtest(
             marker_oi_anomaly=marker_oi_anom,
         )
 
-        # Trade plan: dedicated 15m tight-SL only when that signal was injected;
-        # otherwise always attach 综合止盈止损 for original pattern/structure/alert signals.
+        # Trade plan: NLV pin+RR when injected; else 15m tight-SL; else 综合止盈止损.
         trade_plan: dict[str, Any] = {}
+        is_nlv_hit = any(k in _NLV_KIND_IDS for k in kinds) or ("nlv" in sources)
         is_tight_sl_hit = ("tight_sl_15m" in kinds) or ("tight_sl_15m" in sources)
         plan_df = tf_enriched.get(sig_tf)
         htf_trends = {
@@ -1861,7 +2079,31 @@ async def _run_single_symbol_backtest(
             "4h": tf_map.get("4h") or {},
             "1d": tf_map.get("1d") or {},
         }
-        if is_tight_sl_hit and sig_tf == "15m" and df15_tight is not None and 0 <= bar_idx < len(df15_tight):
+        if is_nlv_hit:
+            try:
+                nlv_m = next(
+                    (x.get("nlv_meta") for x in bms if isinstance(x.get("nlv_meta"), dict)),
+                    None,
+                )
+                if isinstance(nlv_m, dict):
+                    entry_nlv = float(nlv_m.get("next_bar_open") or 0)
+                    if entry_nlv > 0:
+                        trade_plan = _build_nlv_trade_plan(
+                            side=signal_side,
+                            entry=entry_nlv,
+                            signal_high=float(nlv_m.get("signal_high") or bar_row[2]),
+                            signal_low=float(nlv_m.get("signal_low") or bar_row[3]),
+                            exit_plan=str(nlv_m.get("exit_plan") or exit_plan_norm or "") or None,
+                        )
+                        if trade_plan:
+                            entry_price = round(
+                                entry_nlv,
+                                6 if entry_price_needs_precision(api_symbol) else 2,
+                            )
+                            tf_map[sig_tf]["nlv_trade_plan"] = trade_plan
+            except Exception as e:
+                logger.debug("NLV trade plan build failed: %s", e)
+        if (not trade_plan) and is_tight_sl_hit and sig_tf == "15m" and df15_tight is not None and 0 <= bar_idx < len(df15_tight):
             try:
                 # Prefer precomputed plan from collect inject if present
                 pre = next(
@@ -1886,7 +2128,7 @@ async def _run_single_symbol_backtest(
                         tf_map["15m"]["bias"] = trade_plan["side"]
             except Exception as e:
                 logger.debug("evaluate_bar_15m_tight_sl in backtest failed: %s", e)
-        elif plan_df is not None and 0 <= bar_idx < len(plan_df):
+        elif (not trade_plan) and plan_df is not None and 0 <= bar_idx < len(plan_df):
             try:
                 trade_plan = compute_composite_trade_plan(
                     plan_df,
@@ -2075,6 +2317,8 @@ async def _run_single_symbol_backtest(
         "max_llm_signals": max_llm_signals,
         "soft_ai_top_n": soft_ai_top_n,
         "include_tight_sl_signals": include_tight_sl_signals,
+        "signal_kinds": kinds_norm or [],
+        "exit_plan": exit_plan_norm,
         "summary": summary,
         "items": list(reversed(items)),
         "from_cache": False,
@@ -2119,6 +2363,8 @@ async def run_btc_backtest(
     max_llm_signals: int = 12,
     soft_ai_top_n: int = 0,
     include_tight_sl_signals: bool = False,
+    signal_kinds: Any = None,
+    exit_plan: str | None = None,
 ) -> dict[str, Any]:
     """Run strict PIT backtest for one or more symbols.
 
@@ -2130,6 +2376,8 @@ async def run_btc_backtest(
     sym_list = _normalize_symbols(symbols, symbol)
     tfs = _normalize_timeframes(timeframes)
     start_dt, end_dt, span_days = _resolve_window(days=days, start=start, end=end)
+    kinds_norm = _normalize_signal_kinds(signal_kinds)
+    exit_plan_norm = (str(exit_plan).strip().lower() if exit_plan else None) or None
 
     if len(sym_list) == 1:
         return await _run_single_symbol_backtest(
@@ -2145,10 +2393,20 @@ async def run_btc_backtest(
             max_llm_signals=max_llm_signals,
             soft_ai_top_n=soft_ai_top_n,
             include_tight_sl_signals=include_tight_sl_signals,
+            signal_kinds=kinds_norm,
+            exit_plan=exit_plan_norm,
         )
 
     # Multi-symbol cache
-    cache_key = _cache_key("MULTI-" + "-".join(sym_list), tfs, start_dt, end_dt, include_tight_sl_signals=include_tight_sl_signals)
+    cache_key = _cache_key(
+        "MULTI-" + "-".join(sym_list),
+        tfs,
+        start_dt,
+        end_dt,
+        include_tight_sl_signals=include_tight_sl_signals,
+        signal_kinds=kinds_norm,
+        exit_plan=exit_plan_norm,
+    )
     out_path = _result_path(cache_key)
     if not force_refresh and out_path.exists():
         try:
@@ -2235,6 +2493,8 @@ async def run_btc_backtest(
                 max_llm_signals=remaining_llm,
                 soft_ai_top_n=remaining_soft,
                 include_tight_sl_signals=include_tight_sl_signals,
+                signal_kinds=kinds_norm,
+                exit_plan=exit_plan_norm,
             )
         except Exception as e:  # noqa: BLE001
             errors.append({"symbol": api_sym, "error": str(e)})

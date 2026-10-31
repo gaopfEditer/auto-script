@@ -186,6 +186,8 @@ def job_to_dict(job: AiBacktestJob, *, include_items: bool = True) -> dict[str, 
         "max_llm_signals": p.get("max_llm_signals"),
         "soft_ai_top_n": p.get("soft_ai_top_n"),
         "include_tight_sl_signals": bool(p.get("include_tight_sl_signals")),
+        "signal_kinds": list(p.get("signal_kinds") or []),
+        "exit_plan": p.get("exit_plan"),
         "summary": summary,
         "items": items,
         "from_cache": bool(meta.get("from_cache")),
@@ -292,7 +294,15 @@ async def _try_multi_cache(job: AiBacktestJob) -> dict[str, Any] | None:
     tfs = job.timeframes
     start_dt, end_dt, _span = _resolve_window(days=p.get("days"), start=p.get("start"), end=p.get("end"))
     include_tight_sl_signals = bool(p.get("include_tight_sl_signals"))
-    cache_key = _cache_key("MULTI-" + "-".join(sym_list), tfs, start_dt, end_dt, include_tight_sl_signals=include_tight_sl_signals)
+    cache_key = _cache_key(
+        "MULTI-" + "-".join(sym_list),
+        tfs,
+        start_dt,
+        end_dt,
+        include_tight_sl_signals=include_tight_sl_signals,
+        signal_kinds=p.get("signal_kinds"),
+        exit_plan=p.get("exit_plan"),
+    )
     out_path = _result_path(cache_key)
     if not out_path.exists():
         return None
@@ -363,7 +373,7 @@ async def _run_job(job: AiBacktestJob) -> None:
             job.finished_at = time.time()
             _rebuild_progress(job)
             # Also refresh multi cache latest
-            cache_key = _cache_key("MULTI-" + "-".join(job.symbols), job.timeframes, start_dt, end_dt, include_tight_sl_signals=bool(p.get("include_tight_sl_signals")))
+            cache_key = _cache_key("MULTI-" + "-".join(job.symbols), job.timeframes, start_dt, end_dt, include_tight_sl_signals=bool(p.get("include_tight_sl_signals")), signal_kinds=p.get("signal_kinds"), exit_plan=p.get("exit_plan"))
             _persist_result(job_to_dict(job), _result_path(cache_key))
             _persist_job(job)
             logger.info("ai-backtest job %s cache hit items=%s", job.id, len(job.items))
@@ -405,6 +415,8 @@ async def _run_job(job: AiBacktestJob) -> None:
                     max_llm_signals=remaining_llm,
                     soft_ai_top_n=remaining_soft,
                     include_tight_sl_signals=bool(p.get("include_tight_sl_signals")),
+                    signal_kinds=p.get("signal_kinds"),
+                    exit_plan=p.get("exit_plan"),
                 )
             except Exception as e:  # noqa: BLE001
                 logger.exception("ai-backtest job %s symbol %s failed", job.id, api_sym)
@@ -465,7 +477,7 @@ async def _run_job(job: AiBacktestJob) -> None:
             _persist_job(job)
             # Progressive multi cache (partial ok)
             try:
-                cache_key = _cache_key("MULTI-" + "-".join(job.symbols), job.timeframes, start_dt, end_dt, include_tight_sl_signals=bool(p.get("include_tight_sl_signals")))
+                cache_key = _cache_key("MULTI-" + "-".join(job.symbols), job.timeframes, start_dt, end_dt, include_tight_sl_signals=bool(p.get("include_tight_sl_signals")), signal_kinds=p.get("signal_kinds"), exit_plan=p.get("exit_plan"))
                 _persist_result(job_to_dict(job), _result_path(cache_key))
             except Exception:  # noqa: BLE001
                 logger.debug("partial multi persist failed", exc_info=True)
@@ -494,7 +506,7 @@ async def _run_job(job: AiBacktestJob) -> None:
             logger.exception("final summary failed")
         _rebuild_progress(job)
         try:
-            cache_key = _cache_key("MULTI-" + "-".join(job.symbols), job.timeframes, start_dt, end_dt, include_tight_sl_signals=bool(p.get("include_tight_sl_signals")))
+            cache_key = _cache_key("MULTI-" + "-".join(job.symbols), job.timeframes, start_dt, end_dt, include_tight_sl_signals=bool(p.get("include_tight_sl_signals")), signal_kinds=p.get("signal_kinds"), exit_plan=p.get("exit_plan"))
             _persist_result(job_to_dict(job), _result_path(cache_key))
         except Exception:  # noqa: BLE001
             logger.debug("final multi persist failed", exc_info=True)
@@ -529,6 +541,8 @@ async def start_ai_backtest_job(
     max_llm_signals: int = 12,
     soft_ai_top_n: int = 0,
     include_tight_sl_signals: bool = False,
+    signal_kinds: Any = None,
+    exit_plan: str | None = None,
 ) -> AiBacktestJob:
     sym_list = _normalize_symbols(symbols, symbol)
     tfs = _normalize_timeframes(timeframes)
@@ -554,6 +568,8 @@ async def start_ai_backtest_job(
             "max_llm_signals": max_llm_signals,
             "soft_ai_top_n": soft_ai_top_n,
             "include_tight_sl_signals": bool(include_tight_sl_signals),
+            "signal_kinds": list(signal_kinds) if signal_kinds else [],
+            "exit_plan": (str(exit_plan).strip().lower() if exit_plan else None),
         },
         symbols=sym_list,
         symbol_bases=bases,

@@ -585,11 +585,15 @@ def _candle_card_hits_at_index(
         if kind == "shooting_star":
             is_consec = "射击之星（2）" in text or "（2）" in text
             if is_consec:
-                continue
-            if not allow_shooting_star:
-                continue
-            type_label = "射击之星"
-            card_kind = "shooting_star"
+                if not allow_consecutive_shoot:
+                    continue
+                type_label = "连续走平射击之星"
+                card_kind = "consecutive_flat_shooting_star"
+            else:
+                if not allow_shooting_star:
+                    continue
+                type_label = "射击之星"
+                card_kind = "shooting_star"
             if not bypass_ctx:
                 if CANDLE_SHOOT_REQUIRE_POSITION:
                     basis = float(row["bb_basis"])
@@ -641,7 +645,9 @@ def _candle_card_hits_at_index(
         trend = _trend_return(
             df,
             idx,
-            CANDLE_SHOOT_TREND_LOOKBACK if card_kind == "shooting_star" else CANDLE_HAMMER_TREND_LOOKBACK,
+            CANDLE_SHOOT_TREND_LOOKBACK
+            if card_kind in ("shooting_star", "consecutive_flat_shooting_star")
+            else CANDLE_HAMMER_TREND_LOOKBACK,
         )
         side = "bull" if card_kind == "inverted_hammer" else "bear"
         hits.append({
