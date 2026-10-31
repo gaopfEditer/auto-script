@@ -4601,6 +4601,95 @@ button {
   font-weight: 600;
 }
 
+/* 回测 · 行情环境 tip */
+.bt-section-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.bt-section-title-row .bt-section-title {
+  margin: 0;
+}
+.bt-regime-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
+.bt-regime-tip-btn {
+  appearance: none;
+  border: 1px solid rgba(100, 181, 246, 0.35);
+  background: rgba(100, 181, 246, 0.08);
+  color: #9ec9f0;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: help;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.bt-regime-tip-btn:hover,
+.bt-regime-tip.open .bt-regime-tip-btn {
+  border-color: rgba(100, 181, 246, 0.7);
+  background: rgba(100, 181, 246, 0.16);
+  color: #e3f2fd;
+}
+.bt-regime-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 90;
+  width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(100, 181, 246, 0.35);
+  background: rgba(22, 24, 32, 0.98);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  color: #ccc;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.bt-regime-tip:hover .bt-regime-popover,
+.bt-regime-tip.open .bt-regime-popover,
+.bt-regime-tip:focus-within .bt-regime-popover {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+.bt-regime-popover-title {
+  display: block;
+  font-weight: 600;
+  color: #e8e8e8;
+  font-size: 0.78rem;
+  margin-bottom: 6px;
+}
+.bt-regime-kicker {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.68rem;
+  color: #81d4fa;
+  font-weight: 600;
+}
+.bt-regime-text {
+  margin: 2px 0 0;
+  color: #cfcfcf;
+}
+.bt-mode-hint {
+  margin: 4px 0 8px;
+  font-size: 0.72rem;
+  color: #9aa;
+}
+
+
 .bt-btn-row {
   display: flex;
   gap: 8px;

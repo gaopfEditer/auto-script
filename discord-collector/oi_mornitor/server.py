@@ -396,6 +396,7 @@ async def handle_pattern_alert_stats_post(request: web.Request) -> web.Response:
 
 async def handle_backtest_structure_options(_request: web.Request) -> web.Response:
     """结构回测：可选形态 / 周期 / 核算说明。"""
+    from oi_mornitor.backtest.regime_tips import tip_for
     from oi_mornitor.backtest_kline_store import storage_stats
     from oi_mornitor.backtest_universe import load_latest_universe
     from oi_mornitor.mcap_tier import tier_catalog_for_api
@@ -408,6 +409,7 @@ async def handle_backtest_structure_options(_request: web.Request) -> web.Respon
     return _json_response(
         {
             "ok": True,
+            "regimeTip": tip_for("structure"),
             "kindOptions": list_kind_options(),
             "defaultKinds": DEFAULT_KINDS,
             "intervals": sorted(STRUCTURE_CARD_INTERVALS),
@@ -595,6 +597,64 @@ async def handle_backtest_nlv_jobs(request: web.Request) -> web.Response:
     q = request.query
     limit = int(q.get("limit") or "40") if str(q.get("limit") or "40").isdigit() else 40
     return _json_response({"ok": True, "jobs": list_nlv_jobs(limit)})
+
+
+
+
+async def handle_backtest_dca_options(_request: web.Request) -> web.Response:
+    """短线 DCA（TD9/Vegas/形态/NLV）回测选项。"""
+    from oi_mornitor.backtest.dca_pipeline import dca_options
+
+    return _json_response({"ok": True, **dca_options()})
+
+
+async def handle_backtest_dca_start(request: web.Request) -> web.Response:
+    """启动 DCA 回测任务（异步；落盘 data/dca_backtest）。"""
+    from oi_mornitor.backtest.dca_pipeline import job_to_dict, start_dca_backtest
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        job = await start_dca_backtest(body)
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("DCA 回测启动失败")
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response({"ok": True, **job_to_dict(job)})
+
+
+async def handle_backtest_dca_get(request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.dca_pipeline import get_dca_job, job_to_dict
+
+    job_id = str(request.match_info.get("job_id") or "").strip()
+    if not job_id:
+        return _json_response({"ok": False, "error": "missing job_id"}, status=400)
+    job = get_dca_job(job_id)
+    if job is None:
+        return _json_response({"ok": False, "error": "job not found"}, status=404)
+    return _json_response({"ok": True, **job_to_dict(job)})
+
+
+async def handle_backtest_dca_latest(_request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.dca_pipeline import get_latest_dca_job, job_to_dict
+
+    job = get_latest_dca_job()
+    if job is None:
+        return _json_response({"ok": True, "job": None})
+    return _json_response({"ok": True, "job": job_to_dict(job)})
+
+
+async def handle_backtest_dca_jobs(request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.dca_pipeline import list_dca_jobs
+
+    q = request.query
+    limit = int(q.get("limit") or "40") if str(q.get("limit") or "40").isdigit() else 40
+    return _json_response({"ok": True, "jobs": list_dca_jobs(limit)})
 
 
 async def handle_backtest_kline_prefetch_start(request: web.Request) -> web.Response:
@@ -1688,6 +1748,11 @@ def create_app() -> web.Application:
     app.router.add_get("/api/backtest/nlv/jobs", handle_backtest_nlv_jobs)
     app.router.add_post("/api/backtest/nlv", handle_backtest_nlv_start)
     app.router.add_get("/api/backtest/nlv/{job_id}", handle_backtest_nlv_get)
+    app.router.add_get("/api/backtest/dca/options", handle_backtest_dca_options)
+    app.router.add_get("/api/backtest/dca/latest", handle_backtest_dca_latest)
+    app.router.add_get("/api/backtest/dca/jobs", handle_backtest_dca_jobs)
+    app.router.add_post("/api/backtest/dca", handle_backtest_dca_start)
+    app.router.add_get("/api/backtest/dca/{job_id}", handle_backtest_dca_get)
 
     app.router.add_get("/api/pattern-alert-ticker", handle_pattern_alert_ticker_get)
     app.router.add_post("/api/pattern-alert-ticker", handle_pattern_alert_ticker_post)

@@ -1,0 +1,184 @@
+// @version=2
+//
+// 模块：TD9 + 维加斯 + 射击之星/倒锤子 + 研究院新高新低放量（NLV）
+// 空值用 nan；是否为空用 na(x)
+// 来源：用户 AICoin 短线 DCA 脚本（原样存档，供回测口径对照）
+
+bool enable_td9 = true
+bool enable_vegas = true
+bool enable_candles = true
+bool enable_nlv = true
+
+bool show_labels = true
+int label_font_size = 10
+bool show_plots = true
+bool enable_alert = true
+bool enable_strategy = false
+bool enable_nlv_strategy = false
+
+int nlv_hl_len = 50
+int nlv_vol_len = 120
+float nlv_degree_threshold = 0.2
+
+int bb_length = 20
+float bb_mult = 2.0
+float eps = 0.0000001
+
+bool enable_vegas_v_prefix = true
+int vegas_v_filter = 12
+int vegas_v_a1 = 144
+int vegas_v_a2 = 169
+int vegas_v_b1 = 576
+int vegas_v_b2 = 676
+float vegas_v_tol_bb_pct = 20.0
+
+bool enable_shooting_star = true
+float pattern_upper_wick_ratio = 1.5
+float pattern_upper_wick_max_ratio = 20.0
+int shooting_star_repeat_bars = 5
+
+func_absv(v) {
+    return v >= 0 ? v : -v
+}
+
+func_shoot(h, l, o, c, at_lo) {
+    bd = func_absv(c - o)
+    uw = h - max(o, c)
+    lw = min(o, c) - l
+    ok = bd > eps and uw > eps and uw >= bd * pattern_upper_wick_ratio and uw <= bd * pattern_upper_wick_max_ratio
+    sh = uw > eps and lw * 2.0 < uw
+    nol = lw <= eps or sh
+    return ok and nol and (not at_lo or c < o)
+}
+
+func_inv_hammer(h, l, o, c) {
+    bd = func_absv(c - o)
+    uw = h - max(o, c)
+    lw = min(o, c) - l
+    return bd > eps and lw >= bd * pattern_upper_wick_ratio and uw < lw / 3.0
+}
+
+// ---------- TD9 ----------
+td_v = td(close)
+td_os = enable_td9 and td_v == -9
+td_ob = enable_td9 and td_v == 9
+
+// ---------- 布林带 ----------
+need_bb = enable_vegas or enable_candles
+basis = ma(close, bb_length)
+dev = bb_mult * sd(close, bb_length)
+upper = basis + dev
+lower = basis - dev
+bw = upper - lower
+
+// ---------- 维加斯 EMA（12 过滤中线 + A144/169 + B576/676；V 前缀仍只看后四条） ----------
+v1 = ema(close, vegas_v_filter)
+v2 = ema(close, vegas_v_a1)
+v3 = ema(close, vegas_v_a2)
+v4 = ema(close, vegas_v_b1)
+v5 = ema(close, vegas_v_b2)
+
+near_v = false
+if enable_vegas and enable_vegas_v_prefix and need_bb {
+    m2 = min(min(func_absv(high - v2), func_absv(low - v2)), func_absv(close - v2))
+    m3 = min(min(func_absv(high - v3), func_absv(low - v3)), func_absv(close - v3))
+    m4 = min(min(func_absv(high - v4), func_absv(low - v4)), func_absv(close - v4))
+    m5 = min(min(func_absv(high - v5), func_absv(low - v5)), func_absv(close - v5))
+    near_v := bw > eps * 2 and min(min(m2, m3), min(m4, m5)) <= bw * vegas_v_tol_bb_pct / 100.0
+}
+
+// ---------- 射击之星 / 倒锤子 ----------
+at_lo_bb = need_bb and low <= lower + (basis - lower) * 0.15
+below_mid = need_bb and low <= basis
+
+var last_ss = nan
+shoot = false
+ss2 = false
+inv_s = false
+
+if enable_candles and enable_shooting_star and need_bb {
+    shoot := func_shoot(high, low, open, close, at_lo_bb)
+    ss2 := shoot and not na(last_ss) and bar_index > last_ss and bar_index - last_ss <= shooting_star_repeat_bars
+    if shoot {
+        last_ss := bar_index
+    }
+    if below_mid and not shoot {
+        inv_s := func_inv_hammer(high, low, open, close)
+    }
+}
+
+// ---------- 研究院：50 周期新高/新低 + 放量涨跌幅 ----------
+hhv_nlv = highest(high, nlv_hl_len)
+llv_nlv = lowest(low, nlv_hl_len)
+len_k = func_absv(high - low)
+ma_len_k = ma(len_k, nlv_hl_len)
+new_high_nlv = high == hhv_nlv
+new_low_nlv = low == llv_nlv
+degree_nlv = open != 0 ? ((close - open) / open) * 100 : 0.0
+change_nlv = close - open
+len_limit_nlv = len_k > ma_len_k
+new_high_end = ((new_high_nlv[1] and not new_high_nlv) or new_high_nlv) and change_nlv < 0 and len_limit_nlv
+new_low_end = ((new_low_nlv[1] and not new_low_nlv) or new_low_nlv) and change_nlv > 0 and len_limit_nlv
+ma_vol_nlv = ma(volume, nlv_vol_len)
+vol_cond_nlv = volume > ma_vol_nlv
+vol_up_nlv = vol_cond_nlv and degree_nlv >= nlv_degree_threshold
+vol_down_nlv = vol_cond_nlv and degree_nlv <= -nlv_degree_threshold
+
+signal_nlv = 0
+if enable_nlv {
+    if vol_up_nlv and (new_low_end or new_low_end[1] or new_low_end[2] or new_low_end[3] or new_low_end[4]) and (signal_nlv[1] != 1 and signal_nlv[2] != 1 and signal_nlv[3] != 1 and signal_nlv[4] != 1) {
+        signal_nlv := 1
+    } else if vol_down_nlv and (new_high_end or new_high_end[1] or new_high_end[2] or new_high_end[3] or new_high_end[4]) and (signal_nlv[1] != -1 and signal_nlv[2] != -1 and signal_nlv[3] != -1 and signal_nlv[4] != -1) {
+        signal_nlv := -1
+    } else {
+        signal_nlv := 0
+    }
+}
+nlv_buy = enable_nlv and signal_nlv == 1
+nlv_sell = enable_nlv and signal_nlv == -1
+
+// ---------- 曲线 ----------
+plot(show_plots and need_bb ? upper : nan, title='UB', color='rgba(33,150,243,0.5)')
+plot(show_plots and need_bb ? lower : nan, title='LB', color='rgba(33,150,243,0.5)')
+plot(show_plots and need_bb ? basis : nan, title='MB', color='rgba(33,150,243,0.3)')
+plot(show_plots and enable_vegas ? v1 : nan, title='V12', color='rgba(255,255,255,0.85)')
+plot(show_plots and enable_vegas ? v2 : nan, title='V144', color='rgba(255,193,7,0.7)')
+plot(show_plots and enable_vegas ? v3 : nan, title='V169', color='rgba(255,152,0,0.7)')
+plot(show_plots and enable_vegas ? v4 : nan, title='V576', color='rgba(156,39,176,0.6)')
+plot(show_plots and enable_vegas ? v5 : nan, title='V676', color='rgba(103,58,183,0.6)')
+
+// ---------- 文字标签 ----------
+plotText(show_labels and td_os, title='TD9B', text='TD9买', color='green', refSeries=low, placement='bottom', fontSize=label_font_size)
+plotText(show_labels and td_ob, title='TD9S', text='TD9卖', color='red', refSeries=high, placement='top', fontSize=label_font_size)
+
+plotText(show_labels and enable_candles and shoot and near_v and ss2, title='SS1', text='V射2', color='orange', refSeries=high, placement='top', fontSize=label_font_size)
+plotText(show_labels and enable_candles and shoot and near_v and not ss2, title='SS2', text='V射', color='orange', refSeries=high, placement='top', fontSize=label_font_size)
+plotText(show_labels and enable_candles and shoot and not near_v and ss2, title='SS3', text='射2', color='orange', refSeries=high, placement='top', fontSize=label_font_size)
+plotText(show_labels and enable_candles and shoot and not near_v and not ss2, title='SS4', text='射', color='orange', refSeries=high, placement='top', fontSize=label_font_size)
+
+plotText(show_labels and enable_candles and inv_s and near_v and not shoot, title='IH1', text='V倒锤', color='aqua', refSeries=low, placement='bottom', fontSize=label_font_size)
+plotText(show_labels and enable_candles and inv_s and not near_v and not shoot, title='IH2', text='倒锤', color='aqua', refSeries=low, placement='bottom', fontSize=label_font_size)
+
+plotText(show_labels and nlv_buy, title='NLV买', text='买入', refSeries=low, color='#5dfc13', fontSize=label_font_size, placement='bottom', display=true)
+plotText(show_labels and nlv_sell, title='NLV卖', text='卖出', refSeries=high, color='#e0f052', fontSize=label_font_size, placement='top', display=true)
+
+// ---------- 告警 ----------
+alertcondition(enable_alert and td_os, title='TD9超卖', direction='buy')
+alertcondition(enable_alert and td_ob, title='TD9超买', direction='sell')
+alertcondition(enable_alert and enable_candles and shoot and near_v, title='V射击之星', direction='sell')
+alertcondition(enable_alert and enable_candles and shoot and not near_v, title='射击之星', direction='sell')
+alertcondition(enable_alert and enable_candles and inv_s and not shoot, title='倒锤子', direction='buy')
+alertcondition(enable_alert and nlv_buy, title='NLV买入信号', direction='buy')
+alertcondition(enable_alert and nlv_sell, title='NLV卖出信号', direction='sell')
+
+td_long = enable_strategy and enable_td9 and td_os
+td_exit_long = enable_strategy and enable_td9 and td_ob
+nlv_long = enable_nlv_strategy and nlv_buy
+nlv_exit_long = enable_nlv_strategy and nlv_sell
+nlv_short = enable_nlv_strategy and nlv_sell
+nlv_cover = enable_nlv_strategy and nlv_buy
+
+enterLong(td_long or nlv_long, price='market', amount=1)
+exitLong(td_exit_long or nlv_exit_long, price='market', amount=1)
+enterShort(nlv_short, price='market', amount=1)
+exitShort(nlv_cover, price='market', amount=1)

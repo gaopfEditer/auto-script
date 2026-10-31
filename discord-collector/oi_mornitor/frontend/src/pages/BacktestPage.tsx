@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MercuHeader } from "../components/MercuHeader";
+import { RegimeTip, type RegimeTipData } from "../components/RegimeTip";
 import { useRadarSSE } from "../hooks/useRadarSSE";
 import { useSpecialFocus } from "../hooks/useSpecialFocus";
 import { displaySymbol } from "../utils/symbol";
@@ -325,6 +326,40 @@ type NlvJob = {
   result?: { symbols?: string[]; elapsed_sec?: number; interval?: string; universe?: string };
 };
 
+
+type DcaModeOption = {
+  id: string;
+  label: string;
+  desc?: string;
+  tradeable?: boolean;
+  tipKey?: string;
+  regimeTip?: RegimeTipData | null;
+};
+type DcaJob = {
+  id: string;
+  status: string;
+  error?: string | null;
+  params?: Record<string, unknown>;
+  progress?: { current?: string; total?: number };
+  summary?: NlvSummary | null;
+  byKind?: Record<string, { type_label?: string; count?: number; summary?: NlvSummary }>;
+  byMcapTier?: Record<string, { label?: string; count?: number; summary?: NlvSummary }>;
+  itemCount?: number;
+  categoryLabel?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  result?: {
+    symbols?: string[];
+    elapsed_sec?: number;
+    interval?: string;
+    universe?: string;
+    mode?: string;
+    modeLabel?: string;
+    exit_plan?: string;
+    confluenceStats?: Record<string, number>;
+  };
+};
+
 type PrefetchJob = {
   id: string;
   status: string;
@@ -614,6 +649,37 @@ export function BacktestPage() {
   const [nlvLoading, setNlvLoading] = useState(false);
   const [nlvJob, setNlvJob] = useState<NlvJob | null>(null);
   const [nlvErr, setNlvErr] = useState("");
+  const [structureRegimeTip, setStructureRegimeTip] = useState<RegimeTipData | null>(null);
+  const [nlvRegimeTip, setNlvRegimeTip] = useState<RegimeTipData | null>(null);
+  const [dcaRegimeTip, setDcaRegimeTip] = useState<RegimeTipData | null>(null);
+  const [dcaUniverses, setDcaUniverses] = useState<NlvUniverseOption[]>([
+    { id: "majors", label: "主流 BTC/ETH/SOL" },
+    { id: "t1", label: "第一梯队" },
+    { id: "t2", label: "第二梯队" },
+    { id: "t3", label: "第三梯队" },
+    { id: "all_tiers", label: "一+二+三梯队名单" },
+  ]);
+  const [dcaUniverse, setDcaUniverse] = useState("majors");
+  const [dcaInterval, setDcaInterval] = useState("1h");
+  const [dcaIntervals, setDcaIntervals] = useState<string[]>(["15m", "1h", "4h"]);
+  const [dcaModes, setDcaModes] = useState<DcaModeOption[]>([
+    { id: "nlv_flip", label: "A · NLV 翻转 DCA" },
+    { id: "td9_long", label: "B · TD9 只做多" },
+    { id: "confluence", label: "C · 共振计分（无成交）" },
+  ]);
+  const [dcaMode, setDcaMode] = useState("nlv_flip");
+  const [dcaExitPlans, setDcaExitPlans] = useState<NlvExitPlanOption[]>([
+    { id: "fixed_2r", label: "全平 2R" },
+    { id: "fixed_3r", label: "全平 3R" },
+    { id: "scaled", label: "分批 1.5R+3R" },
+  ]);
+  const [dcaExitPlan, setDcaExitPlan] = useState("scaled");
+  const [dcaSettleRules, setDcaSettleRules] = useState(
+    "已收盘→下一根开盘 · A=NLV插针+exit_plan · B=TD9对手平 · C=计分",
+  );
+  const [dcaLoading, setDcaLoading] = useState(false);
+  const [dcaJob, setDcaJob] = useState<DcaJob | null>(null);
+  const [dcaErr, setDcaErr] = useState("");
 
   useEffect(() => {
     fetch("/api/backtest/nlv/options")
@@ -633,12 +699,46 @@ export function BacktestPage() {
         if (body.defaultUniverse) setNlvUniverse(String(body.defaultUniverse));
         if (body.defaultExitPlan) setNlvExitPlan(String(body.defaultExitPlan));
         if (body.settleRules) setNlvSettleRules(String(body.settleRules));
+        if (body.regimeTip) setNlvRegimeTip(body.regimeTip as RegimeTipData);
       })
       .catch(() => undefined);
     fetch("/api/backtest/nlv/latest")
       .then((r) => r.json())
       .then((body) => {
         if (body?.ok && body.job) setNlvJob(body.job as NlvJob);
+      })
+      .catch(() => undefined);
+    fetch("/api/backtest/dca/options")
+      .then((r) => r.json())
+      .then((body) => {
+        if (!body?.ok) return;
+        if (Array.isArray(body.universes) && body.universes.length) {
+          setDcaUniverses(body.universes as NlvUniverseOption[]);
+        }
+        if (Array.isArray(body.intervals) && body.intervals.length) {
+          setDcaIntervals(body.intervals as string[]);
+        }
+        if (Array.isArray(body.modes) && body.modes.length) {
+          setDcaModes(body.modes as DcaModeOption[]);
+        }
+        if (Array.isArray(body.exitPlans) && body.exitPlans.length) {
+          setDcaExitPlans(body.exitPlans as NlvExitPlanOption[]);
+        }
+        if (body.defaultInterval) setDcaInterval(String(body.defaultInterval));
+        if (body.defaultUniverse) setDcaUniverse(String(body.defaultUniverse));
+        if (body.defaultMode) setDcaMode(String(body.defaultMode));
+        if (body.defaultExitPlan) setDcaExitPlan(String(body.defaultExitPlan));
+        if (body.settleRules) setDcaSettleRules(String(body.settleRules));
+        if (body.regimeTip) setDcaRegimeTip(body.regimeTip as RegimeTipData);
+        else if (Array.isArray(body.regimeTips) && body.regimeTips[0]) {
+          setDcaRegimeTip(body.regimeTips[0] as RegimeTipData);
+        }
+      })
+      .catch(() => undefined);
+    fetch("/api/backtest/dca/latest")
+      .then((r) => r.json())
+      .then((body) => {
+        if (body?.ok && body.job) setDcaJob(body.job as DcaJob);
       })
       .catch(() => undefined);
   }, []);
@@ -649,6 +749,7 @@ export function BacktestPage() {
       .then((r) => r.json())
       .then((body) => {
         if (!body?.ok) throw new Error(body?.error || "加载选项失败");
+        if (body.regimeTip) setStructureRegimeTip(body.regimeTip as RegimeTipData);
         const kinds: KindOption[] = body.kindOptions || [];
         const ivs: string[] = body.intervals || ["15m", "1h", "4h"];
         setKindOptions(kinds);
@@ -1111,6 +1212,47 @@ export function BacktestPage() {
     }
   };
 
+
+  const pollDcaJob = async (jobId: string) => {
+    for (let i = 0; i < 120; i++) {
+      const r = await fetch(`/api/backtest/dca/${encodeURIComponent(jobId)}`);
+      const body = await r.json();
+      if (!body?.ok) throw new Error(body?.error || "DCA 任务查询失败");
+      const next = body as DcaJob;
+      setDcaJob(next);
+      if (next.status === "done" || next.status === "failed") return next;
+      await new Promise((res) => setTimeout(res, 800));
+    }
+    throw new Error("DCA 回测超时");
+  };
+
+  const onRunDcaBacktest = async () => {
+    setDcaLoading(true);
+    setDcaErr("");
+    try {
+      const r = await fetch("/api/backtest/dca", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          universe: dcaUniverse,
+          interval: dcaInterval,
+          mode: dcaMode,
+          exitPlan: dcaExitPlan,
+        }),
+      });
+      const body = await r.json();
+      if (!body?.ok) throw new Error(body?.error || "DCA 回测启动失败");
+      const started = body as DcaJob;
+      setDcaJob(started);
+      if (started.status === "done" || started.status === "failed") return;
+      await pollDcaJob(started.id);
+    } catch (e) {
+      setDcaErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDcaLoading(false);
+    }
+  };
+
   const onRunBacktest = async () => {
     setBtLoading(true);
     setBootErr("");
@@ -1393,7 +1535,10 @@ export function BacktestPage() {
           </section>
 
           <section className="bt-section">
-            <h2 className="bt-section-title">2. 回测扫描</h2>
+            <div className="bt-section-title-row">
+              <h2 className="bt-section-title">2. 回测扫描</h2>
+              <RegimeTip tip={structureRegimeTip} title="结构/形态扫描" />
+            </div>
             <label className="bt-field">
               <span>回测开始</span>
               <input type="datetime-local" value={btStartLocal} onChange={(e) => setBtStartLocal(e.target.value)} />
@@ -1473,7 +1618,10 @@ export function BacktestPage() {
           </section>
 
           <section className="bt-section">
-            <h2 className="bt-section-title">3. 新高/新低末端+放量</h2>
+            <div className="bt-section-title-row">
+              <h2 className="bt-section-title">3. 新高/新低末端+放量</h2>
+              <RegimeTip tip={nlvRegimeTip} title="新高/新低末端+放量" />
+            </div>
             <p className="bt-rules">
               NLV：已收盘 → 下一根开盘 · 插针极值止损（多=low / 空=high）· 风险过滤 0.2%–2% ·
               盈亏比可选 2R / 3R / 分批1.5R+3R · 报告统一 20x。可按梯队整泡对比。
@@ -1522,6 +1670,90 @@ export function BacktestPage() {
               {nlvLoading ? "NLV 回测中…" : "开始 NLV 回测"}
             </button>
           </section>
+
+          <section className="bt-section">
+            <div className="bt-section-title-row">
+              <h2 className="bt-section-title">4. 短线DCA · TD9/维加斯/形态/NLV</h2>
+              <RegimeTip
+                tip={
+                  dcaModes.find((m) => m.id === dcaMode)?.regimeTip ||
+                  dcaRegimeTip
+                }
+                title="短线DCA"
+              />
+            </div>
+            <p className="bt-rules">
+              源脚本存档 docs/strategies/aicoin-dca-td9-vegas-nlv.pine。A/B 可跑成交；C 只计分。
+              已收盘信号 → 下一根开盘。NLV 腿复用插针 SL + exit_plan；TD9 用对手 ±9 平仓。
+            </p>
+            <label className="bt-field">
+              <span>模式</span>
+              <select
+                value={dcaMode}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setDcaMode(next);
+                  const tip = dcaModes.find((m) => m.id === next)?.regimeTip;
+                  if (tip) setDcaRegimeTip(tip);
+                }}
+              >
+                {dcaModes.map((m) => (
+                  <option key={m.id} value={m.id} title={m.desc || m.label}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="bt-mode-hint">
+              {(dcaModes.find((m) => m.id === dcaMode)?.desc || dcaSettleRules)}
+            </p>
+            <label className="bt-field">
+              <span>币种宇宙</span>
+              <select value={dcaUniverse} onChange={(e) => setDcaUniverse(e.target.value)}>
+                {dcaUniverses.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="bt-field">
+              <span>周期</span>
+              <select value={dcaInterval} onChange={(e) => setDcaInterval(e.target.value)}>
+                {dcaIntervals.map((iv) => (
+                  <option key={iv} value={iv}>
+                    {iv}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {dcaMode === "nlv_flip" ? (
+              <label className="bt-field">
+                <span>盈亏比方案（NLV 腿）</span>
+                <select value={dcaExitPlan} onChange={(e) => setDcaExitPlan(e.target.value)}>
+                  {dcaExitPlans.map((pl) => (
+                    <option key={pl.id} value={pl.id} title={pl.desc || pl.label}>
+                      {pl.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {dcaSettleRules ? <p className="bt-rules">{dcaSettleRules}</p> : null}
+            {dcaErr ? <p className="bt-error">{dcaErr}</p> : null}
+            {dcaJob?.status === "running" || dcaJob?.status === "pending" ? (
+              <p className="bt-rules">{dcaJob.progress?.current || "DCA 回测中…"}</p>
+            ) : null}
+            <button
+              type="button"
+              className="bt-run"
+              disabled={dcaLoading}
+              onClick={() => void onRunDcaBacktest()}
+            >
+              {dcaLoading ? "DCA 回测中…" : "开始 DCA 回测"}
+            </button>
+          </section>
+
         </aside>
 
         <main className="bt-main">
@@ -1620,7 +1852,10 @@ export function BacktestPage() {
           </section>
 
           <section className="bt-panel">
-            <h2 className="bt-panel-title">新高/新低末端+放量 · 回测摘要</h2>
+            <div className="bt-section-title-row">
+              <h2 className="bt-panel-title">新高/新低末端+放量 · 回测摘要</h2>
+              <RegimeTip tip={nlvRegimeTip} title="新高/新低末端+放量" />
+            </div>
             {!nlvJob ? (
               <p className="bt-empty-inline">在左侧「3. 新高/新低末端+放量」选择宇宙后点「开始 NLV 回测」。</p>
             ) : (
@@ -1758,6 +1993,132 @@ export function BacktestPage() {
                     {Object.entries(nlvJob.byMcapTier).map(([tid, row]) => (
                       <div key={tid} className="bt-interval-card">
                         <div className="bt-interval-head">{row.label || tid}</div>
+                        <div className="bt-interval-stats">
+                          <div className="bt-stat">
+                            <span className="bt-stat-val">{row.count ?? 0}</span>
+                            <span className="bt-stat-lab">笔数</span>
+                          </div>
+                          <div className="bt-stat">
+                            <span className="bt-stat-val">
+                              {row.summary?.winRate == null
+                                ? "—"
+                                : `${(row.summary.winRate * 100).toFixed(1)}%`}
+                            </span>
+                            <span className="bt-stat-lab">胜率</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            )}
+          </section>
+
+
+          <section className="bt-panel">
+            <div className="bt-section-title-row">
+              <h2 className="bt-panel-title">短线DCA · 回测摘要</h2>
+              <RegimeTip
+                tip={dcaModes.find((m) => m.id === (dcaJob?.result?.mode || dcaMode))?.regimeTip || dcaRegimeTip}
+                title="短线DCA"
+              />
+            </div>
+            {!dcaJob ? (
+              <p className="bt-empty-inline">在左侧「4. 短线DCA」选择模式后点「开始 DCA 回测」。</p>
+            ) : (
+              <>
+                <div className="bt-status-bar">
+                  <span className={`bt-status ${dcaJob.status}`}>
+                    {dcaJob.status === "done"
+                      ? "完成"
+                      : dcaJob.status === "failed"
+                        ? "失败"
+                        : dcaJob.status === "running"
+                          ? "运行中"
+                          : "排队"}
+                  </span>
+                  <span className="bt-muted">
+                    {dcaJob.categoryLabel || "DCA"}
+                    {dcaJob.result?.modeLabel
+                      ? ` · ${dcaJob.result.modeLabel}`
+                      : dcaJob.params?.mode
+                        ? ` · ${String(dcaJob.params.mode)}`
+                        : ""}
+                    {dcaJob.result?.universe
+                      ? ` · ${dcaJob.result.universe}`
+                      : dcaJob.params?.universe
+                        ? ` · ${String(dcaJob.params.universe)}`
+                        : ""}
+                    {dcaJob.result?.interval
+                      ? ` · ${dcaJob.result.interval}`
+                      : dcaJob.params?.interval
+                        ? ` · ${String(dcaJob.params.interval)}`
+                        : ""}
+                    {dcaJob.itemCount != null ? ` · ${dcaJob.itemCount} 笔` : ""}
+                    {dcaJob.result?.elapsed_sec != null ? ` · ${dcaJob.result.elapsed_sec}s` : ""}
+                  </span>
+                  {dcaJob.error ? <span className="bt-error">{dcaJob.error}</span> : null}
+                </div>
+                {dcaJob.summary ? (
+                  <>
+                    <div className="bt-summary-grid">
+                      <div className="bt-stat">
+                        <span className="bt-stat-val">
+                          {dcaJob.summary.winRate == null
+                            ? "—"
+                            : `${(dcaJob.summary.winRate * 100).toFixed(1)}%`}
+                        </span>
+                        <span className="bt-stat-lab">胜率</span>
+                      </div>
+                      <div className="bt-stat">
+                        <span className="bt-stat-val">
+                          {dcaJob.summary.profitFactor == null
+                            ? "—"
+                            : dcaJob.summary.profitFactor.toFixed(2)}
+                        </span>
+                        <span className="bt-stat-lab">PF</span>
+                      </div>
+                      <div className="bt-stat">
+                        <span className="bt-stat-val">{dcaJob.summary.total ?? dcaJob.itemCount ?? "—"}</span>
+                        <span className="bt-stat-lab">笔数</span>
+                      </div>
+                      <div className="bt-stat">
+                        <span className={`bt-stat-val ${(dcaJob.summary.totalPnlPct ?? 0) >= 0 ? "up" : "down"}`}>
+                          {dcaJob.summary.totalPnlPct == null
+                            ? "—"
+                            : `${dcaJob.summary.totalPnlPct.toFixed(1)}%`}
+                        </span>
+                        <span className="bt-stat-lab">合计(20x加总)</span>
+                      </div>
+                      <div className="bt-stat">
+                        <span className={`bt-stat-val ${(dcaJob.summary.expectancyR ?? 0) >= 0 ? "up" : "down"}`}>
+                          {dcaJob.summary.expectancyR == null
+                            ? "—"
+                            : dcaJob.summary.expectancyR.toFixed(2)}
+                        </span>
+                        <span className="bt-stat-lab">期望R</span>
+                      </div>
+                    </div>
+                    <p className="bt-rules">
+                      {dcaJob.summary.leverageHint ||
+                        "Mode C 无成交；A/B 合计口径与 NLV 一致（价格涨跌%×20 简单加总）。"}
+                    </p>
+                  </>
+                ) : null}
+                {dcaJob.result?.confluenceStats ? (
+                  <p className="bt-rules">
+                    计分分布：
+                    {Object.entries(dcaJob.result.confluenceStats)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(" · ")}
+                  </p>
+                ) : null}
+                {dcaJob.byKind ? (
+                  <div className="bt-interval-grid" style={{ marginTop: 10 }}>
+                    {Object.entries(dcaJob.byKind).map(([kid, row]) => (
+                      <div key={kid} className="bt-interval-card">
+                        <div className="bt-interval-head">{row.type_label || kid}</div>
                         <div className="bt-interval-stats">
                           <div className="bt-stat">
                             <span className="bt-stat-val">{row.count ?? 0}</span>

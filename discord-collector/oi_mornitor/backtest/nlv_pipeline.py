@@ -42,6 +42,7 @@ from oi_mornitor.mcap_tier import (
 from oi_mornitor.pattern_entry import resolve_backtest_entry_price
 from oi_mornitor.pattern_settle import settle_signal_by_5m_bars
 from oi_mornitor.pattern_settle_profile import SettlePlan, resolve_verify_delay_ms
+from oi_mornitor.backtest.regime_tips import tip_for, tips_payload
 from oi_mornitor.range_extreme_volume import (
     LOOKBACK,
     MA_VOL,
@@ -832,6 +833,8 @@ def nlv_options() -> dict[str, Any]:
 "mcapTiers": tier_catalog_for_api(),
         "klinesRoot": str(root),
         "outDir": str(_OUT_DIR),
+        "regimeTip": tip_for("nlv"),
+        "regimeTips": tips_payload("nlv"),
     }
 
 

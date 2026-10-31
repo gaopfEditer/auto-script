@@ -1,5 +1,9 @@
 """回测模块。"""
 from oi_mornitor.backtest.engine import BacktestResult, run_pullback_backtest
+from oi_mornitor.backtest.dca_pipeline import (
+    DcaPipelineResult,
+    run_dca_pipeline,
+)
 from oi_mornitor.backtest.nlv_pipeline import (
     NLV_BT_LEVERAGE,
     NLV_BT_SL_PCT,
@@ -48,5 +52,7 @@ __all__ = [
     "NLV_BT_SL_PCT",
     "NlvPipelineResult",
     "run_nlv_pipeline",
+    "DcaPipelineResult",
+    "run_dca_pipeline",
     "track_defaults",
 ]
