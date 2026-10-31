@@ -576,6 +576,20 @@ def _scan_symbol_interval(
                 close_ts_sec=bar_close_sec,
                 close_ms=close_time_ms,
             )
+        try:
+            from oi_mornitor.td_sequential import attach_td_setup
+
+            closes = [float(x) for x in df["close"].iloc[: bar_index + 1].tolist()]
+            attach_td_setup(alert, closes)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from oi_mornitor.range_extreme_volume import attach_range_extreme_volume
+
+            sub = df.iloc[: bar_index + 1]
+            attach_range_extreme_volume(alert, df=sub)
+        except Exception:  # noqa: BLE001
+            pass
         next_open: float | None = None
         if bar_index + 1 < len(df):
             try:
@@ -646,6 +660,14 @@ def _scan_symbol_interval(
             "tp1Price": settled.get("tp1Price") or (plan.tp1_price if plan else None),
             "error": settled.get("error"),
         }
+        if alert.get("tdSetup") is not None:
+            row["tdSetup"] = alert.get("tdSetup")
+            if alert.get("tdLabel"):
+                row["tdLabel"] = alert.get("tdLabel")
+        if alert.get("revVolSignal") is not None:
+            row["revVolSignal"] = alert.get("revVolSignal")
+            if alert.get("revVolLabel"):
+                row["revVolLabel"] = alert.get("revVolLabel")
         if extra:
             row.update(extra)
         hits.append(row)

@@ -1137,6 +1137,20 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
             rec["confluence"] = conf
         if isinstance(alert.get("capitalFlow"), dict):
             rec["capitalFlow"] = alert.get("capitalFlow")
+        if alert.get("tdSetup") is not None:
+            try:
+                rec["tdSetup"] = int(alert.get("tdSetup"))
+            except (TypeError, ValueError):
+                pass
+            if alert.get("tdLabel"):
+                rec["tdLabel"] = str(alert.get("tdLabel"))
+        if alert.get("revVolSignal") is not None:
+            try:
+                rec["revVolSignal"] = int(alert.get("revVolSignal"))
+            except (TypeError, ValueError):
+                pass
+            if alert.get("revVolLabel"):
+                rec["revVolLabel"] = str(alert.get("revVolLabel"))
         if alert.get("vp_exit_plan"):
             rec["vp_exit_plan"] = alert.get("vp_exit_plan")
         from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms

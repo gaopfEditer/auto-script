@@ -72,8 +72,25 @@ def passes_push_mtf_gate(
     *,
     min_tiers: int | None = None,
 ) -> bool:
-    """OI_PATTERN_PUSH_MTF_MIN：共振周期数不足则不入库、不推 TG。"""
-    need = int(min_tiers if min_tiers is not None else OI_PATTERN_PUSH_MTF_MIN)
+    """OI_PATTERN_PUSH_MTF_MIN：共振周期数不足则不入库、不推 TG。
+
+    Sequoia 卡片可通过 alert['_sequoia_mtf_min'] 或 type=sequoia_card
+    使用 OI_SEQUOIA_MTF_MIN（默认 1），便于单周期回测入库。
+    """
+    if min_tiers is not None:
+        need = int(min_tiers)
+    else:
+        need = int(OI_PATTERN_PUSH_MTF_MIN)
+        if isinstance(alert, dict):
+            typ = str(alert.get("type") or "").strip().lower()
+            if typ == "sequoia_card" or alert.get("_sequoia_mtf_min") is not None:
+                try:
+                    from oi_mornitor.strategy_sequoia.config import SEQUOIA_MTF_MIN
+
+                    override = alert.get("_sequoia_mtf_min")
+                    need = int(override if override is not None else SEQUOIA_MTF_MIN)
+                except Exception:  # noqa: BLE001
+                    need = 1
     if need <= 1:
         return True
     return mtf_tier_count_for_alert(alert, peers) >= need

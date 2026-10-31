@@ -82,6 +82,7 @@ from oi_mornitor.notify_telegram import (
     send_ma144_main_card_telegram_async,
     send_main_card_telegram_async,
     send_pattern_oi_telegram_async,
+    send_rev_vol_card_telegram_async,
     send_structure_card_telegram_async,
 )
 from oi_mornitor.tv_alert_sync import symbols_on_n_boards
@@ -1335,7 +1336,9 @@ class PatternMonitorEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态+OI 短线扫描失败: %s", exc)
 
-        if is_candle_push_enabled() or is_structure_push_enabled():
+        from oi_mornitor.config import REV_VOL_CARD_TELEGRAM as _REV_VOL_SCAN
+
+        if is_candle_push_enabled() or is_structure_push_enabled() or _REV_VOL_SCAN:
             try:
                 card_alerts = await asyncio.wait_for(
                     self._scan_candle_pattern_cards(
@@ -1500,6 +1503,49 @@ class PatternMonitorEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态 ticker 落盘失败: %s", exc)
 
+        # Sequoia-X 风格策略（默认 OI_SEQUOIA_SCAN_ENABLED=0；不碰 KOL/OI DISABLED）
+        try:
+            from oi_mornitor.strategy_sequoia.config import (
+                SEQUOIA_TELEGRAM,
+                is_sequoia_scan_enabled,
+            )
+
+            if is_sequoia_scan_enabled():
+                from oi_mornitor.pattern_alert_ticker import record_ticker_from_alerts
+                from oi_mornitor.strategy_sequoia.bridge import record_sequoia_alert
+                from oi_mornitor.strategy_sequoia.scan import scan_sequoia_ticker_alerts
+
+                sq_alerts = scan_sequoia_ticker_alerts(
+                    {"15m": klines_map or {}},
+                    scan_ts=self._last_scan_ts,
+                )
+                if sq_alerts:
+                    n_sq_tick = record_ticker_from_alerts(sq_alerts)
+                    n_sq_stats = sum(1 for sa in sq_alerts if record_sequoia_alert(sa))
+                    if SEQUOIA_TELEGRAM:
+                        try:
+                            from oi_mornitor.notify_telegram import (
+                                send_volume_price_card_telegram_async,
+                            )
+
+                            for sa in sq_alerts:
+                                try:
+                                    await send_volume_price_card_telegram_async(sa)
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.debug("sequoia tg skip: %s", exc)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("sequoia telegram 不可用: %s", exc)
+                    if n_sq_tick or n_sq_stats:
+                        logger.info(
+                            "Sequoia 扫描 ticker=%d 胜率入库=%d（信号=%d）",
+                            n_sq_tick,
+                            n_sq_stats,
+                            len(sq_alerts),
+                        )
+                    self._last_alerts = sq_alerts + list(self._last_alerts or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Sequoia 扫描失败: %s", exc)
+
         return alerts
 
     async def _scan_candle_oi_combos(
@@ -1611,10 +1657,14 @@ class PatternMonitorEngine:
         now = time.time()
         now_ms = int(now * 1000)
         sem = asyncio.Semaphore(max(4, min(OI_OI_BATCH_CONCURRENCY, 10)))
+        from oi_mornitor.config import REV_VOL_CARD_TELEGRAM
+
+        _need_rev = bool(REV_VOL_CARD_TELEGRAM)
         fetch_limit = min(
             max(
                 STRUCTURE_KLINE_LIMIT if is_structure_push_enabled() else 120,
                 PATTERN_KLINE_LIMIT,
+                130 if _need_rev else 0,
             ),
             PATTERN_CHART_MAX_LIMIT,
         )
@@ -1739,6 +1789,18 @@ class PatternMonitorEngine:
                     "scan_ts": scan_ts,
                     "kline_close_time": close_ts * 1000,
                 }
+                try:
+                    from oi_mornitor.td_sequential import attach_td_setup
+
+                    attach_td_setup(alert, df=df)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    from oi_mornitor.range_extreme_volume import attach_range_extreme_volume
+
+                    attach_range_extreme_volume(alert, df=df)
+                except Exception:  # noqa: BLE001
+                    pass
                 from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
 
                 if not passes_push_mtf_gate(alert):
@@ -1846,6 +1908,18 @@ class PatternMonitorEngine:
                     "scan_ts": scan_ts,
                     "kline_close_time": close_ts * 1000,
                 }
+                try:
+                    from oi_mornitor.td_sequential import attach_td_setup
+
+                    attach_td_setup(alert, df=work)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    from oi_mornitor.range_extreme_volume import attach_range_extreme_volume
+
+                    attach_range_extreme_volume(alert, df=work)
+                except Exception:  # noqa: BLE001
+                    pass
                 from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
 
                 if not passes_push_mtf_gate(alert):
@@ -1861,13 +1935,101 @@ class PatternMonitorEngine:
                     self._card_last_emit[f"struct:{sym}:{iv}:{side}"] = close_ts
             return out
 
+
+        async def _emit_rev_vol(
+            sym: str, iv: str, df: Any, closed_ts: int
+        ) -> list[dict[str, Any]]:
+            """新高/新低末端+放量 → 形态群 + MAIN（已收盘K）。"""
+            from oi_mornitor.config import REV_VOL_CARD_TELEGRAM
+
+            if not REV_VOL_CARD_TELEGRAM:
+                return []
+            if is_disabled_pattern_interval(iv):
+                return []
+            if df is None or getattr(df, "empty", True) or len(df) < 130:
+                return []
+            try:
+                from oi_mornitor.range_extreme_volume import find_last_closed_rev_vol_hit
+
+                hit = find_last_closed_rev_vol_hit(df, now_ms=now_ms)
+            except Exception:  # noqa: BLE001
+                return []
+            if not hit:
+                return []
+            close_ts = int(hit.get("time") or 0)
+            if close_ts and closed_ts and close_ts != int(closed_ts):
+                # 仅当前已收盘柱
+                return []
+            kind = str(hit.get("kind") or "rev_vol")
+            dedupe = f"{sym.upper()}:{iv}:revvol:{kind}:{close_ts}"
+            if self._card_push_claimed(dedupe):
+                return []
+            side = str(hit.get("side") or "")
+            if side in ("bull", "bear") and self._card_emit_throttled(sym, iv, side, close_ts):
+                return []
+            type_label = str(hit.get("type_label") or kind)
+            alert = {
+                "symbol": sym,
+                "type": "rev_vol_card",
+                "interval": iv,
+                "status": "REV_VOL_CARD",
+                "status_label": f"末端放量 · {type_label}",
+                "signal_kind": kind,
+                "kind": kind,
+                "side": side,
+                "type_label": type_label,
+                "pattern_label": type_label,
+                "signal_text": type_label,
+                "revVolSignal": int(hit.get("revVolSignal") or 0),
+                "revVolLabel": str(hit.get("revVolLabel") or type_label),
+                "vol_ratio": hit.get("vol_ratio"),
+                "card_vol_ok": True,
+                "main_mirror_vol_ok": True,
+                "price": float(hit.get("close") or hit.get("price") or 0),
+                "close": float(hit.get("close") or 0),
+                "high": float(hit.get("high") or 0),
+                "low": float(hit.get("low") or 0),
+                "open": float(hit.get("open") or 0),
+                "kline_open_time": close_ts,
+                "time": close_ts,
+                "message": f"{type_label} · {iv}",
+                "scan_ts": scan_ts,
+                "kline_close_time": close_ts * 1000,
+            }
+            try:
+                from oi_mornitor.td_sequential import attach_td_setup
+
+                attach_td_setup(alert, df=df)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                from oi_mornitor.range_extreme_volume import attach_range_extreme_volume
+
+                attach_range_extreme_volume(alert, df=df)
+            except Exception:  # noqa: BLE001
+                pass
+            out = [alert]
+            logger.info("📩 末端放量卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
+            try:
+                ok = await send_rev_vol_card_telegram_async(alert)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Telegram 末端放量失败 %s: %s", sym, exc)
+                ok = False
+            if ok and side in ("bull", "bear"):
+                self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
+            return out
+
         async def _one(
             sym: str, iv: str, is_major: bool, pool_role: str = "all"
         ) -> list[dict[str, Any]]:
             if is_disabled_pattern_interval(iv):
                 return []
             klines = await _klines_for(sym, iv)
+            from oi_mornitor.config import REV_VOL_CARD_TELEGRAM as _REV_MIN
+
             min_bars = 80 if is_structure_push_enabled() else 30
+            if _REV_MIN:
+                min_bars = max(min_bars, 130)
             if not klines or len(klines) < min_bars:
                 return []
             try:
@@ -1907,6 +2069,10 @@ class PatternMonitorEngine:
                 )
             if is_structure_push_enabled() and pool_role != "main_equity":
                 out.extend(await _emit_structure(sym, iv, df))
+            from oi_mornitor.config import REV_VOL_CARD_TELEGRAM as _REV_VOL_ON
+
+            if _REV_VOL_ON:
+                out.extend(await _emit_rev_vol(sym, iv, df, closed_ts))
             return out
 
         results = await asyncio.gather(

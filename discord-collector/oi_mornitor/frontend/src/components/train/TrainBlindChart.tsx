@@ -20,6 +20,8 @@ import {
   STRUCTURE_LINE_KINDS,
   STRUCTURE_MARKER_KINDS,
   type ChartEmaKey,
+  TD9_MARKER_KINDS,
+  REV_VOL_MARKER_KINDS,
   type ChartLayers,
 } from "../../utils/chartLayers";
 import { buildMacdCrossMarkers } from "../../utils/chartMacdMarkers";
@@ -29,6 +31,11 @@ import {
   assertVisiblePriceWindow,
   prepareTrainCandlesForChart,
 } from "../../train/candleSanitize";
+import {
+  clearViewportHlLines,
+  syncViewportHlPriceLines,
+  type ViewportHlLinePair,
+} from "../../utils/viewportHl";
 
 const VEGAS_SERIES: { key: VegasKey; color: string }[] = [
   { key: "filter", color: "rgba(0, 230, 118, 0.85)" },
@@ -132,6 +139,8 @@ function toCandleMarkers(
   return markers
     .filter((m) => {
       const kind = m.kind ?? "";
+      if (TD9_MARKER_KINDS.has(kind)) return layers.td9 && candleTimes.has(m.time);
+      if (REV_VOL_MARKER_KINDS.has(kind)) return layers.revVol && candleTimes.has(m.time);
       if (!layers.candlePattern && COMPACT_MARKER_KINDS.has(kind)) return false;
       if (!layers.structure && STRUCTURE_MARKER_KINDS.has(kind)) return false;
       return candleTimes.has(m.time);
@@ -192,6 +201,7 @@ export const TrainBlindChart = memo(function TrainBlindChart({
   const macdLineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<ReturnType<ISeriesApi<"Candlestick">["createPriceLine"]>[]>([]);
+  const viewportHlLinesRef = useRef<ViewportHlLinePair>({ high: null, low: null });
   const builtRef = useRef<ReturnType<typeof buildChartFromCandles> | null>(null);
   const layersRef = useRef(layers);
   layersRef.current = layers;
@@ -382,6 +392,19 @@ export const TrainBlindChart = memo(function TrainBlindChart({
     };
     chart.subscribeCrosshairMove(onCrosshairMove);
 
+    const refreshViewportHl = () => {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      const bars = visibleForScaleRef.current.map((c) => ({ high: c.h, low: c.l }));
+      syncViewportHlPriceLines(
+        candleRef.current,
+        viewportHlLinesRef.current,
+        bars,
+        range,
+        layersRef.current.viewportHl,
+      );
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(refreshViewportHl);
+
     const ro = new ResizeObserver(() => {
       if (canvasRef.current && chartRef.current) {
         chartRef.current.applyOptions({
@@ -393,8 +416,10 @@ export const TrainBlindChart = memo(function TrainBlindChart({
     if (outer) ro.observe(outer);
 
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(refreshViewportHl);
       chart.unsubscribeCrosshairMove(onCrosshairMove);
       ro.disconnect();
+      clearViewportHlLines(null, viewportHlLinesRef.current);
       chart.remove();
       chartRef.current = null;
       candleRef.current = null;
@@ -433,6 +458,15 @@ export const TrainBlindChart = memo(function TrainBlindChart({
       candle.setMarkers(toCandleMarkers(builtRef.current.markers, next, times));
     }
     if (chartRef.current) applyPaneMargins(chartRef.current, next);
+    const range = chartRef.current?.timeScale().getVisibleLogicalRange();
+    const bars = visibleForScaleRef.current.map((c) => ({ high: c.h, low: c.l }));
+    syncViewportHlPriceLines(
+      candleRef.current,
+      viewportHlLinesRef.current,
+      bars,
+      range,
+      next.viewportHl,
+    );
   };
 
   useEffect(() => {
@@ -597,6 +631,17 @@ export const TrainBlindChart = memo(function TrainBlindChart({
       const from = Math.max(0, visible.length - Math.min(visible.length, 220));
       ts.setVisibleLogicalRange({ from, to: visible.length + 1 });
     }
+    requestAnimationFrame(() => {
+      const range = chartRef.current?.timeScale().getVisibleLogicalRange();
+      const bars = visibleForScaleRef.current.map((c) => ({ high: c.h, low: c.l }));
+      syncViewportHlPriceLines(
+        candleRef.current,
+        viewportHlLinesRef.current,
+        bars,
+        range,
+        layersRef.current.viewportHl,
+      );
+    });
   }, [visible, trades, sliceEnd, revealAll, showTrades, layers, highlightTradeId]);
 
   useEffect(() => {

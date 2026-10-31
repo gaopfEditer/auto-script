@@ -41,6 +41,7 @@ import {
   CHART_REFRESH_TAIL,
   CHART_TIMEFRAMES,
   CHART_VISIBLE_BARS,
+  chartBarDurationMs,
   chartLimitForSignalTime,
   coerceChartTimeframe,
   type ChartTimeframe,
@@ -56,6 +57,8 @@ import {
   CHART_EMA_LINES,
   DEFAULT_CHART_LAYERS,
   TRAIN_CHART_LAYER_TOGGLES,
+  TD9_MARKER_KINDS,
+  REV_VOL_MARKER_KINDS,
   type ChartEmaKey,
 } from "../utils/chartLayers";
 import { chartLocalization, chartTimeScaleOptions, formatCandleLocalTime } from "../utils/chartLocale";
@@ -85,6 +88,11 @@ import {
   VOLUME_MA_PERIOD,
   volumeLiveUpdate,
 } from "../utils/chartMaSeries";
+import {
+  clearViewportHlLines,
+  syncViewportHlPriceLines,
+  type ViewportHlLinePair,
+} from "../utils/viewportHl";
 
 /** 仅当左缘已贴到数据起点附近（几乎要露空白）才预取；真正空白是 from < 0 */
 const LEFT_HISTORY_PAD = 24;
@@ -226,6 +234,10 @@ const MARKER_LEGEND = [
   { kind: "continuous_upper_wick", label: "连续上插针", color: "#9c27b0" },
   { kind: "continuous_lower_wick", label: "连续下插针", color: "#9c27b0" },
   { kind: "oi_anomaly", label: "OI异动（无形态）", color: "#ff9800" },
+  { kind: "td9_overbought", label: "TD9 超买", color: "#ff6f00" },
+  { kind: "td9_oversold", label: "TD9 超卖", color: "#c6ff00" },
+  { kind: "rev_vol_buy", label: "新低末端放量买", color: "#69f0ae" },
+  { kind: "rev_vol_sell", label: "新高末端放量卖", color: "#ea80fc" },
   { kind: "alert_entry_focus", label: "形态信号入场", color: "#b8ff3c" },
 ];
 
@@ -246,6 +258,10 @@ const COMPACT_MARKER_KINDS = new Set([
   "continuous_non_upper_wick",
   "continuous_non_lower_wick",
   "oi_anomaly",
+  "td9_overbought",
+  "td9_oversold",
+  "rev_vol_buy",
+  "rev_vol_sell",
 ]);
 const COMPACT_MARKER_SIZE = 0.5;
 /** 图表全局字号 = LWC 默认 12 × 60% */
@@ -289,11 +305,12 @@ function alignMarkerTime(
 function rebuildChartMarkers(
   candles: PatternCandle[],
   state: PatternState | undefined,
+  barDurationMs?: number,
 ): PatternChartData["markers"] {
   const built = buildChartFromCandles(
     candles,
     state as unknown as Record<string, unknown> | undefined,
-    {},
+    { barDurationMs },
   );
   return built.markers;
 }
@@ -303,6 +320,8 @@ function toCandleMarkers(
   showCandlePattern: boolean,
   showStructure: boolean,
   candles?: PatternCandle[],
+  showTd9: boolean = true,
+  showRevVol: boolean = true,
 ): SeriesMarker<UTCTimestamp>[] {
   const candleTimes = (candles ?? []).map((c) => c.time).sort((a, b) => a - b);
   const candleTimeSet = new Set(candleTimes);
@@ -310,6 +329,8 @@ function toCandleMarkers(
   return [...(markers ?? [])]
     .filter((m) => {
       const kind = m.kind ?? "";
+      if (TD9_MARKER_KINDS.has(kind)) return showTd9;
+      if (REV_VOL_MARKER_KINDS.has(kind)) return showRevVol;
       if (!showCandlePattern && COMPACT_MARKER_KINDS.has(kind)) return false;
       if (!showStructure && STRUCTURE_MARKER_KINDS.has(kind)) return false;
       return true;
@@ -554,6 +575,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const emaRefs = useRef<Partial<Record<ChartEmaKey, ISeriesApi<"Line">>>>({});
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const alertEntryLineRef = useRef<IPriceLine | null>(null);
+  /** 视口最高/最低价线（独立于结构价线，不被 clearPriceLines 清掉） */
+  const viewportHlLinesRef = useRef<ViewportHlLinePair>({ high: null, low: null });
   const alertEntryMarkersRef = useRef<NonNullable<PatternChartData["markers"]>>([]);
   const pendingFocusScrollRef = useRef(false);
   const focusScrollKeyRef = useRef("");
@@ -608,6 +631,19 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       series.removePriceLine(line);
     }
     priceLinesRef.current = [];
+  }, []);
+
+  const refreshViewportHl = useCallback(() => {
+    const chart = chartApi.current;
+    const series = seriesRef.current;
+    const range = chart?.timeScale().getVisibleLogicalRange() ?? null;
+    syncViewportHlPriceLines(
+      series,
+      viewportHlLinesRef.current,
+      candlesRef.current,
+      range,
+      layersRef.current.viewportHl,
+    );
   }, []);
 
   const applyPriceAxisFormat = useCallback(
@@ -742,14 +778,25 @@ export const PatternChartPanel = memo(function PatternChartPanel({
 
         const showPattern = layersRef.current.candlePattern;
         const showStructure = layersRef.current.structure;
+        const showTd9 = layersRef.current.td9;
+        const showRevVol = layersRef.current.revVol;
+        const barMs = chartBarDurationMs(timeframe);
         const rebuilt = [
           ...rebuildChartMarkers(
             sortedCandles,
             (metaRef.current?.state || payload.state) as PatternState | undefined,
+            barMs,
           ),
           ...alertEntryMarkersRef.current,
         ];
-        const markers = toCandleMarkers(rebuilt, showPattern, showStructure, sortedCandles);
+        const markers = toCandleMarkers(
+          rebuilt,
+          showPattern,
+          showStructure,
+          sortedCandles,
+          showTd9,
+          showRevVol,
+        );
         if (markers.length) {
           series.setMarkers(markers);
         } else {
@@ -880,11 +927,13 @@ export const PatternChartPanel = memo(function PatternChartPanel({
             restoreLogicalRange(chart, { from, to: to + 2 }, suppressHistoryLoadRef);
           }
         }
+        // setData / 恢复视口后下一帧再标，避免 range 尚未落地
+        requestAnimationFrame(() => refreshViewportHl());
       } catch (e) {
         setErr(e instanceof Error ? e.message : "图表渲染失败");
       }
     },
-    [symbol, applyPriceLines, applyAlertEntryPriceLine, applyPriceAxisFormat, applyMacdAxisFormat],
+    [symbol, applyPriceLines, applyAlertEntryPriceLine, applyPriceAxisFormat, applyMacdAxisFormat, refreshViewportHl],
   );
 
   const loadMoreHistoryRef = useRef<() => Promise<void>>(async () => {});
@@ -1066,10 +1115,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         const from = Math.max(0, to - CHART_VISIBLE_BARS);
         chart.timeScale().setVisibleLogicalRange({ from, to });
       }
+      // 未收盘 K 在视口内时高低会变，同步刷新
+      refreshViewportHl();
     } catch {
       /* 静默 */
     }
-  }, []);
+  }, [refreshViewportHl]);
 
   const applyLayerVisibility = useCallback((next: ChartLayers) => {
     const chart = chartApi.current;
@@ -1105,6 +1156,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           next.candlePattern,
           next.structure,
           candlesRef.current,
+          next.td9,
+          next.revVol,
         ),
       );
     }
@@ -1112,9 +1165,10 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       applyPriceLines(metaRef.current);
       applyAlertEntryPriceLine();
     }
+    refreshViewportHl();
 
     if (chart) applyPaneMargins(chart, next);
-  }, [applyPriceLines, applyAlertEntryPriceLine]);
+  }, [applyPriceLines, applyAlertEntryPriceLine, refreshViewportHl]);
 
   const toggleLayer = useCallback(
     (key: keyof ChartLayers) => {
@@ -1186,7 +1240,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       const candles = candlesRef.current;
       if (!series || !candles.length) return;
       const rebuilt = [
-        ...rebuildChartMarkers(candles, metaRef.current?.state),
+        ...rebuildChartMarkers(candles, metaRef.current?.state, chartBarDurationMs(timeframe)),
         ...markers,
       ];
       if (metaRef.current) metaRef.current = { ...metaRef.current, markers: rebuilt };
@@ -1196,6 +1250,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           layersRef.current.candlePattern,
           layersRef.current.structure,
           candles,
+          layersRef.current.td9,
+          layersRef.current.revVol,
         ),
       );
       applyAlertEntryPriceLine(candles);
@@ -1391,6 +1447,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       vegasRefs.current = {};
       emaRefs.current = {};
       priceLinesRef.current = [];
+      clearViewportHlLines(null, viewportHlLinesRef.current);
     }
 
     const el = chartRef.current;
@@ -1590,6 +1647,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       chart.subscribeCrosshairMove(onCrosshairMove);
 
       const onRange = (range: LogicalRange | null) => {
+        // 视口高低：缩放/平移时始终刷新（不受续载 suppress 影响）
+        refreshViewportHl();
         if (!range || loadingMoreRef.current) return;
         if (suppressHistoryLoadRef.current > 0) return;
         const len = candlesRef.current.length;
@@ -1687,11 +1746,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       emaRefs.current = {};
         priceLinesRef.current = [];
         alertEntryLineRef.current = null;
+        clearViewportHlLines(null, viewportHlLinesRef.current);
       };
     } catch (e) {
       setErr(e instanceof Error ? e.message : "图表初始化失败");
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, refreshViewportHl]);
 
   useEffect(() => {
     if (!data?.candles?.length || !seriesRef.current) return;
@@ -2456,7 +2516,15 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 {MARKER_LEGEND.filter(
                   (m) =>
                     activeKinds.has(m.kind) &&
-                    (layers.structure || !STRUCTURE_MARKER_KINDS.has(m.kind)),
+                    (layers.structure || !STRUCTURE_MARKER_KINDS.has(m.kind)) &&
+                    (layers.td9 || !TD9_MARKER_KINDS.has(m.kind)) &&
+                    (layers.revVol || !REV_VOL_MARKER_KINDS.has(m.kind)) &&
+                    (layers.candlePattern ||
+                      STRUCTURE_MARKER_KINDS.has(m.kind) ||
+                      TD9_MARKER_KINDS.has(m.kind) ||
+                      REV_VOL_MARKER_KINDS.has(m.kind) ||
+                      m.kind === "alert_entry_focus" ||
+                      !COMPACT_MARKER_KINDS.has(m.kind)),
                 ).map((m) => (
                   <li key={m.kind}>
                     <span className="legend-dot" style={{ background: m.color }} />

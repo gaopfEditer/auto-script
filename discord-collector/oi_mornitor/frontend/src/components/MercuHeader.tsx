@@ -25,6 +25,7 @@ interface Props {
 const NAV = [
   { to: "/", label: "雷达", end: true },
   { to: "/patterns", label: "形态", end: false },
+  { to: "/btc-backtest", label: "AI回测", end: false },
   { to: "/backtest", label: "回测", end: false },
   { to: "/train", label: "盲K训练", end: false },
 ] as const;

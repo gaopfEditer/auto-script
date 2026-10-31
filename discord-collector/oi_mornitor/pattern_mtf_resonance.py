@@ -15,6 +15,12 @@ _FAMILY_LABELS: dict[str, str] = {
     "vp_thrust": "量价推进",
     "vp_confirm": "量价确认",
     "reversal": "反转",
+    "sequoia_turtle": "海龟突破",
+    "sequoia_ma_volume": "均量金叉",
+    "sequoia_htf": "高紧旗形",
+    "sequoia_shakeout": "大阳洗盘",
+    "sequoia_uld": "趋势恐慌阴",
+    "sequoia_rps": "相对强度突破",
 }
 
 _V_PREFIX_RE = re.compile(r"^V[\+\-]?")
@@ -46,6 +52,18 @@ def mtf_resonance_family(type_label: str, side: str) -> str | None:
         return "vp_thrust"
     if "量价确认" in lab:
         return "vp_confirm"
+    # Sequoia-X 加密适配策略族（各自独立，便于同策略跨周期共振）
+    sequoia_map = (
+        ("海龟突破", "sequoia_turtle"),
+        ("均量金叉", "sequoia_ma_volume"),
+        ("高紧旗形", "sequoia_htf"),
+        ("大阳洗盘", "sequoia_shakeout"),
+        ("趋势恐慌阴", "sequoia_uld"),
+        ("相对强度突破", "sequoia_rps"),
+    )
+    for needle_s, fam in sequoia_map:
+        if needle_s in lab:
+            return fam
     reversal_needles = (
         "底部二次探底",
         "二次探底",

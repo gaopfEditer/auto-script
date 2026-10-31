@@ -381,6 +381,27 @@ WEEX 分阶段开仓默认 TP/SL 与 Bitget 共用 `BITGET_INITIAL_SL_PCT` 等�
 
 环境变量（空/非法回退默认，见 `env_parse.py`）：`OI_CONFLUENCE_PUSH_MIN_TIER`、`OI_CONFLUENCE_WEIGHTS_PATH`、`OI_CONFLUENCE_SHRINK_K`（50）、`OI_CONFLUENCE_MIN_N`（30）、`OI_CONFLUENCE_SPLIT_AT`（`2026-10-14 20:44`）。
 
+#### TD Sequential TD9（超买 / 超卖）— 共振加分，非独立自动交易
+
+- **模块**：`td_sequential.py`（DeMark Setup：收盘价相对 4 根前收盘价连续更高 → 正计数至 **+9=超买**；连续更低 → 负计数至 **-9=超卖**；|计数|封顶 9）。
+- **特征**：`feat:td9_ob` / `feat:td9_os`（默认权重各 **+0.12**）；组合 `combo:超卖·多头形态·放量`、`combo:超买·射击之星·放量`（默认各 **+0.15**）。
+- **组合口径**：超卖 + 倒锤子（等多头形态）+ 放量 → 多头加分；超买 + 射击之星 + 放量 → 空头加分。**冲突**（超买+多 / 超卖+空）**忽略 TD boost**（不加 `feat:td9_*`）。
+- **接线**：形态/结构卡片在 `pattern_monitor` 用当前 K 线收盘序列写入 `tdSetup` / `tdLabel`；胜率库与 `confluence_for_alert` 透传；列表 `/api/pattern-alert-stats` 的 `confluence` 会吃到这些特征。
+- **自检**：`python -m oi_mornitor.td_sequential --self-check`；单测 `tests/test_td_sequential.py`。
+- **UI 名**：超买 / 超卖；蜡烛形态中文统一为 **倒锤子**（勿写「倒垂子」）。
+
+#### 区间极值末端放量（新低/新高末端 + 放量）— 共振加分，非独立自动交易
+
+- **模块**：`range_extreme_volume.py`（AICoin 口径：50 根 hhv/llv、`len>SMA(len,50)`、近 5 根 newLowEnd/newHighEnd、`volume>SMA(vol,120)` 且 |degree|≥0.2；信号冷却前 1..4 根）。
+- **字段**：`revVolSignal`（+1 / -1 / 0）、`revVolLabel`（「新低末端放量买」/「新高末端放量卖」）。
+- **特征**：`feat:rev_nl_buy` / `feat:rev_nh_sell`（默认各 **+0.12**）；组合 `combo:新低放量·倒锤子`、`combo:新高放量·射击之星`（各 **+0.12**）；三重 `combo:新低放量·超卖·倒锤子`、`combo:新高放量·超买·射星`（各 **+0.15**）。
+- **组合口径**：买信号 + 倒锤子（等多头）→ 多头加分；卖信号 + 射击之星 → 空头加分；再叠 TD9 同向则三重加分。**冲突**（卖+多 / 买+空）**忽略本特征 boost**。
+- **接线**：与 TD9 同路径——`pattern_monitor` / `equity_pattern` / `structure_backtest` 用当前 K 线 OHLCV 写入；胜率库与 `confluence_for_alert` 透传。
+- **自检**：`python -m oi_mornitor.range_extreme_volume --self-check`；单测 `tests/test_range_extreme_volume.py`。
+- **TG 推送**：`OI_REV_VOL_CARD_TELEGRAM`（默认开）在已收盘 K 上把 NLV 推到 `OI_CANDLE_CARD_TELEGRAM_CHAT_ID`，并按 MAIN 白名单镜像到 `MAIN_CARD_TELEGRAM_CHAT_ID`；独立于射击之星开关；**不**开 OI 热门推送。
+- **不做**：不接 enterLong/enterShort；OI webhook 保持关闭。
+
+
 ### 10.0.1 数据流
 
 ```
@@ -568,3 +589,12 @@ TG **交易卡**同时可能：① 登记胜率库（有 entry 时）；② 推�
 | 关闭 | `OI_EQUITY_ENABLED=0` 时行为与加币股前一致 |
 
 关键文件：`equity_pool.py` · `equity_pattern.py` · `radar._equity_loop` · `pattern_alert_stats.record_equity_alert_from_scan`。
+
+---
+
+## 13. Sequoia 策略旁路（默认关扫描）
+
+与蜡烛/结构/量价并行的选币策略组（海龟突破、均量金叉、高紧旗形、大阳洗盘、趋势恐慌阴、相对强度突破）。  
+实现：`strategy_sequoia/`；开关：`OI_SEQUOIA_SCAN_ENABLED`（默认 0）。  
+胜率走同一套 `pattern_alert_stats` + `pattern_settle`；细节与回测命令见 [sequoia-strategies.md](./sequoia-strategies.md)。
+

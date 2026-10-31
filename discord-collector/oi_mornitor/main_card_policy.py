@@ -17,6 +17,8 @@ from oi_mornitor.signal_policy import is_blocked_ticker_alert, normalize_type_la
 _MAIN_CANDLE_TYPE_PREFIXES: tuple[str, ...] = (
     "射击之星",
     "倒锤子",
+    "新低末端放量",
+    "新高末端放量",
 )
 
 _MAIN_SYMBOLS: frozenset[str] | None = None
@@ -116,7 +118,7 @@ def _matches_main_type(label: str) -> bool:
 def is_main_pattern_card(alert: dict[str, Any]) -> bool:
     """蜡烛 / 结构形态卡片（非量价 ticker）。"""
     t = str(alert.get("type") or "")
-    return t in ("candle_pattern_card", "structure_pattern_card")
+    return t in ("candle_pattern_card", "structure_pattern_card", "rev_vol_card")
 
 
 def is_volume_price_card(alert: dict[str, Any]) -> bool:
@@ -132,12 +134,13 @@ def is_volume_price_card(alert: dict[str, Any]) -> bool:
 
 
 def is_main_card_mirror_eligible(alert: dict[str, Any]) -> bool:
-    """MAIN 镜像：白名单币 + 分档周期；仅射击之星/倒锤子蜡烛卡片。"""
+    """MAIN 镜像：白名单币 + 分档周期；射击之星/倒锤子/NLV 末端放量。"""
     if not isinstance(alert, dict):
         return False
     if is_volume_price_card(alert):
         return False
-    if str(alert.get("type") or "") != "candle_pattern_card":
+    typ = str(alert.get("type") or "")
+    if typ not in ("candle_pattern_card", "rev_vol_card"):
         return False
     sym = str(alert.get("symbol") or "")
     if not is_main_card_symbol(sym):

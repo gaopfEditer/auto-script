@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import { CHART_EMA_LINES, type ChartEmaKey } from "./chartLayers";
 import { buildCandleSignalMarkers } from "./candleSignals";
+import { buildConfluenceChartMarkers } from "./confluenceChartMarkers";
 import { evaluateSweepMomentum } from "./sweepMomentum";
 
 const BB_LEN = 20;
@@ -71,7 +72,7 @@ function isPivotExtreme(
 export function buildChartFromCandles(
   candles: PatternCandle[],
   state?: Record<string, unknown> | null,
-  opts?: { oiByTime?: Map<number, number>; symbol?: string },
+  opts?: { oiByTime?: Map<number, number>; symbol?: string; barDurationMs?: number },
 ): {
   bb: { upper: Pt[]; mid: Pt[]; lower: Pt[] };
   vegas: Record<"filter" | "a1" | "a2" | "b1" | "b2", Pt[]>;
@@ -240,6 +241,9 @@ export function buildChartFromCandles(
       oiByTime: opts?.oiByTime,
     }),
   );
+  markers.push(
+    ...buildConfluenceChartMarkers(candles, { barDurationMs: opts?.barDurationMs }),
+  );
 
   const price_lines: PatternPriceLine[] = [];
   const lineSpecs: { kind: string; price: number; color: string; title: string }[] = [
@@ -284,7 +288,7 @@ export function buildChartFromCandles(
 export function buildChartIndicatorSeries(
   candles: PatternCandle[],
   state?: Record<string, unknown> | null,
-  opts?: { symbol?: string; oiByTime?: Map<number, number> },
+  opts?: { symbol?: string; oiByTime?: Map<number, number>; barDurationMs?: number },
 ): Pick<
   ReturnType<typeof buildChartFromCandles>,
   "bb" | "vegas" | "ema" | "macd"

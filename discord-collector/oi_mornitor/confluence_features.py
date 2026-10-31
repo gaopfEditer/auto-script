@@ -55,6 +55,16 @@ FEATURE_DISPLAY: dict[str, str] = {
     "feat:cf_liq_reclaim": "清算回收",
     "feat:cf_oi_rebuild_align": "OI重建同向",
     "feat:cf_oi_rebuild_penalty": "OI重建逆向",
+    "feat:td9_ob": "超买",
+    "feat:td9_os": "超卖",
+    "combo:超卖·多头形态·放量": "超卖倒锤放量",
+    "combo:超买·射击之星·放量": "超买射星放量",
+    "feat:rev_nl_buy": "新低放量买",
+    "feat:rev_nh_sell": "新高放量卖",
+    "combo:新低放量·倒锤子": "新低放量倒锤",
+    "combo:新高放量·射击之星": "新高放量射星",
+    "combo:新低放量·超卖·倒锤子": "新低超卖倒锤",
+    "combo:新高放量·超买·射星": "新高超买射星",
 }
 
 
@@ -124,8 +134,40 @@ def _kol_tier(rec: dict[str, Any]) -> str | None:
     return None
 
 
+def _td_setup_value(rec: dict[str, Any]) -> int | None:
+    """读 alert/胜率记录上的 TD Setup（±1..±9）；缺失则 None。"""
+    for k in ("tdSetup", "td_setup", "td9"):
+        if k not in rec or rec.get(k) is None:
+            continue
+        try:
+            return int(rec.get(k))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _rev_vol_signal_value(rec: dict[str, Any]) -> int | None:
+    """读区间极值末端放量信号（+1 买 / -1 卖）；缺失则 None。"""
+    for k in ("revVolSignal", "rev_vol_signal", "rangeExtremeSignal"):
+        if k not in rec or rec.get(k) is None:
+            continue
+        try:
+            return int(rec.get(k))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def derive_combos(rec: dict[str, Any], fam: str | None, mtf_n: int, iv: str, side: str) -> list[str]:
-    """命名组合（结构/蜡烛共振分开）。"""
+    """命名组合（结构/蜡烛共振分开）。
+
+    TD9 / 新高新低末端放量 组合规则（评分用，非自动开平仓）：
+    - 超卖(td==-9) + 多头形态(倒锤子族/看涨) + 放量 → 多头共振加分
+    - 超买(td==9) + 射击之星 + 放量 → 空头共振加分
+    - 新低末端放量买(+1) + 倒锤子 → 多头加分；再叠超卖 → 三重组合
+    - 新高末端放量卖(-1) + 射击之星 → 空头加分；再叠超买 → 三重组合
+    - 冲突（卖信号+多 / 买信号+空；超买+多 / 超卖+空）不产生对应组合；特征层忽略 boost
+    """
     combos: list[str] = []
     sym = str(rec.get("tradeSymbol") or rec.get("symbol") or "")
     if is_main_card_symbol(sym):
@@ -153,6 +195,32 @@ def derive_combos(rec: dict[str, Any], fam: str | None, mtf_n: int, iv: str, sid
         combos.append("量价推进·空")
     if fam == "vp_confirm" and iv == "15m" and mtf_n < 2:
         combos.append("单周期15m量价确认封顶")
+
+    td = _td_setup_value(rec)
+    vb = _vol_ratio_bucket(rec)
+    vol_high = vb == "high"
+    bullish_fam = fam in ("inverted_hammer",) or (
+        side == "long" and fam in ("vp_confirm", "vp_thrust", "reversal")
+    )
+    # 更贴用户口径：倒锤子 / 看涨吞没类 label
+    lab = normalize_type_label(str(rec.get("typeLabel") or rec.get("type_label") or ""))
+    if "倒锤子" in lab or "看涨吞没" in lab or ("吞没" in lab and side == "long"):
+        bullish_fam = True
+    if td == -9 and side == "long" and bullish_fam and vol_high:
+        combos.append("超卖·多头形态·放量")
+    if td == 9 and side == "short" and (fam == "shooting_star" or "射击之星" in lab) and vol_high:
+        combos.append("超买·射击之星·放量")
+
+    rev = _rev_vol_signal_value(rec)
+    bearish_star = fam == "shooting_star" or "射击之星" in lab
+    if rev == 1 and side == "long" and bullish_fam:
+        combos.append("新低放量·倒锤子")
+        if td == -9:
+            combos.append("新低放量·超卖·倒锤子")
+    if rev == -1 and side == "short" and bearish_star:
+        combos.append("新高放量·射击之星")
+        if td == 9:
+            combos.append("新高放量·超买·射星")
     return combos
 
 
@@ -211,6 +279,20 @@ def extract_confluence_features(rec: dict[str, Any]) -> set[str]:
 
         side_s = side or _side(rec)
         feats.update(confluence_feature_keys(cf, side_s))
+
+    # TD9：方向一致才计入 feat（冲突则忽略 boost，不单独惩罚）
+    td = _td_setup_value(rec)
+    if td == 9 and side != "long":
+        feats.add("feat:td9_ob")
+    elif td == -9 and side != "short":
+        feats.add("feat:td9_os")
+
+    # 新高/新低末端放量：买不加空、卖不加多
+    rev = _rev_vol_signal_value(rec)
+    if rev == 1 and side != "short":
+        feats.add("feat:rev_nl_buy")
+    elif rev == -1 and side != "long":
+        feats.add("feat:rev_nh_sell")
 
     return feats
 

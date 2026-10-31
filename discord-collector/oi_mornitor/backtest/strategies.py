@@ -16,6 +16,8 @@ class RiskConfig:
     fee_pct: float = 0.04
     slippage_pct: float = 0.02
     max_bars: int = 48
+    # True: 仅固定止损 + 超时；不做成本防守/追踪（便于止损档位对比）
+    fixed_stop_only: bool = False
 
 
 @dataclass
@@ -116,35 +118,37 @@ class CostDefenseTrailingManager:
 
         if pos.side == "long":
             pos.highest = max(pos.highest, high)
-            profit_pct = (pos.highest - pos.entry_price) / pos.entry_price * 100.0
-            if not pos.breakeven_armed and profit_pct >= self.cfg.breakeven_trigger_pct:
-                pos.stop = max(
-                    pos.stop,
-                    pos.entry_price * (1 + self.cfg.breakeven_buffer_pct / 100.0),
-                )
-                pos.breakeven_armed = True
-            if not pos.trail_armed and profit_pct >= self.cfg.trail_start_pct:
-                pos.trail_armed = True
-            if pos.trail_armed:
-                trail_stop = pos.highest * (1 - self.cfg.trail_pct / 100.0)
-                pos.stop = max(pos.stop, trail_stop)
+            if not self.cfg.fixed_stop_only:
+                profit_pct = (pos.highest - pos.entry_price) / pos.entry_price * 100.0
+                if not pos.breakeven_armed and profit_pct >= self.cfg.breakeven_trigger_pct:
+                    pos.stop = max(
+                        pos.stop,
+                        pos.entry_price * (1 + self.cfg.breakeven_buffer_pct / 100.0),
+                    )
+                    pos.breakeven_armed = True
+                if not pos.trail_armed and profit_pct >= self.cfg.trail_start_pct:
+                    pos.trail_armed = True
+                if pos.trail_armed:
+                    trail_stop = pos.highest * (1 - self.cfg.trail_pct / 100.0)
+                    pos.stop = max(pos.stop, trail_stop)
             if low <= pos.stop:
                 self._close(pos.stop, bar_index, "stop")
                 return "stop"
         else:
             pos.lowest = min(pos.lowest, low)
-            profit_pct = (pos.entry_price - pos.lowest) / pos.entry_price * 100.0
-            if not pos.breakeven_armed and profit_pct >= self.cfg.breakeven_trigger_pct:
-                pos.stop = min(
-                    pos.stop,
-                    pos.entry_price * (1 - self.cfg.breakeven_buffer_pct / 100.0),
-                )
-                pos.breakeven_armed = True
-            if not pos.trail_armed and profit_pct >= self.cfg.trail_start_pct:
-                pos.trail_armed = True
-            if pos.trail_armed:
-                trail_stop = pos.lowest * (1 + self.cfg.trail_pct / 100.0)
-                pos.stop = min(pos.stop, trail_stop)
+            if not self.cfg.fixed_stop_only:
+                profit_pct = (pos.entry_price - pos.lowest) / pos.entry_price * 100.0
+                if not pos.breakeven_armed and profit_pct >= self.cfg.breakeven_trigger_pct:
+                    pos.stop = min(
+                        pos.stop,
+                        pos.entry_price * (1 - self.cfg.breakeven_buffer_pct / 100.0),
+                    )
+                    pos.breakeven_armed = True
+                if not pos.trail_armed and profit_pct >= self.cfg.trail_start_pct:
+                    pos.trail_armed = True
+                if pos.trail_armed:
+                    trail_stop = pos.lowest * (1 + self.cfg.trail_pct / 100.0)
+                    pos.stop = min(pos.stop, trail_stop)
             if high >= pos.stop:
                 self._close(pos.stop, bar_index, "stop")
                 return "stop"

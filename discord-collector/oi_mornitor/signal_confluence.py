@@ -54,6 +54,18 @@ DEFAULT_FEATURE_WEIGHTS: dict[str, float] = {
     "feat:cf_oi_rebuild_align": 0.0,
     "feat:cf_funding_against": 0.0,
     "feat:cf_oi_rebuild_penalty": 0.0,
+    # TD Sequential TD9（评分用；与蜡烛/放量组合，非独立下单）
+    "feat:td9_ob": 0.12,
+    "feat:td9_os": 0.12,
+    "combo:超卖·多头形态·放量": 0.15,
+    "combo:超买·射击之星·放量": 0.15,
+    # 区间极值末端放量（AICoin；评分用，非独立下单）
+    "feat:rev_nl_buy": 0.12,
+    "feat:rev_nh_sell": 0.12,
+    "combo:新低放量·倒锤子": 0.12,
+    "combo:新高放量·射击之星": 0.12,
+    "combo:新低放量·超卖·倒锤子": 0.15,
+    "combo:新高放量·超买·射星": 0.15,
 }
 
 _WEIGHTS_VERSION = 2
@@ -136,14 +148,14 @@ def reload_confluence_weights() -> None:
 def active_feature_weights() -> dict[str, float]:
     data = _load_weights_file()
     if data and isinstance(data.get("weights"), dict) and data["weights"]:
-        out: dict[str, float] = {}
+        # 以默认表打底，文件覆盖：新特征（如 TD9）在尚未写入校准文件时仍有非零默认权重
+        out: dict[str, float] = dict(DEFAULT_FEATURE_WEIGHTS)
         for k, v in data["weights"].items():
             try:
                 out[str(k)] = float(v)
             except (TypeError, ValueError):
                 continue
-        if out:
-            return out
+        return out
     return dict(DEFAULT_FEATURE_WEIGHTS)
 
 
@@ -555,7 +567,18 @@ def confluence_for_alert(alert: dict[str, Any], peers: list[dict[str, Any]] | No
 
     sym = str(alert.get("symbol") or "")
     stub["mcapTier"] = resolve_mcap_tier(sym)
-    for k in ("vol_ratio", "macd_divergence", "htf_trend_aligned", "kol_tier"):
+    for k in (
+        "vol_ratio",
+        "macd_divergence",
+        "htf_trend_aligned",
+        "kol_tier",
+        "tdSetup",
+        "td_setup",
+        "tdLabel",
+        "revVolSignal",
+        "rev_vol_signal",
+        "revVolLabel",
+    ):
         if alert.get(k) is not None:
             stub[k] = alert.get(k)
     if isinstance(alert.get("capitalFlow"), dict):
@@ -612,6 +635,20 @@ def _copy_capital_flow_to_record(rec: dict[str, Any], item: dict[str, Any]) -> N
     cf = item.get("capitalFlow")
     if isinstance(cf, dict):
         rec["capitalFlow"] = cf
+    if item.get("tdSetup") is not None:
+        try:
+            rec["tdSetup"] = int(item.get("tdSetup"))
+        except (TypeError, ValueError):
+            pass
+        if item.get("tdLabel"):
+            rec["tdLabel"] = str(item.get("tdLabel"))
+    if item.get("revVolSignal") is not None:
+        try:
+            rec["revVolSignal"] = int(item.get("revVolSignal"))
+        except (TypeError, ValueError):
+            pass
+        if item.get("revVolLabel"):
+            rec["revVolLabel"] = str(item.get("revVolLabel"))
 
 
 def attach_confluence_to_backtest_items(items: list[dict[str, Any]]) -> None:

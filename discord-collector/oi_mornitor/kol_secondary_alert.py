@@ -29,7 +29,7 @@ _DEFAULT_DATA = _PKG / "data" / "kol_secondary"
 _HOME_DATA = Path.home() / ".grokbot" / "kol-secondary"
 
 PATTERN_ZH = {
-    "inverted_hammer": "倒垂子",
+    "inverted_hammer": "倒锤子",
     "engulfing": "吞没",
     "shooting_star": "射击之星",
 }
@@ -45,6 +45,8 @@ _DISCORD_DISPLAY: dict[str, str] = {
     "1444962339743989843": "大镖客",
     "1444963372134301827": "seven",
     "1444963689194192947": "颜驰-vip",
+    "1559133861617602630": "零下二度",
+    "1559133911001337866": "零下二度-美股",
 }
 
 

@@ -564,3 +564,84 @@ async def send_structure_card_telegram_async(alert: dict[str, Any]) -> bool:
 
 async def send_volume_price_card_telegram_async(alert: dict[str, Any]) -> bool:
     return await asyncio.to_thread(send_volume_price_card_telegram, alert)
+
+
+def format_rev_vol_card_message(alert: dict[str, Any]) -> str:
+    """新高/新低末端+放量（NLV/revVol）卡片文案。"""
+    pair = _pair_label(str(alert.get("symbol") or ""))
+    type_label = str(
+        alert.get("type_label")
+        or alert.get("revVolLabel")
+        or alert.get("signal_text")
+        or "末端放量"
+    )
+    side = str(alert.get("side") or "")
+    side_label = "看跌" if side == "bear" else ("看涨" if side == "bull" else "")
+    type_head = f"{type_label} ({side_label})" if side_label else type_label
+    iv = str(alert.get("interval") or "—")
+    tm = _fmt_time(alert.get("kline_open_time") or alert.get("time") or 0)
+    price = _fmt_price(alert.get("price") if alert.get("price") is not None else alert.get("close"))
+    high = _fmt_price(alert.get("high"))
+    low = _fmt_price(alert.get("low"))
+    lines = [
+        f"💰 交易对: {pair}",
+        f"📈 类型: {type_head}",
+        f"⏰ 周期: {iv}",
+        f"⏰ 时间: {tm}",
+        f"💵 价格: {price}",
+        f"📈 最高: {high}",
+        f"📉 最低: {low}",
+    ]
+    vr = alert.get("vol_ratio")
+    if vr is not None:
+        lines.append(f"📊 量能: {_fmt_vol_x(vr)} MA20")
+    lines.append("------------------------")
+    lines.append("🔍 口径: 区间极值末端 + 放量（已收盘K）")
+    return "\n".join(lines)
+
+
+def send_rev_vol_card_telegram(alert: dict[str, Any]) -> bool:
+    """NLV/revVol → OI_CANDLE_CARD 形态群，并镜像 MAIN（白名单）。
+
+    独立于射击之星 OI_CANDLE_CARD_TELEGRAM 开关；由 OI_REV_VOL_CARD_TELEGRAM 控制。
+    不走 OI 热门推送。
+    """
+    from oi_mornitor.config import REV_VOL_CARD_TELEGRAM
+    from oi_mornitor.signal_policy import is_disabled_pattern_interval
+    from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    if not REV_VOL_CARD_TELEGRAM:
+        return False
+    iv = str(alert.get("interval") or "").strip()
+    if is_disabled_pattern_interval(iv):
+        return False
+    # 不强制共振档：NLV 本身即主信号；仍附加共振文案便于对照
+    text = _message_with_confluence(alert, format_rev_vol_card_message(alert))
+    ok_candle = False
+    primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip() or _resolve_chat_id(None)
+    if primary:
+        ok_candle = _send_card_text_with_fallback(alert, text, primary)
+    ok_main = False
+    if is_main_push_enabled() and MAIN_CARD_TELEGRAM_CHAT_ID:
+        # 与蜡烛镜像同策略：白名单币+周期+类型前缀
+        ok_main = _mirror_to_main_card(alert, text)
+        if not ok_main:
+            # 若形态群未发/未镜像成功，仍尝试 MAIN 专推（同 eligibility）
+            from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
+
+            if is_main_card_mirror_eligible(alert):
+                ok_main = _send_card_text_with_fallback(
+                    alert, text, MAIN_CARD_TELEGRAM_CHAT_ID
+                )
+    ok = bool(ok_candle or ok_main)
+    if ok:
+        _after_candle_card_pushed(alert)
+    return ok
+
+
+async def send_rev_vol_card_telegram_async(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.capital_flow_attach import enrich_alert_capital_flow_auto
+
+    await enrich_alert_capital_flow_auto(alert)
+    return await asyncio.to_thread(send_rev_vol_card_telegram, alert)
+

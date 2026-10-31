@@ -155,6 +155,18 @@ async def scan_equity_patterns(
                     record_signal=record_signal,
                 )
                 if alert:
+                    try:
+                        from oi_mornitor.td_sequential import attach_td_setup
+
+                        attach_td_setup(alert, df=df)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        from oi_mornitor.range_extreme_volume import attach_range_extreme_volume
+
+                        attach_range_extreme_volume(alert, df=df)
+                    except Exception:  # noqa: BLE001
+                        pass
                     alerts.append(alert)
 
             for hit in find_last_closed_structure_hits(df, now_ms=now_ms):
@@ -169,6 +181,18 @@ async def scan_equity_patterns(
                     record_signal=record_signal,
                 )
                 if alert:
+                    try:
+                        from oi_mornitor.td_sequential import attach_td_setup
+
+                        attach_td_setup(alert, df=df)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        from oi_mornitor.range_extreme_volume import attach_range_extreme_volume
+
+                        attach_range_extreme_volume(alert, df=df)
+                    except Exception:  # noqa: BLE001
+                        pass
                     alerts.append(alert)
 
             sym_states.append(iv)

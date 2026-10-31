@@ -203,6 +203,10 @@ CANDLE_CARD_TELEGRAM = os.getenv(
 CANDLE_CARD_TELEGRAM_CHAT_ID = os.getenv(
     "OI_CANDLE_CARD_TELEGRAM_CHAT_ID", "-1004364826383"
 ).strip()
+# 新高/新低末端+放量（NLV/revVol）→ 形态群 + MAIN（独立于射击之星开关；默认开）
+REV_VOL_CARD_TELEGRAM = os.getenv(
+    "OI_REV_VOL_CARD_TELEGRAM", "1"
+).strip().lower() in ("1", "true", "yes", "on")
 # 特别关注币种专属推送群（默认与 MAIN_CARD_TELEGRAM_CHAT_ID / OI_MAIN_CARD_TELEGRAM_CHAT_ID）
 MAIN_CARD_TELEGRAM_CHAT_ID = (
     os.getenv("MAIN_CARD_TELEGRAM_CHAT_ID")
@@ -253,7 +257,7 @@ MAIN_CARD_TYPE_PREFIXES = tuple(
     x.strip()
     for x in os.getenv(
         "OI_MAIN_CARD_TYPE_PREFIXES",
-        "射击之星,倒锤子",
+        "射击之星,倒锤子,新低末端放量,新高末端放量",
     ).split(",")
     if x.strip()
 )
@@ -370,6 +374,27 @@ TELEGRAM_PUSH_CHAT_ID = (
 ).strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+# AI 实时信号 Telegram 群推送（是否入场 / 止盈止损 / 信心程度 / 简单解析）
+# AI_JUDGE_TELEGRAM_PUSH=1 开启；默认关闭（用户要求停实时推送）。凭据缺失时只打日志不崩溃。
+AI_JUDGE_TELEGRAM_PUSH = os.getenv("AI_JUDGE_TELEGRAM_PUSH", "0").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+# 专属 AI 信号群；空则回退 MAIN/CANDLE/TELEGRAM_* 群
+AI_JUDGE_TELEGRAM_CHAT_ID = os.getenv("AI_JUDGE_TELEGRAM_CHAT_ID", "").strip()
+# 默认只推可执行入场 LONG/SHORT，避免「不做/观望」刷屏；可设 AI_JUDGE_TELEGRAM_ACTIONS=* 全推
+AI_JUDGE_TELEGRAM_ACTIONS = tuple(
+    x.strip().upper()
+    for x in os.getenv(
+        "AI_JUDGE_TELEGRAM_ACTIONS", "LONG,SHORT"
+    ).split(",")
+    if x.strip()
+)
+# 同币种+周期+方向+信号棒 最短推送间隔（秒）；默认 15 分钟，挡住 3~4 分钟扫线重复
+AI_JUDGE_TG_COOLDOWN_SEC = int(os.getenv("AI_JUDGE_TG_COOLDOWN_SEC", "900"))
 PATTERN_CHART_INTERVALS = tuple(
     x.strip()
     for x in os.getenv("OI_PATTERN_CHART_INTERVALS", "5m,15m,30m,1h,4h,1d").split(",")
@@ -635,5 +660,16 @@ MOONSHOT_SANDBOX_C = os.getenv("OI_MOONSHOT_SANDBOX_C", "1").strip().lower() in 
 )
 MOONSHOT_STATE_DB = Path(
     os.getenv("OI_MOONSHOT_STATE_DB") or (_PKG_ROOT / "data" / "moonshot_state.db")
+)
+
+# —— Sequoia-X 风格选币（加密适配；默认扫描关，优先回测/胜率）——
+# 实现：strategy_sequoia/；文档：docs/sequoia-strategies.md
+from oi_mornitor.strategy_sequoia.config import (  # noqa: E402
+    SEQUOIA_INTERVALS,
+    SEQUOIA_MTF_MIN,
+    SEQUOIA_SCAN_ENABLED,
+    SEQUOIA_STRATEGY_IDS,
+    SEQUOIA_TELEGRAM,
+    is_sequoia_scan_enabled,
 )
 
