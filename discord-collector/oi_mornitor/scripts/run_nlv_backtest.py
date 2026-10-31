@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NLV（新高/新低末端+放量）回测 CLI：5% SL / 20x，不推 TG。"""
+"""NLV（新高/新低末端+放量）回测 CLI：插针极值 SL / 20x，不推 TG。"""
 from __future__ import annotations
 
 import argparse
@@ -14,12 +14,12 @@ if str(_REPO_ROOT) not in sys.path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="NLV 回测（5% SL · 20x · closed-bar → next open）")
+    parser = argparse.ArgumentParser(description="NLV 回测（插针极值 SL · 20x · closed-bar → next open）")
     parser.add_argument("--universe", default="majors", help="majors|t1|t2|t3|all_tiers")
     parser.add_argument("--symbols", default="", help="逗号分隔；空=按 universe")
     parser.add_argument("--interval", default="1h")
     parser.add_argument("--kinds", default="", help="rev_vol_buy,rev_vol_sell；空=全部")
-    parser.add_argument("--stop", type=float, default=None, help="固定止损%%，默认 5")
+    parser.add_argument("--stop", type=float, default=None, help="已弃用（保留兼容）；止损现为插针极值")
     parser.add_argument("--leverage", type=float, default=None, help="报告杠杆，默认 20")
     parser.add_argument("--limit-bars", type=int, default=0)
     parser.add_argument("-v", "--verbose", action="store_true")

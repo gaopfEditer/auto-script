@@ -3,7 +3,7 @@
 口径与 sequoia_pipeline / 币圈用户约定对齐：
 - 信号：range_extreme_volume（50 根 HHV/LLV 末端 + vol MA120 + degree±0.2 + lookback 冷却）
 - 仅已收盘 K 出信号；下一根开盘价入场（OI_BT next_bar_open + 滑点）
-- 结算：settle_signal_by_5m_bars + 固定 5% SL；报告统一 20x 杠杆
+- 结算：settle_signal_by_5m_bars + 信号棒插针极值止损（多=low / 空=high，无额外 buffer）；报告统一 20x 杠杆
 - 落盘：data/nlv_backtest/（latest_summary.json + job JSON）
 - 不推 Telegram；可按市值梯队 t1/t2/t3 选宇宙，便于后续整泡对比
 """
@@ -24,9 +24,7 @@ import pandas as pd
 from oi_mornitor.backtest.sequoia_pipeline import (
     SEQUOIA_BT_LEVERAGE,
     SEQUOIA_BT_MARGIN_CNY,
-    SEQUOIA_BT_SL_PCT,
     _align_signal_at_ms,
-    _fixed_5pct_plan,
     leverage_report,
     resolve_klines_root,
 )
@@ -41,8 +39,8 @@ from oi_mornitor.mcap_tier import (
     tier_catalog_for_api,
 )
 from oi_mornitor.pattern_entry import resolve_backtest_entry_price
-from oi_mornitor.pattern_settle import settle_signal_by_5m_bars
-from oi_mornitor.pattern_settle_profile import resolve_verify_delay_ms
+from oi_mornitor.pattern_settle import BATCH_WEIGHTS, RUNNER_TRAIL_PCT, settle_signal_by_5m_bars
+from oi_mornitor.pattern_settle_profile import SettlePlan, resolve_verify_delay_ms
 from oi_mornitor.range_extreme_volume import (
     LOOKBACK,
     MA_VOL,
@@ -57,7 +55,9 @@ _PKG = Path(__file__).resolve().parents[1]
 _DATA = _PKG / "data"
 _OUT_DIR = _DATA / "nlv_backtest"
 
-NLV_BT_SL_PCT = env_float("OI_NLV_BT_SL_PCT", SEQUOIA_BT_SL_PCT, min_val=0.0)
+# 旧固定 % SL 已弃用；保留 env 仅作兼容读取，默认不再使用
+NLV_BT_SL_PCT = env_float("OI_NLV_BT_SL_PCT", 0.0, min_val=0.0)
+NLV_SL_MODE = "pin_extreme"
 NLV_BT_LEVERAGE = env_float("OI_NLV_BT_LEVERAGE", SEQUOIA_BT_LEVERAGE, min_val=1.0)
 NLV_BT_MARGIN_CNY = env_float("OI_NLV_BT_MARGIN_CNY", SEQUOIA_BT_MARGIN_CNY, min_val=0.0)
 # vol MA120 + lookback → 默认暖机略大于 MA_VOL
@@ -165,6 +165,54 @@ def _signal_close_ms(df: pd.DataFrame, bi: int) -> int:
     return int(row["open_time"])
 
 
+
+def _pin_extreme_plan(
+    *,
+    entry: float,
+    side: str,
+    signal_high: float,
+    signal_low: float,
+    verify_delay_ms: int,
+) -> SettlePlan | None:
+    """插针极值止损：多=信号棒 low，空=信号棒 high；无额外 buffer（与结构 invalid 原价入计划一致）。
+
+    TP 仍按 1R/2R（与 sequoia 固定计划同形），核实窗沿用 resolve_verify_delay_ms。
+    若入场价已穿越插针（多 entry<=low / 空 entry>=high）则返回 None，跳过该信号。
+    """
+    is_short = str(side).lower() in ("short", "bear")
+    entry_f = float(entry)
+    if entry_f <= 0:
+        return None
+    if is_short:
+        sl = float(signal_high)
+        if sl <= entry_f:
+            return None
+        risk = sl - entry_f
+        tp1 = entry_f - risk * 1.0
+        tp2 = entry_f - risk * 2.0
+    else:
+        sl = float(signal_low)
+        if sl >= entry_f:
+            return None
+        risk = entry_f - sl
+        tp1 = entry_f + risk * 1.0
+        tp2 = entry_f + risk * 2.0
+    if risk <= 0 or (risk / entry_f) < 1e-8:
+        return None
+    return SettlePlan(
+        profile_id="nlv_pin_extreme",
+        sl_price=sl,
+        tp1_price=tp1,
+        tp2_price=tp2,
+        batch_weights=BATCH_WEIGHTS,
+        runner_trail_pct=RUNNER_TRAIL_PCT,
+        verify_delay_ms=int(verify_delay_ms),
+        risk_r=risk,
+        tp1_r=1.0,
+        tp2_r=2.0,
+    )
+
+
 @dataclass
 class NlvPipelineResult:
     interval: str
@@ -216,8 +264,9 @@ def run_nlv_pipeline(
     limit_bars: int = 0,
     kinds: Sequence[str] | None = None,
 ) -> NlvPipelineResult:
-    """本地 parquet → NLV 信号 → next_bar 入场 → 5% SL / 20x 报告 → 落盘。"""
+    """本地 parquet → NLV 信号 → next_bar 入场 → 插针极值 SL / 20x 报告 → 落盘。"""
     t0 = time.time()
+    # sl_pct 参数保留兼容，但默认不再驱动止损
     sl = float(NLV_BT_SL_PCT if sl_pct is None else sl_pct)
     lev = float(NLV_BT_LEVERAGE if leverage is None else leverage)
     margin = float(NLV_BT_MARGIN_CNY if margin_cny is None else margin_cny)
@@ -293,24 +342,18 @@ def run_nlv_pipeline(
             verify_ms = resolve_verify_delay_ms(settle_stub)
             settle_end = signal_at_ms + verify_ms + 5 * 60_000
             bars_5m = store.load_5m_bars(sym, signal_at_ms, settle_end)
-            plan = _fixed_5pct_plan(
+            signal_high = float(row["high"])
+            signal_low = float(row["low"])
+            plan = _pin_extreme_plan(
                 entry=entry,
                 side=side,
-                sl_pct=sl,
+                signal_high=signal_high,
+                signal_low=signal_low,
                 verify_delay_ms=verify_ms,
             )
-            plan = plan.__class__(
-                profile_id=f"nlv_fixed_sl{sl:g}",
-                sl_price=plan.sl_price,
-                tp1_price=plan.tp1_price,
-                tp2_price=plan.tp2_price,
-                batch_weights=plan.batch_weights,
-                runner_trail_pct=plan.runner_trail_pct,
-                verify_delay_ms=plan.verify_delay_ms,
-                risk_r=plan.risk_r,
-                tp1_r=plan.tp1_r,
-                tp2_r=plan.tp2_r,
-            )
+            if plan is None:
+                continue
+            sl_dist_pct = abs(entry - plan.sl_price) / entry * 100.0 if entry else 0.0
             settled = settle_signal_by_5m_bars(
                 side=side,
                 entry=entry,
@@ -355,7 +398,11 @@ def run_nlv_pipeline(
                     "slPrice": settled.get("slPrice") or plan.sl_price,
                     "tp1Price": settled.get("tp1Price") or plan.tp1_price,
                     "error": settled.get("error"),
-                    "slPct": sl,
+                    "slMode": NLV_SL_MODE,
+                    "slPct": round(sl_dist_pct, 4),  # 实际风险距离%（非固定止损%）
+                    "invalidLevel": signal_low if side == "long" else signal_high,
+                    "signalBarHigh": signal_high,
+                    "signalBarLow": signal_low,
                     "profileId": plan.profile_id,
                     "reportLeverage": lev,
                     "category": "nlv",
@@ -393,7 +440,7 @@ def run_nlv_pipeline(
     lev_rep = leverage_report(items, leverage=lev, margin_cny=margin)
     result = NlvPipelineResult(
         interval=iv,
-        sl_pct=sl,
+        sl_pct=0.0,  # 非固定%；详见 params.sl_mode
         symbols=used_syms,
         universe=univ,
         items=items,
@@ -410,7 +457,9 @@ def run_nlv_pipeline(
         "category": "nlv",
         "categoryLabel": "新高/新低末端+放量",
         "universe": univ,
-        "sl_pct": sl,
+        "sl_mode": NLV_SL_MODE,
+        "sl_rule": "long→signal_bar.low / short→signal_bar.high（无额外 buffer）",
+        "sl_pct_legacy": sl,  # 兼容字段；不再驱动止损
         "warmup": warm,
         "interval": iv,
         "fee_pct": OI_BT_FEE_PCT,
@@ -421,9 +470,10 @@ def run_nlv_pipeline(
         "telegram": False,
         "closed_bar_only": True,
         "entry": "next_bar_open",
+        "tp": "1R/2R + runner（相对插针风险）",
     }
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    job_path = out / f"nlv_{univ}_{iv}_sl{sl:g}_{stamp}.json"
+    job_path = out / f"nlv_{univ}_{iv}_pin_{stamp}.json"
     latest = out / "latest_summary.json"
     disk = dict(payload)
     if len(disk.get("items") or []) > 500:
@@ -505,10 +555,13 @@ def nlv_options() -> dict[str, Any]:
         ],
         "defaultUniverse": "majors",
         "settleRules": (
-            "NLV 已收盘信号 → 下一根开盘入场 · 固定 5% 止损 · 报告 20x 杠杆 · "
-            "AICoin 50 根新高/新低末端 + vol MA120 + degree±0.2"
+            "NLV 已收盘信号 → 下一根开盘入场 · 插针极值止损"
+            "（多=信号棒最低价 / 空=信号棒最高价，无额外 buffer）· "
+            "TP=1R/2R · 报告 20x 杠杆 · AICoin 50 根新高/新低末端 + vol MA120 + degree±0.2"
         ),
-        "slPct": NLV_BT_SL_PCT,
+        "slMode": NLV_SL_MODE,
+        "slRule": "long→signal low / short→signal high（at extreme, no buffer）",
+        "slPct": None,
         "leverage": NLV_BT_LEVERAGE,
         "mcapTiers": tier_catalog_for_api(),
         "klinesRoot": str(root),

@@ -594,7 +594,7 @@ export function BacktestPage() {
   const [nlvInterval, setNlvInterval] = useState("1h");
   const [nlvIntervals, setNlvIntervals] = useState<string[]>(["15m", "1h", "4h"]);
   const [nlvSettleRules, setNlvSettleRules] = useState(
-    "NLV 已收盘信号 → 下一根开盘 · 5% SL · 20x",
+    "NLV 已收盘信号 → 下一根开盘 · 插针极值止损 · 20x",
   );
   const [nlvLoading, setNlvLoading] = useState(false);
   const [nlvJob, setNlvJob] = useState<NlvJob | null>(null);
@@ -1455,7 +1455,7 @@ export function BacktestPage() {
           <section className="bt-section">
             <h2 className="bt-section-title">3. 新高/新低末端+放量</h2>
             <p className="bt-rules">
-              独立回测类别（NLV / revVol）：已收盘信号 → 下一根开盘入场 · 固定 5% 止损 · 报告 20x。
+              独立回测类别（NLV / revVol）：已收盘信号 → 下一根开盘入场 · 插针极值止损（多=信号棒低 / 空=信号棒高）· 报告 20x。
               可先选主流烟雾测，再按第一/二/三梯队整泡对比胜率。
             </p>
             <label className="bt-field">
