@@ -540,6 +540,63 @@ async def handle_backtest_structure_jobs(request: web.Request) -> web.Response:
     return _json_response({"ok": True, "jobs": list_backtest_jobs(limit)})
 
 
+
+async def handle_backtest_nlv_options(_request: web.Request) -> web.Response:
+    """NLV（新高/新低末端+放量）回测选项。"""
+    from oi_mornitor.backtest.nlv_pipeline import nlv_options
+
+    return _json_response({"ok": True, **nlv_options()})
+
+
+async def handle_backtest_nlv_start(request: web.Request) -> web.Response:
+    """启动 NLV 回测任务（异步；落盘 data/nlv_backtest）。"""
+    from oi_mornitor.backtest.nlv_pipeline import job_to_dict, start_nlv_backtest
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        job = await start_nlv_backtest(body)
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("NLV 回测启动失败")
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response({"ok": True, **job_to_dict(job)})
+
+
+async def handle_backtest_nlv_get(request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.nlv_pipeline import get_nlv_job, job_to_dict
+
+    job_id = str(request.match_info.get("job_id") or "").strip()
+    if not job_id:
+        return _json_response({"ok": False, "error": "missing job_id"}, status=400)
+    job = get_nlv_job(job_id)
+    if job is None:
+        return _json_response({"ok": False, "error": "job not found"}, status=404)
+    return _json_response({"ok": True, **job_to_dict(job)})
+
+
+async def handle_backtest_nlv_latest(_request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.nlv_pipeline import get_latest_nlv_job, job_to_dict
+
+    job = get_latest_nlv_job()
+    if job is None:
+        return _json_response({"ok": True, "job": None})
+    return _json_response({"ok": True, "job": job_to_dict(job)})
+
+
+async def handle_backtest_nlv_jobs(request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.nlv_pipeline import list_nlv_jobs
+
+    q = request.query
+    limit = int(q.get("limit") or "40") if str(q.get("limit") or "40").isdigit() else 40
+    return _json_response({"ok": True, "jobs": list_nlv_jobs(limit)})
+
+
 async def handle_backtest_kline_prefetch_start(request: web.Request) -> web.Response:
     """分段拉取 K 线到本地 Parquet。"""
     from oi_mornitor.backtest_prefetch import prefetch_job_to_dict, start_kline_prefetch
@@ -1595,6 +1652,11 @@ def create_app() -> web.Application:
     app.router.add_get("/api/backtest/kline/prefetch/latest", handle_backtest_kline_prefetch_latest)
     app.router.add_get("/api/backtest/kline/prefetch/{job_id}", handle_backtest_kline_prefetch_get)
     app.router.add_post("/api/backtest/kline/coverage", handle_backtest_kline_coverage)
+    app.router.add_get("/api/backtest/nlv/options", handle_backtest_nlv_options)
+    app.router.add_get("/api/backtest/nlv/latest", handle_backtest_nlv_latest)
+    app.router.add_get("/api/backtest/nlv/jobs", handle_backtest_nlv_jobs)
+    app.router.add_post("/api/backtest/nlv", handle_backtest_nlv_start)
+    app.router.add_get("/api/backtest/nlv/{job_id}", handle_backtest_nlv_get)
 
     app.router.add_get("/api/pattern-alert-ticker", handle_pattern_alert_ticker_get)
     app.router.add_post("/api/pattern-alert-ticker", handle_pattern_alert_ticker_post)

@@ -279,6 +279,43 @@ function fmtCompactNum(n: number | null | undefined): string {
   return n.toLocaleString("zh-CN");
 }
 
+type NlvKindOption = { id: string; label: string; side?: string };
+type NlvUniverseOption = { id: string; label: string };
+type NlvSummary = {
+  total?: number;
+  wins?: number;
+  losses?: number;
+  winRate?: number | null;
+  totalPnlPct?: number | null;
+  profitFactor?: number | null;
+  expectancyR?: number | null;
+  maxDrawdownPct?: number | null;
+};
+type NlvJob = {
+  id: string;
+  status: string;
+  error?: string | null;
+  params?: Record<string, unknown>;
+  progress?: { current?: string; total?: number };
+  summary?: NlvSummary | null;
+  leverage?: {
+    leverage?: number;
+    trades?: number;
+    win_rate?: number;
+    avg_price_pct?: number;
+    avg_margin_pnl_cny?: number;
+    dd_x_leverage_pct?: number;
+    blowup_risk?: boolean;
+  } | null;
+  byKind?: Record<string, { type_label?: string; count?: number; summary?: NlvSummary }>;
+  byMcapTier?: Record<string, { label?: string; count?: number; summary?: NlvSummary }>;
+  itemCount?: number;
+  categoryLabel?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  result?: { symbols?: string[]; elapsed_sec?: number; interval?: string; universe?: string };
+};
+
 type PrefetchJob = {
   id: string;
   status: string;
@@ -546,6 +583,46 @@ export function BacktestPage() {
   const [fetchLoading, setFetchLoading] = useState(false);
   const [btLoading, setBtLoading] = useState(false);
   const [bootErr, setBootErr] = useState("");
+  const [nlvUniverses, setNlvUniverses] = useState<NlvUniverseOption[]>([
+    { id: "majors", label: "主流 BTC/ETH/SOL" },
+    { id: "t1", label: "第一梯队" },
+    { id: "t2", label: "第二梯队" },
+    { id: "t3", label: "第三梯队" },
+    { id: "all_tiers", label: "一+二+三梯队名单" },
+  ]);
+  const [nlvUniverse, setNlvUniverse] = useState("majors");
+  const [nlvInterval, setNlvInterval] = useState("1h");
+  const [nlvIntervals, setNlvIntervals] = useState<string[]>(["15m", "1h", "4h"]);
+  const [nlvSettleRules, setNlvSettleRules] = useState(
+    "NLV 已收盘信号 → 下一根开盘 · 5% SL · 20x",
+  );
+  const [nlvLoading, setNlvLoading] = useState(false);
+  const [nlvJob, setNlvJob] = useState<NlvJob | null>(null);
+  const [nlvErr, setNlvErr] = useState("");
+
+  useEffect(() => {
+    fetch("/api/backtest/nlv/options")
+      .then((r) => r.json())
+      .then((body) => {
+        if (!body?.ok) return;
+        if (Array.isArray(body.universes) && body.universes.length) {
+          setNlvUniverses(body.universes as NlvUniverseOption[]);
+        }
+        if (Array.isArray(body.intervals) && body.intervals.length) {
+          setNlvIntervals(body.intervals as string[]);
+        }
+        if (body.defaultInterval) setNlvInterval(String(body.defaultInterval));
+        if (body.defaultUniverse) setNlvUniverse(String(body.defaultUniverse));
+        if (body.settleRules) setNlvSettleRules(String(body.settleRules));
+      })
+      .catch(() => undefined);
+    fetch("/api/backtest/nlv/latest")
+      .then((r) => r.json())
+      .then((body) => {
+        if (body?.ok && body.job) setNlvJob(body.job as NlvJob);
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const saved = loadSavedPrefs();
@@ -976,6 +1053,44 @@ export function BacktestPage() {
     }
   };
 
+  const pollNlvJob = async (jobId: string) => {
+    for (let i = 0; i < 120; i++) {
+      const r = await fetch(`/api/backtest/nlv/${encodeURIComponent(jobId)}`);
+      const body = await r.json();
+      if (!body?.ok) throw new Error(body?.error || "NLV 任务查询失败");
+      const next = body as NlvJob;
+      setNlvJob(next);
+      if (next.status === "done" || next.status === "failed") return next;
+      await new Promise((res) => setTimeout(res, 800));
+    }
+    throw new Error("NLV 回测超时");
+  };
+
+  const onRunNlvBacktest = async () => {
+    setNlvLoading(true);
+    setNlvErr("");
+    try {
+      const r = await fetch("/api/backtest/nlv", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          universe: nlvUniverse,
+          interval: nlvInterval,
+        }),
+      });
+      const body = await r.json();
+      if (!body?.ok) throw new Error(body?.error || "NLV 回测启动失败");
+      const started = body as NlvJob;
+      setNlvJob(started);
+      if (started.status === "done" || started.status === "failed") return;
+      await pollNlvJob(started.id);
+    } catch (e) {
+      setNlvErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNlvLoading(false);
+    }
+  };
+
   const onRunBacktest = async () => {
     setBtLoading(true);
     setBootErr("");
@@ -1336,6 +1451,47 @@ export function BacktestPage() {
               {btLoading ? "启动中…" : "开始回测"}
             </button>
           </section>
+
+          <section className="bt-section">
+            <h2 className="bt-section-title">3. 新高/新低末端+放量</h2>
+            <p className="bt-rules">
+              独立回测类别（NLV / revVol）：已收盘信号 → 下一根开盘入场 · 固定 5% 止损 · 报告 20x。
+              可先选主流烟雾测，再按第一/二/三梯队整泡对比胜率。
+            </p>
+            <label className="bt-field">
+              <span>币种宇宙</span>
+              <select value={nlvUniverse} onChange={(e) => setNlvUniverse(e.target.value)}>
+                {nlvUniverses.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="bt-field">
+              <span>周期</span>
+              <select value={nlvInterval} onChange={(e) => setNlvInterval(e.target.value)}>
+                {nlvIntervals.map((iv) => (
+                  <option key={iv} value={iv}>
+                    {iv}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {nlvSettleRules ? <p className="bt-rules">{nlvSettleRules}</p> : null}
+            {nlvErr ? <p className="bt-error">{nlvErr}</p> : null}
+            {nlvJob?.status === "running" || nlvJob?.status === "pending" ? (
+              <p className="bt-rules">{nlvJob.progress?.current || "NLV 回测中…"}</p>
+            ) : null}
+            <button
+              type="button"
+              className="bt-run"
+              disabled={nlvLoading}
+              onClick={() => void onRunNlvBacktest()}
+            >
+              {nlvLoading ? "NLV 回测中…" : "开始 NLV 回测"}
+            </button>
+          </section>
         </aside>
 
         <main className="bt-main">
@@ -1428,6 +1584,129 @@ export function BacktestPage() {
                     {coverage.barPercent ?? coverage.percent}%）
                     {storageStats?.mb != null ? ` · 库 ${storageStats.mb} MB` : ""}
                   </p>
+                ) : null}
+              </>
+            )}
+          </section>
+
+          <section className="bt-panel">
+            <h2 className="bt-panel-title">新高/新低末端+放量 · 回测摘要</h2>
+            {!nlvJob ? (
+              <p className="bt-empty-inline">在左侧「3. 新高/新低末端+放量」选择宇宙后点「开始 NLV 回测」。</p>
+            ) : (
+              <>
+                <div className="bt-status-bar">
+                  <span className={`bt-status ${nlvJob.status}`}>
+                    {nlvJob.status === "done"
+                      ? "完成"
+                      : nlvJob.status === "failed"
+                        ? "失败"
+                        : nlvJob.status === "running"
+                          ? "运行中"
+                          : "排队"}
+                  </span>
+                  <span className="bt-muted">
+                    {(nlvJob.categoryLabel || "NLV")}
+                    {nlvJob.result?.universe ? ` · ${nlvJob.result.universe}` : nlvJob.params?.universe ? ` · ${String(nlvJob.params.universe)}` : ""}
+                    {nlvJob.result?.interval ? ` · ${nlvJob.result.interval}` : nlvJob.params?.interval ? ` · ${String(nlvJob.params.interval)}` : ""}
+                    {nlvJob.itemCount != null ? ` · ${nlvJob.itemCount} 笔` : ""}
+                    {nlvJob.result?.elapsed_sec != null ? ` · ${nlvJob.result.elapsed_sec}s` : ""}
+                  </span>
+                  {nlvJob.error ? <span className="bt-error">{nlvJob.error}</span> : null}
+                </div>
+                {nlvJob.summary ? (
+                  <div className="bt-summary-grid">
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {nlvJob.summary.winRate == null
+                          ? "—"
+                          : `${(nlvJob.summary.winRate * 100).toFixed(1)}%`}
+                      </span>
+                      <span className="bt-stat-lab">胜率</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {nlvJob.summary.profitFactor == null
+                          ? "—"
+                          : nlvJob.summary.profitFactor.toFixed(2)}
+                      </span>
+                      <span className="bt-stat-lab">PF</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">{nlvJob.summary.total ?? nlvJob.itemCount ?? "—"}</span>
+                      <span className="bt-stat-lab">笔数</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {nlvJob.summary.totalPnlPct == null
+                          ? "—"
+                          : `${nlvJob.summary.totalPnlPct.toFixed(1)}%`}
+                      </span>
+                      <span className="bt-stat-lab">合计(20x)</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {nlvJob.leverage?.win_rate == null
+                          ? "—"
+                          : `${nlvJob.leverage.win_rate.toFixed(1)}%`}
+                      </span>
+                      <span className="bt-stat-lab">价格胜率</span>
+                    </div>
+                  </div>
+                ) : null}
+                {nlvJob.byKind ? (
+                  <div className="bt-interval-grid" style={{ marginTop: 10 }}>
+                    {Object.entries(nlvJob.byKind).map(([kid, row]) => (
+                      <div key={kid} className="bt-interval-card">
+                        <div className="bt-interval-head">{row.type_label || kid}</div>
+                        <div className="bt-interval-stats">
+                          <div className="bt-stat">
+                            <span className="bt-stat-val">{row.count ?? 0}</span>
+                            <span className="bt-stat-lab">笔数</span>
+                          </div>
+                          <div className="bt-stat">
+                            <span className="bt-stat-val">
+                              {row.summary?.winRate == null
+                                ? "—"
+                                : `${(row.summary.winRate * 100).toFixed(1)}%`}
+                            </span>
+                            <span className="bt-stat-lab">胜率</span>
+                          </div>
+                          <div className="bt-stat">
+                            <span className="bt-stat-val">
+                              {row.summary?.profitFactor == null
+                                ? "—"
+                                : row.summary.profitFactor.toFixed(2)}
+                            </span>
+                            <span className="bt-stat-lab">PF</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {nlvJob.byMcapTier ? (
+                  <div className="bt-interval-grid" style={{ marginTop: 10 }}>
+                    {Object.entries(nlvJob.byMcapTier).map(([tid, row]) => (
+                      <div key={tid} className="bt-interval-card">
+                        <div className="bt-interval-head">{row.label || tid}</div>
+                        <div className="bt-interval-stats">
+                          <div className="bt-stat">
+                            <span className="bt-stat-val">{row.count ?? 0}</span>
+                            <span className="bt-stat-lab">笔数</span>
+                          </div>
+                          <div className="bt-stat">
+                            <span className="bt-stat-val">
+                              {row.summary?.winRate == null
+                                ? "—"
+                                : `${(row.summary.winRate * 100).toFixed(1)}%`}
+                            </span>
+                            <span className="bt-stat-lab">胜率</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : null}
               </>
             )}
