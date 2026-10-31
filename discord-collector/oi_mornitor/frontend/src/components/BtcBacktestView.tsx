@@ -972,6 +972,75 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     });
   }, [scopedItems, filterMode]);
 
+  /** 结果集内实际出现的币种（用于筛选芯片计数 & 空状态提示） */
+  const resultSymbolBases = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of items) {
+      const b = symbolBaseOf(it);
+      if (!b) continue;
+      m.set(b, (m.get(b) || 0) + 1);
+    }
+    return m;
+  }, [items]);
+
+  /** 为何列表为空：与漏斗「全部」不一致时给出可操作说明 */
+  const emptyFilterReason = useMemo(() => {
+    if (filteredItems.length > 0) return null;
+    if (!items.length) return "本回测结果为空，请重新跑 AI/门禁回测。";
+    if (scopedItems.length === 0) {
+      const selected = symbolFilter.filter(Boolean);
+      if (selected.length) {
+        const present = selected.filter((s) => (resultSymbolBases.get(s) || 0) > 0);
+        const missing = selected.filter((s) => !present.includes(s));
+        const have = [...resultSymbolBases.keys()].sort();
+        if (missing.length && present.length === 0) {
+          return `币种筛选 ${missing.join(",")} 在本结果中无数据（结果含: ${have.join("/") || "无"}）。请点币种「全部」或改选有数据的币。`;
+        }
+      }
+      if (tfFilter !== "all") return `周期 ${tfFilter} 在本结果中无匹配行。`;
+      if (patternFilter !== "all") return `形态「${patternFilter}」无匹配（signal_name 子串）。点「全部形态」重置。`;
+      if (searchQ.trim()) return `搜索「${searchQ.trim()}」无命中。`;
+      return "当前次级筛选无匹配行。";
+    }
+    // scoped 有数但 funnel chip 把列表滤空
+    if (filterMode === "small_sl" || filterMode === "tight_sl_15m") {
+      return `漏斗选中「小止损」匹配 0 条（范围内 ${scopedItems.length} 条）。点漏斗「全部」查看。`;
+    }
+    if (filterMode !== "all") {
+      return `漏斗选中「${filterMode}」匹配 0 条（范围内 ${scopedItems.length} 条）。点漏斗「全部」查看。`;
+    }
+    return "筛选后无行。";
+  }, [
+    filteredItems.length,
+    items.length,
+    scopedItems.length,
+    symbolFilter,
+    resultSymbolBases,
+    tfFilter,
+    patternFilter,
+    searchQ,
+    filterMode,
+  ]);
+
+  // 结果换了币种后，去掉「结果里不存在」的币种筛选，避免列表被滤成 0 却漏斗仍像有数（旧缓存）
+  useEffect(() => {
+    if (!items.length || symbolFilter.length === 0) return;
+    const next = symbolFilter.filter((s) => (resultSymbolBases.get(s) || 0) > 0);
+    if (next.length !== symbolFilter.length) {
+      setSymbolFilter(next);
+    }
+  }, [items, resultSymbolBases, symbolFilter]);
+
+  // 旧会话 filterMode=tight_sl_15m 且无匹配时，回到全部，避免空表
+  useEffect(() => {
+    if (filterMode !== "tight_sl_15m" && filterMode !== "small_sl") return;
+    if (scopedItems.length > 0 && filteredItems.length === 0) {
+      // 仅当小止损桶为 0 时自动回全部
+      const nSmall = scopedItems.reduce((n, it) => n + (isSmallStopItem(it) ? 1 : 0), 0);
+      if (nSmall === 0) setFilterMode("all");
+    }
+  }, [filterMode, scopedItems, filteredItems.length]);
+
   /** Totals for the currently filtered table rows (币种筛选等全部生效). */
   const filteredTotals = useMemo(() => {
     const rows = filteredItems;
@@ -1126,7 +1195,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
 
     return {
       total: n,
-      allTotal: items.length,
+      allTotal: scopedItems.length,
       gatePass,
       gateReject,
       gatePassRate: n ? Math.round((1000 * gatePass) / n) / 10 : 0,
@@ -1155,19 +1224,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
         "8h": winBuckets["8h"].n,
       },
     };
-    }, [filteredItems, items.length, filterMode]);  const selectedItem = useMemo(() => {
+    }, [filteredItems, scopedItems.length, filterMode]);  const selectedItem = useMemo(() => {
     if (!items.length) return null;
     return items.find((x) => x.id === selectedId) || filteredItems[0] || items[0];
   }, [items, filteredItems, selectedId]);
-
-  const resultSymbolBases = useMemo(() => {
-    const set = new Set<string>();
-    for (const it of items) {
-      const b = symbolBaseOf(it);
-      if (b) set.add(b);
-    }
-    return Array.from(set).sort();
-  }, [items]);
 
   // Filter chips: union of presets + run selection + free-text filter + result bases
   const filterSymbolOptions = useMemo(() => {
@@ -1175,7 +1235,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     for (const s of QUICK_SYMBOLS) set.add(s);
     for (const s of selectedSymbols) if (s) set.add(s);
     for (const s of symbolFilter) if (s) set.add(s);
-    for (const s of resultSymbolBases) if (s) set.add(s);
+    for (const s of resultSymbolBases.keys()) if (s) set.add(s);
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [selectedSymbols, symbolFilter, resultSymbolBases]);
 
@@ -1959,7 +2019,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
           <span style={{ fontSize: 12, color: "#a0aec0", fontWeight: 600 }}>按 1h 形态分类筛选：</span>
           <button
             type="button"
-            onClick={() => setPatternFilter("all")}
+            onClick={() => { setPatternFilter("all"); setFilterMode("all"); }}
             style={{
               padding: "4px 10px",
               borderRadius: 999,
@@ -1970,7 +2030,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               cursor: "pointer",
             }}
           >
-            全部形态 ({summary.total_signals})
+            全部形态 ({items.length})
           </button>
           {summary.pattern_stats.map((ps) => {
             const active = patternFilter === ps.pattern;
@@ -2060,7 +2120,9 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
             </button>
             {filterSymbolOptions.map((s) => {
               const on = symbolFilter.includes(s);
-              const isExtra = !(QUICK_SYMBOLS as readonly string[]).includes(s) && !resultSymbolBases.includes(s);
+              const nInResult = resultSymbolBases.get(s) || 0;
+              const isExtra = !(QUICK_SYMBOLS as readonly string[]).includes(s) && nInResult === 0;
+              const absent = nInResult === 0;
               return (
                 <button
                   key={s}
@@ -2071,14 +2133,30 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
                     borderRadius: 999,
                     fontSize: 11,
                     fontWeight: on ? 700 : 500,
-                    border: on ? "1px solid rgba(246,173,85,0.85)" : "1px solid rgba(255,255,255,0.12)",
-                    background: on ? "rgba(237,137,54,0.28)" : "rgba(26,32,44,0.8)",
-                    color: on ? "#fbd38d" : "#cbd5e0",
+                    border: on
+                      ? absent
+                        ? "1px solid rgba(252,129,129,0.85)"
+                        : "1px solid rgba(246,173,85,0.85)"
+                      : "1px solid rgba(255,255,255,0.12)",
+                    background: on
+                      ? absent
+                        ? "rgba(245,101,101,0.22)"
+                        : "rgba(237,137,54,0.28)"
+                      : "rgba(26,32,44,0.8)",
+                    color: on ? (absent ? "#feb2b2" : "#fbd38d") : absent ? "#718096" : "#cbd5e0",
                     cursor: "pointer",
+                    opacity: absent && !on ? 0.55 : 1,
                   }}
-                  title={isExtra ? "自由输入币种" : undefined}
+                  title={
+                    absent
+                      ? `本回测结果无 ${s}（点选会导致列表为空）`
+                      : isExtra
+                        ? "自由输入币种"
+                        : `${s} · ${nInResult} 条`
+                  }
                 >
                   {on ? `✓ ${s}` : s}
+                  {nInResult > 0 ? ` ${nInResult}` : " ·0"}
                   {on && isExtra ? " ✕" : ""}
                 </button>
               );
@@ -2225,7 +2303,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
             }}
           >
             <strong>
-              历史信号逐笔回测列表（共筛选出 {filteredItems.length} / {items.length} 条，点击任意行查看当时无未来数据快照 & 5席推理）
+              历史信号逐笔回测列表（共筛选出 {filteredItems.length} / {scopedItems.length} 条
+            {scopedItems.length !== items.length ? ` · 结果集 ${items.length}` : ""}
+            {filterMode !== "all" ? ` · 漏斗=${filterMode}` : ""}
+            ，点击任意行查看当时无未来数据快照 & 5席推理）
             </strong>
           </div>
 
@@ -2245,6 +2326,86 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
             }}
           >
             <span style={{ fontWeight: 800, color: "#f7fafc" }}>
+              {emptyFilterReason && (
+                <div
+                  style={{
+                    width: "100%",
+                    marginBottom: 8,
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(246,173,85,0.55)",
+                    background: "rgba(237,137,54,0.16)",
+                    color: "#fbd38d",
+                    fontSize: 12.5,
+                    lineHeight: 1.5,
+                    fontWeight: 600,
+                  }}
+                >
+                  列表为空：{emptyFilterReason}
+                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterMode("all");
+                        setPatternFilter("all");
+                        setSymbolFilter([]);
+                        setTfFilter("all");
+                        setSideFilter("all");
+                        setVerdictFilter("all");
+                        setSearchQ("");
+                      }}
+                      style={{
+                        padding: "4px 10px",
+                        borderRadius: 6,
+                        border: "1px solid rgba(246,173,85,0.7)",
+                        background: "rgba(237,137,54,0.28)",
+                        color: "#fbd38d",
+                        fontWeight: 700,
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                    >
+                      清除全部筛选
+                    </button>
+                    {symbolFilter.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSymbolFilter([])}
+                        style={{
+                          padding: "4px 10px",
+                          borderRadius: 6,
+                          border: "1px solid rgba(99,179,237,0.55)",
+                          background: "rgba(49,130,206,0.22)",
+                          color: "#90cdf4",
+                          fontWeight: 700,
+                          fontSize: 12,
+                          cursor: "pointer",
+                        }}
+                      >
+                        仅清除币种筛选
+                      </button>
+                    )}
+                    {filterMode !== "all" && (
+                      <button
+                        type="button"
+                        onClick={() => setFilterMode("all")}
+                        style={{
+                          padding: "4px 10px",
+                          borderRadius: 6,
+                          border: "1px solid rgba(72,187,120,0.55)",
+                          background: "rgba(56,161,105,0.22)",
+                          color: "#9ae6b4",
+                          fontWeight: 700,
+                          fontSize: 12,
+                          cursor: "pointer",
+                        }}
+                      >
+                        漏斗回到「全部」
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               筛选总计{" "}
               <strong style={{ color: "#63b3ed", fontSize: 15 }}>{filteredTotals.total}</strong>
               <span style={{ color: "#718096", fontWeight: 500 }}> / {filteredTotals.allTotal}</span>
