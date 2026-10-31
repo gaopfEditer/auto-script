@@ -237,15 +237,21 @@ interface Props {
 const ALL_TFS = ["15m", "1h", "4h", "1d"] as const;
 const QUICK_SYMBOLS = ["BTC", "ETH", "QQQ", "SNDK", "DOGE", "UNI", "NEAR"] as const;
 
-/** 与后端 AI_SIGNAL_SOURCE_OPTIONS / structure_backtest.KIND_OPTIONS + NLV 对齐 */
-const AI_SIGNAL_SOURCE_OPTIONS: { id: string; label: string }[] = [
-  { id: "nlv", label: "NLV 新高/新低末端+放量" },
-  { id: "bottom_secondary_test", label: "底部二次探底确认" },
-  { id: "shooting_star", label: "射击之星" },
-  { id: "consecutive_flat_shooting_star", label: "连续走平射击之星" },
-  { id: "hs_vegas_break", label: "顶部 · 头肩顶" },
-  { id: "m_top_vegas_break", label: "顶部 · M顶" },
-  { id: "liquidity_sweep", label: "顶部 · 流动性掠夺" },
+/** 与后端 AI_SIGNAL_SOURCE_OPTIONS 对齐（结构 + NLV + 短线 DCA） */
+const AI_SIGNAL_SOURCE_OPTIONS: { id: string; label: string; group?: string }[] = [
+  { id: "nlv", label: "NLV 新高/新低末端+放量", group: "nlv" },
+  { id: "bottom_secondary_test", label: "底部二次探底确认", group: "structure" },
+  { id: "shooting_star", label: "射击之星", group: "structure" },
+  { id: "consecutive_flat_shooting_star", label: "连续走平射击之星", group: "structure" },
+  { id: "hs_vegas_break", label: "顶部 · 头肩顶", group: "structure" },
+  { id: "m_top_vegas_break", label: "顶部 · M顶", group: "structure" },
+  { id: "liquidity_sweep", label: "顶部 · 流动性掠夺", group: "structure" },
+  { id: "dca", label: "短线DCA·全部(TD9/V射/倒锤)", group: "dca" },
+  { id: "dca_td9_buy", label: "DCA·TD9买(-9)", group: "dca" },
+  { id: "dca_td9_sell", label: "DCA·TD9卖(+9)", group: "dca" },
+  { id: "dca_v_shoot", label: "DCA·V射/V射2(维加斯近射击之星)", group: "dca" },
+  { id: "dca_shoot2", label: "DCA·射2(连续射击之星)", group: "dca" },
+  { id: "dca_inv_hammer", label: "DCA·倒锤子/V倒锤", group: "dca" },
 ];
 const ALL_AI_SIGNAL_KIND_IDS = AI_SIGNAL_SOURCE_OPTIONS.map((o) => o.id);
 const BT_UI_CACHE_KEY = "oi_mornitor.btc_backtest.ui_controls.v1";
@@ -1400,11 +1406,15 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
           <div style={{ fontSize: 11, color: "#68d391", marginBottom: 8, lineHeight: 1.45 }}>
             小止损=插针/结构失效位（信号棒影线或 defense/invalidLevel）· AI 通过后按此模拟，
             <strong style={{ color: "#9ae6b4" }}>不用</strong> Live 漏斗 ATR×k / 综合宽止损。
-            NLV 与所列形态共用 exit_plan RR（scaled / 2R / 3R）。
+            NLV / 结构形态 / 短线DCA（TD9·V射·倒锤）共用 exit_plan RR；NLV 请勾选「NLV」（与 DCA 模块不重复注入）。
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
             {AI_SIGNAL_SOURCE_OPTIONS.map((opt) => {
               const on = selectedSignalKinds.includes(opt.id);
+              const isDca = opt.group === "dca";
+              const onBorder = isDca ? "1px solid rgba(246,173,85,0.85)" : "1px solid rgba(72,187,120,0.85)";
+              const onBg = isDca ? "rgba(237,137,54,0.28)" : "rgba(56,161,105,0.28)";
+              const onColor = isDca ? "#fbd38d" : "#9ae6b4";
               return (
                 <button
                   key={opt.id}
@@ -1414,9 +1424,9 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
                   style={{
                     padding: "4px 10px",
                     borderRadius: 999,
-                    border: on ? "1px solid rgba(72,187,120,0.85)" : "1px solid rgba(160,174,192,0.28)",
-                    background: on ? "rgba(56,161,105,0.28)" : "rgba(45,55,72,0.55)",
-                    color: on ? "#9ae6b4" : "#e2e8f0",
+                    border: on ? onBorder : "1px solid rgba(160,174,192,0.28)",
+                    background: on ? onBg : "rgba(45,55,72,0.55)",
+                    color: on ? onColor : "#e2e8f0",
                     fontSize: 11.5,
                     fontWeight: 700,
                     cursor: "pointer",

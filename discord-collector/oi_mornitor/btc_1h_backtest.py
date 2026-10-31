@@ -69,16 +69,31 @@ QUICK_SYMBOLS = ("BTC", "ETH", "QQQ", "SNDK", "DOGE", "UNI", "NEAR")
 
 # AI 回测可选信号源（与 structure_backtest.KIND_OPTIONS + NLV 对齐；多选过滤后再进门禁/AI）
 AI_SIGNAL_SOURCE_OPTIONS: list[dict[str, str]] = [
-    {"id": "nlv", "label": "新高/新低末端+放量 (NLV)", "side": "both"},
-    {"id": "bottom_secondary_test", "label": "底部二次探底确认", "side": "bull"},
-    {"id": "shooting_star", "label": "射击之星", "side": "bear"},
-    {"id": "consecutive_flat_shooting_star", "label": "连续走平射击之星", "side": "bear"},
-    {"id": "hs_vegas_break", "label": "顶部 · 头肩顶", "side": "bear"},
-    {"id": "m_top_vegas_break", "label": "顶部 · M顶", "side": "bear"},
-    {"id": "liquidity_sweep", "label": "顶部 · 流动性掠夺", "side": "bear"},
+    {"id": "nlv", "label": "新高/新低末端+放量 (NLV)", "side": "both", "group": "nlv"},
+    {"id": "bottom_secondary_test", "label": "底部二次探底确认", "side": "bull", "group": "structure"},
+    {"id": "shooting_star", "label": "射击之星", "side": "bear", "group": "structure"},
+    {"id": "consecutive_flat_shooting_star", "label": "连续走平射击之星", "side": "bear", "group": "structure"},
+    {"id": "hs_vegas_break", "label": "顶部 · 头肩顶", "side": "bear", "group": "structure"},
+    {"id": "m_top_vegas_break", "label": "顶部 · M顶", "side": "bear", "group": "structure"},
+    {"id": "liquidity_sweep", "label": "顶部 · 流动性掠夺", "side": "bear", "group": "structure"},
+    # 短线 DCA（TD9 / Vegas形态）；NLV 复用上方 nlv，不在此重复
+    {"id": "dca", "label": "短线DCA·全部(TD9/V射/倒锤)", "side": "both", "group": "dca"},
+    {"id": "dca_td9_buy", "label": "DCA·TD9买(-9)", "side": "bull", "group": "dca"},
+    {"id": "dca_td9_sell", "label": "DCA·TD9卖(+9)", "side": "bear", "group": "dca"},
+    {"id": "dca_v_shoot", "label": "DCA·V射/V射2(维加斯近射击之星)", "side": "bear", "group": "dca"},
+    {"id": "dca_shoot2", "label": "DCA·射2(连续射击之星)", "side": "bear", "group": "dca"},
+    {"id": "dca_inv_hammer", "label": "DCA·倒锤子/V倒锤", "side": "bull", "group": "dca"},
 ]
 AI_SIGNAL_SOURCE_IDS = frozenset(o["id"] for o in AI_SIGNAL_SOURCE_OPTIONS)
 _NLV_KIND_IDS = frozenset({"nlv", "rev_vol_buy", "rev_vol_sell"})
+AI_DCA_KIND_IDS = frozenset({
+    "dca_td9_buy",
+    "dca_td9_sell",
+    "dca_v_shoot",
+    "dca_shoot2",
+    "dca_inv_hammer",
+})
+_AI_DCA_EXPAND = tuple(sorted(AI_DCA_KIND_IDS))
 
 
 def list_ai_signal_source_options() -> list[dict[str, str]]:
@@ -86,7 +101,7 @@ def list_ai_signal_source_options() -> list[dict[str, str]]:
 
 
 def _normalize_signal_kinds(raw: Any) -> list[str] | None:
-    """None/empty → legacy（不过滤、不注入 NLV）；非空 → 仅保留所选 id。"""
+    """None/empty → legacy（不过滤、不注入）；非空 → 所选 id；``dca`` 展开为各 DCA 子 kind。"""
     if raw is None:
         return None
     if isinstance(raw, str):
@@ -97,7 +112,14 @@ def _normalize_signal_kinds(raw: Any) -> list[str] | None:
         return None
     out: list[str] = []
     for p_ in parts:
-        if p_ in AI_SIGNAL_SOURCE_IDS and p_ not in out:
+        if p_ not in AI_SIGNAL_SOURCE_IDS:
+            continue
+        if p_ == "dca":
+            for kid in _AI_DCA_EXPAND:
+                if kid not in out:
+                    out.append(kid)
+            continue
+        if p_ not in out:
             out.append(p_)
     return out or None
 
@@ -110,6 +132,9 @@ def _kind_allowed(kind: str, allow: set[str] | None) -> bool:
         return True
     if "nlv" in allow and k in _NLV_KIND_IDS:
         return True
+    # raw allow may still contain meta id "dca" before expand
+    if "dca" in allow and k in AI_DCA_KIND_IDS:
+        return True
     return False
 
 
@@ -120,7 +145,7 @@ def _remap_chart_kind(kind: str, text: str) -> str:
     return kind
 
 
-# AI 过滤列出的形态：模拟必须用插针/结构失效位小止损（禁止综合 ATR 宽止损）
+# AI 过滤列出的形态 / DCA：模拟必须用插针/结构失效位小止损（禁止综合 ATR 宽止损）
 AI_PIN_SL_PATTERN_KINDS = frozenset({
     "bottom_secondary_test",
     "shooting_star",
@@ -128,8 +153,11 @@ AI_PIN_SL_PATTERN_KINDS = frozenset({
     "hs_vegas_break",
     "m_top_vegas_break",
     "liquidity_sweep",
-})
-_AI_CANDLE_PIN_KINDS = frozenset({"shooting_star", "consecutive_flat_shooting_star"})
+}) | AI_DCA_KIND_IDS
+_AI_CANDLE_PIN_KINDS = frozenset({
+    "shooting_star",
+    "consecutive_flat_shooting_star",
+}) | AI_DCA_KIND_IDS
 _AI_STRUCTURE_PIN_KINDS = frozenset({
     "bottom_secondary_test",
     "hs_vegas_break",
@@ -894,6 +922,8 @@ def _collect_tf_signals(
     base = human_base_asset(api_symbol)
     allow = set(signal_kinds) if signal_kinds else None
     want_nlv = bool(allow and "nlv" in allow)
+    want_dca_kinds = (allow & AI_DCA_KIND_IDS) if allow else set()
+    want_dca = bool(want_dca_kinds)
 
     payload = build_pattern_chart_payload(klines, oi_by_time=oi_map)
     for m in payload.get("markers") or []:
@@ -1120,6 +1150,93 @@ def _collect_tf_signals(
                     )
         except Exception as e:
             logger.warning("NLV inject on %s %s failed: %s", api_symbol, interval, e)
+
+    # 短线 DCA inject：TD9 / V射·射2 / 倒锤子（NLV 走上方 nlv 路径，此处不重复）
+    if want_dca and interval in ("15m", "1h", "4h") and klines and len(klines) >= 40:
+        try:
+            from oi_mornitor.strategy.dca_short_signals import (
+                compute_dca_signal_frame,
+                min_warmup_bars,
+            )
+
+            df_dca = klines_to_df(klines)
+            if df_dca is not None and not df_dca.empty and "open_time" in df_dca.columns:
+                need_vegas = bool(want_dca_kinds & {"dca_v_shoot", "dca_shoot2", "dca_inv_hammer"})
+                warm = int(min_warmup_bars(mode="confluence" if need_vegas else "td9"))
+                sig = compute_dca_signal_frame(df_dca)
+                n = len(df_dca)
+                last_i = n - 2
+                for bi in range(warm, max(warm, last_i + 1)):
+                    if bi > last_i or bi >= len(sig):
+                        break
+                    row = df_dca.iloc[bi]
+                    t_sec = int(row["open_time"]) // 1000
+                    if not (cutoff_start_sec <= t_sec < cutoff_end_sec):
+                        continue
+                    srow = sig.iloc[bi]
+                    near_v = bool(srow.get("near_v"))
+                    shoot = bool(srow.get("shoot"))
+                    ss2 = bool(srow.get("ss2"))
+                    inv_s = bool(srow.get("inv_s"))
+                    td_os = bool(srow.get("td_os"))
+                    td_ob = bool(srow.get("td_ob"))
+                    sig_h = float(row["high"])
+                    sig_l = float(row["low"])
+                    next_open = float(df_dca.iloc[bi + 1]["open"])
+                    existing = by_time.setdefault(t_sec, [])
+
+                    def _append_dca(kind: str, side: str, text_label: str) -> None:
+                        if kind not in want_dca_kinds:
+                            return
+                        if any(x.get("kind") == kind for x in existing):
+                            return
+                        invalid = sig_h if side == "short" else sig_l
+                        existing.append(
+                            {
+                                "time": t_sec,
+                                "kind": kind,
+                                "text": text_label,
+                                "side": side,
+                                "oi_anomaly": False,
+                                "source": "dca",
+                                "timeframe": interval,
+                                "signal_high": sig_h,
+                                "signal_low": sig_l,
+                                "invalid_level": invalid,
+                                "defense": invalid,
+                                "sl_anchor": "signal_wick",
+                                "dca_meta": {
+                                    "bar_index": bi,
+                                    "near_v": near_v,
+                                    "ss2": ss2,
+                                    "td": int(srow.get("td") or 0),
+                                    "label": str(srow.get("label") or ""),
+                                    "score": int(srow.get("score") or 0),
+                                    "next_bar_open": next_open,
+                                    "signal_high": sig_h,
+                                    "signal_low": sig_l,
+                                    "exit_plan": exit_plan,
+                                },
+                            }
+                        )
+
+                    if td_os:
+                        _append_dca("dca_td9_buy", "long", "DCA·TD9买(-9)")
+                    if td_ob:
+                        _append_dca("dca_td9_sell", "short", "DCA·TD9卖(+9)")
+                    if shoot and near_v:
+                        lab = "DCA·V射2" if ss2 else "DCA·V射"
+                        _append_dca("dca_v_shoot", "short", lab)
+                    elif shoot and ss2:
+                        _append_dca("dca_shoot2", "short", "DCA·射2")
+                    if inv_s and not shoot:
+                        _append_dca(
+                            "dca_inv_hammer",
+                            "long",
+                            "DCA·V倒锤" if near_v else "DCA·倒锤",
+                        )
+        except Exception as e:
+            logger.warning("DCA inject on %s %s failed: %s", api_symbol, interval, e)
 
     # Drop empty buckets
     return {t: metas for t, metas in by_time.items() if metas}
@@ -2275,7 +2392,11 @@ async def _run_single_symbol_backtest(
                     inv_f = float(inv_raw) if inv_raw is not None else None
                 except (TypeError, ValueError):
                     inv_f = None
-                entry_pin = float(next_open_px) if next_open_px and next_open_px > 0 else float(entry_price)
+                dca_m = pin_meta.get("dca_meta") if isinstance(pin_meta.get("dca_meta"), dict) else None
+                if dca_m and float(dca_m.get("next_bar_open") or 0) > 0:
+                    entry_pin = float(dca_m["next_bar_open"])
+                else:
+                    entry_pin = float(next_open_px) if next_open_px and next_open_px > 0 else float(entry_price)
                 pin_h, pin_l, sl_src = _resolve_pin_sl_prices(
                     side=side_pin,
                     signal_high=sig_h,
