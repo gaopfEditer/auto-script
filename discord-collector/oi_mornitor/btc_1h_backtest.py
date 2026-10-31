@@ -120,15 +120,105 @@ def _remap_chart_kind(kind: str, text: str) -> str:
     return kind
 
 
-def _build_nlv_trade_plan(
+# AI 过滤列出的形态：模拟必须用插针/结构失效位小止损（禁止综合 ATR 宽止损）
+AI_PIN_SL_PATTERN_KINDS = frozenset({
+    "bottom_secondary_test",
+    "shooting_star",
+    "consecutive_flat_shooting_star",
+    "hs_vegas_break",
+    "m_top_vegas_break",
+    "liquidity_sweep",
+})
+_AI_CANDLE_PIN_KINDS = frozenset({"shooting_star", "consecutive_flat_shooting_star"})
+_AI_STRUCTURE_PIN_KINDS = frozenset({
+    "bottom_secondary_test",
+    "hs_vegas_break",
+    "m_top_vegas_break",
+    "liquidity_sweep",
+})
+
+
+def _ohlc_at_sec(klines: list[list[Any]], t_sec: int) -> tuple[float, float, float, float] | None:
+    """Return (o,h,l,c) for bar open_sec == t_sec."""
+    for row in klines:
+        try:
+            if int(row[0]) // 1000 == int(t_sec):
+                return float(row[1]), float(row[2]), float(row[3]), float(row[4])
+        except (TypeError, ValueError, IndexError):
+            continue
+    return None
+
+
+def _resolve_pin_sl_prices(
+    *,
+    side: str,
+    signal_high: float,
+    signal_low: float,
+    invalid_level: float | None = None,
+    kind: str = "",
+    entry: float | None = None,
+) -> tuple[float, float, str]:
+    """Return (pin_high, pin_low, sl_source) for _pin_extreme_plan.
+
+    - 蜡烛：信号棒影线极值
+    - 结构：优先 defense/invalid；若失效位已在入场错误一侧 → 退回信号棒影线
+    """
+    hi = float(signal_high)
+    lo = float(signal_low)
+    inv: float | None = None
+    if invalid_level is not None:
+        try:
+            inv = float(invalid_level)
+        except (TypeError, ValueError):
+            inv = None
+    is_short = str(side).lower() in ("short", "bear", "sell")
+    k = str(kind or "")
+    entry_f = float(entry) if entry is not None and float(entry) > 0 else None
+    src = "signal_wick"
+
+    if k in _AI_STRUCTURE_PIN_KINDS and inv is not None and inv > 0:
+        ok_side = (is_short and (entry_f is None or inv > entry_f)) or (
+            (not is_short) and (entry_f is None or inv < entry_f)
+        )
+        if ok_side:
+            if is_short:
+                hi = inv
+            else:
+                lo = inv
+            src = "structure_invalid"
+        else:
+            # 失效位穿入场价 → 用影线极值保小止损可用
+            src = "signal_wick_fallback"
+    elif k in _AI_CANDLE_PIN_KINDS:
+        src = "signal_wick"
+    elif inv is not None and inv > 0:
+        ok_side = (is_short and (entry_f is None or inv > entry_f)) or (
+            (not is_short) and (entry_f is None or inv < entry_f)
+        )
+        if ok_side:
+            if is_short:
+                hi = inv
+            else:
+                lo = inv
+            src = "structure_invalid"
+    return hi, lo, src
+
+
+def _build_pin_invalid_trade_plan(
     *,
     side: str,
     entry: float,
     signal_high: float,
     signal_low: float,
     exit_plan: str | None = None,
+    strategy_id: str = "pin_invalid",
+    kind: str = "",
+    sl_source: str = "pin_extreme",
 ) -> dict[str, Any]:
-    """NLV 插针止损 + RR 方案 → simulate_tight_sl_outcome 兼容 dict。"""
+    """插针/结构失效位小止损 + RR → simulate_tight_sl_outcome 兼容 dict。
+
+    与 NLV 共用 `_pin_extreme_plan`（R=|entry−pin|，风险过滤 0.2–2%，禁止 ATR 加宽）。
+    """
     try:
         from oi_mornitor.backtest.nlv_pipeline import (
             NLV_DEFAULT_EXIT_PLAN,
@@ -155,9 +245,10 @@ def _build_nlv_trade_plan(
     risk = abs(entry_f - sl)
     sl_pct = (risk / entry_f * 100.0) if entry_f > 0 else 0.0
     meta = NLV_EXIT_PLANS[plan_id]
+    sid = str(strategy_id or "pin_invalid")
     return {
-        "plan_kind": f"nlv_pin_{plan_id}",
-        "strategy_id": "nlv",
+        "plan_kind": f"{sid}_pin_{plan_id}",
+        "strategy_id": sid,
         "matched": True,
         "should_enter": True,
         "side": side_n,
@@ -173,8 +264,31 @@ def _build_nlv_trade_plan(
         "rr_tp1": float(meta.get("tp1_r") or settle.tp1_r or 0),
         "rr_tp2": float(meta.get("tp2_r") or settle.tp2_r or 0),
         "exit_plan": plan_id,
-        "trail": f"NLV 插针止损 · {meta.get('desc') or plan_id}",
+        "sl_source": sl_source,
+        "signal_kind": kind or sid,
+        "trail": f"小止损=插针/结构失效位 · {meta.get('desc') or plan_id}",
     }
+
+
+def _build_nlv_trade_plan(
+    *,
+    side: str,
+    entry: float,
+    signal_high: float,
+    signal_low: float,
+    exit_plan: str | None = None,
+) -> dict[str, Any]:
+    """NLV 插针止损 + RR（薄封装）。"""
+    return _build_pin_invalid_trade_plan(
+        side=side,
+        entry=entry,
+        signal_high=signal_high,
+        signal_low=signal_low,
+        exit_plan=exit_plan,
+        strategy_id="nlv",
+        kind="nlv",
+        sl_source="nlv_pin_extreme",
+    )
 
 
 
@@ -804,6 +918,11 @@ def _collect_tf_signals(
             )
             else "long"
         )
+        ohlc = _ohlc_at_sec(klines, t_sec)
+        sig_h = float(ohlc[1]) if ohlc else float(m.get("price") or 0)
+        sig_l = float(ohlc[2]) if ohlc else 0.0
+        # 射击之星类：失效=信号棒高点（插针极值）；倒锤子类用低点
+        invalid = sig_h if side == "short" else sig_l
         by_time.setdefault(t_sec, []).append(
             {
                 "time": t_sec,
@@ -813,6 +932,11 @@ def _collect_tf_signals(
                 "oi_anomaly": bool(m.get("oi_anomaly")),
                 "source": "chart_pattern",
                 "timeframe": interval,
+                "signal_high": sig_h,
+                "signal_low": sig_l,
+                "invalid_level": invalid if invalid > 0 else None,
+                "defense": invalid if invalid > 0 else None,
+                "sl_anchor": "signal_wick",
             }
         )
 
@@ -831,6 +955,16 @@ def _collect_tf_signals(
                     label = f"{ev.get('type_label', '结构信号')}({ev.get('pattern_label', '')})".rstrip("()")
                     existing = by_time.setdefault(t_sec, [])
                     if not any(x.get("text") == label for x in existing):
+                        row = df.iloc[idx]
+                        sig_h = float(row["high"])
+                        sig_l = float(row["low"])
+                        defense = ev.get("defense")
+                        try:
+                            inv = float(defense) if defense is not None else None
+                        except (TypeError, ValueError):
+                            inv = None
+                        if inv is None or inv <= 0:
+                            inv = sig_h if side == "short" else sig_l
                         existing.append(
                             {
                                 "time": t_sec,
@@ -840,6 +974,12 @@ def _collect_tf_signals(
                                 "oi_anomaly": bool(ev.get("oi_anomaly")),
                                 "source": "structure_signal",
                                 "timeframe": interval,
+                                "signal_high": sig_h,
+                                "signal_low": sig_l,
+                                "defense": defense,
+                                "invalid_level": inv,
+                                "sl_anchor": "structure_invalid",
+                                "bar_index": idx,
                             }
                         )
     except Exception as e:
@@ -2069,9 +2209,14 @@ async def _run_single_symbol_backtest(
             marker_oi_anomaly=marker_oi_anom,
         )
 
-        # Trade plan: NLV pin+RR when injected; else 15m tight-SL; else 综合止盈止损.
+        # Trade plan priority:
+        # 1) NLV / listed AI 形态 → 插针或结构失效位小止损（禁止综合 ATR 宽止损）
+        # 2) 15m tight-SL button path
+        # 3) legacy 综合止盈止损（仅非上述种类）
         trade_plan: dict[str, Any] = {}
         is_nlv_hit = any(k in _NLV_KIND_IDS for k in kinds) or ("nlv" in sources)
+        pin_kinds_hit = [k for k in kinds if k in AI_PIN_SL_PATTERN_KINDS]
+        is_pin_pattern = bool(pin_kinds_hit)
         is_tight_sl_hit = ("tight_sl_15m" in kinds) or ("tight_sl_15m" in sources)
         plan_df = tf_enriched.get(sig_tf)
         htf_trends = {
@@ -2079,6 +2224,14 @@ async def _run_single_symbol_backtest(
             "4h": tf_map.get("4h") or {},
             "1d": tf_map.get("1d") or {},
         }
+        # Prefer next-bar open entry for closed-bar pin sims when available
+        next_open_px: float | None = None
+        try:
+            if bar_idx + 1 < len(tf_klines[sig_tf]):
+                next_open_px = float(tf_klines[sig_tf][bar_idx + 1][1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            next_open_px = None
+
         if is_nlv_hit:
             try:
                 nlv_m = next(
@@ -2103,6 +2256,65 @@ async def _run_single_symbol_backtest(
                             tf_map[sig_tf]["nlv_trade_plan"] = trade_plan
             except Exception as e:
                 logger.debug("NLV trade plan build failed: %s", e)
+
+        if (not trade_plan) and is_pin_pattern:
+            try:
+                # Prefer meta from the first matching pin kind on this bar
+                pin_meta = next(
+                    (x for x in bms if str(x.get("kind") or "") in AI_PIN_SL_PATTERN_KINDS),
+                    {},
+                )
+                pk = str(pin_meta.get("kind") or pin_kinds_hit[0])
+                side_pin = str(pin_meta.get("side") or signal_side)
+                sig_h = float(pin_meta.get("signal_high") or bar_row[2])
+                sig_l = float(pin_meta.get("signal_low") or bar_row[3])
+                inv_raw = pin_meta.get("invalid_level")
+                if inv_raw is None:
+                    inv_raw = pin_meta.get("defense")
+                try:
+                    inv_f = float(inv_raw) if inv_raw is not None else None
+                except (TypeError, ValueError):
+                    inv_f = None
+                entry_pin = float(next_open_px) if next_open_px and next_open_px > 0 else float(entry_price)
+                pin_h, pin_l, sl_src = _resolve_pin_sl_prices(
+                    side=side_pin,
+                    signal_high=sig_h,
+                    signal_low=sig_l,
+                    invalid_level=inv_f,
+                    kind=pk,
+                    entry=entry_pin,
+                )
+                trade_plan = _build_pin_invalid_trade_plan(
+                    side=side_pin,
+                    entry=entry_pin,
+                    signal_high=pin_h,
+                    signal_low=pin_l,
+                    exit_plan=exit_plan_norm,
+                    strategy_id=pk,
+                    kind=pk,
+                    sl_source=sl_src,
+                )
+                # 结构失效位风险越界时，再试信号棒影线（仍禁止 ATR 宽止损）
+                if (not trade_plan) and pk in _AI_STRUCTURE_PIN_KINDS and sl_src != "signal_wick":
+                    trade_plan = _build_pin_invalid_trade_plan(
+                        side=side_pin,
+                        entry=entry_pin,
+                        signal_high=sig_h,
+                        signal_low=sig_l,
+                        exit_plan=exit_plan_norm,
+                        strategy_id=pk,
+                        kind=pk,
+                        sl_source="signal_wick_risk_fallback",
+                    )
+                if trade_plan:
+                    entry_price = round(
+                        entry_pin,
+                        6 if entry_price_needs_precision(api_symbol) else 2,
+                    )
+                    tf_map[sig_tf]["pin_invalid_trade_plan"] = trade_plan
+            except Exception as e:
+                logger.debug("pin/invalid trade plan build failed: %s", e)
+
         if (not trade_plan) and is_tight_sl_hit and sig_tf == "15m" and df15_tight is not None and 0 <= bar_idx < len(df15_tight):
             try:
                 # Prefer precomputed plan from collect inject if present
@@ -2128,7 +2340,13 @@ async def _run_single_symbol_backtest(
                         tf_map["15m"]["bias"] = trade_plan["side"]
             except Exception as e:
                 logger.debug("evaluate_bar_15m_tight_sl in backtest failed: %s", e)
-        elif (not trade_plan) and plan_df is not None and 0 <= bar_idx < len(plan_df):
+        elif (
+            (not trade_plan)
+            and (not is_nlv_hit)
+            and (not is_pin_pattern)
+            and plan_df is not None
+            and 0 <= bar_idx < len(plan_df)
+        ):
             try:
                 trade_plan = compute_composite_trade_plan(
                     plan_df,

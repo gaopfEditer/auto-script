@@ -1397,6 +1397,11 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
             AI 过滤信号源（可多选 · 已选 {selectedSignalKinds.length}
             {selectedSignalKinds.length === 0 ? " · 空=原形态全集/不注入NLV" : " · 仅这些种类进门禁/AI后再模拟"}）
           </div>
+          <div style={{ fontSize: 11, color: "#68d391", marginBottom: 8, lineHeight: 1.45 }}>
+            小止损=插针/结构失效位（信号棒影线或 defense/invalidLevel）· AI 通过后按此模拟，
+            <strong style={{ color: "#9ae6b4" }}>不用</strong> Live 漏斗 ATR×k / 综合宽止损。
+            NLV 与所列形态共用 exit_plan RR（scaled / 2R / 3R）。
+          </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
             {AI_SIGNAL_SOURCE_OPTIONS.map((opt) => {
               const on = selectedSignalKinds.includes(opt.id);
@@ -2618,7 +2623,18 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
                     <strong style={{ color: "#e9d8fd" }}>
-                      {(planOf(selectedItem)?.plan_kind === "tight_sl_15m" || planOf(selectedItem)?.strategy_id === "tight_sl_15m") ? `🎯 15m 小止损策略共振（${planOf(selectedItem)?.pillar_count || 0}/3 维共振）` : `📐 综合止盈止损（形态极值+支撑压力+均线+ATR）`}
+                      {(() => {
+                        const pk = String(planOf(selectedItem)?.plan_kind || "");
+                        const sid = String(planOf(selectedItem)?.strategy_id || "");
+                        if (pk === "tight_sl_15m" || sid === "tight_sl_15m") {
+                          return `🎯 15m 小止损策略共振（${planOf(selectedItem)?.pillar_count || 0}/3 维共振）`;
+                        }
+                        if (pk.includes("_pin_") || sid === "nlv" || String(planOf(selectedItem)?.sl_source || "").includes("pin") || String(planOf(selectedItem)?.sl_source || "").includes("invalid") || String(planOf(selectedItem)?.sl_source || "").includes("wick")) {
+                          const src = planOf(selectedItem)?.sl_source || "pin/invalid";
+                          return `📌 小止损=插针/结构失效位（${src} · ${pk || sid}）`;
+                        }
+                        return `📐 综合止盈止损（形态极值+支撑压力+均线+ATR）`;
+                      })()}
                     </strong>
                     <span
                       style={{
