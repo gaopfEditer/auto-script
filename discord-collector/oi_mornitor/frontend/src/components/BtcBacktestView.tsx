@@ -311,10 +311,93 @@ function normSymList(arr: unknown, fallback: string[]): string[] {
   return out.length ? out : fallback;
 }
 
+
 function symbolBaseOf(item: { symbol?: string; symbol_base?: string } | null | undefined): string {
   if (!item) return "";
   if (item.symbol_base) return String(item.symbol_base).toUpperCase();
   return String(item.symbol || "").replace(/USDT$/i, "").toUpperCase();
+}
+
+/** 统一漏斗 / chip / 列表脚部分类（同一套规则，避免「对不上」） */
+type FunnelBucket =
+  | "all"
+  | "small_sl"
+  | "gate_pass"
+  | "active_ai"
+  | "ai_wait"
+  | "ai_skipped"
+  | "ai_error"
+  | "gate_reject";
+
+function planOfItem(item: BacktestSignalItem | null | undefined): Record<string, any> {
+  if (!item) return {};
+  const tp = item.trade_plan;
+  if (tp && typeof tp === "object" && (tp.entry != null || tp.sl != null || tp.plan_kind)) return tp as any;
+  const c = item.composite_trade_plan;
+  if (c && typeof c === "object" && (c.entry != null || c.sl != null || c.plan_kind)) return c as any;
+  const t = item.tight_sl_strategy;
+  if (t && typeof t === "object") return t as any;
+  return {};
+}
+
+/** 小止损：15m tight_sl 或 插针/结构失效 pin 计划（NLV/形态/DCA） */
+function isSmallStopItem(item: BacktestSignalItem): boolean {
+  const ts = item.tight_sl_strategy as any;
+  if (
+    ts &&
+    Boolean(ts.matched) &&
+    (ts.plan_kind === "tight_sl_15m" || ts.strategy_id === "tight_sl_15m" || Boolean(ts.should_enter))
+  ) {
+    return true;
+  }
+  const p = planOfItem(item);
+  const pk = String(p.plan_kind || "");
+  const sid = String(p.strategy_id || "");
+  const src = String(p.sl_source || "");
+  if (pk === "tight_sl_15m" || sid === "tight_sl_15m") return true;
+  if (pk.includes("_pin_")) return true;
+  if (/pin|wick|invalid/i.test(src)) return true;
+  return false;
+}
+
+function aiStatusOf(item: BacktestSignalItem): string {
+  const st = String(item.ai_status || "").toLowerCase();
+  if (st) return st;
+  if (item.gate_result === "reject") return "gate_blocked";
+  if (item.llm) return "judged";
+  if (item.llm_error) return "error";
+  return "skipped";
+}
+
+function isAiDoItem(item: BacktestSignalItem): boolean {
+  return aiStatusOf(item) === "judged" && (item.action === "LONG" || item.action === "SHORT");
+}
+
+function isAiDontItem(item: BacktestSignalItem): boolean {
+  return aiStatusOf(item) === "judged" && (item.action === "NO_TRADE" || item.action === "WATCH");
+}
+
+function matchesFunnelBucket(item: BacktestSignalItem, bucket: FunnelBucket): boolean {
+  switch (bucket) {
+    case "all":
+      return true;
+    case "small_sl":
+      return isSmallStopItem(item);
+    case "gate_pass":
+      return item.gate_result === "pass";
+    case "active_ai":
+      return isAiDoItem(item);
+    case "ai_wait":
+      return item.gate_result === "pass" && isAiDontItem(item);
+    case "ai_skipped":
+      return aiStatusOf(item) === "skipped";
+    case "ai_error":
+      return aiStatusOf(item) === "error";
+    case "gate_reject":
+      return item.gate_result === "reject";
+    default:
+      return true;
+  }
 }
 
 function defaultStartLocal(): string {
@@ -739,7 +822,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     const tfs = ["15m"];
     setSelectedSymbols(syms);
     setSelectedTfs(tfs);
-    setFilterMode("tight_sl_15m");
+    setFilterMode("small_sl");
     setSymbolFilter([]);
     setRunningMode("fast");
     setErr("");
@@ -826,45 +909,20 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
   const items = data?.items ?? [];
   const summary = data?.summary;
 
-  const filteredItems = useMemo(() => {
+  /** 次级筛选（币种/周期/方向/搜索…）—— 漏斗 chip 计数与列表共用此范围 */
+  const scopedItems = useMemo(() => {
     return items.filter((item) => {
-      if (filterMode === "tight_sl_15m") {
-        const ts = item.tight_sl_strategy as any;
-        const isTight =
-          Boolean(ts?.matched) &&
-          (ts?.plan_kind === "tight_sl_15m" || ts?.strategy_id === "tight_sl_15m" || Boolean(ts?.should_enter));
-        if (!isTight) return false;
-      }
-      if (filterMode === "gate_pass" && item.gate_result !== "pass") return false;
-      if (filterMode === "gate_reject" && item.gate_result !== "reject") return false;
-      if (filterMode === "active_ai") {
-        if (item.action !== "LONG" && item.action !== "SHORT") return false;
-        if (item.ai_status && item.ai_status !== "judged") return false;
-      }
-      if (filterMode === "LONG" && item.action !== "LONG") return false;
-      if (filterMode === "SHORT" && item.action !== "SHORT") return false;
-      if (filterMode === "ai_wait") {
-        if (item.gate_result !== "pass") return false;
-        if (item.ai_status === "skipped" || item.ai_status === "error") return false;
-        if (item.action !== "NO_TRADE" && item.action !== "WATCH") return false;
-      }
-      if (filterMode === "ai_error" && item.ai_status !== "error") return false;
-      if (filterMode === "ai_skipped" && item.ai_status !== "skipped") return false;
-
       if (sideFilter !== "all" && item.signal_side !== sideFilter) return false;
       if (tfFilter !== "all" && item.timeframe !== tfFilter) return false;
       if (symbolFilter.length > 0) {
         const base = symbolBaseOf(item);
         if (!symbolFilter.includes(base)) return false;
       }
-
       if (verdictFilter === "win" && item.outcome.verdict !== "ai_win") return false;
       if (verdictFilter === "saved" && item.outcome.verdict !== "gate_saved" && item.outcome.verdict !== "ai_saved") return false;
       if (verdictFilter === "missed" && item.outcome.verdict !== "gate_missed" && item.outcome.verdict !== "ai_missed") return false;
       if (verdictFilter === "loss" && item.outcome.verdict !== "ai_loss") return false;
-
       if (patternFilter !== "all" && !item.signal_name.includes(patternFilter)) return false;
-
       if (searchQ.trim()) {
         const q = searchQ.trim().toLowerCase();
         const hay = `${item.signal_name} ${item.timeframe} ${item.symbol} ${item.bar_open_iso} ${item.rationale || ""} ${(item.gate_reasons || []).join(" ")}`.toLowerCase();
@@ -872,7 +930,47 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       }
       return true;
     });
-  }, [items, filterMode, sideFilter, verdictFilter, patternFilter, tfFilter, symbolFilter, searchQ]);
+  }, [items, sideFilter, verdictFilter, patternFilter, tfFilter, symbolFilter, searchQ]);
+
+  /** 漏斗各桶计数（= scopedItems，不含 filterMode；点 chip 再缩列表） */
+  const funnelCounts = useMemo(() => {
+    const rows = scopedItems;
+    const count = (b: FunnelBucket) => rows.reduce((n, it) => n + (matchesFunnelBucket(it, b) ? 1 : 0), 0);
+    return {
+      all: rows.length,
+      allGlobal: items.length,
+      small_sl: count("small_sl"),
+      gate_pass: count("gate_pass"),
+      active_ai: count("active_ai"),
+      ai_wait: count("ai_wait"),
+      ai_skipped: count("ai_skipped"),
+      ai_error: count("ai_error"),
+      gate_reject: count("gate_reject"),
+      scoped: symbolFilter.length > 0 || tfFilter !== "all" || sideFilter !== "all" || Boolean(searchQ.trim()) || patternFilter !== "all" || verdictFilter !== "all",
+    };
+  }, [scopedItems, items.length, symbolFilter.length, tfFilter, sideFilter, searchQ, patternFilter, verdictFilter]);
+
+  const filteredItems = useMemo(() => {
+    // filterMode 映射到统一漏斗桶（LONG/SHORT 仍单独保留）
+    const modeToBucket: Record<string, FunnelBucket | null> = {
+      all: null,
+      tight_sl_15m: "small_sl",
+      small_sl: "small_sl",
+      gate_pass: "gate_pass",
+      active_ai: "active_ai",
+      ai_wait: "ai_wait",
+      ai_skipped: "ai_skipped",
+      ai_error: "ai_error",
+      gate_reject: "gate_reject",
+    };
+    return scopedItems.filter((item) => {
+      if (filterMode === "LONG") return item.action === "LONG";
+      if (filterMode === "SHORT") return item.action === "SHORT";
+      const bucket = modeToBucket[filterMode];
+      if (bucket) return matchesFunnelBucket(item, bucket);
+      return true;
+    });
+  }, [scopedItems, filterMode]);
 
   /** Totals for the currently filtered table rows (币种筛选等全部生效). */
   const filteredTotals = useMemo(() => {
@@ -896,19 +994,17 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     // Totals sample follows active filter chips. Selecting 「门禁通过」 MUST use that
     // gate-pass set (composite SL/TP sums) — never silently shrink to tiny AI做.
     // On 「全部」: prefer AI做 only when n is large enough; else fall back to 门禁过.
-    const isTightFilter = filterMode === "tight_sl_15m";
+    const isTightFilter = filterMode === "tight_sl_15m" || filterMode === "small_sl";
     const isGatePassFilter = filterMode === "gate_pass";
     const isAiDoFilter =
       filterMode === "active_ai" || filterMode === "LONG" || filterMode === "SHORT";
     const doRows = rows.filter(
       (x) =>
-        (x.ai_status === "judged" && (x.action === "LONG" || x.action === "SHORT")) ||
-        (isTightFilter &&
-          Boolean(x.tight_sl_strategy?.should_enter) &&
-          (x.action === "LONG" || x.action === "SHORT")),
+        isAiDoItem(x) ||
+        (isTightFilter && isSmallStopItem(x) && (x.action === "LONG" || x.action === "SHORT")),
     );
     const enterGateRows = isTightFilter
-      ? rows.filter((x) => x.gate_result === "pass" && Boolean(x.tight_sl_strategy?.should_enter))
+      ? rows.filter((x) => x.gate_result === "pass" && isSmallStopItem(x))
       : [];
     const gatePassRows = rows.filter((x) => x.gate_result === "pass");
 
@@ -962,11 +1058,11 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     for (const x of rows) {
       if (x.gate_result === "pass") gatePass += 1;
       else if (x.gate_result === "reject") gateReject += 1;
-      const st = String(x.ai_status || "").toLowerCase();
+      const st = aiStatusOf(x);
       if (st === "judged") {
         aiJudged += 1;
-        if (x.action === "LONG" || x.action === "SHORT") aiDo += 1;
-        else aiDont += 1;
+        if (isAiDoItem(x)) aiDo += 1;
+        else if (isAiDontItem(x)) aiDont += 1;
       } else if (st === "skipped") aiSkipped += 1;
       else if (st === "error") aiError += 1;
       else if (st === "gate_blocked") aiGateBlocked += 1;
@@ -1914,14 +2010,14 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
           {[
-            { id: "all", label: `全部 (${items.length})` },
-            { id: "tight_sl_15m", label: `🎯 15m小止损 (${summary?.tight_sl_15m_stats?.total_signals ?? items.filter((x) => { const t = x.tight_sl_strategy as any; return t?.matched && (t?.plan_kind === "tight_sl_15m" || t?.strategy_id === "tight_sl_15m" || t?.should_enter); }).length})` },
-            { id: "gate_pass", label: `✅ 门禁通过 (${summary?.gate_pass_count ?? 0})` },
-            { id: "active_ai", label: `🎯 AI开仓 LONG/SHORT (${summary?.ai_do_count ?? summary?.active_trade_count ?? 0})` },
-            { id: "ai_wait", label: `🟡 AI不做 NO_TRADE/WATCH (${summary?.ai_dont_count ?? "—"})` },
-            { id: "ai_skipped", label: `⏸ 未跑AI (${summary?.ai_skipped_count ?? 0})` },
-            { id: "ai_error", label: `⚠ AI失败 (${summary?.ai_error_count ?? 0})` },
-            { id: "gate_reject", label: `🛡️ 门禁拦截 (${summary?.gate_reject_count ?? 0})` },
+            { id: "all", label: `全部 (${funnelCounts.all}${funnelCounts.scoped && funnelCounts.all !== funnelCounts.allGlobal ? ` · 全集${funnelCounts.allGlobal}` : ""})` },
+            { id: "small_sl", label: `🎯 小止损·插针 (${funnelCounts.small_sl})` },
+            { id: "gate_pass", label: `✅ 门禁通过 (${funnelCounts.gate_pass})` },
+            { id: "active_ai", label: `🎯 AI开仓 LONG/SHORT (${funnelCounts.active_ai})` },
+            { id: "ai_wait", label: `🟡 AI不做 NO_TRADE/WATCH (${funnelCounts.ai_wait})` },
+            { id: "ai_skipped", label: `⏸ 未跑AI (${funnelCounts.ai_skipped})` },
+            { id: "ai_error", label: `⚠ AI失败 (${funnelCounts.ai_error})` },
+            { id: "gate_reject", label: `🛡️ 门禁拦截 (${funnelCounts.gate_reject})` },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -2152,6 +2248,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               筛选总计{" "}
               <strong style={{ color: "#63b3ed", fontSize: 15 }}>{filteredTotals.total}</strong>
               <span style={{ color: "#718096", fontWeight: 500 }}> / {filteredTotals.allTotal}</span>
+              <span style={{ color: "#718096", fontWeight: 500, marginLeft: 6, fontSize: 11 }} title="漏斗 chip 与本行共用：先按币种/周期/方向/搜索定范围，再按 chip 桶分类。AI做=ai_status judged 且 action LONG/SHORT；小止损=插针/pin 或 15m tight_sl。">
+                · 口径=漏斗
+                {funnelCounts.scoped ? "（已按币种等收窄）" : ""}
+              </span>
             </span>
             <span style={{ color: "#4a5568" }}>|</span>
             <span>
