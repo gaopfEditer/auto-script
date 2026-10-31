@@ -690,9 +690,9 @@ def _apply_tier_filters(
         )
     if not skip_mcap:
         out = filter_by_mcap_tier(out, mcap_tier=mcap_f)
-    from oi_mornitor.signal_confluence import sort_records_by_confluence_score
-
-    return sort_records_by_confluence_score(out)
+    # 形态信号列表：始终按信号时间降序（最新在前）；共振分仅作展示字段
+    out.sort(key=lambda r: int(r.get("signalAt") or 0), reverse=True)
+    return out
 
 
 def list_alert_stats_page(
@@ -824,14 +824,12 @@ def list_alert_stats_page(
         )
     )
     if not tier_active:
-        from oi_mornitor.signal_confluence import (
-            attach_signal_confluence,
-            sort_records_by_confluence_score,
-        )
+        from oi_mornitor.signal_confluence import attach_signal_confluence
 
         attach_mtf_resonance(filtered, peer_records=mtf_peer_pool)
         attach_signal_confluence(filtered)
-        filtered = sort_records_by_confluence_score(filtered)
+        # 默认列表按日期最新在前（勿按共振分重排，否则旧高分会盖住新信号）
+        filtered.sort(key=lambda r: int(r.get("signalAt") or 0), reverse=True)
     mcap_opts = list_mcap_tier_options(
         _tier_rows(
             filter_alert_stats(

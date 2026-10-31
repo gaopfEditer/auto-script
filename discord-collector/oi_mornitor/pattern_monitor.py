@@ -1336,28 +1336,26 @@ class PatternMonitorEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("形态+OI 短线扫描失败: %s", exc)
 
-        from oi_mornitor.config import REV_VOL_CARD_TELEGRAM as _REV_VOL_SCAN
-
-        if is_candle_push_enabled() or is_structure_push_enabled() or _REV_VOL_SCAN:
-            try:
-                card_alerts = await asyncio.wait_for(
-                    self._scan_candle_pattern_cards(
-                        session,
-                        base_url=base_url,
-                        klines_map=klines_map,
-                        watchlist=watchlist,
-                        pool_rows=self._last_pool_rows,
-                        scan_ts=self._last_scan_ts,
-                    ),
-                    timeout=120,
-                )
-                if card_alerts:
-                    self._last_alerts = card_alerts + self._last_alerts
-                    alerts = self._last_alerts
-            except asyncio.TimeoutError:
-                logger.warning("形态/结构卡片扫描超时（120s），跳过")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("形态/结构卡片扫描失败: %s", exc)
+        # 形态/结构卡片扫描始终跑（列表需更新）；TG 推送在 emit 内按开关决定
+        try:
+            card_alerts = await asyncio.wait_for(
+                self._scan_candle_pattern_cards(
+                    session,
+                    base_url=base_url,
+                    klines_map=klines_map,
+                    watchlist=watchlist,
+                    pool_rows=self._last_pool_rows,
+                    scan_ts=self._last_scan_ts,
+                ),
+                timeout=120,
+            )
+            if card_alerts:
+                self._last_alerts = card_alerts + self._last_alerts
+                alerts = self._last_alerts
+        except asyncio.TimeoutError:
+            logger.warning("形态/结构卡片扫描超时（120s），跳过")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("形态/结构卡片扫描失败: %s", exc)
 
         try:
             ma144_alerts = await asyncio.wait_for(
@@ -1616,9 +1614,7 @@ class PatternMonitorEngine:
         MAIN 美股代币：main_card_equity_symbols × MAIN 分档周期。
         山寨：流入 Top7 + 涨幅 Top7（dip）→ 15m/1h。
         """
-        if not is_candle_push_enabled() and not is_structure_push_enabled():
-            return []
-
+        # TG candle/structure 开关只控制推送，不阻断扫描：列表/ticker/胜率仍需 closed-bar 产出
         majors = {s.upper() for s in CANDLE_CARD_MAJOR_SYMBOLS}
         rows = pool_rows if pool_rows is not None else self._last_pool_rows
         alt_flow = pick_candle_card_alt_flow_symbols(rows or [], majors=majors)
@@ -1662,7 +1658,7 @@ class PatternMonitorEngine:
         _need_rev = bool(REV_VOL_CARD_TELEGRAM)
         fetch_limit = min(
             max(
-                STRUCTURE_KLINE_LIMIT if is_structure_push_enabled() else 120,
+                STRUCTURE_KLINE_LIMIT,  # 列表也要结构形态，与 TG 开关解耦
                 PATTERN_KLINE_LIMIT,
                 130 if _need_rev else 0,
             ),
@@ -1677,15 +1673,15 @@ class PatternMonitorEngine:
                 cached
                 and (now - cached[0]) < refresh
                 and cached[1]
-                and (not is_structure_push_enabled() or len(cached[1]) >= min(180, fetch_limit - 20))
+                and len(cached[1]) >= min(180, fetch_limit - 20)
             ):
                 return cached[1]
-            # 主扫描 15m 可复用（结构关闭或条数够用时）
+            # 主扫描 15m 可复用（条数够结构扫描时）
             if (
-                not is_structure_push_enabled()
-                and iv == PATTERN_KLINE_INTERVAL
+                iv == PATTERN_KLINE_INTERVAL
                 and sym in klines_map
                 and klines_map[sym]
+                and len(klines_map[sym]) >= min(180, fetch_limit - 20)
             ):
                 return klines_map[sym]
             async with sem:
@@ -1713,8 +1709,6 @@ class PatternMonitorEngine:
             closed_ts: int,
             htf_dfs: dict | None = None,
         ) -> list[dict[str, Any]]:
-            if not is_candle_push_enabled():
-                return []
             if is_disabled_pattern_interval(iv):
                 return []
             allow_shoot = pool_role in ("all", "flow", "main_equity")
@@ -1809,22 +1803,32 @@ class PatternMonitorEngine:
                 logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 card_vol_ok = bool(alert.get("card_vol_ok", True))
                 ok = False
-                if card_vol_ok:
-                    try:
-                        ok = await send_candle_card_telegram_async(alert)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
-                        ok = False
-                else:
-                    try:
-                        ok = await send_main_card_telegram_async(alert)
-                        if ok:
-                            from oi_mornitor.notify_telegram import _after_candle_card_pushed
+                if is_candle_push_enabled():
+                    if card_vol_ok:
+                        try:
+                            ok = await send_candle_card_telegram_async(alert)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
+                            ok = False
+                    else:
+                        try:
+                            ok = await send_main_card_telegram_async(alert)
+                            if ok:
+                                from oi_mornitor.notify_telegram import _after_candle_card_pushed
 
-                            _after_candle_card_pushed(alert)
+                                _after_candle_card_pushed(alert)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("Telegram MAIN 形态卡片失败 %s: %s", sym, exc)
+                            ok = False
+                else:
+                    # 推送关闭：仍写入形态信号列表 / ticker（closed-bar）
+                    try:
+                        from oi_mornitor.notify_telegram import _after_candle_card_pushed
+
+                        _after_candle_card_pushed(alert)
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning("Telegram MAIN 形态卡片失败 %s: %s", sym, exc)
-                        ok = False
+                        logger.warning("形态信号入库失败 %s: %s", sym, exc)
+                    ok = True
                 if ok:
                     self._card_last_emit[f"{sym}:{iv}:{side}"] = close_ts
             return out
@@ -1832,8 +1836,6 @@ class PatternMonitorEngine:
         async def _emit_structure(
             sym: str, iv: str, df: Any
         ) -> list[dict[str, Any]]:
-            if not is_structure_push_enabled():
-                return []
             if iv not in STRUCTURE_CARD_INTERVALS:
                 return []
             work = df
@@ -1926,11 +1928,21 @@ class PatternMonitorEngine:
                     continue
                 out.append(alert)
                 logger.info("📩 结构卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
-                try:
-                    ok = await send_structure_card_telegram_async(alert)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Telegram 结构卡片失败 %s: %s", sym, exc)
-                    ok = False
+                ok = False
+                if is_structure_push_enabled():
+                    try:
+                        ok = await send_structure_card_telegram_async(alert)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Telegram 结构卡片失败 %s: %s", sym, exc)
+                        ok = False
+                else:
+                    try:
+                        from oi_mornitor.notify_telegram import _after_candle_card_pushed
+
+                        _after_candle_card_pushed(alert)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("结构信号入库失败 %s: %s", sym, exc)
+                    ok = True
                 if ok and side in ("bull", "bear"):
                     self._card_last_emit[f"struct:{sym}:{iv}:{side}"] = close_ts
             return out
@@ -2027,7 +2039,7 @@ class PatternMonitorEngine:
             klines = await _klines_for(sym, iv)
             from oi_mornitor.config import REV_VOL_CARD_TELEGRAM as _REV_MIN
 
-            min_bars = 80 if is_structure_push_enabled() else 30
+            min_bars = 80 if iv in STRUCTURE_CARD_INTERVALS else 30
             if _REV_MIN:
                 min_bars = max(min_bars, 130)
             if not klines or len(klines) < min_bars:
@@ -2050,7 +2062,7 @@ class PatternMonitorEngine:
                 return []
 
             htf_dfs = None
-            if iv == "1h" and is_candle_push_enabled():
+            if iv == "1h":
                 htf_dfs = {}
                 for hiv in ("4h", "1d"):
                     hk = await _klines_for(sym, hiv)
@@ -2061,13 +2073,13 @@ class PatternMonitorEngine:
                             pass
 
             out: list[dict[str, Any]] = []
-            if is_candle_push_enabled():
-                out.extend(
-                    await _emit_candle(
-                        sym, iv, is_major, pool_role, df, closed_ts, htf_dfs=htf_dfs
-                    )
+            # 始终检测形态/结构（列表）；TG 推送在 _emit_* 内按开关决定
+            out.extend(
+                await _emit_candle(
+                    sym, iv, is_major, pool_role, df, closed_ts, htf_dfs=htf_dfs
                 )
-            if is_structure_push_enabled() and pool_role != "main_equity":
+            )
+            if pool_role != "main_equity":
                 out.extend(await _emit_structure(sym, iv, df))
             from oi_mornitor.config import REV_VOL_CARD_TELEGRAM as _REV_VOL_ON
 

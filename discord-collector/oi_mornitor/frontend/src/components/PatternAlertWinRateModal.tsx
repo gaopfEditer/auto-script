@@ -236,7 +236,12 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
           mcapTierFilter,
         });
         if (seq !== loadSeqRef.current) return;
-        setRows(res.items);
+        // 最新信号在前（后端也应已按 signalAt 降序；此处兜底）
+        setRows(
+          [...res.items].sort(
+            (a, b) => Number(b.signalAt || 0) - Number(a.signalAt || 0),
+          ),
+        );
         setSummary(res.summary);
         setTypeOptions(res.typeOptions);
         setIntervalOptions(res.intervalOptions ?? []);
