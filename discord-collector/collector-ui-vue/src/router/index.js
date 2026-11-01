@@ -96,8 +96,24 @@ function buildRoutes() {
   if (__UI_PAGE_MANUAL_STATS__) {
     routes.push({
       path: "/local/manual-stats",
-      name: "manual-stats",
-      component: () => import("../views/ManualStatsView.vue"),
+      component: () => import("../views/ManualStatsLayout.vue"),
+      children: [
+        {
+          path: "",
+          name: "manual-stats",
+          component: () => import("../views/ManualStatsView.vue"),
+        },
+        {
+          path: "telegram-backfill",
+          name: "manual-stats-telegram-backfill",
+          component: () => import("../components/TelegramBackfillPanel.vue"),
+        },
+        {
+          path: "discord-backfill",
+          name: "manual-stats-discord-backfill",
+          component: () => import("../components/DiscordBackfillPanel.vue"),
+        },
+      ],
     });
     routes.push({ path: "/local", redirect: "/local/manual-stats" });
   }

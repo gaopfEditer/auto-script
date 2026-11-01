@@ -56,6 +56,8 @@ import { registerMainCardTelegramDigestRoutes } from "./card-main-telegram-diges
 import { registerCardValidateRoutes } from "./card-validate-api.js";
 import { registerTelegramPromRoutes } from "./telegram-prom-api.js";
 import { registerTelegramLiveRoutes } from "./telegram-live-api.js";
+import { registerTelegramBackfillRoutes } from "./telegram-backfill-api.js";
+import { registerDiscordBackfillRoutes } from "./discord-backfill-api.js";
 import { registerCommunityRoutes } from "./community-api.js";
 import { createCardPriceMonitor } from "./card-price-monitor.js";
 import { createCardExternalSink } from "./card-external-sink.js";
@@ -294,6 +296,7 @@ async function main() {
   /** @type {() => Record<string, unknown>} */
   let getTelegramListenStatus = () => ({ running: null, managed: false });
   registerTelegramLiveRoutes(app, broadcast, { getListenStatus: () => getTelegramListenStatus() });
+  registerTelegramBackfillRoutes(app);
   registerTwitterCdpRoutes(app, twitterCdp);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
@@ -319,6 +322,11 @@ async function main() {
   let navigateDiscordImpl = null;
   /** @type {((guildId: string, channelId: string, traceCtx?: { clientTraceId?: string }) => Promise<unknown>) | null} */
   let scrollDiscordHistoryImpl = null;
+  registerDiscordBackfillRoutes(app, {
+    store,
+    getScrollImpl: () => scrollDiscordHistoryImpl,
+    getNavigateImpl: () => navigateDiscordImpl,
+  });
   /** @type {{ state: 'disabled' | 'pending' | 'ready' | 'error', attempt: number, error?: string }} */
   let cdpBoot = { state: config.cdpConnectUrl ? "pending" : "disabled", attempt: 0 };
 

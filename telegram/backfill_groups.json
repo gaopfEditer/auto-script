@@ -1,0 +1,65 @@
+{
+  "_doc": "Telegram 群组回溯列表（manual-stats → Telegram 回溯）。enabled=false 跳过；name/avatar 可省略，会从 channel_profiles.json 补全。",
+  "groups": [
+    {
+      "chatId": "-1001766481463",
+      "name": "砸锅卖铁去炒币",
+      "avatar": "avatar/1001766481463.png",
+      "enabled": true
+    },
+    {
+      "chatId": "-1003938902957",
+      "name": "Nine Call",
+      "avatar": "avatar/1003169740057.png",
+      "enabled": true
+    },
+    {
+      "chatId": "-1001720924085",
+      "name": "Leo-加密貨幣頻道",
+      "avatar": "avatar/1001720924085.jpeg",
+      "enabled": true
+    },
+    {
+      "chatId": "-1002666021235",
+      "name": "Ashley的旺財情報局",
+      "avatar": "avatar/1002666021235.jpeg",
+      "enabled": true
+    },
+    {
+      "chatId": "-1003962150986",
+      "name": "熊貓說交易🐼",
+      "avatar": "avatar/1003962150986.jpeg",
+      "enabled": true
+    },
+    {
+      "chatId": "-1001908181865",
+      "name": "Aura_幣圈策略",
+      "avatar": "avatar/1001908181865.png",
+      "enabled": true
+    },
+    {
+      "chatId": "-1002355647897",
+      "name": "[KAI]的幣圈策略分享",
+      "avatar": "avatar/1002355647897.png",
+      "enabled": true
+    },
+    {
+      "chatId": "-1002404948215",
+      "name": "Fly-幣圈頭號玩家",
+      "avatar": "avatar/1002404948215.png",
+      "enabled": true
+    },
+    {
+      "chatId": "-1002438953921",
+      "name": "陈哥交易",
+      "avatar": "avatar/1002404948215.png",
+      "enabled": true
+    },
+    {
+      "chatId": "-1001976446916",
+      "name": "熬惯合约",
+      "avatar": "avatar/1002404948215.png",
+      "enabled": true
+    }
+  ]
+}
