@@ -360,6 +360,75 @@ function isSmallStopItem(item: BacktestSignalItem): boolean {
   return false;
 }
 
+
+type SlTpMethod = "all" | "pin_r" | "td9_opposite" | "structure_tight" | "alert_only";
+
+/** 止盈止损方式 chip：按实际落盘计划优先，其次按信号族产品口径推导（旧任务无字段也能筛） */
+const SL_TP_METHOD_OPTIONS: { id: SlTpMethod; label: string; tip: string }[] = [
+  {
+    id: "all",
+    label: "全部方式",
+    tip: "不按止盈止损方式收窄；列表与脚注统计=其它筛选后的全集。",
+  },
+  {
+    id: "pin_r",
+    label: "插针极值·R倍数",
+    tip: "适合：NLV/revVol 与 DCA-A nlv_flip。止损=信号棒插针极值（非固定5%）；出场=exit_plan（2R/3R/scaled，默认 scaled 50%@1.5R→BE 再 50%@3R）；风险 R 过滤常 0.2%–2%。失败：波动过窄/过宽被过滤，或趋势鞭索翻转。",
+  },
+  {
+    id: "td9_opposite",
+    label: "TD9对手平仓",
+    tip: "适合：DCA-B td9_long。出场=对手 TD9 下一根开盘（对齐 Pine enable_strategy）；默认无硬插针/ATR SL。失败：强空瀑布中 -9 只是中继，或 +9 迟迟不来拖长持仓。若本行已被盖上 *_pin_* 计划，会归入「结构/影线小止损」（按实际结算口径）。",
+  },
+  {
+    id: "structure_tight",
+    label: "结构/影线小止损",
+    tip: "适合：二次探底、射击之星、头肩/M顶、流动性掠夺、DCA 蜡烛标签等。小止损=信号影线或结构失效位（tight_sl / 插针小止损）+ 共用 exit_plan RR；不用宽 ATR。失败：失效位过宽、假突破后反复扫损。",
+  },
+  {
+    id: "alert_only",
+    label: "无可结算计划",
+    tip: "无 entry/sl/tp 可结算计划（仅告警、门禁拒、计划构建失败、或 confluence 计分）。不进入 SL/TP 总盈亏样本。",
+  },
+];
+
+function hasPinSettlePlan(item: BacktestSignalItem): boolean {
+  const p = planOfItem(item);
+  if (!p || typeof p !== "object") return false;
+  const pk = String(p.plan_kind || "");
+  const src = String(p.sl_source || "");
+  if (pk.includes("_pin_")) return true;
+  if (/pin|wick|invalid/i.test(src)) return true;
+  return false;
+}
+
+function slTpMethodOf(item: BacktestSignalItem): Exclude<SlTpMethod, "all"> {
+  const plan = planOfItem(item);
+  const kinds = new Set((item.signal_kinds || []).map((k) => String(k)));
+  const sid = String(plan.strategy_id || "");
+  const slSrc = String(plan.sl_source || "");
+  const pk = String(plan.plan_kind || "");
+  const name = String(item.signal_name || "");
+
+  // 1) NLV / DCA-A：插针极值 + R 倍数（以落盘计划为准）
+  if (sid === "nlv" || slSrc === "nlv_pin_extreme" || pk.startsWith("nlv_pin_")) {
+    return "pin_r";
+  }
+
+  // 2) 其它已盖 pin/影线/结构失效计划 → 结构/影线小止损（含 DCA 蜡烛标签、以及误盖 pin 的 TD9）
+  if (hasPinSettlePlan(item)) {
+    return "structure_tight";
+  }
+
+  // 3) TD9 族且无硬 pin 计划 → 对手 TD9 平仓口径
+  if (kinds.has("dca_td9_buy") || kinds.has("dca_td9_sell") || /TD9/i.test(name)) {
+    return "td9_opposite";
+  }
+
+  // 4) 无可结算计划 / 仅告警
+  return "alert_only";
+}
+
 function aiStatusOf(item: BacktestSignalItem): string {
   const st = String(item.ai_status || "").toLowerCase();
   if (st) return st;
@@ -561,6 +630,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
   const [sideFilter, setSideFilter] = useState<string>("all");
   const [verdictFilter, setVerdictFilter] = useState<string>("all");
   const [patternFilter, setPatternFilter] = useState<string>("all");
+  const [slTpMethodFilter, setSlTpMethodFilter] = useState<SlTpMethod>("all");
   const [tfFilter, setTfFilter] = useState<string>("all");
   const [searchQ, setSearchQ] = useState<string>("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -923,6 +993,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       if (verdictFilter === "missed" && item.outcome.verdict !== "gate_missed" && item.outcome.verdict !== "ai_missed") return false;
       if (verdictFilter === "loss" && item.outcome.verdict !== "ai_loss") return false;
       if (patternFilter !== "all" && !item.signal_name.includes(patternFilter)) return false;
+      if (slTpMethodFilter !== "all" && slTpMethodOf(item) !== slTpMethodFilter) return false;
       if (searchQ.trim()) {
         const q = searchQ.trim().toLowerCase();
         const hay = `${item.signal_name} ${item.timeframe} ${item.symbol} ${item.bar_open_iso} ${item.rationale || ""} ${(item.gate_reasons || []).join(" ")}`.toLowerCase();
@@ -930,7 +1001,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       }
       return true;
     });
-  }, [items, sideFilter, verdictFilter, patternFilter, tfFilter, symbolFilter, searchQ]);
+  }, [items, sideFilter, verdictFilter, patternFilter, slTpMethodFilter, tfFilter, symbolFilter, searchQ]);
 
   /** 漏斗各桶计数（= scopedItems，不含 filterMode；点 chip 再缩列表） */
   const funnelCounts = useMemo(() => {
@@ -946,9 +1017,9 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       ai_skipped: count("ai_skipped"),
       ai_error: count("ai_error"),
       gate_reject: count("gate_reject"),
-      scoped: symbolFilter.length > 0 || tfFilter !== "all" || sideFilter !== "all" || Boolean(searchQ.trim()) || patternFilter !== "all" || verdictFilter !== "all",
+      scoped: symbolFilter.length > 0 || tfFilter !== "all" || sideFilter !== "all" || Boolean(searchQ.trim()) || patternFilter !== "all" || slTpMethodFilter !== "all" || verdictFilter !== "all",
     };
-  }, [scopedItems, items.length, symbolFilter.length, tfFilter, sideFilter, searchQ, patternFilter, verdictFilter]);
+  }, [scopedItems, items.length, symbolFilter.length, tfFilter, sideFilter, searchQ, patternFilter, slTpMethodFilter, verdictFilter]);
 
   /** 人类可读：当前列表/脚注所属 cohort（与顶部全量 KPI 区分） */
   const filterCohortLabel = useMemo(() => {
@@ -957,6 +1028,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     if (tfFilter !== "all") parts.push(`周期 ${tfFilter}`);
     if (sideFilter !== "all") parts.push(`方向 ${sideFilter}`);
     if (patternFilter !== "all") parts.push(`形态「${patternFilter}」`);
+    if (slTpMethodFilter !== "all") {
+      const lab = SL_TP_METHOD_OPTIONS.find((x) => x.id === slTpMethodFilter)?.label || slTpMethodFilter;
+      parts.push(`止盈止损「${lab}」`);
+    }
     if (verdictFilter !== "all") parts.push(`复盘 ${verdictFilter}`);
     if (searchQ.trim()) parts.push(`搜索「${searchQ.trim()}」`);
     const funnelName: Record<string, string> = {
@@ -975,7 +1050,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     if (filterMode !== "all") parts.push(`漏斗=${funnelName[filterMode] || filterMode}`);
     if (!parts.length) return "当前无次级筛选（=结果集全量行）";
     return parts.join(" · ");
-  }, [symbolFilter, tfFilter, sideFilter, patternFilter, verdictFilter, searchQ, filterMode]);
+  }, [symbolFilter, tfFilter, sideFilter, patternFilter, slTpMethodFilter, verdictFilter, searchQ, filterMode]);
 
   const filteredItems = useMemo(() => {
     // filterMode 映射到统一漏斗桶（LONG/SHORT 仍单独保留）
@@ -1026,6 +1101,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       }
       if (tfFilter !== "all") return `周期 ${tfFilter} 在本结果中无匹配行。`;
       if (patternFilter !== "all") return `形态「${patternFilter}」无匹配（signal_name 子串）。点「全部形态」重置。`;
+      if (slTpMethodFilter !== "all") {
+        const lab = SL_TP_METHOD_OPTIONS.find((x) => x.id === slTpMethodFilter)?.label || slTpMethodFilter;
+        return `止盈止损方式「${lab}」无匹配。点「全部方式」重置。`;
+      }
       if (searchQ.trim()) return `搜索「${searchQ.trim()}」无命中。`;
       return "当前次级筛选无匹配行。";
     }
@@ -1045,6 +1124,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     resultSymbolBases,
     tfFilter,
     patternFilter,
+    slTpMethodFilter,
     searchQ,
     filterMode,
   ]);
@@ -1067,6 +1147,41 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
       if (nSmall === 0) setFilterMode("all");
     }
   }, [filterMode, scopedItems, filteredItems.length]);
+
+
+  /** 止盈止损方式计数：相对「其它次级筛选已收窄、尚未点止盈止损 chip」的集合 */
+  const slTpMethodCounts = useMemo(() => {
+    const base = items.filter((item) => {
+      if (sideFilter !== "all" && item.signal_side !== sideFilter) return false;
+      if (tfFilter !== "all" && item.timeframe !== tfFilter) return false;
+      if (symbolFilter.length > 0) {
+        const baseSym = symbolBaseOf(item);
+        if (!symbolFilter.includes(baseSym)) return false;
+      }
+      if (verdictFilter === "win" && item.outcome.verdict !== "ai_win") return false;
+      if (verdictFilter === "saved" && item.outcome.verdict !== "gate_saved" && item.outcome.verdict !== "ai_saved") return false;
+      if (verdictFilter === "missed" && item.outcome.verdict !== "gate_missed" && item.outcome.verdict !== "ai_missed") return false;
+      if (verdictFilter === "loss" && item.outcome.verdict !== "ai_loss") return false;
+      if (patternFilter !== "all" && !item.signal_name.includes(patternFilter)) return false;
+      if (searchQ.trim()) {
+        const q = searchQ.trim().toLowerCase();
+        const hay = `${item.signal_name} ${item.timeframe} ${item.symbol} ${item.bar_open_iso} ${item.rationale || ""} ${(item.gate_reasons || []).join(" ")}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const counts: Record<SlTpMethod, number> = {
+      all: base.length,
+      pin_r: 0,
+      td9_opposite: 0,
+      structure_tight: 0,
+      alert_only: 0,
+    };
+    for (const it of base) {
+      counts[slTpMethodOf(it)] += 1;
+    }
+    return counts;
+  }, [items, sideFilter, tfFilter, symbolFilter, verdictFilter, patternFilter, searchQ]);
 
   /** Totals for the currently filtered table rows (币种筛选等全部生效). */
   const filteredTotals = useMemo(() => {
@@ -2100,6 +2215,52 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               >
                 {ps.pattern} <strong>{ps.total}</strong>{" "}
                 <span style={{ color: "#68d391", fontSize: 11 }}>(过门禁{ps.gate_pass}·避坑{ps.saved_count})</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+
+      {/* 止盈止损方式筛选 — 与形态 chip 并列，收窄列表 + filteredTotals */}
+      {items.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+            marginBottom: 8,
+            padding: "8px 12px",
+            borderRadius: 10,
+            background: "rgba(23, 25, 35, 0.85)",
+            border: "1px solid rgba(255,255,255,0.06)",
+            alignItems: "center",
+          }}
+        >
+          <span style={{ fontSize: 12, color: "#a0aec0", fontWeight: 600 }} title="按实际 trade_plan/tight_sl 优先分类；无计划时按信号族产品口径（NLV pin+R / TD9 对手平 / 结构影线小止损）">
+            止盈止损方式：
+          </span>
+          {SL_TP_METHOD_OPTIONS.map((opt) => {
+            const active = slTpMethodFilter === opt.id;
+            const n = slTpMethodCounts[opt.id] ?? 0;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                title={opt.tip}
+                onClick={() => setSlTpMethodFilter(active && opt.id !== "all" ? "all" : opt.id)}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  fontSize: 11.5,
+                  border: active ? "1px solid rgba(129, 230, 217, 0.95)" : "1px solid rgba(255,255,255,0.12)",
+                  background: active ? "rgba(49, 151, 149, 0.28)" : "rgba(45, 55, 72, 0.5)",
+                  color: active ? "#81e6d9" : "#e2e8f0",
+                  cursor: "pointer",
+                  fontWeight: active ? 700 : 500,
+                }}
+              >
+                {opt.label} <strong>{n}</strong>
               </button>
             );
           })}
