@@ -950,6 +950,33 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
     };
   }, [scopedItems, items.length, symbolFilter.length, tfFilter, sideFilter, searchQ, patternFilter, verdictFilter]);
 
+  /** 人类可读：当前列表/脚注所属 cohort（与顶部全量 KPI 区分） */
+  const filterCohortLabel = useMemo(() => {
+    const parts: string[] = [];
+    if (symbolFilter.length) parts.push(`币种 ${symbolFilter.join("/")}`);
+    if (tfFilter !== "all") parts.push(`周期 ${tfFilter}`);
+    if (sideFilter !== "all") parts.push(`方向 ${sideFilter}`);
+    if (patternFilter !== "all") parts.push(`形态「${patternFilter}」`);
+    if (verdictFilter !== "all") parts.push(`复盘 ${verdictFilter}`);
+    if (searchQ.trim()) parts.push(`搜索「${searchQ.trim()}」`);
+    const funnelName: Record<string, string> = {
+      all: "全部",
+      small_sl: "小止损·插针",
+      tight_sl_15m: "小止损·插针",
+      gate_pass: "门禁通过",
+      active_ai: "AI开仓",
+      ai_wait: "AI不做",
+      ai_skipped: "未跑AI",
+      ai_error: "AI失败",
+      gate_reject: "门禁拦截",
+      LONG: "LONG",
+      SHORT: "SHORT",
+    };
+    if (filterMode !== "all") parts.push(`漏斗=${funnelName[filterMode] || filterMode}`);
+    if (!parts.length) return "当前无次级筛选（=结果集全量行）";
+    return parts.join(" · ");
+  }, [symbolFilter, tfFilter, sideFilter, patternFilter, verdictFilter, searchQ, filterMode]);
+
   const filteredItems = useMemo(() => {
     // filterMode 映射到统一漏斗桶（LONG/SHORT 仍单独保留）
     const modeToBucket: Record<string, FunnelBucket | null> = {
@@ -1809,8 +1836,26 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
         <div style={{ padding: 40, textAlign: "center", color: "#a0aec0" }}>正在加载回测数据…</div>
       ) : null}
 
-      {/* Summary KPI Grid */}
+      {/* Summary KPI Grid — 全量任务，不受下方币种/漏斗筛选影响 */}
       {summary && (
+        <>
+        <div
+          style={{
+            marginBottom: 8,
+            padding: "8px 12px",
+            borderRadius: 8,
+            border: "1px solid rgba(99,179,237,0.35)",
+            background: "rgba(49,130,206,0.12)",
+            color: "#90cdf4",
+            fontSize: 12,
+            lineHeight: 1.45,
+          }}
+        >
+          <strong style={{ color: "#bee3f8" }}>上方 KPI = 本任务全量</strong>
+          （{summary.total_signals} 信号 · 门禁过 {summary.gate_pass_count} · AI开仓 {summary.active_trade_count ?? summary.ai_do_count ?? 0}）
+          ，<strong style={{ color: "#fbd38d" }}>不受</strong>下方币种/形态/漏斗筛选影响。
+          列表脚注胜率才是「当前筛选」样本——两者不是同一 cohort，请勿直接对比。
+        </div>
         <div
           style={{
             display: "grid",
@@ -1828,7 +1873,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               border: "1px solid rgba(255,255,255,0.08)",
             }}
           >
-            <div style={{ fontSize: 11.5, color: "#a0aec0" }}>7天 1h 形态/信号总数</div>
+            <div style={{ fontSize: 11.5, color: "#a0aec0" }}>全量 · 7天 1h 形态/信号总数</div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
               <span style={{ fontSize: 24, fontWeight: 800, color: "#f7fafc" }}>{summary.total_signals}</span>
               <span style={{ fontSize: 12, color: "#68d391" }}>
@@ -1850,7 +1895,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
             }}
           >
             <div style={{ fontSize: 11.5, color: "#a0aec0" }}>
-              {data?.skip_llm ? "门禁占位分布（未跑AI · 非决策）" : "Agent 决策分布（未知后续K线）"}
+              {data?.skip_llm ? "全量 · 门禁占位分布（未跑AI · 非决策）" : "全量 · Agent 决策分布（未知后续K线）"}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
               <span style={{ padding: "2px 8px", borderRadius: 6, background: "rgba(72,187,120,0.2)", color: "#68d391", fontSize: 12, fontWeight: 700 }}>
@@ -1895,7 +1940,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               border: "1px solid rgba(72, 187, 120, 0.28)",
             }}
           >
-            <div style={{ fontSize: 11.5, color: "#a0aec0" }}>AI 开仓表现 (LONG/SHORT) / 门禁通过组</div>
+            <div style={{ fontSize: 11.5, color: "#a0aec0" }}>
+              全量 AI开仓 {summary.active_trade_count ?? summary.ai_do_count ?? 0} 笔胜率
+              <span style={{ color: "#718096" }}>（LONG/SHORT · ≠下方筛选表）</span>
+            </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 4 }}>
               <div>
                 <span style={{ fontSize: 11, color: "#a0aec0" }}>4h胜率: </span>
@@ -1911,7 +1959,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               </div>
             </div>
             <div style={{ fontSize: 11.5, color: "#cbd5e0", marginTop: 4 }}>
-              门禁通过组 4h MFE <strong style={{ color: "#68d391" }}>+{summary.gate_pass_avg_mfe_4h_pct}%</strong> / MAE{" "}
+              全量门禁通过组({summary.gate_pass_count}) 4h MFE <strong style={{ color: "#68d391" }}>+{summary.gate_pass_avg_mfe_4h_pct}%</strong> / MAE{" "}
               <strong style={{ color: "#fc8181" }}>-{summary.gate_pass_avg_mae_4h_pct}%</strong>
               {" · "}
               8h MFE <strong style={{ color: "#68d391" }}>+{summary.gate_pass_avg_mfe_8h_pct}%</strong> / MAE{" "}
@@ -1928,7 +1976,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               border: "1px solid rgba(56, 178, 172, 0.3)",
             }}
           >
-            <div style={{ fontSize: 11.5, color: "#a0aec0" }}>门禁 + AI 风控避坑价值</div>
+            <div style={{ fontSize: 11.5, color: "#a0aec0" }}>全量 · 门禁 + AI 风控避坑价值</div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
               <span style={{ fontSize: 22, fontWeight: 800, color: "#4fd1c5" }}>
                 成功避坑 {summary.total_saved_count} 次
@@ -1999,6 +2047,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
             </div>
           </div>
         </div>
+        </>
       )}
 
       {/* Pattern Breakdown Chips */}
@@ -2069,16 +2118,22 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
         }}
       >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          <span
+            style={{ fontSize: 11, color: "#718096", fontWeight: 700, marginRight: 2 }}
+            title="漏斗计数与列表共用 scopedItems（币种/周期/方向/形态/搜索已收窄）；点 chip 再缩列表。上方 KPI 仍是全量任务。"
+          >
+            漏斗{funnelCounts.scoped ? "（已按币种等收窄）" : "（结果集）"}
+          </span>
           {[
-            { id: "all", label: `全部 (${funnelCounts.all}${funnelCounts.scoped && funnelCounts.all !== funnelCounts.allGlobal ? ` · 全集${funnelCounts.allGlobal}` : ""})` },
-            { id: "small_sl", label: `🎯 小止损·插针 (${funnelCounts.small_sl})` },
-            { id: "gate_pass", label: `✅ 门禁通过 (${funnelCounts.gate_pass})` },
-            { id: "active_ai", label: `🎯 AI开仓 LONG/SHORT (${funnelCounts.active_ai})` },
-            { id: "ai_wait", label: `🟡 AI不做 NO_TRADE/WATCH (${funnelCounts.ai_wait})` },
-            { id: "ai_skipped", label: `⏸ 未跑AI (${funnelCounts.ai_skipped})` },
-            { id: "ai_error", label: `⚠ AI失败 (${funnelCounts.ai_error})` },
-            { id: "gate_reject", label: `🛡️ 门禁拦截 (${funnelCounts.gate_reject})` },
-          ].map((tab) => (
+            { id: "all", label: `全部 (${funnelCounts.all}${funnelCounts.scoped && funnelCounts.all !== funnelCounts.allGlobal ? ` · 全集${funnelCounts.allGlobal}` : ""})`, show: true },
+            { id: "small_sl", label: `🎯 小止损·插针 (${funnelCounts.small_sl})`, show: funnelCounts.small_sl > 0 || filterMode === "small_sl" || filterMode === "tight_sl_15m" },
+            { id: "gate_pass", label: `✅ 门禁通过 (${funnelCounts.gate_pass})`, show: true },
+            { id: "active_ai", label: `🎯 AI开仓 LONG/SHORT (${funnelCounts.active_ai})`, show: true },
+            { id: "ai_wait", label: `🟡 AI不做 NO_TRADE/WATCH (${funnelCounts.ai_wait})`, show: true },
+            { id: "ai_skipped", label: `⏸ 未跑AI (${funnelCounts.ai_skipped})`, show: funnelCounts.ai_skipped > 0 || filterMode === "ai_skipped" },
+            { id: "ai_error", label: `⚠ AI失败 (${funnelCounts.ai_error})`, show: funnelCounts.ai_error > 0 || filterMode === "ai_error" },
+            { id: "gate_reject", label: `🛡️ 门禁拦截 (${funnelCounts.gate_reject})`, show: true },
+          ].filter((tab) => tab.show).map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -2092,6 +2147,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
                 background: filterMode === tab.id ? "rgba(49, 130, 206, 0.28)" : "rgba(26, 32, 44, 0.8)",
                 color: filterMode === tab.id ? "#90cdf4" : "#cbd5e0",
                 cursor: "pointer",
+                opacity: (tab.id !== "all" && (tab.id === "small_sl" ? funnelCounts.small_sl === 0 : false)) ? 0.55 : 1,
               }}
             >
               {tab.label}
@@ -2303,9 +2359,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
             }}
           >
             <strong>
-              历史信号逐笔回测列表（共筛选出 {filteredItems.length} / {scopedItems.length} 条
-            {scopedItems.length !== items.length ? ` · 结果集 ${items.length}` : ""}
-            {filterMode !== "all" ? ` · 漏斗=${filterMode}` : ""}
+              历史信号逐笔回测列表（当前筛选 {filteredItems.length} / 范围 {scopedItems.length}
+            {scopedItems.length !== items.length ? ` · 全量结果集 ${items.length}` : ""}
+            {" · "}
+            {filterCohortLabel}
             ，点击任意行查看当时无未来数据快照 & 5席推理）
             </strong>
           </div>
@@ -2406,12 +2463,11 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
                   </div>
                 </div>
               )}
-              筛选总计{" "}
+              当前筛选总计{" "}
               <strong style={{ color: "#63b3ed", fontSize: 15 }}>{filteredTotals.total}</strong>
-              <span style={{ color: "#718096", fontWeight: 500 }}> / {filteredTotals.allTotal}</span>
-              <span style={{ color: "#718096", fontWeight: 500, marginLeft: 6, fontSize: 11 }} title="漏斗 chip 与本行共用：先按币种/周期/方向/搜索定范围，再按 chip 桶分类。AI做=ai_status judged 且 action LONG/SHORT；小止损=插针/pin 或 15m tight_sl。">
-                · 口径=漏斗
-                {funnelCounts.scoped ? "（已按币种等收窄）" : ""}
+              <span style={{ color: "#718096", fontWeight: 500 }}> / 范围 {filteredTotals.allTotal}</span>
+              <span style={{ color: "#718096", fontWeight: 500, marginLeft: 6, fontSize: 11 }} title="与漏斗 chip 共用 scopedItems→filteredItems。上方 KPI 是全量任务，数字不可直接对比。">
+                · {filterCohortLabel}
               </span>
             </span>
             <span style={{ color: "#4a5568" }}>|</span>
@@ -2443,8 +2499,10 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
               )}
             </span>
             <span style={{ color: "#4a5568" }}>|</span>
-            <span title={`胜率样本：${filteredTotals.wrLabel}（有后续收益的行）`}>
-              胜率({filteredTotals.wrLabel}){" "}
+            <span title={`胜率样本=当前筛选·${filteredTotals.wrLabel}（有后续收益的行）；上方「全量 AI开仓」胜率是另一 cohort，勿直接对比`}>
+              胜率(当前筛选·{filteredTotals.wrLabel}
+              {filteredTotals.aiDo === 0 && filteredTotals.total > 0 ? "·AI未开仓" : ""}
+              ){" "}
               +1h{" "}
               <strong style={{ color: "#9ae6b4" }}>
                 {filteredTotals.wr1h == null ? "—" : `${filteredTotals.wr1h}%`}
@@ -2464,7 +2522,7 @@ export const BtcBacktestView = memo(function BtcBacktestView({ onOpenChartAt }: 
             <span
               title={`总盈亏率(净)=Σ realized_pct_net；毛利未扣费。手续费≈万4/边，全平约0.08%/笔。样本=${filteredTotals.wrLabel} · 来源=${filteredTotals.pnlSourceLabel || "—"} · 盈${filteredTotals.pnlWins}/亏${filteredTotals.pnlLosses}/平${filteredTotals.pnlFlat}`}
             >
-              总盈亏率净({filteredTotals.wrLabel}){" "}
+              总盈亏率净(当前筛选·{filteredTotals.wrLabel}){" "}
               <strong style={{ color: pctColor(filteredTotals.totalPnlNetPct ?? filteredTotals.totalPnlPct), fontSize: 14 }}>
                 {fmtPct(filteredTotals.totalPnlNetPct ?? filteredTotals.totalPnlPct)}
               </strong>
