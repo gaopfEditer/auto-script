@@ -6,21 +6,21 @@ import { DEFAULT_SIGNAL_CHANNELS } from "./discord-signal-config.js";
 
 /** 默认推送频道（可被环境变量覆盖） */
 export const DEFAULT_TELEGRAM_PUSH_CHANNEL_IDS = [
-  "1444963689194192947",
-  "1444962439471955989",
-  "1444962376066793513",
-  "1444962339743989843",
-  "1444963372134301827",
-  "1459861535815110810",
-  "1444967547169669160",
-  "1444967575858581545",
+  "1444963689194192947", // 颜驰 · 🟢丨颜驰-vip
+  "1444962439471955989", // 三马 · 🟢丨三马哥合约
+  "1444962376066793513", // 淑琴 · 🟢丨舒琴行情分析
+  "1444962339743989843", // 大镖客 · 🟢丨大镖客vip策略
+  "1444963372134301827", // seven · 🟢丨seven内部策略
+  "1459861535815110810", // unknown-trader · ⛳丨unknown-trader
+  "1444967547169669160", // 币安杀手 · ⚜️｜币安杀手-vip
+  "1444967575858581545", // 华尔街女王 · ⚜️｜华尔街女王-vip
 ];
 
 /** 实时推送、不参与 2 分钟聚合的频道 */
 export const DEFAULT_TELEGRAM_REALTIME_CHANNEL_IDS = [];
 
 /** 大镖客信号频道：无法解析为卡片时，含特定关键词仍推 Telegram */
-export const DABIAOKE_SIGNAL_CHANNEL_ID = "1444962339743989843";
+export const DABIAOKE_SIGNAL_CHANNEL_ID = "1444962339743989843"; // 大镖客
 
 /**
  * @param {string} channelId

@@ -3,6 +3,11 @@
  */
 import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
 import { createChannelTextDedup, normalizeSignalText, signalTextHash } from "./discord-signal-dedup.js";
+import {
+  isReplyRepostOfReference,
+  resolveReplyReferenceMessageId,
+  resolveSignalContentFromRow,
+} from "./discord-reply-content.js";
 import { generateCardsByStyles, extractSignalWithAi } from "./discord-signal-ai.js";
 import { JUNZHANG_SL_LINK_MS, parseSignalText } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
@@ -589,8 +594,9 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
 
     const channelId = String(row.channelId ?? row.channel_id ?? "").trim();
     const messageId = String(row.messageId ?? row.message_id ?? "").trim();
-    const content = normalizeSignalText(String(row.content ?? ""));
+    const content = resolveSignalContentFromRow(row);
     const guildId = String(row.guildId ?? row.guild_id ?? "").trim();
+    const replyRefId = resolveReplyReferenceMessageId(row.rawJson ?? row.raw_json);
 
     if (!channelId || !isSignalChannel(channelId)) return { skipped: "not_signal_channel" };
     if (!content) return { skipped: "empty" };
@@ -624,6 +630,39 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     if (!parsed) {
       log.info(`信号未识别 channel=${channelId} parser=${chCfg.parser} preview=${content.slice(0, 80)}`);
       return { skipped: "parse_failed" };
+    }
+
+    if (
+      replyRefId &&
+      store.getSignalCardByMessageId &&
+      parsed.signalPhase !== "tpsl"
+    ) {
+      const refCard = await store.getSignalCardByMessageId(replyRefId);
+      const refRaw = normalizeSignalText(
+        String(refCard?.raw_content ?? refCard?.rawContent ?? ""),
+      );
+      if (refCard && refRaw && isReplyRepostOfReference(content, refRaw)) {
+        log.info(
+          `回复引用跳过重复发卡 ref=${replyRefId} message=${messageId} channel=${channelId} preview=${content.slice(0, 60)}`,
+        );
+        if (!opts.skipDedup) await dedup.remember(channelId, content);
+        return { skipped: "reply_reposts_reference" };
+      }
+    }
+
+    if (
+      replyRefId &&
+      store.getSignalCardByMessageId &&
+      parsed.signalPhase === "tpsl"
+    ) {
+      const refCard = await store.getSignalCardByMessageId(replyRefId);
+      const refRaw = normalizeSignalText(
+        String(refCard?.raw_content ?? refCard?.rawContent ?? ""),
+      );
+      if (refCard && refRaw && content === refRaw) {
+        log.debug(`回复仅复读引用正文，跳过 channel=${channelId} ref=${replyRefId}`);
+        return { skipped: "reply_quote_only" };
+      }
     }
 
     /** @type {unknown} */

@@ -61,6 +61,25 @@ export function createDebouncedDiscordMessageBroadcast(broadcast, debounceMs) {
     if (!broadcast) return;
     const rows = Array.isArray(payload.rows) ? payload.rows : [];
     const channels = Array.isArray(payload.channels) ? payload.channels : [];
+    const incomingRestCid =
+      payload.source === "rest_api" && payload.restQuery && typeof payload.restQuery === "object"
+        ? String(payload.restQuery.channelId ?? "").trim()
+        : "";
+    const pendingRestCid =
+      envelope.source === "rest_api" && envelope.restQuery && typeof envelope.restQuery === "object"
+        ? String(/** @type {{ channelId?: string }} */ (envelope.restQuery).channelId ?? "").trim()
+        : "";
+    if (rowsById.size && incomingRestCid && pendingRestCid && incomingRestCid !== pendingRestCid) {
+      flush();
+    }
+    if (
+      rowsById.size &&
+      payload.source &&
+      envelope.source &&
+      payload.source !== envelope.source
+    ) {
+      flush();
+    }
     insertedSum += Number(payload.count) || 0;
     envelope = {
       ...envelope,

@@ -2,6 +2,11 @@
  * Discord Gateway / REST 消息解析辅助。
  */
 import { avatarFromAuthor } from "./discord-avatar.js";
+import {
+  dedupeContentLines,
+  extractMessageContentSelfOnly,
+  stripEmbeddedQuotedContent,
+} from "./discord-reply-content.js";
 
 /** @param {string} snowflake */
 export function snowflakeToMs(snowflake) {
@@ -40,15 +45,15 @@ export function resolveDiscordMessageCreatedAtMs(parts) {
     return 0;
   };
 
-  let rawMsg = parts.rawMessage ?? parts.rawJson ?? parts.raw_json;
-  if (typeof rawMsg === "string") {
+  let raw = parts.rawMessage ?? parts.rawJson ?? parts.raw_json;
+  if (typeof raw === "string") {
     try {
-      rawMsg = JSON.parse(rawMsg);
+      raw = JSON.parse(raw);
     } catch {
-      rawMsg = null;
+      raw = null;
     }
   }
-  const rec = asRecord(rawMsg);
+  const rec = asRecord(raw);
   if (rec) {
     const fromTs = fromRecord(rec);
     if (fromTs > 0) return fromTs;
@@ -129,39 +134,13 @@ export function looksLikeDiscordMessage(obj) {
  * @param {Record<string, unknown>} m
  */
 export function extractDiscordMessageContent(m) {
-  const parts = [];
-  const raw = typeof m.content === "string" ? m.content.trim() : "";
-  if (raw) parts.push(raw);
-
-  const embeds = Array.isArray(m.embeds) ? m.embeds : [];
-  for (const item of embeds) {
-    const e = asRecord(item);
-    if (!e) continue;
-    for (const key of ["title", "description", "url"]) {
-      const v = String(e[key] ?? "").trim();
-      if (v) parts.push(v);
-    }
-    const fields = Array.isArray(e.fields) ? e.fields : [];
-    for (const f of fields) {
-      const fr = asRecord(f);
-      if (!fr) continue;
-      const name = String(fr.name ?? "").trim();
-      const value = String(fr.value ?? "").trim();
-      if (name && value) parts.push(`${name}: ${value}`);
-      else if (value) parts.push(value);
-      else if (name) parts.push(name);
-    }
+  let base = extractMessageContentSelfOnly(m);
+  const ref = asRecord(m.referenced_message);
+  if (ref) {
+    const quoted = extractMessageContentSelfOnly(ref);
+    if (quoted) base = stripEmbeddedQuotedContent(base, quoted);
   }
-
-  const deduped = [];
-  const seen = new Set();
-  for (const p of parts) {
-    const line = p.replace(/\s+/g, " ").trim();
-    if (!line || seen.has(line)) continue;
-    seen.add(line);
-    deduped.push(line);
-  }
-  return deduped.join("\n").trim();
+  return dedupeContentLines(base);
 }
 
 /**

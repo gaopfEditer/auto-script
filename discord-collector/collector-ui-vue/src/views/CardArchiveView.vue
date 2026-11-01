@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch, onUnmounted } from "vue";
+import { ref, computed, onMounted, watch, onUnmounted, nextTick } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { subscribeCollectorSocket } from "../composables/useCollectorSocket.js";
 import SignalCardItem from "../components/SignalCardItem.vue";
@@ -330,7 +330,7 @@ function scheduleSave(card) {
 /** @param {import("../lib/cardArchiveApi.js").ArchiveCard} card */
 function openCard(card) {
   selectedId.value = card.id;
-  initEvalDraft(card);
+  nextTick(() => initEvalDraft(card));
 }
 
 /** @param {KeyboardEvent} e */

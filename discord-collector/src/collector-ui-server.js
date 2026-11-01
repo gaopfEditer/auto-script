@@ -1028,12 +1028,13 @@ async function main() {
   });
 
   app.get("/api/show/discord-groups", (_req, res) => {
-    const { channelIds, namesByChannelId } = config.discordGroups;
+    const { channelIds, namesByChannelId } = config.discordShowSidebar;
     res.json({
       ok: true,
       filterEnabled: channelIds.length > 0,
       channelIds,
       namesByChannelId,
+      source: "discord-show-channels",
     });
   });
 
@@ -1075,7 +1076,7 @@ async function main() {
         lastMessageAtMs: row.last_message_at_ms,
         updatedAt: row.updated_at,
       }));
-      channels = applyDiscordGroupsChannelList(channels, guildId, config.discordGroups);
+      channels = applyDiscordGroupsChannelList(channels, guildId, config.discordShowSidebar);
       res.json({ ok: true, guildId, channels });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -1267,8 +1268,8 @@ async function main() {
       let channelIds = channels
         .map((c) => String(c.channel_id ?? c.channelId ?? "").trim())
         .filter(Boolean);
-      if (config.discordGroups.channelIds.length) {
-        channelIds = config.discordGroups.channelIds;
+      if (config.discordShowSidebar.channelIds.length) {
+        channelIds = config.discordShowSidebar.channelIds;
       }
       /** @type {Record<string, Record<string, unknown>[]>} */
       const byChannel = {};

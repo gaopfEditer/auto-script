@@ -1,5 +1,6 @@
 /**
  * Discord 信号频道配置：解析器、语言风格、Telegram 默认风格。
+ * Show 左侧列表顺序见 discord-show-channels.js（DEFAULT_SHOW_CHANNEL_IDS）。
  * 进卡路径与频道无关：DISCORD_SIGNAL_CHANNEL_IDS（非空覆盖）或本表 keys → isSignalChannel → ingest onMessage；无 per-channel 回填脚本。
  */
 import { config } from "./config.js";
@@ -24,9 +25,45 @@ export const DEFAULT_SIGNAL_CHANNELS = {
     telegramStyle: "cn_brief",
   },
   "1444962376066793513": {
-    name: "淑琴",
+    name: "淑琴行情分析",
     parser: "btc_cn",
     styles: ["cn_formal", "cn_brief", "tw_formal"],
+    telegramStyle: "cn_brief",
+  },
+  "1564946716321382462": {
+    name: "淑琴美股频道",
+    parser: "generic",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1561796495492259901": {
+    name: "dr-hash延报",
+    parser: "generic",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1444963605786267739": {
+    name: "加密大漂亮",
+    parser: "generic",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1444963641219747902": {
+    name: "反指姐（反向跟单）",
+    parser: "generic",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1559133861617602630": {
+    name: "零下二度",
+    parser: "generic",
+    styles: ["cn_formal", "cn_brief"],
+    telegramStyle: "cn_brief",
+  },
+  "1559133911001337866": {
+    name: "零下二度-美股",
+    parser: "generic",
+    styles: ["cn_formal", "cn_brief"],
     telegramStyle: "cn_brief",
   },
   "1444962410002911396": {

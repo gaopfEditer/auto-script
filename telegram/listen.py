@@ -30,7 +30,12 @@ from config import (
     get_target_chat_ids,
 )
 from logging_setup import setup_telethon_logging
-from message_format import download_message_images, format_message_console, sender_display
+from message_format import (
+    download_message_images,
+    format_message_console,
+    incoming_message_text,
+    sender_display,
+)
 from session import create_and_start_client
 from signal_pipeline_log import log_pipeline
 from trade_card_pusher import TradeCardPusher
@@ -178,7 +183,7 @@ async def main() -> None:
             omit_sender=True,
         )
 
-        text = strip_promotional_lines((msg.message or "").strip())
+        text = strip_promotional_lines(await incoming_message_text(client, msg))
 
         if chat_id in card_route_ids:
             image_paths: list[str] = []

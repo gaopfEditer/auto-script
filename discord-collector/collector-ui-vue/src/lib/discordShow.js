@@ -84,6 +84,25 @@ function isSortedByTimeAsc(messages) {
 }
 
 /**
+ * 只保留属于该频道的行；缺 channelId 时按目标频道补全。
+ * @param {string} channelId
+ * @param {Array<Record<string, unknown>>} rows
+ */
+export function filterMessagesForChannel(channelId, rows) {
+  const want = String(channelId ?? "").trim();
+  if (!want || !Array.isArray(rows)) return [];
+  /** @type {Array<Record<string, unknown>>} */
+  const out = [];
+  for (const m of rows) {
+    if (!m || typeof m !== "object") continue;
+    const got = String(m.channelId ?? m.channel_id ?? "").trim();
+    if (got && got !== want) continue;
+    out.push(got === want ? m : { ...m, channelId: want, channel_id: want });
+  }
+  return out;
+}
+
+/**
  * @param {Array<Record<string, unknown>>} prev
  * @param {Array<Record<string, unknown>>} incoming
  * @returns {Array<Record<string, unknown>>} 无实质变化时返回 prev 同一引用，避免消息列表整表重绘
@@ -266,6 +285,29 @@ export function discordAttachmentProxyUrl(raw) {
   return s;
 }
 
+/** @param {string} raw */
+export function discordAttachmentUrlExpired(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return false;
+  try {
+    const u = new URL(s);
+    const ex = u.searchParams.get("ex");
+    if (!ex) return false;
+    const ts = Number.parseInt(ex, 16);
+    if (!Number.isFinite(ts) || ts <= 0) return false;
+    return ts * 1000 < Date.now() - 60_000;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {Record<string, unknown>} att */
+export function attachmentLinksExpired(att) {
+  const urls = attachmentCdnRawUrls(att);
+  if (!urls.length) return false;
+  return urls.every((u) => discordAttachmentUrlExpired(u));
+}
+
 /** @param {Record<string, unknown>} att */
 export function attachmentCdnRawUrls(att) {
   if (!att || typeof att !== "object") return [];
@@ -286,6 +328,7 @@ export function attachmentCdnRawUrls(att) {
  * @param {Record<string, unknown>} att
  */
 export function attachmentDisplayUrl(att) {
+  if (attachmentLinksExpired(att)) return "";
   const raw = attachmentCdnRawUrls(att);
   return raw[0] ?? "";
 }

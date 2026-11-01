@@ -36,6 +36,7 @@ import {
   isChannelPinned,
   isPlaceholderChannelName,
   mergeChannelMessages,
+  filterMessagesForChannel,
   messageContentPreview,
   upsertChannelItem,
   buildChannelListSections,
@@ -143,7 +144,7 @@ let pendingWsBatchMeta = null;
 
 const selectedGuild = computed(() => guilds.value.find((g) => g.guildId === selectedGuildId.value) ?? null);
 
-/** Show 侧栏白名单（`DISCORD_GROUPS`）；由 collect:ui 下发 */
+/** Show 侧栏白名单（discord-show-channels.js + /api/show/discord-groups） */
 const showGroupsFilterEnabled = ref(false);
 const showGroupsChannelIds = ref(/** @type {string[]} */ ([]));
 const showGroupsNames = reactive(/** @type {Record<string, string>} */ ({}));
@@ -984,7 +985,7 @@ async function loadMessagesForChannel(ch, opts = {}) {
         : "";
       const prev = messagesByChannelId[cid] ?? [];
       if (rows.length || !prev.length) {
-        commitChannelMessages(cid, prev, rows);
+        commitChannelMessages(cid, prev, filterMessagesForChannel(cid, rows));
       }
       scheduleSave();
       const stick =
@@ -1096,48 +1097,17 @@ let lastSelectChannelId = "";
 let lastDbReloadAt = 0;
 
 /**
- * 切换频道：CDP 打开 Discord 网页对应频道（触发 REST 采集）+ 本地 MySQL 拉历史。
- * 向上翻页见 onMsgsScroll → scrollDiscordChannelHistory。
+ * CDP + 二次拉库在后台跑，不阻塞侧栏/卡片点击后的首屏。
  * @param {ChannelItem} ch
+ * @param {number} seq
+ * @param {string} gid
+ * @param {string} cid
+ * @param {boolean} skipInitialDb
  */
-async function selectChannel(ch) {
-  if (renamingChannelId.value && renamingChannelId.value !== ch.channelId) {
-    commitRename();
-  }
-  const seq = ++selectChannelSeq;
-  const sameChannel = lastSelectChannelId === ch.channelId;
-  lastSelectChannelId = ch.channelId;
-  if (selectedChannel.value?.channelId !== ch.channelId) {
-    selectedChannel.value = ch;
-  }
-  channelMessagesHint.value = "";
-  if (channelHasMoreOlder[ch.channelId] === undefined) {
-    channelHasMoreOlder[ch.channelId] = true;
-  }
-  clearChannelUnread(ch.channelId);
-  navError.value = "";
-  resetAttachmentImgDeadCache();
-  bumpShowUserActivity();
-  channelStickBottom.value = true;
-  syncPaneMessagesFromStore();
-  scrollMsgsBottom();
-  await scrollMsgsToBottomAfterLayout();
-
-  const cached = messagesByChannelId[ch.channelId] ?? [];
-  const now = Date.now();
-  const skipDb =
-    sameChannel && cached.length > 0 && now - lastDbReloadAt < DB_RELOAD_SAME_CHANNEL_MS;
-
-  const gid = String(ch.guildId || selectedGuildId.value || DEFAULT_SHOW_GUILD_ID).trim();
-  const cid = String(ch.channelId ?? "").trim();
-  if (!cid || !gid) {
-    navError.value = "缺少 guildId 或 channelId，无法 CDP 打开频道";
-    return;
-  }
-
+async function syncChannelAfterSelect(ch, seq, gid, cid, skipInitialDb) {
   navPending.value = true;
   try {
-    if (!skipDb) {
+    if (!skipInitialDb) {
       await loadMessagesForChannel(ch, { stickBottom: true });
       lastDbReloadAt = Date.now();
     }
@@ -1170,6 +1140,53 @@ async function selectChannel(ch) {
   } finally {
     if (seq === selectChannelSeq) navPending.value = false;
   }
+}
+
+/**
+ * 切换频道：CDP 打开 Discord 网页对应频道（触发 REST 采集）+ 本地 MySQL 拉历史。
+ * 向上翻页见 onMsgsScroll → scrollDiscordChannelHistory。
+ * @param {ChannelItem} ch
+ */
+async function selectChannel(ch) {
+  if (renamingChannelId.value && renamingChannelId.value !== ch.channelId) {
+    commitRename();
+  }
+  const seq = ++selectChannelSeq;
+  const sameChannel = lastSelectChannelId === ch.channelId;
+  lastSelectChannelId = ch.channelId;
+  if (selectedChannel.value?.channelId !== ch.channelId) {
+    selectedChannel.value = ch;
+  }
+  paneMessages.value = filterMessagesForChannel(
+    ch.channelId,
+    messagesByChannelId[ch.channelId] ?? [],
+  );
+  channelMessagesHint.value = "";
+  if (channelHasMoreOlder[ch.channelId] === undefined) {
+    channelHasMoreOlder[ch.channelId] = true;
+  }
+  clearChannelUnread(ch.channelId);
+  navError.value = "";
+  resetAttachmentImgDeadCache();
+  bumpShowUserActivity();
+  channelStickBottom.value = true;
+  syncPaneMessagesFromStore();
+  scrollMsgsBottom();
+  await scrollMsgsToBottomAfterLayout();
+
+  const cached = messagesByChannelId[ch.channelId] ?? [];
+  const now = Date.now();
+  const skipDb =
+    sameChannel && cached.length > 0 && now - lastDbReloadAt < DB_RELOAD_SAME_CHANNEL_MS;
+
+  const gid = String(ch.guildId || selectedGuildId.value || DEFAULT_SHOW_GUILD_ID).trim();
+  const cid = String(ch.channelId ?? "").trim();
+  if (!cid || !gid) {
+    navError.value = "缺少 guildId 或 channelId，无法 CDP 打开频道";
+    return;
+  }
+
+  void syncChannelAfterSelect(ch, seq, gid, cid, skipDb);
   if (seq === selectChannelSeq) {
     void warmupChannelHistoryAfterSelect(ch, seq);
   }
@@ -1276,32 +1293,39 @@ async function onShowIdleJumpBottom() {
 }
 
 /** @param {string} messageId */
-async function scrollToSignalMessage(messageId) {
+function scrollToSignalMessage(messageId) {
   const mid = String(messageId ?? "").trim();
   if (!mid) return;
   navError.value = "";
-  await nextTick();
-  const root = msgsScrollEl.value;
-  if (!root) return;
-  let el = root.querySelector(`[data-message-id="${CSS.escape(mid)}"]`);
-  if (!el && selectedChannel.value) {
+  void (async () => {
+    await nextTick();
+    const root = msgsScrollEl.value;
+    if (!root) return;
+    const tryScroll = () => {
+      const el = root.querySelector(`[data-message-id="${CSS.escape(mid)}"]`);
+      if (!el) return null;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      highlightMessageId.value = mid;
+      window.setTimeout(() => {
+        if (highlightMessageId.value === mid) highlightMessageId.value = "";
+      }, 2800);
+      return el;
+    };
+    if (tryScroll()) return;
+    if (!selectedChannel.value) {
+      navError.value = "未找到该信号对应的消息，可能尚未采集到本地。";
+      return;
+    }
     try {
       await loadMessagesForChannel(selectedChannel.value);
       await nextTick();
-      el = root.querySelector(`[data-message-id="${CSS.escape(mid)}"]`);
     } catch {
       /* ignore */
     }
-  }
-  if (!el) {
-    navError.value = "未找到该信号对应的消息，可能尚未采集到本地。";
-    return;
-  }
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
-  highlightMessageId.value = mid;
-  window.setTimeout(() => {
-    if (highlightMessageId.value === mid) highlightMessageId.value = "";
-  }, 2800);
+    if (!tryScroll()) {
+      navError.value = "未找到该信号对应的消息，可能尚未采集到本地。";
+    }
+  })();
 }
 
 /** @param {import('../lib/discordSignalApi.js').SignalCard} card */
@@ -1487,12 +1511,13 @@ function syncPaneMessagesFromStore() {
     paneMessages.value = [];
     return;
   }
-  paneMessages.value = messagesByChannelId[ch] ?? [];
+  paneMessages.value = filterMessagesForChannel(ch, messagesByChannelId[ch] ?? []);
 }
 
 function commitChannelMessages(cid, prev, rows) {
-  if (!rows.length) return prev;
-  let next = mergeChannelMessages(prev, rows);
+  const scoped = filterMessagesForChannel(cid, rows);
+  if (!scoped.length) return prev;
+  let next = mergeChannelMessages(prev, scoped);
   if (next.length > MAX_MSGS_PER_CHANNEL) {
     next = next.slice(-MAX_MSGS_PER_CHANNEL);
   }
@@ -1526,7 +1551,32 @@ function enqueueDiscordMessageBatch(msg) {
   const batch = Array.isArray(msg.rows) ? msg.rows : [];
   const channelUpdates = Array.isArray(msg.channels) ? msg.channels : [];
   for (const ch of channelUpdates) mergePendingWsChannelUpdate(ch);
-  if (batch.length) pendingWsBatchRows.push(...batch);
+  if (batch.length) {
+    const incomingRestCid =
+      msg.source === "rest_api" && msg.restQuery && typeof msg.restQuery === "object"
+        ? String(
+            /** @type {{ channelId?: string }} */ (msg.restQuery).channelId ?? "",
+          ).trim()
+        : "";
+    const pendingRestCid =
+      pendingWsBatchMeta?.source === "rest_api" &&
+      pendingWsBatchMeta.restQuery &&
+      typeof pendingWsBatchMeta.restQuery === "object"
+        ? String(
+            /** @type {{ channelId?: string }} */ (pendingWsBatchMeta.restQuery).channelId ??
+              "",
+          ).trim()
+        : "";
+    if (
+      pendingWsBatchRows.length &&
+      incomingRestCid &&
+      pendingRestCid &&
+      incomingRestCid !== pendingRestCid
+    ) {
+      flushPendingDiscordBatchesImmediate();
+    }
+    pendingWsBatchRows.push(...batch);
+  }
   pendingWsBatchMeta = {
     ...(pendingWsBatchMeta ?? {}),
     ...msg,
@@ -1603,14 +1653,18 @@ function applyDiscordMessageBatch(msg) {
   /** @type {Map<string, Record<string, unknown>[]>} */
   const batchByChannel = new Map();
   for (const m of batch) {
-    if (isRestBatch && restChannelId) {
-      m.channelId = restChannelId;
-      m.channel_id = restChannelId;
+    let rowCid = String(m.channelId ?? m.channel_id ?? "").trim();
+    if (!rowCid && isRestBatch && restChannelId) {
+      rowCid = restChannelId;
+      m.channelId = rowCid;
+      m.channel_id = rowCid;
     }
-    const cid = String(m.channelId ?? m.channel_id ?? restChannelId ?? "");
-    if (!cid) continue;
-    if (!batchByChannel.has(cid)) batchByChannel.set(cid, []);
-    batchByChannel.get(cid).push(m);
+    if (!rowCid) continue;
+    const scoped = filterMessagesForChannel(rowCid, [m]);
+    if (!scoped.length) continue;
+    const row = scoped[0];
+    if (!batchByChannel.has(rowCid)) batchByChannel.set(rowCid, []);
+    batchByChannel.get(rowCid).push(row);
   }
 
   let needReloadGuilds = false;
@@ -2100,7 +2154,7 @@ onUnmounted(() => {
       </header>
 
       <div v-if="navError" class="kook-nav-alert err">{{ navError }}</div>
-      <p v-if="navPending" class="kook-nav-alert info">CDP 正在打开 Discord 频道并拉取消息…</p>
+      <p v-if="navPending" class="kook-nav-alert info">后台同步 CDP / 消息库…（可先浏览已缓存内容）</p>
       <p v-if="channelMessagesHint" class="kook-nav-alert info">{{ channelMessagesHint }}</p>
 
       <div

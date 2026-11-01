@@ -4,6 +4,7 @@ import PageLoadingBlock from "./PageLoadingBlock.vue";
 import {
   attachmentDisplayUrl,
   attachmentImgSrcCandidates,
+  attachmentLinksExpired,
   fmtMsgTime,
   groupChannelMessages,
   isImageAttachment,
@@ -81,10 +82,21 @@ function tryNextAttachmentSrc(img, candidates) {
   return false;
 }
 
+/** @param {Record<string, unknown>} att @param {number} i @param {Record<string, unknown>} msg */
+function attachmentImgSkipped(att, i, msg) {
+  if (attachmentLinksExpired(att)) return true;
+  return attachmentImgDead(att, i, msg);
+}
+
 /** @param {Record<string, unknown>} att @param {number} i @param {Record<string, unknown>} msg @param {Event} e */
 async function onAttachmentImgError(att, i, msg, e) {
   const key = stableAttachmentImgKey(att, i, msg);
   if (isAttachmentImgDead(key)) return;
+  if (attachmentLinksExpired(att)) {
+    markAttachmentImgDead(key);
+    attachmentFailEpoch.value += 1;
+    return;
+  }
 
   const img = /** @type {HTMLImageElement | null} */ (e.target);
   if (!img) {
@@ -99,21 +111,31 @@ async function onAttachmentImgError(att, i, msg, e) {
   const mid = messageDomId(msg);
   if (mid && img.dataset.dcRefreshTried !== "1") {
     img.dataset.dcRefreshTried = "1";
-    try {
-      const res = await fetch(`/api/discord/messages/${encodeURIComponent(mid)}/attachments`);
-      const data = await res.json();
-      const fresh = Array.isArray(data.attachments) ? data.attachments[i] : null;
-      if (fresh && typeof fresh === "object") {
-        const freshKey = stableAttachmentImgKey(fresh, i, msg);
-        clearAttachmentImgDead(key);
-        clearAttachmentImgDead(freshKey);
-        img.dataset.dcTryIdx = "0";
-        const freshChain = attachmentImgSrcCandidates(fresh);
-        if (tryNextAttachmentSrc(img, freshChain)) return;
+    void (async () => {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 2500);
+        const res = await fetch(`/api/discord/messages/${encodeURIComponent(mid)}/attachments`, {
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        const data = await res.json();
+        const fresh = Array.isArray(data.attachments) ? data.attachments[i] : null;
+        if (fresh && typeof fresh === "object" && !attachmentLinksExpired(fresh)) {
+          const freshKey = stableAttachmentImgKey(fresh, i, msg);
+          clearAttachmentImgDead(key);
+          clearAttachmentImgDead(freshKey);
+          img.dataset.dcTryIdx = "0";
+          const freshChain = attachmentImgSrcCandidates(fresh);
+          if (tryNextAttachmentSrc(img, freshChain)) return;
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
-    }
+      markAttachmentImgDead(key);
+      attachmentFailEpoch.value += 1;
+    })();
+    return;
   }
 
   markAttachmentImgDead(key);
@@ -171,7 +193,7 @@ async function onAttachmentImgError(att, i, msg, e) {
           <div v-if="msgAttachments(g.head).length" class="msg-attachments">
             <template v-for="(att, i) in msgAttachments(g.head)" :key="`${g.head.messageId ?? g.head.message_id}-${i}`">
               <a
-                    v-if="isImageAttachment(att) && !attachmentImgDead(att, i, g.head)"
+                    v-if="isImageAttachment(att) && !attachmentImgSkipped(att, i, g.head)"
                 :href="attachmentDisplayUrl(att)"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -181,13 +203,15 @@ async function onAttachmentImgError(att, i, msg, e) {
                   :src="attachmentDisplayUrl(att)"
                   :alt="att.filename || '图片'"
                   class="msg-image"
-                  loading="eager"
+                  loading="lazy"
                   decoding="async"
                   referrerpolicy="no-referrer"
                         @error="onAttachmentImgError(att, i, g.head, $event)"
                 />
               </a>
-              <span v-else-if="isImageAttachment(att)" class="msg-image-placeholder">图片加载失败</span>
+              <span v-else-if="isImageAttachment(att)" class="msg-image-placeholder">{{
+                attachmentLinksExpired(att) ? "图片链接已过期" : "图片加载失败"
+              }}</span>
               <a
                 v-else
                 :href="attachmentDisplayUrl(att)"
@@ -216,7 +240,7 @@ async function onAttachmentImgError(att, i, msg, e) {
           <div v-if="msgAttachments(m).length" class="msg-attachments">
             <template v-for="(att, i) in msgAttachments(m)" :key="`${m.messageId ?? m.message_id}-${i}`">
               <a
-                      v-if="isImageAttachment(att) && !attachmentImgDead(att, i, m)"
+                      v-if="isImageAttachment(att) && !attachmentImgSkipped(att, i, m)"
                 :href="attachmentDisplayUrl(att)"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -226,13 +250,15 @@ async function onAttachmentImgError(att, i, msg, e) {
                   :src="attachmentDisplayUrl(att)"
                   :alt="att.filename || '图片'"
                   class="msg-image"
-                  loading="eager"
+                  loading="lazy"
                   decoding="async"
                   referrerpolicy="no-referrer"
                         @error="onAttachmentImgError(att, i, m, $event)"
                 />
               </a>
-              <span v-else-if="isImageAttachment(att)" class="msg-image-placeholder">图片加载失败</span>
+              <span v-else-if="isImageAttachment(att)" class="msg-image-placeholder">{{
+                attachmentLinksExpired(att) ? "图片链接已过期" : "图片加载失败"
+              }}</span>
               <a
                 v-else
                 :href="attachmentDisplayUrl(att)"

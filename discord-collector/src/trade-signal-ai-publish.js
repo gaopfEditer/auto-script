@@ -4,6 +4,8 @@
  *
  * 白名单：telegram/channel_profiles.json 的 `send` 数组（来源群 id）。
  * 在 pushArchivedCardToTelegram 成功后触发；CDP 正文去掉【频道名】首行与会员引流行（TG 推送仅删引流行）。
+ * 平台列表：`TRADE_SIGNAL_AI_PUBLISH_PLATFORMS`（逗号分隔，与 python-ai-operate 平台 id 一致：
+ * binance_square / okx / bitget / gate / x）。未配置时由 operate 侧 config.yaml `default_platforms` 决定。
  */
 import { config } from "./config.js";
 import { isCdpSendChannel } from "./telegram-channel-profiles.js";
@@ -22,6 +24,13 @@ export { stripCdpPlatformHeader } from "./telegram-content-sanitize.js";
 /** @type {Map<string, number>} */
 const recentPublish = new Map();
 const DEDUP_MS = Math.max(60_000, Number(process.env.TRADE_SIGNAL_AI_PUBLISH_DEDUP_MS ?? 600_000));
+/** 同频道+币种 CDP 冷却（默认 3 分钟，避免引用/补 TP 连发） */
+const SYMBOL_COOLDOWN_MS = Math.max(
+  60_000,
+  Number(process.env.TRADE_SIGNAL_CDP_SYMBOL_COOLDOWN_MS ?? 180_000),
+);
+/** @type {Map<string, number>} */
+const recentSymbolPublish = new Map();
 
 /** @param {unknown} raw */
 function isTelegramSource(raw) {
@@ -51,6 +60,33 @@ function wasRecentlyPublished(key) {
   if (!t) return false;
   if (Date.now() - t > DEDUP_MS) {
     recentPublish.delete(key);
+    return false;
+  }
+  return true;
+}
+
+/** @param {string} channelId @param {string} symbol */
+function buildSymbolCooldownKey(channelId, symbol) {
+  return `sym:${String(channelId ?? "").trim()}:${String(symbol ?? "").trim().toUpperCase()}`;
+}
+
+/** @param {string} key */
+function markSymbolPublished(key) {
+  const now = Date.now();
+  recentSymbolPublish.set(key, now);
+  if (recentSymbolPublish.size > 400) {
+    for (const [k, t] of recentSymbolPublish) {
+      if (now - t > SYMBOL_COOLDOWN_MS) recentSymbolPublish.delete(k);
+    }
+  }
+}
+
+/** @param {string} key */
+function wasRecentlyPublishedSymbol(key) {
+  const t = recentSymbolPublish.get(key);
+  if (!t) return false;
+  if (Date.now() - t > SYMBOL_COOLDOWN_MS) {
+    recentSymbolPublish.delete(key);
     return false;
   }
   return true;
@@ -164,6 +200,15 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
     );
     return false;
   }
+  const symCooldownKey = buildSymbolCooldownKey(channelId, symbol);
+  if (!bypass && wasRecentlyPublishedSymbol(symCooldownKey)) {
+    skipCdp(
+      card,
+      opts,
+      `同频道同币种 ${Math.round(SYMBOL_COOLDOWN_MS / 1000)}s 内已 CDP（${symbol}）`,
+    );
+    return false;
+  }
 
   const targets = Array.isArray(planned.takeProfitPrices)
     ? planned.takeProfitPrices.map((x) => String(x ?? "").trim()).filter(Boolean)
@@ -203,7 +248,10 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
     body.token = config.tradeSignalAiPublishToken;
   }
 
-  if (!bypass) markPublished(dedupKey);
+  if (!bypass) {
+    markPublished(dedupKey);
+    markSymbolPublished(symCooldownKey);
+  }
   const log = opts.log;
   const msgRef = resolveTelegramMessageRef(card, opts.ingestSourceRef);
   if (bypass) {

@@ -21,6 +21,7 @@ from signal_pipeline_log import log_pipeline
 from trade_context_buffer import TradeContextBuffer, WindowMessage
 from trade_signal_detect import (
     TradeSignal,
+    dedupe_trade_text_lines,
     format_signal_push,
     is_push_bypass_message,
     is_spam_or_recap_message,
@@ -228,25 +229,35 @@ class TradeCardPusher:
             rest = [m for m in ordered if (m.sender or "") != prefer_sender]
             ordered = same + rest
 
-        for m in ordered:
-            t = (m.text or "").strip()
-            if not t or t in seen:
-                continue
-            in_ids = m.msg_id in msg_ids
-            if not in_ids and not looks_like_trade_message(t):
-                continue
-            frag = parse_trade_text(t, sender=m.sender, msg_id=m.msg_id)
-            if frag and sig.symbol:
-                if frag.symbol and frag.symbol != sig.symbol:
+        if msg_ids:
+            for m in ordered:
+                if m.msg_id not in msg_ids:
                     continue
-            parts.append(t)
-            seen.add(t)
+                t = (m.text or "").strip()
+                if not t or t in seen:
+                    continue
+                parts.append(t)
+                seen.add(t)
+        else:
+            for m in ordered:
+                t = (m.text or "").strip()
+                if not t or t in seen:
+                    continue
+                if not looks_like_trade_message(t):
+                    continue
+                frag = parse_trade_text(t, sender=m.sender, msg_id=m.msg_id)
+                if frag and sig.symbol:
+                    if frag.symbol and frag.symbol != sig.symbol:
+                        continue
+                parts.append(t)
+                seen.add(t)
 
         src = (sig.source_text or "").strip()
         if src and src not in seen:
             parts.insert(0, src)
 
-        return "\n\n".join(parts) if parts else src
+        combined = "\n\n".join(parts) if parts else src
+        return dedupe_trade_text_lines(combined)
 
     async def on_group_message(
         self,

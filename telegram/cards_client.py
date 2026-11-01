@@ -20,7 +20,7 @@ from signal_pipeline_log import log_pipeline
 from default_tpsl import apply_default_tpsl_if_needed
 from trade_signal_detect import (
     TradeSignal,
-    format_signal_push,
+    dedupe_trade_text_lines,
     refine_trade_text,
     strip_promotional_lines,
 )
@@ -94,7 +94,7 @@ def signal_to_card_payload(
     sig, defaulted, exit_plan = apply_default_tpsl_if_needed(sig)
     formatted = format_signal_push(sig, phase=phase if phase != "update" else "full")
     refined_raw = refine_trade_text(raw_body) if (raw_body or "").strip() else ""
-    body = strip_promotional_lines(refined_raw or formatted)
+    body = dedupe_trade_text_lines(strip_promotional_lines(refined_raw or formatted))
     note_parts = []
     if defaulted:
         note_parts.append("默认TP/SL(10%止盈+5%止损)")

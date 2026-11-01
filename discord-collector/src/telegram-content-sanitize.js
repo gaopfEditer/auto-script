@@ -26,12 +26,33 @@ export function stripCdpPlatformHeader(text) {
   return s.replace(CDP_HEADER_LINE_RE, "").trimStart();
 }
 
-/** CDP 发布：去首行频道名 + 删引流行 */
-export function sanitizeCdpPlatformText(text) {
-  return stripPromotionalLines(stripCdpPlatformHeader(text));
+/** CDP 发布：去首行频道名 + 删引流行 + 去重复行 */
+export function dedupeCdpTextLines(text) {
+  /** @type {string[]} */
+  const kept = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const chunk = line.replace(/\s+$/, "");
+    if (!chunk.trim()) continue;
+    const key = chunk
+      .replace(/止損/g, "止损")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(chunk);
+  }
+  return kept.join("\n").trim();
 }
 
-/** Telegram 群推送：删引流行（保留【频道名】首行） */
+/** CDP 发布：去首行频道名 + 删引流行 */
+export function sanitizeCdpPlatformText(text) {
+  return dedupeCdpTextLines(stripPromotionalLines(stripCdpPlatformHeader(text)));
+}
+
+/** Telegram 群推送：删引流行（保留【频道名】首行）+ 去重复行 */
 export function sanitizeTelegramPushText(text) {
-  return stripPromotionalLines(text);
+  return dedupeCdpTextLines(stripPromotionalLines(text));
 }

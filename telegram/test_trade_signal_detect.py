@@ -4,12 +4,14 @@ from __future__ import annotations
 import unittest
 
 from trade_signal_detect import (
+    dedupe_trade_text_lines,
     is_casual_chat_only,
     is_structured_trade_message,
     looks_like_trade_message,
     parse_trade_text,
     refine_trade_text,
     signal_skip_reason,
+    strip_embedded_quote,
 )
 
 AURA_SIGNAL = """\
@@ -129,6 +131,18 @@ class TradeSignalFilterTest(unittest.TestCase):
         self.assertIsNone(
             signal_skip_reason(sig, ASHLEY_MOVE_COMPACT, sender="Ashley帶你賺U")
         )
+
+    def test_strip_embedded_quote_reply(self) -> None:
+        parent = "#APR 轻仓市价多 0.05551\n止盈：0.6102\n止損：0.661"
+        reply = parent + "\n止盈：0.0584-0.062\n止损：0.05317"
+        out = strip_embedded_quote(reply, parent)
+        self.assertIn("0.0584", out)
+        self.assertNotIn("0.6102", out)
+
+    def test_dedupe_trade_text_lines(self) -> None:
+        raw = "止盈：0.0584\n止损：0.05317\n止盈：0.0584\n止损：0.05317"
+        out = dedupe_trade_text_lines(raw)
+        self.assertEqual(out.count("0.0584"), 1)
 
 
 if __name__ == "__main__":

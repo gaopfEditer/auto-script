@@ -29,6 +29,7 @@ import {
 } from "./discord-message-format.js";
 import { createChannelMessageDedup, messageDedupKey } from "./discord-message-dedup.js";
 import { normalizeSignalText } from "./discord-signal-dedup.js";
+import { resolveSignalContentFromRow } from "./discord-reply-content.js";
 import { isSignalChannel, getSignalChannelConfig } from "./discord-signal-config.js";
 import { shouldTelegramPushSignalChannelComment } from "./discord-telegram-push-config.js";
 import { isBlockedWsPayload, isDiscordGatewayPayload } from "./ws-noise-filter.js";
@@ -530,7 +531,7 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       await signalCards.ensureHydrated();
       for (const r of rows) {
         const cid = String(r.channelId ?? "").trim();
-        const content = normalizeSignalText(String(r.content ?? ""));
+        const content = resolveSignalContentFromRow(r);
         if (!cid) continue;
         if (!content) {
           if (isSignalChannel(cid)) {

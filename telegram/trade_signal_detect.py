@@ -462,6 +462,79 @@ def strip_promotional_lines(text: str) -> str:
     return "\n".join(kept).strip()
 
 
+def _normalize_dedupe_line(line: str) -> str:
+    s = _t2s((line or "").strip())
+    s = re.sub(r"\s+", " ", s)
+    s = s.replace("止損", "止损").replace("止盈", "止盈")
+    return s.lower()
+
+
+def dedupe_trade_text_lines(text: str) -> str:
+    """去掉重复行（引用回复常把上一条正文再贴一遍）。"""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    kept: list[str] = []
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        chunk = line.rstrip()
+        if not chunk.strip():
+            continue
+        key = _normalize_dedupe_line(chunk)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        kept.append(chunk)
+    return "\n".join(kept).strip()
+
+
+def strip_embedded_quote(text: str, quoted: str) -> str:
+    """
+    从正文里去掉被引用/回复的上一条消息内容（Telegram 回复常整段复制）。
+    保留本条新增的行。
+    """
+    body = (text or "").strip()
+    quote = (quoted or "").strip()
+    if not body or not quote:
+        return body
+    if body == quote:
+        return ""
+    if body.startswith(quote):
+        rest = body[len(quote) :].lstrip("\n").strip()
+        return dedupe_trade_text_lines(rest)
+
+    quote_lines = [ln.strip() for ln in quote.splitlines() if ln.strip()]
+    if not quote_lines:
+        return dedupe_trade_text_lines(body)
+
+    body_lines = body.splitlines()
+    if len(body_lines) >= len(quote_lines):
+        head = [ln.strip() for ln in body_lines[: len(quote_lines)] if ln.strip()]
+        if len(head) == len(quote_lines) and all(
+            _normalize_dedupe_line(a) == _normalize_dedupe_line(b)
+            for a, b in zip(head, quote_lines)
+        ):
+            rest = "\n".join(body_lines[len(quote_lines) :]).strip()
+            return dedupe_trade_text_lines(rest)
+
+    q_norm = _normalize_dedupe_line(quote)
+    if q_norm and q_norm in _normalize_dedupe_line(body):
+        pattern = re.escape(quote)
+        stripped = re.sub(pattern, "", body, count=1).strip()
+        return dedupe_trade_text_lines(stripped)
+
+    q_keys = {_normalize_dedupe_line(ln) for ln in quote_lines if ln.strip()}
+    kept: list[str] = []
+    for ln in body_lines:
+        chunk = ln.rstrip()
+        if not chunk.strip():
+            continue
+        if _normalize_dedupe_line(chunk) in q_keys:
+            continue
+        kept.append(chunk)
+    return dedupe_trade_text_lines("\n".join(kept))
+
+
 def refine_trade_text(text: str) -> str:
     """
     从混合闲聊的长消息里抽出结构化策略行。
@@ -484,8 +557,8 @@ def refine_trade_text(text: str) -> str:
         elif has_dir_hint and _ticker_only_symbol(chunk):
             picked.append(ln.rstrip())
     if picked:
-        return "\n".join(picked).strip()
-    return raw.strip()
+        return dedupe_trade_text_lines("\n".join(picked).strip())
+    return dedupe_trade_text_lines(raw.strip())
 
 
 def is_structured_trade_message(text: str) -> bool:

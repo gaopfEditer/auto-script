@@ -64,6 +64,26 @@ def text_preview(message, preview: int) -> str:
     return text
 
 
+async def incoming_message_text(client: TelegramClient, message) -> str:
+    """
+    群消息正文：去掉回复引用里夹带的上一条全文，并去重行。
+    """
+    from trade_signal_detect import dedupe_trade_text_lines, strip_embedded_quote
+
+    body = (message.message or "").strip()
+    reply_to = getattr(message, "reply_to", None)
+    if reply_to and getattr(reply_to, "reply_to_msg_id", None):
+        try:
+            parent = await message.get_reply_message()
+            if parent:
+                parent_text = (parent.message or "").strip()
+                if parent_text:
+                    body = strip_embedded_quote(body, parent_text)
+        except Exception:
+            pass
+    return dedupe_trade_text_lines(body)
+
+
 def media_type_hint(message) -> str:
     if getattr(message, "photo", None):
         return "[图片]"

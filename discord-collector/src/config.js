@@ -3,6 +3,7 @@
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildShowSidebarChannelGroups } from "./discord-show-channels.js";
 
 const _repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const _collectorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -294,7 +295,12 @@ export const config = {
     .filter(Boolean),
   /** 非空时仅入库/展示这些 guild 的消息 */
   monitoredGuildIds: parseIdList(process.env.DISCORD_MONITORED_GUILD_IDS ?? ""),
-  /** Show 侧栏频道白名单（`DISCORD_GROUPS`）；空=展示该服全部已同步频道 */
+  /** Show /show 左侧频道白名单（默认 discord-show-channels.js；DISCORD_SHOW_CHANNEL_IDS 覆盖） */
+  discordShowSidebar: buildShowSidebarChannelGroups(
+    process.env.DISCORD_SHOW_CHANNEL_IDS ?? "",
+    process.env.DISCORD_GROUPS ?? "",
+  ),
+  /** 旧 Show 白名单 env（未设 DISCORD_SHOW_CHANNEL_IDS 时仍可读 DISCORD_GROUPS） */
   discordGroups: parseDiscordGroups(process.env.DISCORD_GROUPS ?? ""),
   /** 信号卡片监听频道（默认内置 4 个） */
   discordSignalChannelIds: parseIdList(process.env.DISCORD_SIGNAL_CHANNEL_IDS ?? ""),
@@ -649,6 +655,11 @@ export const config = {
   /** 卡片合并更新是否再次走 trade-signal CDP；默认关 */
   tradeSignalAiPublishOnUpdate: ["1", "true", "yes", "on"].includes(
     String(process.env.TRADE_SIGNAL_AI_PUBLISH_ON_UPDATE ?? "0").toLowerCase(),
+  ),
+  /** 同频道同币种 CDP 最短间隔（毫秒，默认 180000） */
+  tradeSignalCdpSymbolCooldownMs: Math.max(
+    60_000,
+    Number(process.env.TRADE_SIGNAL_CDP_SYMBOL_COOLDOWN_MS ?? 180_000),
   ),
   tradeSignalAiPublishPlatforms: parseIdList(
     process.env.TRADE_SIGNAL_AI_PUBLISH_PLATFORMS ?? ""
