@@ -1259,8 +1259,9 @@ def _plan_from_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 # 量化补齐质量门槛：未达则门禁过也标不做（可逆配置）
-QUANT_FILL_MIN_CONFIDENCE_PCT = 60
-QUANT_FILL_MIN_RR = 1.5
+# 2026-11-01：再松一档 60→50 / 1.5→1.3，减少门禁过仍 NO_TRADE / 信心0 踏空
+QUANT_FILL_MIN_CONFIDENCE_PCT = 50
+QUANT_FILL_MIN_RR = 1.3
 
 
 def _plan_rr(plan: dict[str, Any]) -> float | None:
@@ -1321,10 +1322,17 @@ def _plan_confidence_pct(plan: dict[str, Any], item: dict[str, Any]) -> int:
 
 
 def _quant_fill_quality_ok(plan: dict[str, Any], item: dict[str, Any]) -> tuple[bool, list[str]]:
-    """confidence_pct≥60 且 RR≥1.5 才允许补成 LONG/SHORT。"""
+    """confidence_pct≥QUANT_FILL_MIN 且 RR≥QUANT_FILL_MIN_RR 才允许补成 LONG/SHORT。"""
     reasons: list[str] = []
     conf = _plan_confidence_pct(plan, item)
     rr = _plan_rr(plan)
+    # 结构计划已给出入场/止损/止盈但未填信心时，给温和默认值，避免门禁过全是信心0→NO_TRADE
+    if conf <= 0 and isinstance(plan, dict) and plan:
+        has_levels = plan.get("entry") is not None and plan.get("sl") is not None and (
+            plan.get("tp1") is not None or plan.get("tp") is not None
+        )
+        if has_levels and (plan.get("matched") or plan.get("should_enter")):
+            conf = max(conf, min(55, QUANT_FILL_MIN_CONFIDENCE_PCT + 5))
     if conf < QUANT_FILL_MIN_CONFIDENCE_PCT:
         reasons.append(f"confidence_pct {conf}<{QUANT_FILL_MIN_CONFIDENCE_PCT}")
     if rr is None:
@@ -1341,7 +1349,7 @@ def _quant_fill_quality_ok(plan: dict[str, Any], item: dict[str, Any]) -> tuple[
 def _quant_fill_gate_pass_item(item: dict[str, Any], *, reason: str = "llm_budget_or_fail") -> None:
     """Gate-pass without usable LLM → judged LONG/SHORT only if quality gate passes.
 
-    Quality: confidence_pct≥60 且 RR≥1.5；否则 NO_TRADE（门禁过也不做）。
+    Quality: confidence_pct≥QUANT_FILL_MIN_CONFIDENCE_PCT 且 RR≥QUANT_FILL_MIN_RR；否则 NO_TRADE（门禁过也不做）。
     Marks ai_status=judged so UI 未跑→0 on gate-pass; quant_fill=True even when NO_TRADE.
     """
     if str(item.get("gate_result") or "") != "pass":

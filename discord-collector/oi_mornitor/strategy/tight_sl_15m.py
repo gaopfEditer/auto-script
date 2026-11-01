@@ -38,11 +38,12 @@ import pandas as pd
 from oi_mornitor.pattern_monitor import enrich_indicators
 
 # --- Actionable quality + fee defaults (survive ~万4 taker fees) ---
-TIGHT_SL_MIN_CONF_ENTER = 80
-TIGHT_SL_MIN_CONF_THREE_PILLAR = 75
-TIGHT_SL_MIN_CONF_NO_MA = 85
-TIGHT_SL_MIN_RR_TP1 = 1.5
-TIGHT_SL_MIN_CONF_AGAINST_HTF = 90
+# 2026-11-01：入场信心再松一档（约 -8~10pt）；RR 1.5→1.3 与量化补齐对齐
+TIGHT_SL_MIN_CONF_ENTER = 70
+TIGHT_SL_MIN_CONF_THREE_PILLAR = 65
+TIGHT_SL_MIN_CONF_NO_MA = 75
+TIGHT_SL_MIN_RR_TP1 = 1.3
+TIGHT_SL_MIN_CONF_AGAINST_HTF = 80
 # ATR buffer outside structural invalidation (pattern extreme ∩ S/R)
 TIGHT_SL_ATR_BUF_LO = 0.35
 TIGHT_SL_ATR_BUF_HI = 0.55
