@@ -837,6 +837,13 @@ export function parseJunzhang(text) {
  *     `以太坊2426附近空，2450止损` / `0.059止损` / `目标0.048`
  * @param {string} text
  */
+
+/** 兼容 Local Discord 统计：多信号接口；本树暂用单卡 parseJunzhang 包装 */
+export function parseJunzhangSignals(text) {
+  const one = parseJunzhang(text);
+  return one ? [one] : [];
+}
+
 export function parsePangmao(text) {
   const joined = lines(text).join("\n");
   const compact = joined.replace(/\s+/g, "");
@@ -953,6 +960,13 @@ export function parsePangmao(text) {
  * @param {string} text
  * @param {import("./discord-signal-config.js").ParserKind} kind
  */
+
+/** 兼容 Local Discord 统计：多信号接口；本树暂用单卡 parsePangmao 包装 */
+export function parsePangmaoSignals(text) {
+  const one = parsePangmao(text);
+  return one ? [one] : [];
+}
+
 export function parseSignalText(text, kind) {
   const t = String(text ?? "").trim();
   if (!t) return null;

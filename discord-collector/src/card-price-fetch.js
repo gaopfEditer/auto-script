@@ -52,6 +52,11 @@ const KLINE_FALLBACK_ORDER = ["bybit", "okx"];
 /** 币安 K 线 418 后本轮进程内跳过后续币安请求 */
 let binanceKlineBlocked = false;
 
+/** 批量回溯开始前调用，避免上次 451 导致整次任务永久跳过币安 */
+export function resetBinanceKlineBlockForBacktest() {
+  binanceKlineBlocked = false;
+}
+
 /** @type {import("undici").Dispatcher | undefined} */
 let marketDispatcher;
 

@@ -14,6 +14,56 @@ export function snowflakeToMs(snowflake) {
 }
 
 /**
+ * 消息时间：REST/Gateway 的 timestamp → 雪花 id → 0。
+ * @param {{
+ *   createdAtMs?: number;
+ *   created_at_ms?: number;
+ *   messageId?: string;
+ *   message_id?: string;
+ *   rawMessage?: unknown;
+ *   rawJson?: unknown;
+ *   raw_json?: unknown;
+ * }} parts
+ */
+export function resolveDiscordMessageCreatedAtMs(parts) {
+  const direct = Number(parts.createdAtMs ?? parts.created_at_ms ?? 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  /** @param {Record<string, unknown>} m */
+  const fromRecord = (m) => {
+    for (const key of ["timestamp", "edited_timestamp"]) {
+      const raw = m[key];
+      if (raw == null || raw === "") continue;
+      const ms = Date.parse(String(raw));
+      if (Number.isFinite(ms)) return ms;
+    }
+    return 0;
+  };
+
+  let rawMsg = parts.rawMessage ?? parts.rawJson ?? parts.raw_json;
+  if (typeof rawMsg === "string") {
+    try {
+      rawMsg = JSON.parse(rawMsg);
+    } catch {
+      rawMsg = null;
+    }
+  }
+  const rec = asRecord(rawMsg);
+  if (rec) {
+    const fromTs = fromRecord(rec);
+    if (fromTs > 0) return fromTs;
+  }
+
+  const mid = String(parts.messageId ?? parts.message_id ?? "").trim();
+  if (mid && /^\d{5,}$/.test(mid)) {
+    const ms = snowflakeToMs(mid);
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+  return 0;
+}
+
+
+/**
  * @param {unknown} obj Gateway 帧 JSON
  * @returns {{ op?: number, t?: string, d?: unknown, s?: number } | null}
  */
