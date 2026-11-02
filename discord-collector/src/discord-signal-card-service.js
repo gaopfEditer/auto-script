@@ -2,7 +2,7 @@
  * 信号卡片：去重 → 解析 → AI 多风格 → 入库 → Telegram → WS 广播。
  */
 import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
-import { resolveSignalCardInsertSource } from "./discord-signal-card-source.js";
+import { resolveSignalCardInsertSource, assertSignalCardSourceLength } from "./discord-signal-card-source.js";
 import { createChannelTextDedup, normalizeSignalText, signalTextHash } from "./discord-signal-dedup.js";
 import {
   isReplyRepostOfReference,
@@ -980,6 +980,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     const assetClass = detectAssetClass(symbol, parsed, executionJson, content);
     const verifyMode = resolveVerifyMode(assetClass, parsed.verifyMode);
     const insertSource = resolveSignalCardInsertSource(row);
+    assertSignalCardSourceLength(insertSource.source);
     const cardFieldsJson = buildCardFieldsFromExecution(executionJson, parsed, content, {
       sourceType: insertSource.sourceType,
       sourceRef: insertSource.sourceRef,
