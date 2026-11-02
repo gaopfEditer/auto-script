@@ -694,6 +694,8 @@ export const config = {
   /** 留空则沿用 CDP_CONNECT_URL（同一 Chrome :9222，需已登录 kolvip.vip/web） */
   kolvipCdpConnectUrl: (process.env.KOLVIP_CDP_CONNECT_URL ?? "").trim(),
   kolvipWebUrl: (process.env.KOLVIP_WEB_URL ?? "https://kolvip.vip/web").trim(),
+  /** 图片附件 origin；留空则从 KOLVIP_WEB_URL 推导（如 https://kolvip.vip） */
+  kolvipAssetOrigin: (process.env.KOLVIP_ASSET_ORIGIN ?? "").trim(),
   kolvipCdpIntervalMs: Math.max(
     15_000,
     Number(process.env.KOLVIP_CDP_INTERVAL_MS ?? 90_000) || 90_000

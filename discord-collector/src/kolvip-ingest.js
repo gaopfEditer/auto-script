@@ -99,6 +99,7 @@ export async function ingestKolvipMessageBatch(opts) {
 
   /** @type {number[]} */
   const cardIds = [];
+  const store = opts.store;
   if (rows.length) {
     await runSignalCardPipelineForRows(rows, {
       signalCards: opts.signalCards,

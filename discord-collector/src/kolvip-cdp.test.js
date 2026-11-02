@@ -16,6 +16,7 @@ import {
   DEFAULT_KOLVIP_CHANNEL_MAPPINGS,
   parseKolvipChannelIdsEnv,
   getKolvipMappedDiscordChannelIds,
+  resolveKolvipAssetUrl,
 } from "./kolvip-cdp-config.js";
 
 describe("kolvip message id 与 Discord 行", () => {
@@ -45,9 +46,37 @@ describe("kolvip message id 与 Discord 行", () => {
     assert.equal(raw.attachments?.[0]?.url, "https://cdn.example/img.jpg");
   });
 
+  it("相对路径 imageUrl 拼 kolvip origin", () => {
+    const map = DEFAULT_KOLVIP_CHANNEL_MAPPINGS.find((m) => m.kolvipChannelId === "16");
+    assert.ok(map);
+    const row = kolvipMessageToDiscordRow(
+      {
+        dataId: "1",
+        text: "x",
+        author: "胖猫",
+        timeText: "",
+        timeTitle: "",
+        imageUrl: "/web_file/abc.png",
+      },
+      { kolvipChannelId: map.kolvipChannelId, discordChannelId: map.discordChannelId }
+    );
+    const raw = /** @type {{ attachments?: Array<{ url: string }> }} */ (row.rawJson);
+    assert.match(raw.attachments?.[0]?.url ?? "", /^https:\/\/[^/]+\/web_file\/abc\.png$/);
+  });
+
   it("parseKolvipMessageTimeMs 优先 bubble title", () => {
     const ms = parseKolvipMessageTimeMs("无效", "2026-01-15T08:30:00.000Z");
     assert.equal(ms, Date.parse("2026-01-15T08:30:00.000Z"));
+  });
+});
+
+describe("resolveKolvipAssetUrl", () => {
+  it("保留绝对 URL", () => {
+    assert.equal(resolveKolvipAssetUrl("https://cdn.example/x"), "https://cdn.example/x");
+  });
+
+  it("/web_file 相对路径", () => {
+    assert.match(resolveKolvipAssetUrl("/web_file/x"), /^https:\/\/[^/]+\/web_file\/x$/);
   });
 });
 
@@ -80,6 +109,15 @@ describe("kolvip API 消息行", () => {
     assert.equal(dom.dataId, "42");
     assert.equal(dom.text, "BTC long");
     assert.equal(dom.imageUrl, "https://cdn.example/a.jpg");
+  });
+
+  it("API 相对路径 images 拼绝对 URL", () => {
+    const dom = kolvipApiRawToDomMessage({
+      id: 1,
+      text: "t",
+      images: [{ url: "/web_file/pangmao.jpg" }],
+    });
+    assert.match(dom.imageUrl, /^https:\/\/[^/]+\/web_file\/pangmao\.jpg$/);
   });
 
   it("parseWtokenFromLocalStorageExport", () => {

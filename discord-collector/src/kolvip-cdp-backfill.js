@@ -297,6 +297,7 @@ export function createKolvipBackfillService(store, log, deps = {}) {
       const oldestMs = Date.parse(oldest.timeTitle || "");
       job.oldestMessageMs = Number.isFinite(oldestMs) ? oldestMs : job.oldestMessageMs;
       job.backfillCursor = String(oldest.dataId);
+      job.lastError = null;
 
       const evalChannelId = job.curated
         ? getKolvipMappingByKolvipId(kid)?.discordChannelId
