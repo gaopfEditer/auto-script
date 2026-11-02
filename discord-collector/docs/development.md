@@ -6,6 +6,7 @@
 - [前端上云 + 后台本地](./deploy-frontend-remote-backend-local.md)
 - [WebSocket 推送架构](./websocket-push-architecture.md)
 - [Show 消息与图片展示](./show-messages-and-images.md)
+- [巨鲸 kolvip 临时 CDP 信号源](./kolvip-cdp.md)
 - [信号卡片模板](./card-templates.md)
 - [开放建卡 API](./cards-api.md)
 - [OI Monitor](../oi_mornitor/README.md)
@@ -194,6 +195,7 @@ flowchart LR
 | Show 布局 | `show-layout-store.js` `ShowView.vue` |
 | 社区 | `community-api.js` `community-auth.js` `community-feed-service.js` `CommunityView.vue`（邮箱/Google 登录 · 聊天 · 消息频道 · Twitter） |
 | Twitter | `twitter-cdp-service.js` → TG + 社区 Twitter Tab（`community-twitter-ai.js`） |
+| 巨鲸 kolvip（临时） | [kolvip-cdp.md](./kolvip-cdp.md) · `kolvip-cdp-service.js` · `discord-signal-pipeline.js` |
 | YouTube 队列 | `youtube-fetch-proxy.js`（上游默认 :3920） |
 | 文稿粘贴 | `youtube-paste-parse.js` `youtube-paste-batch.js` |
 | 内容板 | `content_board/` + `content-board-proxy.js` |
