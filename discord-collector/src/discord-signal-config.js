@@ -4,6 +4,7 @@
  * 进卡路径与频道无关：DISCORD_SIGNAL_CHANNEL_IDS（非空覆盖）或本表 keys → isSignalChannel → ingest onMessage；无 per-channel 回填脚本。
  */
 import { config } from "./config.js";
+import { resolveKolvipScanSignalConfig } from "./kolvip-scan-config.js";
 
 /** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"biquan_suozhang"|"unknown_trader"|"altcoin_king"|"junzhang"|"pangmao"|"generic"} ParserKind */
 
@@ -156,12 +157,17 @@ export function getSignalChannelIds() {
 export function getSignalChannelConfig(channelId) {
   const id = String(channelId ?? "").trim();
   if (!id) return null;
-  return DEFAULT_SIGNAL_CHANNELS[id] ?? null;
+  const base = DEFAULT_SIGNAL_CHANNELS[id];
+  if (base) return base;
+  return resolveKolvipScanSignalConfig(id);
 }
 
 /** @param {string} channelId */
 export function isSignalChannel(channelId) {
-  return getSignalChannelIds().has(String(channelId ?? "").trim());
+  const id = String(channelId ?? "").trim();
+  if (!id) return false;
+  if (getSignalChannelIds().has(id)) return true;
+  return Boolean(resolveKolvipScanSignalConfig(id));
 }
 
 /** @param {string} channelId @returns {string} */

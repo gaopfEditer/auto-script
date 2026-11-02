@@ -15,6 +15,7 @@ import { shouldBypassDiscordSignalChannel } from "./kolvip-cdp-config.js";
  *   log: ReturnType<typeof import("./logger.js").createLogger>,
  *   telegramPush?: ReturnType<typeof import("./discord-telegram-message-push.js").createDiscordTelegramMessagePush> | null,
  *   respectKolvipBypass?: boolean,
+ *   skipTelegram?: boolean,
  * }} SignalPipelineDeps
  */
 
@@ -23,7 +24,8 @@ import { shouldBypassDiscordSignalChannel } from "./kolvip-cdp-config.js";
  * @param {SignalPipelineDeps} deps
  */
 export async function runSignalCardPipelineForRows(rows, deps) {
-  const { signalCards, store, log, telegramPush, respectKolvipBypass = true } = deps;
+  const { signalCards, store, log, telegramPush, respectKolvipBypass = true, skipTelegram = false } =
+    deps;
   if (!signalCards || !rows.length) return;
   await signalCards.ensureHydrated();
   for (const r of rows) {
@@ -93,6 +95,7 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     try {
       cardResult = await signalCards.onMessage(r, {
         skipDedup: true,
+        skipTelegram: skipTelegram,
         contentOverride: content,
         preParsed: ocrPreParsed,
         ocrFingerprint,

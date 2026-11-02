@@ -1,15 +1,19 @@
 /**
- * 巨鲸 kolvip **临时** CDP 轮询 → 现有 signal card ingest（Telegram 推送逻辑不变）。
- * 关闭 KOLVIP_CDP_ENABLED 即可切回纯 Discord 出卡；不修改 Discord Gateway/CDP 代码路径。
+ * 巨鲸 kolvip 信号轮询：优先 HTTP API，CDP DOM 可关或 auto 兜底。
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import { runSignalCardPipelineForRows } from "./discord-signal-pipeline.js";
 import { fetchKolvipChannelsViaCdp, probeKolvipCdp } from "./kolvip-cdp-fetch.js";
-import { kolvipMessageToDiscordRow } from "./kolvip-cdp-message.js";
+import { fetchKolvipChannelsViaApi } from "./kolvip-api-fetch.js";
 import { getKolvipChannelMappings, kolvipWebUrl } from "./kolvip-cdp-config.js";
+import { resolveKolvipApiWtoken } from "./kolvip-api-auth.js";
+import {
+  ingestKolvipMessageBatch,
+  loadKolvipSeen,
+  saveKolvipSeen,
+} from "./kolvip-ingest.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SEEN_PATH = path.join(__dirname, "..", "data", "kolvip-cdp-seen.json");
@@ -33,7 +37,6 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
   /** @type {string[]} */
   const logs = [];
 
-  /** @param {string} msg */
   function pushLog(msg) {
     const line = `${new Date().toISOString()} ${msg}`;
     logs.unshift(line);
@@ -45,90 +48,33 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
     return (config.kolvipCdpConnectUrl || config.cdpConnectUrl || "").trim();
   }
 
-  async function loadSeen() {
-    try {
-      const raw = await fs.readFile(SEEN_PATH, "utf8");
-      const j = JSON.parse(raw);
-      return j && typeof j === "object" ? j : {};
-    } catch {
-      return {};
-    }
-  }
-
-  /** @param {Record<string, unknown>} data */
-  async function saveSeen(data) {
-    await fs.mkdir(path.dirname(SEEN_PATH), { recursive: true });
-    await fs.writeFile(SEEN_PATH, JSON.stringify(data), "utf8");
-  }
-
-  /**
-   * @param {string} kolvipChannelId
-   * @param {string[]} dataIds
-   */
-  async function filterNewDataIds(kolvipChannelId, dataIds) {
-    const all = await loadSeen();
-    const bucket =
-      all[kolvipChannelId] && typeof all[kolvipChannelId] === "object"
-        ? /** @type {{ ids: string[] }} */ (all[kolvipChannelId])
-        : { ids: [] };
-    const set = new Set(Array.isArray(bucket.ids) ? bucket.ids.map(String) : []);
-    return dataIds.filter((id) => id && !set.has(id));
-  }
-
-  /**
-   * @param {string} kolvipChannelId
-   */
-  async function channelHasSeenHistory(kolvipChannelId) {
-    const all = await loadSeen();
-    const bucket = all[kolvipChannelId];
-    if (!bucket || typeof bucket !== "object") return false;
-    const ids = /** @type {{ ids?: unknown }} */ (bucket).ids;
-    return Array.isArray(ids) && ids.length > 0;
-  }
-
-  /**
-   * @param {string} kolvipChannelId
-   * @param {string[]} dataIds
-   */
-  async function rememberDataIds(kolvipChannelId, dataIds) {
-    if (!dataIds.length) return;
-    const all = await loadSeen();
-    const bucket =
-      all[kolvipChannelId] && typeof all[kolvipChannelId] === "object"
-        ? /** @type {{ ids: string[] }} */ (all[kolvipChannelId])
-        : { ids: [] };
-    if (!Array.isArray(bucket.ids)) bucket.ids = [];
-    for (const id of dataIds) {
-      if (!id || bucket.ids.includes(id)) continue;
-      bucket.ids.push(id);
-    }
-    if (bucket.ids.length > 500) bucket.ids = bucket.ids.slice(-500);
-    all[kolvipChannelId] = bucket;
-    await saveSeen(all);
+  function shouldUseApi() {
+    const mode = config.kolvipFetchMode;
+    if (mode === "api") return true;
+    if (mode === "cdp") return false;
+    return config.kolvipApiEnabled || config.kolvipFetchMode === "auto";
   }
 
   async function probe() {
-    return probeKolvipCdp(connectUrl());
+    const token = await resolveKolvipApiWtoken(log);
+    return {
+      api: { configured: Boolean(token.wtoken), source: token.source },
+      cdp: await probeKolvipCdp(connectUrl()),
+    };
   }
 
   async function runOnce() {
     if (running) return { ok: false, skipped: "busy", lastRun };
-    if (!config.kolvipCdpEnabled) {
+    if (!config.kolvipSignalEnabled) {
       return { ok: false, skipped: "disabled" };
     }
     if (!signalCards) {
       return { ok: false, error: "signalCards 未注入" };
     }
-    const url = connectUrl();
-    if (!url) {
-      const msg = "未配置 CDP（KOLVIP_CDP_CONNECT_URL 或 CDP_CONNECT_URL）";
-      lastRun = { at: new Date().toISOString(), ok: false, error: msg };
-      return { ok: false, error: msg };
-    }
 
     const channels = getKolvipChannelMappings();
     if (!channels.length) {
-      const msg = "未配置巨鲸频道映射（KOLVIP_CHANNEL_IDS 或默认表）";
+      const msg = "未配置巨鲸精选频道（KOLVIP_CHANNEL_IDS 或默认表）";
       lastRun = { at: new Date().toISOString(), ok: false, error: msg };
       return { ok: false, error: msg };
     }
@@ -138,16 +84,45 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
     /** @type {Array<Record<string, unknown>>} */
     const summaries = [];
     let cardRowsProcessed = 0;
+    let fetchMode = "api";
 
     try {
-      pushLog(`巨鲸 CDP 抓取 ${channels.length} 频道 bypassDiscord=${config.kolvipCdpBypassDiscordSignals}`);
-      const batches = await fetchKolvipChannelsViaCdp({
-        connectUrl: url,
-        channels,
-        maxPerChannel: config.kolvipCdpMaxPerChannel,
-        webUrl: kolvipWebUrl(),
-        log,
-      });
+      const seen = await loadKolvipSeen(fs, SEEN_PATH);
+      /** @type {Array<{ channel: typeof channels[number], messages: import('./kolvip-cdp-message.js').KolvipDomMessage[], error?: string }>} */
+      let batches = [];
+
+      if (shouldUseApi()) {
+        fetchMode = "api";
+        try {
+          const apiResult = await fetchKolvipChannelsViaApi({
+            channels,
+            maxPerChannel: config.kolvipApiMaxPerChannel,
+            log,
+          });
+          batches = apiResult.results;
+        } catch (e) {
+          if (config.kolvipFetchMode === "api" || !config.kolvipCdpEnabled) {
+            throw e;
+          }
+          fetchMode = "cdp-fallback";
+        }
+      }
+
+      if (!batches.length && (config.kolvipFetchMode === "cdp" || fetchMode === "cdp-fallback")) {
+        fetchMode = "cdp";
+        const url = connectUrl();
+        if (!url) {
+          throw new Error("CDP 未配置且 API 不可用");
+        }
+        pushLog(`巨鲸 CDP 兜底抓取 ${channels.length} 频道`);
+        batches = await fetchKolvipChannelsViaCdp({
+          connectUrl: url,
+          channels,
+          maxPerChannel: config.kolvipCdpMaxPerChannel,
+          webUrl: kolvipWebUrl(),
+          log,
+        });
+      }
 
       for (const batch of batches) {
         const chId = batch.channel.kolvipChannelId;
@@ -157,73 +132,53 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
             logicName: batch.channel.logicName,
             error: batch.error,
             fetched: 0,
-            newCount: 0,
-            seeded: false,
+            cardsQueued: 0,
           });
           continue;
         }
-        const messages = batch.messages ?? [];
-        const allIds = messages.map((m) => m.dataId).filter(Boolean);
-        const hadHistory = await channelHasSeenHistory(chId);
-        const seedAll = !hadHistory;
-        const newIds = seedAll ? [] : await filterNewDataIds(chId, allIds);
-        const newSet = new Set(newIds);
-        const toRemember = seedAll ? allIds : allIds;
-        await rememberDataIds(chId, toRemember);
-
-        /** @type {Record<string, unknown>[]} */
-        const rows = [];
-        let rowsQueued = 0;
-        if (!seedAll) {
-          for (const msg of messages) {
-            if (!newSet.has(msg.dataId)) continue;
-            rows.push(
-              kolvipMessageToDiscordRow(msg, {
-                kolvipChannelId: chId,
-                discordChannelId: batch.channel.discordChannelId,
-              })
-            );
-          }
-          rowsQueued = rows.length;
-          if (rows.length) {
-            await runSignalCardPipelineForRows(rows, {
-              signalCards,
-              store,
-              log,
-              telegramPush: null,
-              respectKolvipBypass: false,
-            });
-            cardRowsProcessed += rows.length;
-          }
-        } else {
+        const result = await ingestKolvipMessageBatch({
+          kolvipChannelId: chId,
+          channelName: batch.channel.logicName,
+          messages: batch.messages ?? [],
+          mode: "live",
+          curated: true,
+          seen,
+          signalCards,
+          store,
+          log,
+        });
+        if (result.seeded) {
           pushLog(
-            `巨鲸 ${batch.channel.logicName} 首次记档 ${messages.length} 条（不推历史，与 Twitter CDP 一致）`
+            `巨鲸 ${batch.channel.logicName} 首次记档 ${result.fetched} 条（不推历史，与 Twitter CDP 一致）`
           );
         }
-
+        cardRowsProcessed += result.cardsQueued;
         summaries.push({
           kolvipChannelId: chId,
           logicName: batch.channel.logicName,
-          fetched: messages.length,
-          newCount: seedAll ? 0 : newIds.length,
-          cardsQueued: seedAll ? 0 : rowsQueued,
-          seeded: seedAll,
+          fetched: result.fetched,
+          newCount: result.cardsQueued,
+          cardsQueued: result.cardsQueued,
+          seeded: result.seeded,
         });
       }
+
+      await saveKolvipSeen(fs, SEEN_PATH, seen);
 
       lastRun = {
         at: new Date().toISOString(),
         ok: true,
         ms: Date.now() - started,
+        fetchMode,
         channels: summaries,
         cardsQueued: cardRowsProcessed,
-        bypassDiscordSignals: config.kolvipCdpBypassDiscordSignals,
+        bypassDiscordSignals: config.kolvipBypassDiscordSignals,
       };
-      broadcast?.("meta", { kind: "kolvip_cdp_run", ...lastRun });
+      broadcast?.("meta", { kind: "kolvip_run", ...lastRun });
       return { ok: true, ...lastRun };
     } catch (e) {
       const error = /** @type {Error} */ (e).message;
-      lastRun = { at: new Date().toISOString(), ok: false, error };
+      lastRun = { at: new Date().toISOString(), ok: false, error, fetchMode };
       pushLog(`巨鲸抓取失败: ${error}`);
       return { ok: false, error, lastRun };
     } finally {
@@ -236,38 +191,40 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
       clearInterval(timer);
       timer = null;
     }
-    if (!config.kolvipCdpEnabled) return;
+    if (!config.kolvipSignalEnabled) return;
     timer = setInterval(() => {
-      void runOnce().catch((e) =>
-        log.warn(`Kolvip CDP tick: ${/** @type {Error} */ (e).message}`)
-      );
-    }, config.kolvipCdpIntervalMs);
+      void runOnce().catch((e) => log.warn(`Kolvip tick: ${/** @type {Error} */ (e).message}`));
+    }, config.kolvipPollIntervalMs);
   }
 
   async function status() {
-    const cdp = await probe();
+    const probeResult = await probe();
     return {
       ok: true,
-      enabled: config.kolvipCdpEnabled,
-      bypassDiscordSignals: config.kolvipCdpBypassDiscordSignals,
+      enabled: config.kolvipSignalEnabled,
+      fetchMode: config.kolvipFetchMode,
+      apiEnabled: config.kolvipApiEnabled,
+      cdpEnabled: config.kolvipCdpEnabled,
+      bypassDiscordSignals: config.kolvipBypassDiscordSignals,
       running,
       lastRun,
       logs: logs.slice(0, 30),
       connectUrl: connectUrl() || null,
       webUrl: kolvipWebUrl(),
+      apiBaseUrl: config.kolvipApiBaseUrl,
       channels: getKolvipChannelMappings(),
-      cdp,
+      ...probeResult,
     };
   }
 
   async function start() {
-    if (!config.kolvipCdpEnabled) {
-      pushLog("巨鲸 CDP 未启用（KOLVIP_CDP_ENABLED=0，仍走 Discord 出卡）");
+    if (!config.kolvipSignalEnabled) {
+      pushLog("巨鲸信号源未启用（KOLVIP_ENABLED / KOLVIP_API_ENABLED / KOLVIP_CDP_ENABLED=0）");
       return;
     }
     schedule();
     pushLog(
-      `巨鲸 CDP 已启动 interval=${Math.round(config.kolvipCdpIntervalMs / 1000)}s channels=${getKolvipChannelMappings().length}`
+      `巨鲸已启动 mode=${config.kolvipFetchMode} interval=${Math.round(config.kolvipPollIntervalMs / 1000)}s 精选=${getKolvipChannelMappings().length}`
     );
     void runOnce().catch((e) => pushLog(`首次抓取: ${/** @type {Error} */ (e).message}`));
   }

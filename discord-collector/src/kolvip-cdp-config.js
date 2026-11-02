@@ -49,9 +49,21 @@ export function getKolvipMappingByKolvipId(kolvipChannelId) {
   return kolvipChannelMapByKolvipId().get(String(kolvipChannelId ?? "").trim()) ?? null;
 }
 
+/** @returns {Set<string>} 巨鲸 ch id（精选跟单映射） */
+export function getKolvipMappedKolvipChannelIds() {
+  return new Set(getKolvipChannelMappings().map((m) => String(m.kolvipChannelId)));
+}
+
 /** @returns {Set<string>} 对应 Discord 信号频道 ID（旁路 Gateway 建卡用） */
 export function getKolvipMappedDiscordChannelIds() {
   return new Set(getKolvipChannelMappings().map((m) => m.discordChannelId));
+}
+
+/**
+ * @returns {boolean} 任一巨鲸信号源开关（API 或 CDP）
+ */
+export function isKolvipSignalEnabled() {
+  return config.kolvipSignalEnabled;
 }
 
 /**
@@ -59,7 +71,7 @@ export function getKolvipMappedDiscordChannelIds() {
  * @returns {boolean}
  */
 export function shouldBypassDiscordSignalChannel(discordChannelId) {
-  if (!config.kolvipCdpEnabled || !config.kolvipCdpBypassDiscordSignals) return false;
+  if (!isKolvipSignalEnabled() || !config.kolvipBypassDiscordSignals) return false;
   return getKolvipMappedDiscordChannelIds().has(String(discordChannelId ?? "").trim());
 }
 

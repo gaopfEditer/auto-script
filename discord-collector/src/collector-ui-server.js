@@ -256,7 +256,9 @@ async function main() {
   const kolvipCdp = createKolvipCdpService(store, createLogger("kolvip-cdp"), broadcast, {
     signalCards,
   });
-  const kolvipBackfill = createKolvipBackfillService(createLogger("kolvip-backfill"));
+  const kolvipBackfill = createKolvipBackfillService(store, createLogger("kolvip-backfill"), {
+    signalCards,
+  });
   const cardPriceMonitor = createCardPriceMonitor(
     store,
     createLogger("card-price"),
