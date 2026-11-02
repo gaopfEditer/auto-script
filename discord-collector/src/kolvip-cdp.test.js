@@ -18,6 +18,7 @@ import {
   getKolvipMappedDiscordChannelIds,
   resolveKolvipAssetUrl,
 } from "./kolvip-cdp-config.js";
+import { resolveSignalCardInsertSource } from "./discord-signal-card-source.js";
 
 describe("kolvip message id 与 Discord 行", () => {
   it("data-id 稳定 messageId", () => {
@@ -77,6 +78,39 @@ describe("resolveKolvipAssetUrl", () => {
 
   it("/web_file 相对路径", () => {
     assert.match(resolveKolvipAssetUrl("/web_file/x"), /^https:\/\/[^/]+\/web_file\/x$/);
+  });
+});
+
+describe("resolveSignalCardInsertSource", () => {
+  it("kolvip_api_backfill → source_type kolvip", () => {
+    const map = DEFAULT_KOLVIP_CHANNEL_MAPPINGS[0];
+    const row = kolvipMessageToDiscordRow(
+      { dataId: "1", text: "x", author: "", timeText: "", timeTitle: "", imageUrl: "" },
+      {
+        kolvipChannelId: map.kolvipChannelId,
+        discordChannelId: map.discordChannelId,
+        source: "kolvip_api_backfill",
+      }
+    );
+    const ins = resolveSignalCardInsertSource(row);
+    assert.equal(ins.source, "kolvip_api_backfill");
+    assert.equal(ins.sourceType, "kolvip");
+    assert.equal(ins.sourceRef, map.kolvipChannelId);
+  });
+
+  it("kolvip-scan 备选频道", () => {
+    const row = kolvipMessageToDiscordRow(
+      { dataId: "9", text: "y", author: "", timeText: "", timeTitle: "", imageUrl: "" },
+      {
+        kolvipChannelId: "99",
+        discordChannelId: "kolvip-scan-99",
+        source: "kolvip_api_scan",
+      }
+    );
+    assert.equal(row.channelId, "kolvip-scan-99");
+    const ins = resolveSignalCardInsertSource(row);
+    assert.equal(ins.source, "kolvip_api_scan");
+    assert.equal(ins.sourceType, "kolvip");
   });
 });
 

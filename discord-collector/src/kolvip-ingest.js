@@ -79,7 +79,18 @@ export async function ingestKolvipMessageBatch(opts) {
     const hadHistory = set.size > 0;
     if (!hadHistory) {
       await rememberKolvipDataIds(opts.seen, kid, allIds);
-      return { fetched: messages.length, cardsQueued: 0, seeded: true, cardIds: [] };
+      return {
+        fetched: messages.length,
+        rowsQueued: 0,
+        cardsQueued: 0,
+        cardsCreated: 0,
+        seeded: true,
+        cardIds: [],
+        skipCounts: {},
+        channelName: opts.channelName || mapping?.logicName || kid,
+        discordChannelId,
+        source,
+      };
     }
     toProcess = messages.filter((m) => m.dataId && !set.has(m.dataId));
     await rememberKolvipDataIds(opts.seen, kid, allIds);
@@ -100,8 +111,11 @@ export async function ingestKolvipMessageBatch(opts) {
   /** @type {number[]} */
   const cardIds = [];
   const store = opts.store;
+  /** @type {Record<string, number>} */
+  let skipCounts = {};
+  let pipelineCreated = 0;
   if (rows.length) {
-    await runSignalCardPipelineForRows(rows, {
+    const pipe = await runSignalCardPipelineForRows(rows, {
       signalCards: opts.signalCards,
       store: opts.store,
       log: opts.log,
@@ -109,6 +123,8 @@ export async function ingestKolvipMessageBatch(opts) {
       respectKolvipBypass: false,
       skipTelegram: opts.mode === "backfill" || !curated,
     });
+    pipelineCreated = pipe.created;
+    skipCounts = pipe.skipCounts;
     for (const r of rows) {
       const mid = String(r.messageId ?? "").trim();
       if (!mid || !store.getSignalCardByMessageId) continue;
@@ -118,15 +134,25 @@ export async function ingestKolvipMessageBatch(opts) {
     }
   }
 
+  const cardsCreated = cardIds.length;
+  if (rows.length && cardsCreated === 0 && pipelineCreated === 0) {
+    opts.log.info(
+      `巨鲸 ingest 本批无新卡 channel=${kid} discordChannel=${discordChannelId} source=${source} queued=${rows.length} skips=${JSON.stringify(skipCounts)}`
+    );
+  }
+
   if (opts.mode === "backfill" && cardIds.length) {
     await runBatchLiquidation(opts.store, opts.log, { cardIds, limit: cardIds.length });
   }
 
   return {
     fetched: messages.length,
+    rowsQueued: rows.length,
     cardsQueued: rows.length,
+    cardsCreated,
     seeded: false,
     cardIds,
+    skipCounts,
     channelName: opts.channelName || mapping?.logicName || kid,
     discordChannelId,
     source,

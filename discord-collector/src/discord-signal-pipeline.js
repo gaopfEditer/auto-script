@@ -19,19 +19,46 @@ import { shouldBypassDiscordSignalChannel } from "./kolvip-cdp-config.js";
  * }} SignalPipelineDeps
  */
 
+/** @param {Record<string, unknown>} r */
+function rowAttachmentCount(r) {
+  const raw = r.rawJson ?? r.raw_json;
+  if (!raw || typeof raw !== "object") return 0;
+  const att = /** @type {{ attachments?: unknown[] }} */ (raw).attachments;
+  return Array.isArray(att) ? att.length : 0;
+}
+
 /**
  * @param {Record<string, unknown>[]} rows
  * @param {SignalPipelineDeps} deps
+ * @returns {Promise<{ rows: number, created: number, skipCounts: Record<string, number> }>}
  */
 export async function runSignalCardPipelineForRows(rows, deps) {
   const { signalCards, store, log, telegramPush, respectKolvipBypass = true, skipTelegram = false } =
     deps;
-  if (!signalCards || !rows.length) return;
+  /** @type {Record<string, number>} */
+  const skipCounts = {};
+  const bump = (/** @type {string} */ k) => {
+    skipCounts[k] = (skipCounts[k] || 0) + 1;
+  };
+  let created = 0;
+
+  if (!signalCards || !rows.length) {
+    return { rows: rows.length, created: 0, skipCounts };
+  }
   await signalCards.ensureHydrated();
+  let kolvipBatch = false;
+
   for (const r of rows) {
     const cid = String(r.channelId ?? r.channel_id ?? "").trim();
-    if (!cid) continue;
+    if (!cid) {
+      bump("no_channel");
+      continue;
+    }
+    const src = String(r.source ?? "").trim();
+    if (src.startsWith("kolvip")) kolvipBatch = true;
+
     if (respectKolvipBypass && shouldBypassDiscordSignalChannel(cid)) {
+      bump("bypass_discord");
       log.debug(
         `信号卡片旁路 Discord 建卡（巨鲸临时源已接管）channel=${cid} message=${r.messageId ?? "?"}`
       );
@@ -43,16 +70,22 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     let ocrFingerprint;
     /** @type {Record<string, unknown> | undefined} */
     let ocrPreParsed;
+    const attN = rowAttachmentCount(r);
+    const ocrEligible =
+      isSignalChannel(cid) &&
+      (isDiscordSignalOcrChannel(cid) || (src.startsWith("kolvip") && attN > 0));
 
-    if (isSignalChannel(cid) && isDiscordSignalOcrChannel(cid)) {
+    if (ocrEligible) {
       const ocrResolved = await resolveSignalFromRowWithOcr(r, { log });
       if (ocrResolved?.skipped === "ocr_show_off" || ocrResolved?.skipped === "ocr_fingerprint_dedup") {
+        bump(String(ocrResolved.skipped));
         continue;
       }
       if (ocrResolved?.skipped === "ocr_failed" && !content) {
-        log.debug(
-          `信号卡片 OCR 失败且无正文 channel=${cid} message=${r.messageId}`,
+        log.info(
+          `信号 ingest 跳过 OCR 失败且无正文 channel=${cid} message=${r.messageId} attachments=${attN} source=${src || "-"}`
         );
+        bump("ocr_failed");
         continue;
       }
       if (ocrResolved?.content) {
@@ -63,14 +96,18 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     }
 
     if (!content) {
-      if (isSignalChannel(cid)) {
-        log.debug(
-          `信号卡片跳过空正文 channel=${cid} message=${r.messageId}（若仅图片需 OCR/人工）`
+      if (isSignalChannel(cid) || src.startsWith("kolvip")) {
+        log.info(
+          `信号 ingest 跳过空正文 channel=${cid} message=${r.messageId} attachments=${attN} ocr=${ocrEligible ? "yes" : "no"} source=${src || "-"}`
         );
       }
+      bump("empty_content");
       continue;
     }
-    if (!isSignalChannel(cid)) continue;
+    if (!isSignalChannel(cid)) {
+      bump("not_signal_channel");
+      continue;
+    }
     if (signalCards.dedup.isDuplicate(cid, content)) {
       const mid = String(r.messageId ?? r.message_id ?? "").trim();
       let allowRetry = false;
@@ -79,14 +116,16 @@ export async function runSignalCardPipelineForRows(rows, deps) {
         if (!existing) allowRetry = true;
       }
       if (!allowRetry) {
-        log.debug(`信号卡片跳过重复 channel=${cid} preview=${content.slice(0, 80)}`);
+        log.info(
+          `信号 ingest 跳过正文去重 channel=${cid} message=${mid || "?"} source=${src || "-"} preview=${content.slice(0, 60)}`
+        );
+        bump("duplicate_text");
         continue;
       }
       log.info(
         `信号正文曾处理但未建卡，重试 channel=${cid} message=${mid} preview=${content.slice(0, 60)}`
       );
     }
-    const src = String(r.source ?? "");
     log.info(
       `信号卡片处理 channel=${cid} message=${r.messageId} source=${src || "unknown"} preview=${content.slice(0, 60)}`
     );
@@ -102,9 +141,20 @@ export async function runSignalCardPipelineForRows(rows, deps) {
       });
     } catch (e) {
       log.warn(`signal card: ${/** @type {Error} */ (e).message}`);
+      bump("on_message_error");
       continue;
     }
     const skipped = String(cardResult?.skipped ?? "");
+    if (cardResult?.card || cardResult?.merged) {
+      created += 1;
+    } else if (skipped) {
+      log.info(
+        `信号 ingest 未建卡 channel=${cid} message=${r.messageId} reason=${skipped} source=${src || "-"}`
+      );
+      bump(skipped);
+    } else {
+      bump("unknown");
+    }
     if (cardResult?.card || cardResult?.merged || skipped !== "parse_failed") {
       await signalCards.dedup.remember(cid, content);
     }
@@ -121,4 +171,12 @@ export async function runSignalCardPipelineForRows(rows, deps) {
       );
     }
   }
+
+  if (kolvipBatch) {
+    log.info(
+      `巨鲸 ingest 批次汇总 rows=${rows.length} created=${created} skips=${JSON.stringify(skipCounts)}`
+    );
+  }
+
+  return { rows: rows.length, created, skipCounts };
 }
