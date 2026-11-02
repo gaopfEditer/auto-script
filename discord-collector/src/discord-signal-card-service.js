@@ -2,7 +2,7 @@
  * 信号卡片：去重 → 解析 → AI 多风格 → 入库 → Telegram → WS 广播。
  */
 import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
-import { resolveSignalCardInsertSource, assertSignalCardSourceLength } from "./discord-signal-card-source.js";
+import { resolveSignalCardInsertSource, assertSignalCardSourceLength, isKolvipIngestSource, upgradeKolvipSignalCardSourceFromRow } from "./discord-signal-card-source.js";
 import { createChannelTextDedup, normalizeSignalText, signalTextHash } from "./discord-signal-dedup.js";
 import {
   isReplyRepostOfReference,
@@ -610,7 +610,20 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     const chCfg = getSignalChannelConfig(channelId);
     if (!chCfg) return { skipped: "no_config" };
 
+    if (isKolvipIngestSource(String(row.source ?? "")) && messageId && store.getSignalCardByMessageId) {
+      const up = await upgradeKolvipSignalCardSourceFromRow(store, row, log);
+      if (up.upgraded && up.card) {
+        return { skipped: "source_upgraded", card: signalCardToClient(up.card) };
+      }
+    }
+
     if (!opts.skipDedup && dedup.isDuplicate(channelId, content)) {
+      if (isKolvipIngestSource(String(row.source ?? "")) && messageId && store.getSignalCardByMessageId) {
+        const up = await upgradeKolvipSignalCardSourceFromRow(store, row, log);
+        if (up.upgraded && up.card) {
+          return { skipped: "source_upgraded", card: signalCardToClient(up.card) };
+        }
+      }
       log.debug(`信号跳过重复 channel=${channelId} preview=${content.slice(0, 80)}`);
       return { skipped: "duplicate_text" };
     }

@@ -84,6 +84,7 @@ export async function ingestKolvipMessageBatch(opts) {
         rowsQueued: 0,
         cardsQueued: 0,
         cardsCreated: 0,
+        sourceUpgraded: 0,
         seeded: true,
         cardIds: [],
         skipCounts: {},
@@ -114,6 +115,7 @@ export async function ingestKolvipMessageBatch(opts) {
   /** @type {Record<string, number>} */
   let skipCounts = {};
   let pipelineCreated = 0;
+  let sourceUpgraded = 0;
   if (rows.length) {
     const pipe = await runSignalCardPipelineForRows(rows, {
       signalCards: opts.signalCards,
@@ -124,6 +126,7 @@ export async function ingestKolvipMessageBatch(opts) {
       skipTelegram: opts.mode === "backfill" || !curated,
     });
     pipelineCreated = pipe.created;
+    sourceUpgraded = pipe.sourceUpgraded ?? 0;
     skipCounts = pipe.skipCounts;
     for (const r of rows) {
       const mid = String(r.messageId ?? "").trim();
@@ -134,10 +137,14 @@ export async function ingestKolvipMessageBatch(opts) {
     }
   }
 
-  const cardsCreated = cardIds.length;
-  if (rows.length && cardsCreated === 0 && pipelineCreated === 0) {
+  const cardsCreated = pipelineCreated;
+  if (rows.length && cardsCreated === 0 && sourceUpgraded === 0 && pipelineCreated === 0) {
     opts.log.info(
       `巨鲸 ingest 本批无新卡 channel=${kid} discordChannel=${discordChannelId} source=${source} queued=${rows.length} skips=${JSON.stringify(skipCounts)}`
+    );
+  } else if (sourceUpgraded > 0) {
+    opts.log.info(
+      `巨鲸 ingest 升级 source ${sourceUpgraded} 张（非新建）channel=${kid} source=${source}`
     );
   }
 
@@ -150,6 +157,7 @@ export async function ingestKolvipMessageBatch(opts) {
     rowsQueued: rows.length,
     cardsQueued: rows.length,
     cardsCreated,
+    sourceUpgraded,
     seeded: false,
     cardIds,
     skipCounts,

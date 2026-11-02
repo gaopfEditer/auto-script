@@ -7,6 +7,10 @@ import { shouldTelegramPushSignalChannelComment } from "./discord-telegram-push-
 import { resolveSignalFromRowWithOcr } from "./discord-signal-image-ocr.js";
 import { isDiscordSignalOcrChannel } from "./discord-signal-ocr-config.js";
 import { shouldBypassDiscordSignalChannel } from "./kolvip-cdp-config.js";
+import {
+  isKolvipIngestSource,
+  upgradeKolvipSignalCardSourceFromRow,
+} from "./discord-signal-card-source.js";
 
 /**
  * @typedef {{
@@ -30,7 +34,7 @@ function rowAttachmentCount(r) {
 /**
  * @param {Record<string, unknown>[]} rows
  * @param {SignalPipelineDeps} deps
- * @returns {Promise<{ rows: number, created: number, skipCounts: Record<string, number> }>}
+ * @returns {Promise<{ rows: number, created: number, sourceUpgraded: number, skipCounts: Record<string, number> }>}
  */
 export async function runSignalCardPipelineForRows(rows, deps) {
   const { signalCards, store, log, telegramPush, respectKolvipBypass = true, skipTelegram = false } =
@@ -41,9 +45,10 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     skipCounts[k] = (skipCounts[k] || 0) + 1;
   };
   let created = 0;
+  let sourceUpgraded = 0;
 
   if (!signalCards || !rows.length) {
-    return { rows: rows.length, created: 0, skipCounts };
+    return { rows: rows.length, created: 0, sourceUpgraded: 0, skipCounts };
   }
   await signalCards.ensureHydrated();
   let kolvipBatch = false;
@@ -110,6 +115,17 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     }
     if (signalCards.dedup.isDuplicate(cid, content)) {
       const mid = String(r.messageId ?? r.message_id ?? "").trim();
+      if (isKolvipIngestSource(src) && mid && store.getSignalCardByMessageId) {
+        const existing = await store.getSignalCardByMessageId(mid);
+        if (existing) {
+          const up = await upgradeKolvipSignalCardSourceFromRow(store, r, log);
+          if (up.upgraded) {
+            sourceUpgraded += 1;
+            bump("source_upgraded");
+            continue;
+          }
+        }
+      }
       let allowRetry = false;
       if (mid && store.getSignalCardByMessageId) {
         const existing = await store.getSignalCardByMessageId(mid);
@@ -147,6 +163,9 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     const skipped = String(cardResult?.skipped ?? "");
     if (cardResult?.card || cardResult?.merged) {
       created += 1;
+    } else if (skipped === "source_upgraded") {
+      sourceUpgraded += 1;
+      bump("source_upgraded");
     } else if (skipped) {
       log.info(
         `信号 ingest 未建卡 channel=${cid} message=${r.messageId} reason=${skipped} source=${src || "-"}`
@@ -174,9 +193,9 @@ export async function runSignalCardPipelineForRows(rows, deps) {
 
   if (kolvipBatch) {
     log.info(
-      `巨鲸 ingest 批次汇总 rows=${rows.length} created=${created} skips=${JSON.stringify(skipCounts)}`
+      `巨鲸 ingest 批次汇总 rows=${rows.length} created=${created} sourceUpgraded=${sourceUpgraded} skips=${JSON.stringify(skipCounts)}`
     );
   }
 
-  return { rows: rows.length, created, skipCounts };
+  return { rows: rows.length, created, sourceUpgraded, skipCounts };
 }
