@@ -210,6 +210,10 @@ export async function probeKolvipCdp(connectUrl) {
  * }} opts
  */
 export async function fetchKolvipChannelsViaCdp(opts) {
+  const log = opts.log;
+  if (!log) {
+    throw new Error("fetchKolvipChannelsViaCdp: 缺少 logger（opts.log）");
+  }
   const connectUrl = String(opts.connectUrl ?? "").trim();
   if (!connectUrl) {
     throw new Error("未配置 KOLVIP_CDP_CONNECT_URL 或 CDP_CONNECT_URL");
