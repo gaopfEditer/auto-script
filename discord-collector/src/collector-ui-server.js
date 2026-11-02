@@ -69,6 +69,7 @@ import { registerWeexRoutes } from "./weex-api-routes.js";
 import { getBitgetProxyInUse } from "./bitget-api.js";
 import { getWeexProxyInUse } from "./weex-api.js";
 import { createTwitterCdpService } from "./twitter-cdp-service.js";
+import { createKolvipCdpService } from "./kolvip-cdp-service.js";
 import { registerTwitterCdpRoutes } from "./twitter-cdp-api.js";
 import {
   getAutoTradeChannelIds,
@@ -249,6 +250,9 @@ async function main() {
   });
   const twitterCdp = createTwitterCdpService(store, createLogger("twitter-cdp"), broadcast, {
     communityFeed,
+  });
+  const kolvipCdp = createKolvipCdpService(store, createLogger("kolvip-cdp"), broadcast, {
+    signalCards,
   });
   const cardPriceMonitor = createCardPriceMonitor(
     store,
@@ -1545,6 +1549,7 @@ async function main() {
     channelRotate = null;
     cardPriceMonitor.stop();
     twitterCdp.stop();
+    kolvipCdp.stop();
     cardSink.stop();
     await telegramPush.flushAll().catch((e) => log.warn(String(e?.message ?? e)));
     if (session) await session.close().catch((e) => log.warn(String(e?.message ?? e)));
@@ -1612,6 +1617,9 @@ async function main() {
   }
   void twitterCdp.start().catch((e) =>
     log.warn(`Twitter CDP 启动: ${/** @type {Error} */ (e).message}`)
+  );
+  void kolvipCdp.start().catch((e) =>
+    log.warn(`Kolvip CDP 启动: ${/** @type {Error} */ (e).message}`)
   );
 
   const oiSupervisor = startOiSupervisor({

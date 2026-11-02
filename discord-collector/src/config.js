@@ -4,6 +4,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildShowSidebarChannelGroups } from "./discord-show-channels.js";
+import { parseKolvipChannelIdsEnv } from "./kolvip-cdp-config.js";
 
 const _repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const _collectorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -640,6 +641,39 @@ export const config = {
   ),
   twitterCdpLists: parseIdList(process.env.TWITTER_CDP_LISTS ?? ""),
   twitterCdpMaxPerList: Math.min(50, Math.max(5, Number(process.env.TWITTER_CDP_MAX_PER_LIST ?? 20) || 20)),
+  /**
+   * 巨鲸 kolvip.vip **临时**信号源（CDP DOM）；默认关，开启后仍保留完整 Discord CDP/Gateway。
+   * 切回 Discord：`KOLVIP_CDP_ENABLED=0`（无需改代码）。
+   */
+  kolvipCdpEnabled: ["1", "true", "yes", "on"].includes(
+    String(process.env.KOLVIP_CDP_ENABLED ?? "0").toLowerCase()
+  ),
+  /** 留空则沿用 CDP_CONNECT_URL（同一 Chrome :9222，需已登录 kolvip.vip/web） */
+  kolvipCdpConnectUrl: (process.env.KOLVIP_CDP_CONNECT_URL ?? "").trim(),
+  kolvipWebUrl: (process.env.KOLVIP_WEB_URL ?? "https://kolvip.vip/web").trim(),
+  kolvipCdpIntervalMs: Math.max(
+    15_000,
+    Number(process.env.KOLVIP_CDP_INTERVAL_MS ?? 90_000) || 90_000
+  ),
+  kolvipCdpMaxPerChannel: Math.min(
+    80,
+    Math.max(5, Number(process.env.KOLVIP_CDP_MAX_PER_CHANNEL ?? 40) || 40)
+  ),
+  /**
+   * kolvip 开启时，是否旁路 Discord Gateway **建卡**（同映射频道，避免双推）。默认开。
+   * `0` = 双源并行出卡（仅调试）；Discord 采集本身不受影响。
+   */
+  kolvipCdpBypassDiscordSignals: (() => {
+    const explicit = (process.env.KOLVIP_CDP_BYPASS_DISCORD_SIGNALS ?? "").trim();
+    if (explicit) {
+      return !["0", "false", "no", "off"].includes(explicit.toLowerCase());
+    }
+    return ["1", "true", "yes", "on"].includes(
+      String(process.env.KOLVIP_CDP_ENABLED ?? "0").toLowerCase()
+    );
+  })(),
+  /** 非空覆盖默认 8 频道；格式 `1,4,8` 或 `16:1562351038277619783` */
+  kolvipChannelMappings: parseKolvipChannelIdsEnv(process.env.KOLVIP_CHANNEL_IDS ?? ""),
   /** OI → Telegram 形态卡片回测（validate backtestPolicy=telegram_oi） */
   tgSignalBacktestMajorStepPct: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_STEP_PCT ?? 0.5),
   tgSignalBacktestMajorInitialH: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_INITIAL_H ?? 3),

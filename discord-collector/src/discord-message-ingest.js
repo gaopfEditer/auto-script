@@ -28,14 +28,8 @@ import {
   messageRowToClientForPush,
 } from "./discord-message-format.js";
 import { createChannelMessageDedup, messageDedupKey } from "./discord-message-dedup.js";
-import { normalizeSignalText } from "./discord-signal-dedup.js";
-import { resolveSignalContentFromRow } from "./discord-reply-content.js";
 import { isSignalChannel, getSignalChannelConfig } from "./discord-signal-config.js";
-import { shouldTelegramPushSignalChannelComment } from "./discord-telegram-push-config.js";
-import {
-  resolveSignalFromRowWithOcr,
-} from "./discord-signal-image-ocr.js";
-import { isDiscordSignalOcrChannel } from "./discord-signal-ocr-config.js";
+import { runSignalCardPipelineForRows } from "./discord-signal-pipeline.js";
 import { isBlockedWsPayload, isDiscordGatewayPayload } from "./ws-noise-filter.js";
 import { createDebouncedDiscordMessageBroadcast } from "./discord-ui-message-broadcast.js";
 
@@ -529,98 +523,6 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       log.info(`Discord 消息入库 +${result.inserted}（重复 ${result.duplicate}）`);
     }
 
-    /** @param {ReturnType<typeof extractMessageFromPayload>[]} rows */
-    async function runSignalCardPipeline(rows) {
-      if (!signalCards || !rows.length) return;
-      await signalCards.ensureHydrated();
-      for (const r of rows) {
-        const cid = String(r.channelId ?? "").trim();
-        let content = resolveSignalContentFromRow(r);
-        if (!cid) continue;
-
-        /** @type {string | undefined} */
-        let ocrFingerprint;
-        /** @type {Record<string, unknown> | undefined} */
-        let ocrPreParsed;
-
-        if (isSignalChannel(cid) && isDiscordSignalOcrChannel(cid)) {
-          const ocrResolved = await resolveSignalFromRowWithOcr(r, { log });
-          if (ocrResolved?.skipped === "ocr_show_off" || ocrResolved?.skipped === "ocr_fingerprint_dedup") {
-            continue;
-          }
-          if (ocrResolved?.skipped === "ocr_failed" && !content) {
-            log.debug(
-              `信号卡片 OCR 失败且无正文 channel=${cid} message=${r.messageId}`,
-            );
-            continue;
-          }
-          if (ocrResolved?.content) {
-            content = ocrResolved.content;
-            ocrPreParsed = ocrResolved.parsed;
-            ocrFingerprint = ocrResolved.fingerprint;
-          }
-        }
-
-        if (!content) {
-          if (isSignalChannel(cid)) {
-            log.debug(
-              `信号卡片跳过空正文 channel=${cid} message=${r.messageId}（若仅图片需 OCR/人工）`
-            );
-          }
-          continue;
-        }
-        if (!isSignalChannel(cid)) continue;
-        if (signalCards.dedup.isDuplicate(cid, content)) {
-          const mid = String(r.messageId ?? r.message_id ?? "").trim();
-          let allowRetry = false;
-          if (mid && store.getSignalCardByMessageId) {
-            const existing = await store.getSignalCardByMessageId(mid);
-            if (!existing) allowRetry = true;
-          }
-          if (!allowRetry) {
-            log.debug(`信号卡片跳过重复 channel=${cid} preview=${content.slice(0, 80)}`);
-            continue;
-          }
-          log.info(
-            `信号正文曾处理但未建卡，重试 channel=${cid} message=${mid} preview=${content.slice(0, 60)}`
-          );
-        }
-        const src = String(r.source ?? "");
-        log.info(
-          `信号卡片处理 channel=${cid} message=${r.messageId} source=${src || "unknown"} preview=${content.slice(0, 60)}`
-        );
-        /** @type {{ skipped?: string, card?: Record<string, unknown> } | undefined} */
-        let cardResult;
-        try {
-          cardResult = await signalCards.onMessage(r, {
-            skipDedup: true,
-            contentOverride: content,
-            preParsed: ocrPreParsed,
-            ocrFingerprint,
-          });
-        } catch (e) {
-          log.warn(`signal card: ${/** @type {Error} */ (e).message}`);
-          continue;
-        }
-        const skipped = String(cardResult?.skipped ?? "");
-        if (cardResult?.card || cardResult?.merged || skipped !== "parse_failed") {
-          await signalCards.dedup.remember(cid, content);
-        }
-
-        if (
-          telegramPush?.enabled &&
-          src === "gateway_ws" &&
-          cardResult?.skipped === "parse_failed" &&
-          shouldTelegramPushSignalChannelComment(cid, content)
-        ) {
-          telegramPush.enqueue(r);
-          log.info(
-            `大镖客 commentary → Telegram channel=${cid} message=${r.messageId ?? "?"}`
-          );
-        }
-      }
-    }
-
     if (signalCards) {
       const gatewayRows = isRestBatch
         ? []
@@ -643,7 +545,13 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
           if (mid) insertedIds.add(mid);
         }
       }
-      await runSignalCardPipeline([...gatewayRows, ...restCardRows]);
+      await runSignalCardPipelineForRows([...gatewayRows, ...restCardRows], {
+        signalCards,
+        store,
+        log,
+        telegramPush,
+        respectKolvipBypass: true,
+      });
     }
 
     if (!config.telegramPriorityForward && telegramPush?.enabled && !isRestBatch && result.inserted > 0) {
