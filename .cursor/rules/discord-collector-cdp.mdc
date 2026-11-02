@@ -12,7 +12,7 @@ alwaysApply: false
 |------|----------|------|----------------|
 | Discord Gateway | `9222`（`CDP_CONNECT_URL`） | `cdp-ws-monitor.js` | 已登录 discord.com |
 | X 列表最新帖 | `TWITTER_CDP_PORT`（可 `9223`） | `twitter-cdp-fetch.js` | 已登录 x.com |
-| 巨鲸 kolvip（**临时**出卡源） | 默认同 `CDP_CONNECT_URL` | `kolvip-cdp-fetch.js` | 已登录 kolvip.vip/web |
+| 巨鲸 kolvip（**临时**出卡源） | 默认同 `CDP_CONNECT_URL` | `kolvip-cdp-fetch.js` · `kolvip-cdp-nav.js` | 已登录 kolvip.vip/web |
 
 - `connectOverCDP` 后 `browser.close()` **只断开会话，不许杀用户 Chrome**。
 - 连本机调试端口必须摘掉代理（`load-env.js` 的 `NO_PROXY` + fetch/Playwright 的 localhost 直连）。

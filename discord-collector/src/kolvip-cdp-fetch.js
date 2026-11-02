@@ -49,6 +49,7 @@ async function withLocalhostNoProxy(fn) {
 }
 
 import { parseCdpConnectHostPort } from "./kolvip-cdp-connect.js";
+import { openKolvipChannelInSidebar, waitForKolvipMsgsFeed } from "./kolvip-cdp-nav.js";
 
 /**
  * @param {string} connectUrl
@@ -105,16 +106,8 @@ async function findOrCreateKolvipPage(browser, webUrl) {
  */
 export async function scrapeKolvipChannelFeed(page, kolvipChannelId, maxMessages) {
   const ch = String(kolvipChannelId).trim();
-  const opener = page.locator(`[data-open-ch="${ch}"]`).first();
-  if (!(await opener.count())) {
-    throw new Error(`未找到频道入口 data-open-ch="${ch}"（请确认已登录 kolvip.vip/web）`);
-  }
-  await opener.click({ timeout: 8_000 });
-  await page
-    .locator("#v-channel #feed.feed #msgs, #feed.feed #msgs, #msgs")
-    .first()
-    .waitFor({ state: "attached", timeout: 12_000 })
-    .catch(() => {});
+  await openKolvipChannelInSidebar(page, ch);
+  await waitForKolvipMsgsFeed(page);
   await sleep(600);
 
   const dom = await page.evaluate((maxN) => {

@@ -3,6 +3,7 @@ import { ref, reactive, computed, shallowRef, onMounted, onUnmounted, watch, nex
 import { RouterLink } from "vue-router";
 import ShowMessagePane from "../components/ShowMessagePane.vue";
 import SignalCardRail from "../components/SignalCardRail.vue";
+import KolvipEvalPanel from "../components/KolvipEvalPanel.vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
 import {
   fetchGuilds,
@@ -1923,7 +1924,7 @@ onUnmounted(() => {
 <template>
   <div
     class="show-app"
-    :class="{ 'has-signal-cards': showSignalCards, 'no-guild-rail': !SHOW_GUILD_RAIL }"
+    :class="{ 'has-signal-cards': showSignalCards, 'no-guild-rail': !SHOW_GUILD_RAIL, 'has-kolvip-panel': true }"
     @pointerdown="bumpShowUserActivity"
     @keydown="bumpShowUserActivity"
   >
@@ -2185,6 +2186,7 @@ onUnmounted(() => {
       @scroll-to-message="scrollToSignalMessage"
       @card-updated="onSignalCardUpdated"
     />
+    <KolvipEvalPanel :active-channel-id="selectedChannel?.channelId ?? ''" />
   </div>
 </template>
 
