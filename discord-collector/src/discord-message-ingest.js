@@ -32,6 +32,10 @@ import { normalizeSignalText } from "./discord-signal-dedup.js";
 import { resolveSignalContentFromRow } from "./discord-reply-content.js";
 import { isSignalChannel, getSignalChannelConfig } from "./discord-signal-config.js";
 import { shouldTelegramPushSignalChannelComment } from "./discord-telegram-push-config.js";
+import {
+  resolveSignalFromRowWithOcr,
+} from "./discord-signal-image-ocr.js";
+import { isDiscordSignalOcrChannel } from "./discord-signal-ocr-config.js";
 import { isBlockedWsPayload, isDiscordGatewayPayload } from "./ws-noise-filter.js";
 import { createDebouncedDiscordMessageBroadcast } from "./discord-ui-message-broadcast.js";
 
@@ -531,8 +535,32 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       await signalCards.ensureHydrated();
       for (const r of rows) {
         const cid = String(r.channelId ?? "").trim();
-        const content = resolveSignalContentFromRow(r);
+        let content = resolveSignalContentFromRow(r);
         if (!cid) continue;
+
+        /** @type {string | undefined} */
+        let ocrFingerprint;
+        /** @type {Record<string, unknown> | undefined} */
+        let ocrPreParsed;
+
+        if (isSignalChannel(cid) && isDiscordSignalOcrChannel(cid)) {
+          const ocrResolved = await resolveSignalFromRowWithOcr(r, { log });
+          if (ocrResolved?.skipped === "ocr_show_off" || ocrResolved?.skipped === "ocr_fingerprint_dedup") {
+            continue;
+          }
+          if (ocrResolved?.skipped === "ocr_failed" && !content) {
+            log.debug(
+              `信号卡片 OCR 失败且无正文 channel=${cid} message=${r.messageId}`,
+            );
+            continue;
+          }
+          if (ocrResolved?.content) {
+            content = ocrResolved.content;
+            ocrPreParsed = ocrResolved.parsed;
+            ocrFingerprint = ocrResolved.fingerprint;
+          }
+        }
+
         if (!content) {
           if (isSignalChannel(cid)) {
             log.debug(
@@ -564,7 +592,12 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
         /** @type {{ skipped?: string, card?: Record<string, unknown> } | undefined} */
         let cardResult;
         try {
-          cardResult = await signalCards.onMessage(r, { skipDedup: true });
+          cardResult = await signalCards.onMessage(r, {
+            skipDedup: true,
+            contentOverride: content,
+            preParsed: ocrPreParsed,
+            ocrFingerprint,
+          });
         } catch (e) {
           log.warn(`signal card: ${/** @type {Error} */ (e).message}`);
           continue;

@@ -50,6 +50,9 @@ import {
   shouldSkipTelegramCardPushDuplicate,
 } from "./telegram-card-push-dedup.js";
 import { formatPipelineLog } from "./signal-pipeline-log.js";
+import {
+  rememberOcrSignalFingerprint,
+} from "./discord-signal-image-ocr.js";
 
 /** @param {Record<string, unknown>} row */
 export function resolveMessageSignalAt(row) {
@@ -586,7 +589,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
 
   /**
    * @param {Record<string, unknown>} row
-   * @param {{ skipDedup?: boolean; skipTelegram?: boolean; debugSimulate?: boolean; tradePlatforms?: { bitget?: boolean; weex?: boolean } }} [opts]
+   * @param {{ skipDedup?: boolean; skipTelegram?: boolean; debugSimulate?: boolean; tradePlatforms?: { bitget?: boolean; weex?: boolean }; contentOverride?: string; preParsed?: Record<string, unknown>; ocrFingerprint?: string }} [opts]
    * @returns {Promise<{ skipped?: string; card?: Record<string, unknown>; parsed?: Record<string, unknown>; bitgetResult?: unknown; merged?: boolean }>}
    */
   async function onMessage(row, opts = {}) {
@@ -594,7 +597,9 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
 
     const channelId = String(row.channelId ?? row.channel_id ?? "").trim();
     const messageId = String(row.messageId ?? row.message_id ?? "").trim();
-    const content = resolveSignalContentFromRow(row);
+    const content = opts.contentOverride
+      ? normalizeSignalText(String(opts.contentOverride))
+      : resolveSignalContentFromRow(row);
     const guildId = String(row.guildId ?? row.guild_id ?? "").trim();
     const replyRefId = resolveReplyReferenceMessageId(row.rawJson ?? row.raw_json);
 
@@ -609,7 +614,10 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       return { skipped: "duplicate_text" };
     }
 
-    let parsed = parseSignalText(content, chCfg.parser);
+    let parsed =
+      opts.preParsed && typeof opts.preParsed === "object"
+        ? /** @type {Record<string, unknown>} */ ({ ...opts.preParsed })
+        : parseSignalText(content, chCfg.parser);
     if (!parsed && config.ollamaEnabled && !opts.debugSimulate) {
       parsed = await extractSignalWithAi(content, chCfg.parser, chCfg.name, {
         debug: (s) => log.debug(s),
@@ -1145,6 +1153,10 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     const clientCard = signalCardToClient(cardRow);
     broadcast?.("meta", { kind: "signal_card_created", card: clientCard });
     log.info(`信号卡片 #${cardId} channel=${channelId} styles=${Object.keys(cardsByStyle).join(",")}`);
+
+    if (opts.ocrFingerprint) {
+      rememberOcrSignalFingerprint(channelId, String(opts.ocrFingerprint));
+    }
 
     return { card: clientCard, parsed, bitgetResult, weexResult };
   }

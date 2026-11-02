@@ -304,6 +304,23 @@ export const config = {
   discordGroups: parseDiscordGroups(process.env.DISCORD_GROUPS ?? ""),
   /** 信号卡片监听频道（默认内置 4 个） */
   discordSignalChannelIds: parseIdList(process.env.DISCORD_SIGNAL_CHANNEL_IDS ?? ""),
+  /** 附件图片 OCR 信号频道（空=默认仅胖猫社区） */
+  discordSignalOcrChannelIds: parseIdList(process.env.DISCORD_SIGNAL_OCR_CHANNEL_IDS ?? ""),
+  /** 本机 OCR 服务根 URL */
+  discordSignalOcrBaseUrl: (process.env.DISCORD_SIGNAL_OCR_BASE_URL ?? "http://127.0.0.1:8866")
+    .trim()
+    .replace(/\/$/, ""),
+  /** OCR 晒单：盈利率 ≥ 该值视为晒单，不出开仓卡（默认 66） */
+  discordSignalOcrOpenMaxProfitPct: Number(process.env.DISCORD_SIGNAL_OCR_OPEN_MAX_PROFIT_PCT ?? 66),
+  /** OCR 开仓指纹去重窗口（毫秒，默认 5 分钟） */
+  discordSignalOcrDedupWindowMs: Math.max(
+    60_000,
+    Number(process.env.DISCORD_SIGNAL_OCR_DEDUP_WINDOW_MS ?? 5 * 60_000),
+  ),
+  discordSignalOcrTimeoutMs: Math.max(
+    5_000,
+    Number(process.env.DISCORD_SIGNAL_OCR_TIMEOUT_MS ?? 30_000),
+  ),
   /** Telegram 推送频道（空=内置 8 个） */
   discordTelegramPushChannelIds: parseIdList(process.env.DISCORD_TELEGRAM_PUSH_CHANNEL_IDS ?? ""),
   /** 实时推送频道，不参与 debounce（空=无，全部走 2 分钟聚合） */
