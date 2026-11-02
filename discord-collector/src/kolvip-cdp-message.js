@@ -1,6 +1,7 @@
 /**
  * 巨鲸 DOM 消息 → Discord ingest 行（纯函数，单测不依赖 Playwright）。
  */
+import { resolveKolvipAssetUrl } from "./kolvip-cdp-config.js";
 
 /**
  * @param {string} kolvipChannelId
@@ -46,7 +47,7 @@ export function kolvipMessageToDiscordRow(msg, map) {
   const source = String(map.source ?? "kolvip_cdp").trim() || "kolvip_cdp";
   /** @type {Array<{ url: string, filename: string, content_type: string }>} */
   const attachments = [];
-  const imageUrl = String(msg.imageUrl ?? "").trim();
+  const imageUrl = resolveKolvipAssetUrl(String(msg.imageUrl ?? "").trim());
   if (imageUrl) {
     attachments.push({
       url: imageUrl,

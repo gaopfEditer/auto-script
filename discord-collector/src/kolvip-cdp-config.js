@@ -79,6 +79,30 @@ export function kolvipWebUrl() {
   return (config.kolvipWebUrl || KOLVIP_WEB_URL).trim() || KOLVIP_WEB_URL;
 }
 
+/** @returns {string} 图片/CDN 绝对 URL 的 origin（默认 kolvip.vip） */
+export function kolvipAssetOrigin() {
+  const fromCfg = String(config.kolvipAssetOrigin ?? "").trim();
+  if (fromCfg) return fromCfg.replace(/\/$/, "");
+  try {
+    return new URL(kolvipWebUrl()).origin;
+  } catch {
+    return "https://kolvip.vip";
+  }
+}
+
+/**
+ * API/DOM 相对路径 `/web_file/...` → 可下载绝对 URL（OCR / 附件）。
+ * @param {string} url
+ */
+export function resolveKolvipAssetUrl(url) {
+  const u = String(url ?? "").trim();
+  if (!u) return "";
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.startsWith("//")) return `https:${u}`;
+  const origin = kolvipAssetOrigin();
+  return `${origin}${u.startsWith("/") ? u : `/${u}`}`;
+}
+
 /**
  * 解析 KOLVIP_CHANNEL_IDS=1:144496...,4:144496... 或 1,4,8（使用默认 Discord id）
  * @param {string} raw

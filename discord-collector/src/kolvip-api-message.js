@@ -1,6 +1,4 @@
-/**
- * kolvip /webu/messages 行 → KolvipDomMessage
- */
+import { resolveKolvipAssetUrl } from "./kolvip-cdp-config.js";
 
 /** @param {unknown} im */
 function imageUrlFromApiMedia(im) {
@@ -40,6 +38,6 @@ export function kolvipApiRawToDomMessage(raw) {
     author: String(raw.author ?? "").trim(),
     timeText: "",
     timeTitle,
-    imageUrl,
+    imageUrl: resolveKolvipAssetUrl(imageUrl),
   };
 }
