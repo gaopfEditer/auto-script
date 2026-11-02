@@ -5,6 +5,8 @@ import {
   kolvipMessageToDiscordRow,
   parseKolvipMessageTimeMs,
 } from "./kolvip-cdp-message.js";
+import { parseWtokenFromLocalStorageExport } from "./kolvip-api-auth.js";
+import { kolvipApiRawToDomMessage } from "./kolvip-api-message.js";
 import { parseCdpConnectHostPort } from "./kolvip-cdp-connect.js";
 import {
   listKolvipGroupAncestorsOuterToInner,
@@ -63,6 +65,26 @@ describe("kolvip 频道 env 与旁路", () => {
     assert.equal(a[1].kolvipChannelId, "16");
     const b = parseKolvipChannelIdsEnv("22:1444963689194192947");
     assert.equal(b[0].discordChannelId, "1444963689194192947");
+  });
+});
+
+describe("kolvip API 消息行", () => {
+  it("kolvipApiRawToDomMessage 映射 id 与图片", () => {
+    const dom = kolvipApiRawToDomMessage({
+      id: 42,
+      text: "BTC long",
+      author: "测试",
+      time: Date.parse("2026-01-01T00:00:00.000Z"),
+      images: [{ url: "https://cdn.example/a.jpg" }],
+    });
+    assert.equal(dom.dataId, "42");
+    assert.equal(dom.text, "BTC long");
+    assert.equal(dom.imageUrl, "https://cdn.example/a.jpg");
+  });
+
+  it("parseWtokenFromLocalStorageExport", () => {
+    const t = parseWtokenFromLocalStorageExport({ wtoken: "abc" });
+    assert.equal(t, "abc");
   });
 });
 

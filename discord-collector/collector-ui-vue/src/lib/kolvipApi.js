@@ -10,11 +10,9 @@ import { readJsonResponse } from "./httpJson.js";
  *   displayState: 'win_rate' | 'insufficient_sample' | 'fetching',
  *   decided: number,
  *   metrics: import('./cardEvalApi.js').EvalMetrics,
+ *   section?: string,
  * }} KolvipEvalChannelRow */
 
-/**
- * @param {{ days?: number }} [opts]
- */
 export async function fetchKolvipEvalSummary(opts = {}) {
   const q = new URLSearchParams();
   if (opts.days) q.set("days", String(opts.days));
@@ -28,6 +26,8 @@ export async function fetchKolvipEvalSummary(opts = {}) {
     fromMs: Number(j.fromMs) || 0,
     toMs: Number(j.toMs) || 0,
     note: typeof j.note === "string" ? j.note : "",
-    channels: Array.isArray(j.channels) ? j.channels : [],
+    curated: Array.isArray(j.curated) ? j.curated : Array.isArray(j.channels) ? j.channels : [],
+    candidates: Array.isArray(j.candidates) ? j.candidates : [],
+    catalogUpdatedAt: j.catalogUpdatedAt ?? null,
   };
 }

@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { buildKolvipEvalSummary } from "./kolvip-cdp-eval.js";
 import { getKolvipChannelMappings } from "./kolvip-cdp-config.js";
 import { requireLocalRequest } from "./local-request.js";
+import { loadKolvipCatalogCache } from "./kolvip-api-catalog.js";
 
 /**
  * @param {import("express").Express} app
@@ -31,6 +32,23 @@ export function registerKolvipCdpRoutes(app, kolvipCdp, store, backfill) {
 
   app.get("/api/kolvip/mappings", (_req, res) => {
     res.json({ ok: true, channels: getKolvipChannelMappings() });
+  });
+
+  app.get("/api/kolvip/catalog", async (_req, res) => {
+    try {
+      const catalog = await loadKolvipCatalogCache();
+      res.json({ ok: true, ...catalog });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
+    }
+  });
+
+  app.post("/api/kolvip/catalog/sync", requireLocalRequest, async (_req, res) => {
+    try {
+      res.json({ ok: true, ...(await backfill.syncCatalog()) });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: /** @type {Error} */ (e).message });
+    }
   });
 
   app.get("/api/kolvip/eval-summary", async (req, res) => {
@@ -63,11 +81,24 @@ export function registerKolvipCdpRoutes(app, kolvipCdp, store, backfill) {
       if (!config.kolvipBackfillEnabled) {
         res.status(400).json({
           ok: false,
-          error: "KOLVIP_BACKFILL_ENABLED=0，请先在 .env 开启回溯骨架",
+          error: "KOLVIP_BACKFILL_ENABLED=0，请先在 .env 开启回溯",
         });
         return;
       }
       res.json({ ok: true, ...(await backfill.startPilot(kid)) });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: /** @type {Error} */ (e).message });
+    }
+  });
+
+  app.post("/api/kolvip/backfill/start-all", requireLocalRequest, async (_req, res) => {
+    try {
+      if (!config.kolvipBackfillEnabled) {
+        res.status(400).json({ ok: false, error: "KOLVIP_BACKFILL_ENABLED=0" });
+        return;
+      }
+      await backfill.syncCatalog();
+      res.json({ ok: true, ...(await backfill.queueAllChannels()) });
     } catch (e) {
       res.status(400).json({ ok: false, error: /** @type {Error} */ (e).message });
     }

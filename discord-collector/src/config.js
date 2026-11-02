@@ -642,11 +642,54 @@ export const config = {
   twitterCdpLists: parseIdList(process.env.TWITTER_CDP_LISTS ?? ""),
   twitterCdpMaxPerList: Math.min(50, Math.max(5, Number(process.env.TWITTER_CDP_MAX_PER_LIST ?? 20) || 20)),
   /**
-   * 巨鲸 kolvip.vip **临时**信号源（CDP DOM）；默认关，开启后仍保留完整 Discord CDP/Gateway。
-   * 切回 Discord：`KOLVIP_CDP_ENABLED=0`（无需改代码）。
+   * 巨鲸 kolvip.vip **临时**信号源；默认关。优先 HTTP API（KOLVIP_FETCH_MODE），CDP DOM 可关或作兜底。
+   * 切回 Discord：`KOLVIP_ENABLED=0` 且 `KOLVIP_API_ENABLED=0` 且 `KOLVIP_CDP_ENABLED=0`。
    */
+  kolvipApiEnabled: ["1", "true", "yes", "on"].includes(
+    String(process.env.KOLVIP_API_ENABLED ?? "0").toLowerCase()
+  ),
   kolvipCdpEnabled: ["1", "true", "yes", "on"].includes(
     String(process.env.KOLVIP_CDP_ENABLED ?? "0").toLowerCase()
+  ),
+  kolvipSignalEnabled: (() => {
+    const on = (k) => ["1", "true", "yes", "on"].includes(String(process.env[k] ?? "0").toLowerCase());
+    return on("KOLVIP_ENABLED") || on("KOLVIP_API_ENABLED") || on("KOLVIP_CDP_ENABLED");
+  })(),
+  /** api | cdp | auto — auto 优先 HTTP，失败且 CDP 开则回退 DOM */
+  kolvipFetchMode: (() => {
+    const m = String(process.env.KOLVIP_FETCH_MODE ?? "auto").trim().toLowerCase();
+    if (m === "api" || m === "cdp" || m === "auto") return m;
+    return "auto";
+  })(),
+  kolvipApiBaseUrl: (
+    process.env.KOLVIP_API_BASE_URL ?? "https://kolvip.vip/api-v1"
+  ).trim(),
+  kolvipApiWtoken: (process.env.KOLVIP_API_WTOKEN ?? "").trim(),
+  kolvipApiTokenFile: (process.env.KOLVIP_API_TOKEN_FILE ?? "").trim(),
+  kolvipApiLocalStorageFile: (process.env.KOLVIP_API_LOCALSTORAGE_FILE ?? "").trim(),
+  kolvipApiCdpTokenSync: !["0", "false", "no", "off"].includes(
+    String(process.env.KOLVIP_API_CDP_TOKEN_SYNC ?? "1").toLowerCase()
+  ),
+  kolvipApiTimeoutMs: Math.max(
+    3000,
+    Number(process.env.KOLVIP_API_TIMEOUT_MS ?? 15_000) || 15_000
+  ),
+  kolvipApiChannelDelayMs: Math.max(
+    0,
+    Number(process.env.KOLVIP_API_CHANNEL_DELAY_MS ?? 800) || 800
+  ),
+  kolvipApiMaxPerChannel: Math.min(
+    150,
+    Math.max(5, Number(process.env.KOLVIP_API_MAX_PER_CHANNEL ?? 40) || 40)
+  ),
+  kolvipPollIntervalMs: Math.max(
+    15_000,
+    Number(
+      process.env.KOLVIP_POLL_INTERVAL_MS ??
+        process.env.KOLVIP_API_INTERVAL_MS ??
+        process.env.KOLVIP_CDP_INTERVAL_MS ??
+        90_000
+    ) || 90_000
   ),
   /** 留空则沿用 CDP_CONNECT_URL（同一 Chrome :9222，需已登录 kolvip.vip/web） */
   kolvipCdpConnectUrl: (process.env.KOLVIP_CDP_CONNECT_URL ?? "").trim(),
@@ -659,19 +702,29 @@ export const config = {
     80,
     Math.max(5, Number(process.env.KOLVIP_CDP_MAX_PER_CHANNEL ?? 40) || 40)
   ),
-  /**
-   * kolvip 开启时，是否旁路 Discord Gateway **建卡**（同映射频道，避免双推）。默认开。
-   * `0` = 双源并行出卡（仅调试）；Discord 采集本身不受影响。
-   */
-  kolvipCdpBypassDiscordSignals: (() => {
-    const explicit = (process.env.KOLVIP_CDP_BYPASS_DISCORD_SIGNALS ?? "").trim();
+  kolvipBypassDiscordSignals: (() => {
+    const explicit = (
+      process.env.KOLVIP_BYPASS_DISCORD_SIGNALS ??
+      process.env.KOLVIP_CDP_BYPASS_DISCORD_SIGNALS ??
+      ""
+    ).trim();
     if (explicit) {
       return !["0", "false", "no", "off"].includes(explicit.toLowerCase());
     }
-    return ["1", "true", "yes", "on"].includes(
-      String(process.env.KOLVIP_CDP_ENABLED ?? "0").toLowerCase()
-    );
+    const on = (k) => ["1", "true", "yes", "on"].includes(String(process.env[k] ?? "0").toLowerCase());
+    return on("KOLVIP_ENABLED") || on("KOLVIP_API_ENABLED") || on("KOLVIP_CDP_ENABLED");
   })(),
+  /** 非精选频道建卡扫描（虚拟 channelId，不推 TG） */
+  kolvipScanEvalEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.KOLVIP_SCAN_EVAL_ENABLED ?? "1").toLowerCase()
+  ),
+  kolvipBackfillDays: Math.min(
+    90,
+    Math.max(7, Number(process.env.KOLVIP_BACKFILL_DAYS ?? 30) || 30)
+  ),
+  kolvipBackfillAllChannels: !["0", "false", "no", "off"].includes(
+    String(process.env.KOLVIP_BACKFILL_ALL_CHANNELS ?? "1").toLowerCase()
+  ),
   /** 非空覆盖默认 8 频道；格式 `1,4,8` 或 `16:1562351038277619783` */
   kolvipChannelMappings: parseKolvipChannelIdsEnv(process.env.KOLVIP_CHANNEL_IDS ?? ""),
   /** 巨鲸 DOM 历史回溯骨架（默认关；大批量请配合 KOLVIP_BACKFILL_SHADOW=1） */

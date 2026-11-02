@@ -37,12 +37,13 @@ export function parseKolvipMessageTimeMs(timeText, titleAttr) {
 
 /**
  * @param {KolvipDomMessage} msg
- * @param {{ kolvipChannelId: string, discordChannelId: string }} map
+ * @param {{ kolvipChannelId: string, discordChannelId: string, source?: string }} map
  */
 export function kolvipMessageToDiscordRow(msg, map) {
   const messageId = kolvipStableMessageId(map.kolvipChannelId, msg.dataId);
   const createdAtMs = parseKolvipMessageTimeMs(msg.timeText, msg.timeTitle);
   const content = String(msg.text ?? "").trim();
+  const source = String(map.source ?? "kolvip_cdp").trim() || "kolvip_cdp";
   /** @type {Array<{ url: string, filename: string, content_type: string }>} */
   const attachments = [];
   const imageUrl = String(msg.imageUrl ?? "").trim();
@@ -64,7 +65,7 @@ export function kolvipMessageToDiscordRow(msg, map) {
     authorGlobalName: null,
     authorAvatar: null,
     eventType: "MESSAGE_CREATE",
-    source: "kolvip_cdp",
+    source,
     rawJson: {
       id: messageId,
       channel_id: map.discordChannelId,
@@ -73,6 +74,7 @@ export function kolvipMessageToDiscordRow(msg, map) {
       kolvip: {
         channelId: map.kolvipChannelId,
         dataId: msg.dataId,
+        ingest: source,
       },
     },
   };
