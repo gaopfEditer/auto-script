@@ -56,6 +56,8 @@ Token：localStorage `wv.wtoken`（JSON 字符串）。写入 `data/kolvip-api-t
 
 精选回溯：`source=kolvip_api_backfill`（19 字符，需 `discord_signal_cards.source` ≥64；collect:ui 启动时 `store.js` 会 `MODIFY COLUMN source VARCHAR(64)`）。库内不再写死 `auto`；Gateway Discord 仍为 `auto` / `source_type=discord`（`source_type` 保持 VARCHAR(32)，`kolvip` 够用）。
 
+**历史卡升级**：早期建卡可能已是 `message_id=kolvip-*` 但 `source=auto`。回溯/扫描 ingest 遇正文去重时不会重插，但会走 `upgradeKolvipSignalCardSourceFromRow` 把 `source` / `source_type` / `source_ref`（必要时 `channel_id` 改为 `kolvip-scan-*`）写回已有行；日志 `source_upgraded`，**不计入** backfill `cardsCreated`。
+
 ---
 
 ## 4. 约 30 天回溯 + eval（精选 + 全站）

@@ -48,6 +48,76 @@ export function resolveSignalCardInsertSource(row) {
 /**
  * @param {string} source
  */
+export function isKolvipIngestSource(source) {
+  return String(source ?? "").trim().startsWith("kolvip");
+}
+
+/**
+ * 旧卡 source=auto/gateway 或较早 kolvip 值 → 允许写入回溯/扫描 source。
+ * @param {unknown} existingSource
+ * @param {unknown} desiredSource
+ */
+export function legacySignalSourceNeedsKolvipUpgrade(existingSource, desiredSource) {
+  const prev = String(existingSource ?? "auto").trim() || "auto";
+  const next = String(desiredSource ?? "").trim();
+  if (!next.startsWith("kolvip")) return false;
+  if (prev === next) return false;
+  if (prev === "auto" || prev === "gateway_ws" || prev === "rest") return true;
+  if (prev.startsWith("kolvip") && prev !== next) return true;
+  return false;
+}
+
+/**
+ * @param {ReturnType<typeof import("./store.js").openStore>} store
+ * @param {Record<string, unknown>} row
+ * @param {{ info?: (msg: string) => void } | null} [log]
+ */
+export async function upgradeKolvipSignalCardSourceFromRow(store, row, log = null) {
+  const messageId = String(row.messageId ?? row.message_id ?? "").trim();
+  if (!messageId || !store.getSignalCardByMessageId || !store.updateSignalCard) {
+    return { upgraded: false };
+  }
+  const desired = resolveSignalCardInsertSource(row);
+  if (!isKolvipIngestSource(desired.source)) {
+    return { upgraded: false };
+  }
+  assertSignalCardSourceLength(desired.source);
+
+  const existing = await store.getSignalCardByMessageId(messageId);
+  if (!existing) return { upgraded: false };
+
+  const prevSource = String(existing.source ?? "auto");
+  if (!legacySignalSourceNeedsKolvipUpgrade(prevSource, desired.source)) {
+    return { upgraded: false, reason: "no_upgrade_needed" };
+  }
+
+  const id = Number(existing.id ?? existing.ID);
+  if (!Number.isFinite(id) || id <= 0) return { upgraded: false };
+
+  const channelId = String(row.channelId ?? row.channel_id ?? "").trim();
+  const prevChannel = String(existing.channel_id ?? existing.channelId ?? "").trim();
+  /** @type {{ source: string, sourceType: string, sourceRef: string, channelId?: string }} */
+  const patch = {
+    source: desired.source,
+    sourceType: desired.sourceType,
+    sourceRef: desired.sourceRef,
+  };
+  if (channelId && channelId !== prevChannel) {
+    patch.channelId = channelId;
+  }
+
+  await store.updateSignalCard(id, patch);
+  log?.info?.(
+    `信号卡升级 source #${id} message=${messageId} ${prevSource} → ${desired.source}` +
+      (patch.channelId ? ` channel=${prevChannel}→${channelId}` : "")
+  );
+  const updated = (await store.getSignalCardById?.(id)) ?? existing;
+  return { upgraded: true, source: desired.source, cardId: id, card: updated };
+}
+
+/**
+ * @param {string} source
+ */
 export function assertSignalCardSourceLength(source) {
   const s = String(source ?? "");
   if (s.length > SIGNAL_CARD_SOURCE_MAX_LENGTH) {

@@ -1527,7 +1527,7 @@ export async function openStore(cfg, log) {
 
   /**
    * @param {number} id
-   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, channelId?: string, symbol?: string, rawContent?: string, signalAt?: string | null, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown, progressJson?: unknown }} patch
+   * @param {{ status?: string, expiresAt?: string | null, cardsByStyle?: Record<string, string>, note?: string | null, channelId?: string, symbol?: string, rawContent?: string, signalAt?: string | null, executionJson?: unknown, parsedJson?: unknown, verify3hJson?: unknown, verify1mJson?: unknown, proximityJson?: unknown, cardFieldsJson?: unknown, backtestJson?: unknown, progressJson?: unknown, source?: string, sourceType?: string, sourceRef?: string | null }} patch
    */
   async function updateSignalCard(id, patch) {
     const now = isoToMysqlDatetime3(new Date().toISOString());
@@ -1598,6 +1598,18 @@ export async function openStore(cfg, log) {
     if (patch.progressJson !== undefined) {
       sets.push("progress_json = ?");
       params.push(serializeRawJsonColumnForMysql(patch.progressJson));
+    }
+    if (patch.source != null) {
+      sets.push("source = ?");
+      params.push(String(patch.source));
+    }
+    if (patch.sourceType != null) {
+      sets.push("source_type = ?");
+      params.push(String(patch.sourceType));
+    }
+    if (patch.sourceRef !== undefined) {
+      sets.push("source_ref = ?");
+      params.push(patch.sourceRef ? String(patch.sourceRef) : null);
     }
     params.push(id);
     await pool.execute(`UPDATE discord_signal_cards SET ${sets.join(", ")} WHERE id = ?`, params);
