@@ -49,6 +49,10 @@ async function withLocalhostNoProxy(fn) {
 }
 
 import { parseCdpConnectHostPort } from "./kolvip-cdp-connect.js";
+import {
+  openKolvipChannelInSidebar,
+  waitForKolvipFeedAttached,
+} from "./kolvip-cdp-nav.js";
 
 /**
  * @param {string} connectUrl
@@ -103,19 +107,13 @@ async function findOrCreateKolvipPage(browser, webUrl) {
  * @param {string} kolvipChannelId
  * @param {number} maxMessages
  */
-export async function scrapeKolvipChannelFeed(page, kolvipChannelId, maxMessages) {
+export async function scrapeKolvipChannelFeed(page, kolvipChannelId, maxMessages, opts = {}) {
   const ch = String(kolvipChannelId).trim();
-  const opener = page.locator(`[data-open-ch="${ch}"]`).first();
-  if (!(await opener.count())) {
-    throw new Error(`未找到频道入口 data-open-ch="${ch}"（请确认已登录 kolvip.vip/web）`);
-  }
-  await opener.click({ timeout: 8_000 });
-  await page
-    .locator("#v-channel #feed.feed #msgs, #feed.feed #msgs, #msgs")
-    .first()
-    .waitFor({ state: "attached", timeout: 12_000 })
-    .catch(() => {});
-  await sleep(600);
+  await openKolvipChannelInSidebar(page, ch, {
+    clickTimeoutMs: 20_000,
+    log: opts.log,
+  });
+  await waitForKolvipFeedAttached(page, 18_000);
 
   const dom = await page.evaluate((maxN) => {
     const feed =
@@ -248,7 +246,8 @@ export async function fetchKolvipChannelsViaCdp(opts) {
         const messages = await scrapeKolvipChannelFeed(
           page,
           channel.kolvipChannelId,
-          maxPerChannel
+          maxPerChannel,
+          { log }
         );
         log.info(
           `巨鲸 ${channel.logicName} ch=${channel.kolvipChannelId} 可见 ${messages.length} 条`

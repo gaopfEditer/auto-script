@@ -7,6 +7,10 @@ import {
 } from "./kolvip-cdp-message.js";
 import { parseCdpConnectHostPort } from "./kolvip-cdp-connect.js";
 import {
+  pickKolvipChannelTarget,
+  sortKolvipGroupHeadersOuterFirst,
+} from "./kolvip-cdp-nav.js";
+import {
   DEFAULT_KOLVIP_CHANNEL_MAPPINGS,
   parseKolvipChannelIdsEnv,
   getKolvipMappedDiscordChannelIds,
