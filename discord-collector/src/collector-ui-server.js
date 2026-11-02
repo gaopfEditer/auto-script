@@ -70,6 +70,8 @@ import { getBitgetProxyInUse } from "./bitget-api.js";
 import { getWeexProxyInUse } from "./weex-api.js";
 import { createTwitterCdpService } from "./twitter-cdp-service.js";
 import { createKolvipCdpService } from "./kolvip-cdp-service.js";
+import { createKolvipBackfillService } from "./kolvip-cdp-backfill.js";
+import { registerKolvipCdpRoutes } from "./kolvip-cdp-api.js";
 import { registerTwitterCdpRoutes } from "./twitter-cdp-api.js";
 import {
   getAutoTradeChannelIds,
@@ -254,6 +256,7 @@ async function main() {
   const kolvipCdp = createKolvipCdpService(store, createLogger("kolvip-cdp"), broadcast, {
     signalCards,
   });
+  const kolvipBackfill = createKolvipBackfillService(createLogger("kolvip-backfill"));
   const cardPriceMonitor = createCardPriceMonitor(
     store,
     createLogger("card-price"),
@@ -302,6 +305,7 @@ async function main() {
   registerTelegramLiveRoutes(app, broadcast, { getListenStatus: () => getTelegramListenStatus() });
   registerTelegramBackfillRoutes(app);
   registerTwitterCdpRoutes(app, twitterCdp);
+  registerKolvipCdpRoutes(app, kolvipCdp, store, kolvipBackfill);
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")
@@ -1550,6 +1554,7 @@ async function main() {
     cardPriceMonitor.stop();
     twitterCdp.stop();
     kolvipCdp.stop();
+    kolvipBackfill.stop();
     cardSink.stop();
     await telegramPush.flushAll().catch((e) => log.warn(String(e?.message ?? e)));
     if (session) await session.close().catch((e) => log.warn(String(e?.message ?? e)));
@@ -1620,6 +1625,9 @@ async function main() {
   );
   void kolvipCdp.start().catch((e) =>
     log.warn(`Kolvip CDP 启动: ${/** @type {Error} */ (e).message}`)
+  );
+  void kolvipBackfill.start().catch((e) =>
+    log.warn(`Kolvip 回溯启动: ${/** @type {Error} */ (e).message}`)
   );
 
   const oiSupervisor = startOiSupervisor({

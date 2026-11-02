@@ -674,6 +674,38 @@ export const config = {
   })(),
   /** 非空覆盖默认 8 频道；格式 `1,4,8` 或 `16:1562351038277619783` */
   kolvipChannelMappings: parseKolvipChannelIdsEnv(process.env.KOLVIP_CHANNEL_IDS ?? ""),
+  /** 巨鲸 DOM 历史回溯骨架（默认关；大批量请配合 KOLVIP_BACKFILL_SHADOW=1） */
+  kolvipBackfillEnabled: ["1", "true", "yes", "on"].includes(
+    String(process.env.KOLVIP_BACKFILL_ENABLED ?? "0").toLowerCase()
+  ),
+  kolvipBackfillShadow: !["0", "false", "no", "off"].includes(
+    String(process.env.KOLVIP_BACKFILL_SHADOW ?? "1").toLowerCase()
+  ),
+  kolvipBackfillPilotChannelId: (process.env.KOLVIP_BACKFILL_PILOT_CHANNEL_ID ?? "").trim(),
+  kolvipBackfillBatchSize: Math.min(
+    200,
+    Math.max(5, Number(process.env.KOLVIP_BACKFILL_BATCH_SIZE ?? 40) || 40)
+  ),
+  kolvipBackfillDaysPerBatch: Math.min(
+    7,
+    Math.max(1, Number(process.env.KOLVIP_BACKFILL_DAYS_PER_BATCH ?? 3) || 3)
+  ),
+  kolvipBackfillChannelCooldownMs: Math.max(
+    30_000,
+    Number(process.env.KOLVIP_BACKFILL_CHANNEL_COOLDOWN_MS ?? 120_000) || 120_000
+  ),
+  kolvipBackfillBatchCooldownMs: Math.max(
+    15_000,
+    Number(process.env.KOLVIP_BACKFILL_BATCH_COOLDOWN_MS ?? 60_000) || 60_000
+  ),
+  kolvipBackfillTickMs: Math.max(
+    10_000,
+    Number(process.env.KOLVIP_BACKFILL_TICK_MS ?? 45_000) || 45_000
+  ),
+  kolvipBackfillMaxRetries: Math.min(
+    8,
+    Math.max(0, Number(process.env.KOLVIP_BACKFILL_MAX_RETRIES ?? 3) || 3)
+  ),
   /** OI → Telegram 形态卡片回测（validate backtestPolicy=telegram_oi） */
   tgSignalBacktestMajorStepPct: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_STEP_PCT ?? 0.5),
   tgSignalBacktestMajorInitialH: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_INITIAL_H ?? 3),

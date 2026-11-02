@@ -112,40 +112,39 @@ kolvip CDP DOM
 
 ---
 
-## 5. 明日目标：Discord 频道页右侧「巨鲸胜率」面板
+## 5. Show 右侧「kolvip」胜率面板
 
-> **状态：规划中，尚未合入主流程 UI。** 本文档先固定口径，避免实现与 eval 分叉。
+**状态：已合入 Show 页最右栏**（`KolvipEvalPanel.vue`）。
 
-### 产品位置
+- 数据：`GET /api/kolvip/eval-summary?days=7`（本机 collect:ui，无需 Open API Key）。
+- 口径：与 `GET /api/v1/cards/eval/summary` 相同（`aggregateMetrics` / `classifyCardEval`）；按映射 **Discord channelId** 合并 `kolvip_cdp` 与 Gateway 源。
+- 展示：有已结算样本 → 胜率；仅有卡未结算 →「样本不足」；无卡 →「抓取中」。
 
-- 在 **Discord 频道浏览页**（Show / 与 CDP 当前频道上下文一致）**右侧**增加面板：展示当前映射巨鲸频道（及同源 Discord 信号频道）的 **胜率 / 盈亏摘要**。
-- 数据源：已有卡片库 `discord_signal_cards` + eval 汇总逻辑，**不** 另建一套胜率公式。
+## 6. 一个月回溯：分期与防封
 
-### 口径（与 Discord 回溯 / eval 对齐）
+**状态：Job 骨架已合入**（`kolvip-cdp-backfill.js` + `data/kolvip-backfill.json`）。
 
-与 [development.md](./development.md) 及卡片评估规则一致，**禁止** 面板单独改语义：
+| 变量 | 默认 | 含义 |
+|------|------|------|
+| `KOLVIP_BACKFILL_ENABLED` | `0` | `1` 启动回溯 tick |
+| `KOLVIP_BACKFILL_SHADOW` | `1` | `1` 只跑状态机/限速，不真刷 DOM |
+| `KOLVIP_BACKFILL_PILOT_CHANNEL_ID` | 空 | 固定试点巨鲸 ch（如 `16` 胖猫） |
+| `KOLVIP_BACKFILL_BATCH_SIZE` | `40` | 每批条数上限 |
+| `KOLVIP_BACKFILL_DAYS_PER_BATCH` | `3` | 每批时间窗（天，实现 DOM 时用） |
+| `KOLVIP_BACKFILL_CHANNEL_COOLDOWN_MS` | `120000` | 频道切换冷却 |
+| `KOLVIP_BACKFILL_BATCH_COOLDOWN_MS` | `60000` | 批间冷却 |
+| `KOLVIP_BACKFILL_TICK_MS` | `45000` | 状态机 tick |
+| `KOLVIP_BACKFILL_MAX_RETRIES` | `3` | 失败退避上限 |
 
-| 项 | 口径 |
-|----|------|
-| 未入场 | 不计入胜率；清算限价 **12h 未触** 视为未入场 |
-| 赢 | 任意 TP 命中 |
-| 输 | 先 SL |
-| 仓位 | N 个 TP 各平 `1/N`；`pnlPct` 仓位加权 |
-| 汇总 API | 对齐 `GET /api/v1/cards/eval/summary`、`GET /api/v1/cards/eval/channels/:channelId`（见 [cards-api.md](./cards-api.md)） |
+HTTP（本机）：
 
-面板筛选建议：`source` 含 `kolvip_cdp` 与 `gateway_ws` / `rest_api` 的合并视图（按 **Discord channelId** 聚合，因巨鲸行已映射到同一 channelId）。
+- `GET /api/kolvip/backfill/status`
+- `POST /api/kolvip/backfill/start` body `{ "kolvipChannelId": "16" }`
+- `POST /api/kolvip/backfill/pause`
 
----
+Job 字段：`status`（`idle|pending|running|cooldown|insufficient_sample|done|failed|paused`）、`backfillCursor`、`sampleCount`、`lastError`。
 
-## 6. 一个月回溯：分期与防封（规划）
-
-> **状态：规划中。** 巨鲸 DOM 回溯尚未实现；以下为设计与运维约束，实现时需写进 store/任务状态机。
-
-### 目标
-
-- 对 8 个映射频道做约 **30 天** 历史消息抓取，用于补卡/回测样本；与 Discord REST 回溯 **互补**，不替代 eval 引擎。
-
-### 防封 / 限速原则
+### 防封 / 限速原则（DOM 大批量待实现）
 
 | 策略 | 说明 |
 |------|------|
@@ -175,23 +174,19 @@ kolvip CDP DOM
 
 实现后在本节补充实际 env 名与 API（如 `POST /api/kolvip/backfill`）。
 
+（已补充：见上文 `KOLVIP_BACKFILL_*` 与 `/api/kolvip/backfill/*`。）
+
 ---
 
 ## 7. 已知问题
 
 ### 分组频道 CDP click 超时（大镖客 / 淑琴 / 颜驰）
 
-**现象**：日志中胖猫等「首次记档」成功，但 **大镖客（ch=1）、淑琴（ch=4）、颜驰（ch=22）** 打开失败，Playwright `click` 超时。
+**状态：已修**（`kolvip-cdp-nav.js`：先展开 `[data-open-grp]`，再点可见 `[data-open-ch]`；feed 等待约 18s）。
 
-**原因（已确认方向）**：上述频道在 UI 中位于 **分组** 下（例如「大镖客VIP禁言群」「舒琴VIP会员群」「颜驰VIP教学频道」），父级为 **`data-open-grp`**。折叠时分组内的 `[data-open-ch]` 在 DOM 中存在但 **不可见**，旧逻辑 `.first()` 点到隐藏节点导致超时。
+**原现象**：折叠分组内频道 Playwright click 超时。
 
-**修复方向**（代码 PR 跟踪，目标模块 `kolvip-cdp-nav.js`）：
-
-1. 先按 **outer → inner** 顺序点击相关 `[data-open-grp]` 展开；
-2. 再对 **可见** 的 `[data-open-ch="{id}"]` 点击（`visible=true` / `scrollIntoView`）；
-3. 点击超时提高到约 **20s**，feed 等待约 **18s**。
-
-**临时规避**：在 Chrome 里 **手动展开** 对应 VIP 分组并保持侧栏可见，再启轮询（仍可能因 SPA 折叠复发）。
+**临时规避**：在 Chrome 里 **手动展开** 对应 VIP 分组并保持侧栏可见，再启轮询（仍可能因 SPA 折叠复发，代码侧已自动展开）。
 
 ---
 
@@ -202,7 +197,10 @@ kolvip CDP DOM
 | `.env.example` | `KOLVIP_*` 注释 |
 | `src/kolvip-cdp-config.js` | 映射表、bypass 判断 |
 | `src/kolvip-cdp-fetch.js` | CDP 连接、按频道 scrape |
-| `src/kolvip-cdp-nav.js` | 分组展开 + 打开频道（修复中） |
+| `src/kolvip-cdp-nav.js` | 分组展开 + 打开频道 |
+| `src/kolvip-cdp-eval.js` | Show 胜率摘要聚合 |
+| `src/kolvip-cdp-backfill.js` | 回溯 Job 骨架 |
+| `src/kolvip-cdp-api.js` | `/api/kolvip/*` |
 | `src/discord-signal-pipeline.js` | 建卡旁路与 OCR 入口 |
 | `docs/development.md` | 总地图（含 eval 口径） |
 | `docs/cards-api.md` | eval 汇总 API |
