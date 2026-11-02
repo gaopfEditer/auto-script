@@ -161,7 +161,7 @@ export function normalizeDiscordMessage(data, eventType, source = "gateway_ws") 
     guildId: m.guild_id != null ? String(m.guild_id) : "",
     channelId: m.channel_id != null ? String(m.channel_id) : "",
     authorId: author?.id != null ? String(author.id) : "",
-    createdAtMs: snowflakeToMs(id),
+    createdAtMs: resolveDiscordMessageCreatedAtMs({ messageId: id, rawMessage: m }),
     content: extractDiscordMessageContent(m),
     authorUsername: author?.username != null ? String(author.username) : null,
     authorGlobalName: author?.global_name != null ? String(author.global_name) : null,

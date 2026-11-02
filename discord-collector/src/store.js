@@ -4,6 +4,7 @@ import mysql from "mysql2/promise";
 import { bufferToPlainPayloadText } from "./collect-ws-decode.js";
 import { bindCommunitySqliteToStore, openCommunitySqliteStore } from "./community-sqlite-store.js";
 import { config } from "./config.js";
+import { resolveDiscordMessageCreatedAtMs } from "./discord-gateway.js";
 import { minDiscordSnowflakeId } from "./discord-show-history-cache.js";
 import { serializeRawJsonColumnForMysql } from "./mysql-json.js";
 
@@ -430,7 +431,12 @@ export async function openStore(cfg, log) {
       event_type = VALUES(event_type),
       source = VALUES(source),
       raw_json = VALUES(raw_json),
-      received_at = VALUES(received_at)
+      received_at = VALUES(received_at),
+      created_at_ms = CASE
+        WHEN COALESCE(created_at_ms, 0) <= 0 AND COALESCE(VALUES(created_at_ms), 0) > 0 THEN VALUES(created_at_ms)
+        WHEN COALESCE(VALUES(created_at_ms), 0) > COALESCE(created_at_ms, 0) THEN VALUES(created_at_ms)
+        ELSE created_at_ms
+      END
   `;
 
   /**
@@ -825,6 +831,96 @@ export async function openStore(cfg, log) {
       params
     );
     return rows[0]?.message_id != null ? String(rows[0].message_id) : "";
+  }
+
+  /** @param {string} channelId */
+  async function getOldestDiscordMessageRowForChannel(channelId) {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return null;
+    const [rows] = await pool.query(
+      `SELECT message_id, created_at_ms FROM discord_messages
+       WHERE channel_id = ?
+       ORDER BY CAST(message_id AS UNSIGNED) ASC
+       LIMIT 1`,
+      [cid],
+    );
+    return rows[0] ?? null;
+  }
+
+  /**
+   * @param {string} channelId
+   * @param {number} fromMs
+   * @param {number} toMs
+   * @param {number} [limit]
+   */
+  async function listDiscordMessagesInTimeRange(channelId, fromMs, toMs, limit = 12_000) {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return [];
+    const lim = Math.min(20_000, Math.max(1, Number(limit) || 12_000));
+    const f = Number(fromMs) || 0;
+    const t = Number(toMs) || 0;
+    /** @type {unknown[]} */
+    const params = [cid];
+    let timeSql = "";
+    if (f > 0 && t > 0) {
+      timeSql = " AND created_at_ms >= ? AND created_at_ms <= ?";
+      params.push(f, t);
+    } else if (f > 0) {
+      timeSql = " AND created_at_ms >= ?";
+      params.push(f);
+    } else if (t > 0) {
+      timeSql = " AND created_at_ms <= ?";
+      params.push(t);
+    }
+    const [rows] = await pool.query(
+      `SELECT message_id, guild_id, guild_name, channel_id, channel_name, author_id, created_at_ms, content,
+              author_username, author_global_name, author_avatar, event_type, source, raw_json
+       FROM discord_messages
+       WHERE channel_id = ?${timeSql}
+       ORDER BY CAST(message_id AS UNSIGNED) ASC
+       LIMIT ${lim}`,
+      params,
+    );
+    return rows;
+  }
+
+  /**
+   * 将 created_at_ms=0 的历史行按 message_id / raw_json.timestamp 补全。
+   * @param {string} channelId
+   * @param {(patch: { repaired?: number; repairTotal?: number }) => void} [onProgress]
+   */
+  async function repairDiscordMessageCreatedAtForChannel(channelId, onProgress) {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return { updated: 0 };
+    const [rows] = await pool.query(
+      `SELECT message_id, created_at_ms, raw_json FROM discord_messages
+       WHERE channel_id = ? AND COALESCE(created_at_ms, 0) <= 0
+       LIMIT 8000`,
+      [cid],
+    );
+    if (!rows?.length) return { updated: 0 };
+    const total = rows.length;
+    let updated = 0;
+    for (const row of rows) {
+      const ms = resolveDiscordMessageCreatedAtMs({
+        created_at_ms: row.created_at_ms,
+        messageId: row.message_id,
+        raw_json: row.raw_json,
+      });
+      if (!ms) continue;
+      await pool.execute(
+        `UPDATE discord_messages SET created_at_ms = ? WHERE message_id = ? AND COALESCE(created_at_ms, 0) <= 0`,
+        [ms, String(row.message_id)],
+      );
+      updated += 1;
+      if (updated % 50 === 0 || updated === total) {
+        onProgress?.({ repaired: updated, repairTotal: total });
+        if (updated % 100 === 0) {
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+    }
+    return { updated };
   }
 
   /** @param {string} channelId */
@@ -2246,6 +2342,9 @@ export async function openStore(cfg, log) {
     listRecentMessages,
     getDiscordMessageRawJson,
     getOldestDiscordMessageIdForChannel,
+    getOldestDiscordMessageRowForChannel,
+    listDiscordMessagesInTimeRange,
+    repairDiscordMessageCreatedAtForChannel,
     getDiscordChannelShowHistoryCache,
     mergeDiscordChannelShowHistoryCache,
     listChannelTextCaches,
@@ -2382,6 +2481,9 @@ export function createOfflineStore() {
     listRecentMessages: async () => [],
     getDiscordMessageRawJson: async () => null,
     getOldestDiscordMessageIdForChannel: async () => "",
+    getOldestDiscordMessageRowForChannel: async () => null,
+    listDiscordMessagesInTimeRange: async () => [],
+    repairDiscordMessageCreatedAtForChannel: async () => ({ updated: 0 }),
     getDiscordChannelShowHistoryCache: async () => ({ warmedAtMs: 0, oldestMessageId: "" }),
     mergeDiscordChannelShowHistoryCache: async () => {},
     listChannelTextCaches: async () => [],

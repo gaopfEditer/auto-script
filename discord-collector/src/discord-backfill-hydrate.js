@@ -105,9 +105,11 @@ export async function ensureDiscordBackfillGroupCards(store, group, fromMs, toMs
         toMs,
       });
       const prevBacktests = Array.isArray(next.backtestItems) ? next.backtestItems : [];
+      const prevScrollPages = next.scrollPages;
       next = dedupeBackfillGroupCards({
         ...next,
         ...replay,
+        scrollPages: prevScrollPages ?? replay.scrollPages,
         ok: next.ok !== false,
         parseReplayVersion: DISCORD_BACKFILL_PARSE_REPLAY_VERSION,
       });

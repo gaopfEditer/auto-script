@@ -525,7 +525,7 @@ export async function replayDiscordChannelMessages(rows, channelId, opts = {}) {
     symbols,
     samples,
     cards,
-    scrollPages: 0,
+    scrollPages: undefined,
     backtestsRun,
     winRate: decided ? wins / decided : null,
     wins,
@@ -653,6 +653,7 @@ export async function runDiscordBackfillScan(opts) {
         onProgress: (p) => onProgress?.({ channelId, name, ...p }),
       });
       const deduped = dedupeBackfillGroupCards({
+        ...replay,
         channelId,
         name,
         guildId,
@@ -660,7 +661,6 @@ export async function runDiscordBackfillScan(opts) {
         error: null,
         scrollPages: pull.pagesDone,
         parseReplayVersion: DISCORD_BACKFILL_PARSE_REPLAY_VERSION,
-        ...replay,
       });
       results.push(stripBackfillGroupPnl(deduped));
     } catch (e) {
