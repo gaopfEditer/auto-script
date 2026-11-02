@@ -11,6 +11,10 @@ import {
   parseKolvipChannelIdsEnv,
   getKolvipMappedDiscordChannelIds,
 } from "./kolvip-cdp-config.js";
+import {
+  pickKolvipChannelTarget,
+  sortKolvipGroupHeadersOuterFirst,
+} from "./kolvip-cdp-nav.js";
 
 describe("kolvip message id 与 Discord 行", () => {
   it("data-id 稳定 messageId", () => {
@@ -67,5 +71,32 @@ describe("parseCdpConnectHostPort", () => {
     const p = parseCdpConnectHostPort("http://127.0.0.1:9222");
     assert.equal(p.host, "127.0.0.1");
     assert.equal(p.port, 9222);
+  });
+});
+
+describe("kolvip 分组侧栏辅助", () => {
+  it("pickKolvipChannelTarget 优先可见节点", () => {
+    const nodes = [
+      { id: "a", d: 1, vis: false },
+      { id: "b", d: 2, vis: true },
+    ];
+    const pick = pickKolvipChannelTarget(
+      nodes,
+      (n) => /** @type {{ vis: boolean }} */ (n).vis,
+      (n) => /** @type {{ d: number }} */ (n).d
+    );
+    assert.equal(/** @type {{ id: string }} */ (pick).id, "b");
+  });
+
+  it("sortKolvipGroupHeadersOuterFirst 浅层 grp 先展开", () => {
+    const headers = [
+      { id: "inner", d: 5 },
+      { id: "outer", d: 2 },
+    ];
+    const sorted = sortKolvipGroupHeadersOuterFirst(headers, (h) => h.d);
+    assert.deepEqual(
+      sorted.map((h) => h.id),
+      ["outer", "inner"]
+    );
   });
 });

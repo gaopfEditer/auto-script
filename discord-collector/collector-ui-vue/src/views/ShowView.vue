@@ -3,6 +3,8 @@ import { ref, reactive, computed, shallowRef, onMounted, onUnmounted, watch, nex
 import { RouterLink } from "vue-router";
 import ShowMessagePane from "../components/ShowMessagePane.vue";
 import SignalCardRail from "../components/SignalCardRail.vue";
+import KolvipStatsRail from "../components/KolvipStatsRail.vue";
+import { isLocalClient } from "../lib/localClient.js";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
 import {
   fetchGuilds,
@@ -61,6 +63,7 @@ const SHOW_CACHE_DEBOUNCE_MS = 2500;
 /** 默认固定服务器（…504831）；guild-rail 隐藏时不可切换 */
 const DEFAULT_SHOW_GUILD_ID = "1444959079209504831";
 const SHOW_GUILD_RAIL = false;
+const showKolvipPanel = isLocalClient();
 
 /** @typedef {{ guildId: string, name: string, iconUrl: string, channelCount: number }} GuildItem */
 /** @typedef {{ channelId: string, guildId: string, name: string, lastMessagePreview: string, lastMessageAtMs: number }} ChannelItem */
@@ -1923,7 +1926,11 @@ onUnmounted(() => {
 <template>
   <div
     class="show-app"
-    :class="{ 'has-signal-cards': showSignalCards, 'no-guild-rail': !SHOW_GUILD_RAIL }"
+    :class="{
+      'has-signal-cards': showSignalCards,
+      'no-guild-rail': !SHOW_GUILD_RAIL,
+      'has-kolvip-panel': showKolvipPanel,
+    }"
     @pointerdown="bumpShowUserActivity"
     @keydown="bumpShowUserActivity"
   >
@@ -2185,6 +2192,7 @@ onUnmounted(() => {
       @scroll-to-message="scrollToSignalMessage"
       @card-updated="onSignalCardUpdated"
     />
+    <KolvipStatsRail v-if="showKolvipPanel" />
   </div>
 </template>
 

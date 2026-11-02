@@ -49,6 +49,11 @@ async function withLocalhostNoProxy(fn) {
 }
 
 import { parseCdpConnectHostPort } from "./kolvip-cdp-connect.js";
+import {
+  openKolvipChannelInSidebar,
+  scrollKolvipFeedUp,
+  waitForKolvipFeedAttached,
+} from "./kolvip-cdp-nav.js";
 
 /**
  * @param {string} connectUrl
@@ -103,19 +108,17 @@ async function findOrCreateKolvipPage(browser, webUrl) {
  * @param {string} kolvipChannelId
  * @param {number} maxMessages
  */
-export async function scrapeKolvipChannelFeed(page, kolvipChannelId, maxMessages) {
+export async function scrapeKolvipChannelFeed(page, kolvipChannelId, maxMessages, opts = {}) {
   const ch = String(kolvipChannelId).trim();
-  const opener = page.locator(`[data-open-ch="${ch}"]`).first();
-  if (!(await opener.count())) {
-    throw new Error(`未找到频道入口 data-open-ch="${ch}"（请确认已登录 kolvip.vip/web）`);
+  await openKolvipChannelInSidebar(page, ch, {
+    clickTimeoutMs: 20_000,
+    log: opts.log,
+  });
+  await waitForKolvipFeedAttached(page, 18_000);
+  const scrollPasses = Math.max(0, Number(opts.scrollPasses) || 0);
+  if (scrollPasses > 0) {
+    await scrollKolvipFeedUp(page, scrollPasses);
   }
-  await opener.click({ timeout: 8_000 });
-  await page
-    .locator("#v-channel #feed.feed #msgs, #feed.feed #msgs, #msgs")
-    .first()
-    .waitFor({ state: "attached", timeout: 12_000 })
-    .catch(() => {});
-  await sleep(600);
 
   const dom = await page.evaluate((maxN) => {
     const feed =
@@ -206,6 +209,7 @@ export async function probeKolvipCdp(connectUrl) {
  *   channels: Array<{ logicName: string, kolvipChannelId: string, discordChannelId: string }>,
  *   maxPerChannel: number,
  *   webUrl?: string,
+ *   scrollPasses?: number,
  *   log: ReturnType<typeof import("./logger.js").createLogger>,
  * }} opts
  */
@@ -220,6 +224,7 @@ export async function fetchKolvipChannelsViaCdp(opts) {
   }
   const webUrl = opts.webUrl || kolvipWebUrl();
   const maxPerChannel = Math.min(80, Math.max(5, opts.maxPerChannel || 30));
+  const scrollPasses = Math.max(0, Number(opts.scrollPasses) || 0);
   const endpoint = await resolveCdpEndpoint(connectUrl);
   let browser;
   try {
@@ -248,7 +253,8 @@ export async function fetchKolvipChannelsViaCdp(opts) {
         const messages = await scrapeKolvipChannelFeed(
           page,
           channel.kolvipChannelId,
-          maxPerChannel
+          maxPerChannel,
+          { log, scrollPasses }
         );
         log.info(
           `巨鲸 ${channel.logicName} ch=${channel.kolvipChannelId} 可见 ${messages.length} 条`

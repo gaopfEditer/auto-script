@@ -21,13 +21,17 @@
 .show-app.no-guild-rail {
   grid-template-columns: 390px 1fr;
 }
-.show-app.no-guild-rail.has-signal-cards {
-  grid-template-columns: 390px 1fr 280px;
+.show-app.no-guild-rail.has-kolvip-panel {
+  grid-template-columns: 390px 1fr 248px;
+}
+.show-app.no-guild-rail.has-signal-cards.has-kolvip-panel {
+  grid-template-columns: 390px 1fr 280px 248px;
 }
 .show-app > .guild-rail,
 .show-app > .channel-panel,
 .show-app > .main,
-.show-app > .signal-card-rail {
+.show-app > .signal-card-rail,
+.show-app > .kolvip-stats-rail {
   min-height: 0;
 }
 .guild-rail {

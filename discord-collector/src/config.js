@@ -674,6 +674,31 @@ export const config = {
   })(),
   /** 非空覆盖默认 8 频道；格式 `1,4,8` 或 `16:1562351038277619783` */
   kolvipChannelMappings: parseKolvipChannelIdsEnv(process.env.KOLVIP_CHANNEL_IDS ?? ""),
+  /** 30 天 DOM 回溯分期（默认随 kolvip 开启） */
+  kolvipBackfillEnabled: (() => {
+    const explicit = (process.env.KOLVIP_BACKFILL_ENABLED ?? "").trim();
+    if (explicit) {
+      return !["0", "false", "no", "off"].includes(explicit.toLowerCase());
+    }
+    return ["1", "true", "yes", "on"].includes(
+      String(process.env.KOLVIP_CDP_ENABLED ?? "0").toLowerCase()
+    );
+  })(),
+  kolvipBackfillTargetDays: Math.min(60, Math.max(7, Number(process.env.KOLVIP_BACKFILL_TARGET_DAYS ?? 30) || 30)),
+  kolvipBackfillPhasesPerChannel: Math.min(
+    20,
+    Math.max(3, Number(process.env.KOLVIP_BACKFILL_PHASES_PER_CHANNEL ?? 6) || 6)
+  ),
+  kolvipBackfillCooldownMs: Math.max(
+    30_000,
+    Number(process.env.KOLVIP_BACKFILL_COOLDOWN_MS ?? 90_000) || 90_000
+  ),
+  kolvipBackfillMaxPerPhase: Math.min(
+    120,
+    Math.max(10, Number(process.env.KOLVIP_BACKFILL_MAX_PER_PHASE ?? 60) || 60)
+  ),
+  kolvipBackfillScrollPassesBase: Math.max(1, Number(process.env.KOLVIP_BACKFILL_SCROLL_BASE ?? 2) || 2),
+  kolvipBackfillScrollPassesStep: Math.max(0, Number(process.env.KOLVIP_BACKFILL_SCROLL_STEP ?? 1) || 1),
   /** OI → Telegram 形态卡片回测（validate backtestPolicy=telegram_oi） */
   tgSignalBacktestMajorStepPct: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_STEP_PCT ?? 0.5),
   tgSignalBacktestMajorInitialH: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_INITIAL_H ?? 3),
