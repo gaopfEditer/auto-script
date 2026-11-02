@@ -175,7 +175,7 @@ export async function openStore(cfg, log) {
   for (const col of [
     "ADD COLUMN note TEXT NULL AFTER telegram_sent_at",
     "ADD COLUMN execution_json JSON NULL AFTER note",
-    "ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'auto' AFTER execution_json",
+    "ADD COLUMN source VARCHAR(64) NOT NULL DEFAULT 'auto' AFTER execution_json",
     "ADD COLUMN source_type VARCHAR(32) NOT NULL DEFAULT 'discord' AFTER source",
     "ADD COLUMN source_ref VARCHAR(128) NULL AFTER source_type",
     "ADD COLUMN symbol VARCHAR(32) NULL AFTER source_ref",
@@ -205,6 +205,14 @@ export async function openStore(cfg, log) {
     } catch {
       /* 索引已存在 */
     }
+  }
+
+  try {
+    await pool.query(
+      `ALTER TABLE discord_signal_cards MODIFY COLUMN source VARCHAR(64) NOT NULL DEFAULT 'auto'`
+    );
+  } catch {
+    /* 表未就绪或已是目标宽度 */
   }
 
   await pool.query(`

@@ -54,7 +54,7 @@ Token：localStorage `wv.wtoken`（JSON 字符串）。写入 `data/kolvip-api-t
 
 **全站其它浏览频道**：回溯扫描，`channelId=kolvip-scan-{ch}`，`source=kolvip_api_scan`，`source_type=kolvip`，**不推 TG**，面板「全站备选」（eval-summary `candidates` 按 `kolvip-scan-*` 聚合）。
 
-精选回溯：`source=kolvip_api_backfill`。库内 `discord_signal_cards.source` 不再写死 `auto`；Gateway Discord 仍为 `auto` / `source_type=discord`。
+精选回溯：`source=kolvip_api_backfill`（19 字符，需 `discord_signal_cards.source` ≥64；collect:ui 启动时 `store.js` 会 `MODIFY COLUMN source VARCHAR(64)`）。库内不再写死 `auto`；Gateway Discord 仍为 `auto` / `source_type=discord`（`source_type` 保持 VARCHAR(32)，`kolvip` 够用）。
 
 ---
 

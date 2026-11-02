@@ -3,6 +3,17 @@
  */
 import { parseKolvipScanVirtualChannelId } from "./kolvip-scan-config.js";
 
+/** 与 discord_signal_cards.source VARCHAR(64) 对齐（最长 kolvip_api_backfill=19） */
+export const SIGNAL_CARD_SOURCE_MAX_LENGTH = 64;
+
+/** @type {readonly string[]} */
+export const KOLVIP_SIGNAL_CARD_SOURCES = Object.freeze([
+  "kolvip_api",
+  "kolvip_api_scan",
+  "kolvip_api_backfill",
+  "kolvip_cdp",
+]);
+
 /**
  * @param {Record<string, unknown>} row ingest 行（含 channelId、source、rawJson）
  */
@@ -32,4 +43,16 @@ export function resolveSignalCardInsertSource(row) {
     }
   }
   return { source, sourceType, sourceRef };
+}
+
+/**
+ * @param {string} source
+ */
+export function assertSignalCardSourceLength(source) {
+  const s = String(source ?? "");
+  if (s.length > SIGNAL_CARD_SOURCE_MAX_LENGTH) {
+    throw new Error(
+      `signal card source 过长 (${s.length} > ${SIGNAL_CARD_SOURCE_MAX_LENGTH}): ${s.slice(0, 48)}`
+    );
+  }
 }

@@ -133,6 +133,7 @@ export const SOURCE_TYPES = /** @type {const} */ ([
   "binance",
   "api",
   "manual",
+  "kolvip",
 ]);
 
 /** 与 discord_signal_cards.source_type VARCHAR(32) 对齐 */

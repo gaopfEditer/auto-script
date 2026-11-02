@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS discord_signal_cards (
   telegram_sent_at DATETIME(3) NULL,
   note TEXT NULL,
   execution_json JSON NULL,
-  source VARCHAR(16) NOT NULL DEFAULT 'auto',
+  source VARCHAR(64) NOT NULL DEFAULT 'auto',
   source_type VARCHAR(32) NOT NULL DEFAULT 'discord',
   source_ref VARCHAR(128) NULL,
   symbol VARCHAR(32) NULL,

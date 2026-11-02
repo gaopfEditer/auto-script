@@ -18,7 +18,12 @@ import {
   getKolvipMappedDiscordChannelIds,
   resolveKolvipAssetUrl,
 } from "./kolvip-cdp-config.js";
-import { resolveSignalCardInsertSource } from "./discord-signal-card-source.js";
+import {
+  resolveSignalCardInsertSource,
+  SIGNAL_CARD_SOURCE_MAX_LENGTH,
+  KOLVIP_SIGNAL_CARD_SOURCES,
+  assertSignalCardSourceLength,
+} from "./discord-signal-card-source.js";
 
 describe("kolvip message id 与 Discord 行", () => {
   it("data-id 稳定 messageId", () => {
@@ -111,6 +116,16 @@ describe("resolveSignalCardInsertSource", () => {
     const ins = resolveSignalCardInsertSource(row);
     assert.equal(ins.source, "kolvip_api_scan");
     assert.equal(ins.sourceType, "kolvip");
+  });
+
+  it("巨鲸 source 字符串不超过库字段上限", () => {
+    for (const src of KOLVIP_SIGNAL_CARD_SOURCES) {
+      assert.ok(src.length <= SIGNAL_CARD_SOURCE_MAX_LENGTH, src);
+      assert.doesNotThrow(() => assertSignalCardSourceLength(src));
+    }
+    const longest = KOLVIP_SIGNAL_CARD_SOURCES.reduce((a, b) => (a.length >= b.length ? a : b));
+    assert.equal(longest, "kolvip_api_backfill");
+    assert.equal(longest.length, 19);
   });
 });
 
