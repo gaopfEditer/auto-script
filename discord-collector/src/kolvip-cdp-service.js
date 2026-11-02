@@ -152,13 +152,14 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
             `巨鲸 ${batch.channel.logicName} 首次记档 ${result.fetched} 条（不推历史，与 Twitter CDP 一致）`
           );
         }
-        cardRowsProcessed += result.cardsQueued;
+        cardRowsProcessed += result.cardsCreated;
         summaries.push({
           kolvipChannelId: chId,
           logicName: batch.channel.logicName,
           fetched: result.fetched,
-          newCount: result.cardsQueued,
-          cardsQueued: result.cardsQueued,
+          newCount: result.cardsCreated,
+          cardsQueued: result.rowsQueued,
+          cardsCreated: result.cardsCreated,
           seeded: result.seeded,
         });
       }
@@ -172,6 +173,7 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
         fetchMode,
         channels: summaries,
         cardsQueued: cardRowsProcessed,
+        cardsCreated: summaries.reduce((n, s) => n + (Number(s.cardsCreated) || 0), 0),
         bypassDiscordSignals: config.kolvipBypassDiscordSignals,
       };
       broadcast?.("meta", { kind: "kolvip_run", ...lastRun });

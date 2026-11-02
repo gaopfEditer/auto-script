@@ -233,6 +233,18 @@ export function createKolvipBackfillService(store, log, deps = {}) {
       }
       const job = state.jobs[kid];
 
+      if (job.status === "running") {
+        const staleMs = Date.now() - Date.parse(job.updatedAt);
+        if (staleMs > 8 * 60 * 1000) {
+          log.warn(
+            `巨鲸回溯 ${kid} status=running 已 ${Math.round(staleMs / 1000)}s 无进展，重置为 pending`
+          );
+          job.status = "pending";
+          job.updatedAt = new Date().toISOString();
+          await saveState(state);
+        }
+      }
+
       if (job.status === "cooldown") {
         const elapsed = Date.now() - Date.parse(job.updatedAt);
         if (elapsed < config.kolvipBackfillBatchCooldownMs) return;
@@ -291,7 +303,7 @@ export function createKolvipBackfillService(store, log, deps = {}) {
       });
 
       job.batchesDone += 1;
-      job.cardsCreated += ingestResult.cardsQueued;
+      job.cardsCreated += ingestResult.cardsCreated;
       job.sampleCount += ingestResult.fetched;
       const oldest = dom[0];
       const oldestMs = Date.parse(oldest.timeTitle || "");
