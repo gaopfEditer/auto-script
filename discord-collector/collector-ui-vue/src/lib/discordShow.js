@@ -1,3 +1,5 @@
+export { isolateShowChannelMessages } from "../../../src/kolvip-show-messages.js";
+
 /** @param {string} userId */
 export function defaultAvatarUrl(userId) {
   try {

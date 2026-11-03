@@ -32,6 +32,7 @@ import { isSignalChannel, getSignalChannelConfig } from "./discord-signal-config
 import { runSignalCardPipelineForRows } from "./discord-signal-pipeline.js";
 import { isBlockedWsPayload, isDiscordGatewayPayload } from "./ws-noise-filter.js";
 import { createDebouncedDiscordMessageBroadcast } from "./discord-ui-message-broadcast.js";
+import { messageVisibleForKolvipShow } from "./discord-message-source-isolation.js";
 
 /**
  * @typedef {ReturnType<import("./store.js").openStore>} Store
@@ -451,7 +452,9 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       }
     }
 
-    const pushRows = toPersist;
+    const pushRows = toPersist.filter((r) =>
+      messageVisibleForKolvipShow(r.channelId, r.source)
+    );
 
     /** @type {Map<string, { channelId: string, guildId: string, name: string, lastMessagePreview: string, lastMessageAtMs: number }>} */
     const channelUpdates = new Map();
@@ -470,13 +473,15 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       });
     }
 
-    const limit = isRestBatch ? toPersist.length : broadcastLimit;
+    const limit = isRestBatch ? pushRows.length : broadcastLimit;
     const pushCardApi = pushRows.some((r) => String(r.source ?? "") === "card_api");
     // Gateway：仅新入库推 Show，避免重复帧刷屏。REST（CDP 点频道 / before 翻页）：有消息就推，否则切频道 inserted=0 时 UI 永远空白。
+    // 巨鲸接管的映射频道不把 Discord 原文推到 Show（库内软删，接口同样隔离）。
     const shouldPushUi =
-      result.inserted > 0 ||
-      pushCardApi ||
-      (isRestBatch && toPersist.length > 0);
+      pushRows.length > 0 &&
+      (result.inserted > 0 ||
+        pushCardApi ||
+        (isRestBatch && pushRows.length > 0));
     if (pushRows.length && shouldPushUi) {
       pushDiscordMessageBatch({
         kind: "discord_message_batch",

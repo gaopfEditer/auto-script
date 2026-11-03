@@ -48,6 +48,9 @@ export async function fetchChannelMessages(q) {
     rows: /** @type {Array<Record<string, unknown>>} */ (data.rows ?? []),
     fallbackOlder: Boolean(data.fallbackOlder),
     showHistory: /** @type {Record<string, unknown> | null} */ (data.showHistory ?? null),
+    kolvipShowIsolation: /** @type {Record<string, unknown> | null} */ (
+      data.kolvipShowIsolation ?? null
+    ),
   };
 }
 
@@ -65,7 +68,7 @@ export async function fetchGuildMessagesSnapshot(guildId, opts = {}) {
     `/api/discord/guilds/${encodeURIComponent(guildId)}/messages-snapshot${q ? `?${q}` : ""}`
   );
   const data = await readOkJson(res, "加载频道消息快照失败");
-  return /** @type {{ fromMs?: number, byChannel?: Record<string, Record<string, unknown>[]> }} */ (
+  return /** @type {{ fromMs?: number, byChannel?: Record<string, Record<string, unknown>[]>, kolvipShowIsolation?: Record<string, unknown> | null }} */ (
     data
   );
 }

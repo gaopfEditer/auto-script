@@ -56,6 +56,37 @@ Token：localStorage `wv.wtoken`（JSON 字符串）。写入 `data/kolvip-api-t
 
 精选回溯：`source=kolvip_api_backfill`（19 字符，需 `discord_signal_cards.source` ≥64；collect:ui 启动时 `store.js` 会 `MODIFY COLUMN source VARCHAR(64)`）。库内不再写死 `auto`；Gateway Discord 仍为 `auto` / `source_type=discord`（`source_type` 保持 VARCHAR(32)，`kolvip` 够用）。
 
+实时 / 回溯 ingest 会把同一批消息 **upsert** 进 `discord_messages`（Show 读的那张表），不是只建卡。`message_id` 稳定为 `kolvip-{巨鲸频道}-{dataId}`，精选频道的 `channel_id` 用映射表里的 Discord channelId（`KOLVIP_CHANNEL_IDS` 可覆盖）。未映射备选仍用 `kolvip-scan-{ch}`，不写入 Discord 服务器侧栏。
+
+### Show 消息隔离
+
+由 `KOLVIP_ENABLED` / `KOLVIP_API_ENABLED` / `KOLVIP_CDP_ENABLED`（`isKolvipSignalEnabled`）决定，`source` 标签保留：
+
+| 开关 | 映射信号频道的 Show / `/api/discord/messages` / messages-snapshot |
+|------|------------------------------------------------------------------|
+| 开 | 只返回 `source` 以 `kolvip_` 开头（或 `KOLVIP_SIGNAL_CARD_SOURCES`）的行 |
+| 关 | 隐藏上述 kolvip 行，恢复 Discord 原文 |
+
+开启时，映射频道上的 Discord 原文会被软删（`deleted_at` + `deleted_reason=kolvip_primary`），可逆：关开关并重启 `collect:ui` 会清掉这批软删。Discord 刷新按 `message_id` 合并，**不会删掉** `kolvip_*` 行。
+
+### 部署后补近 7 天精选消息（本机手动）
+
+云端代理不要对 Mac 生产库跑回溯。在已配置 wtoken 的本机 `collect:ui` 上：
+
+1. `.env`：`KOLVIP_ENABLED=1`、`KOLVIP_BACKFILL_ENABLED=1`、`KOLVIP_BACKFILL_DAYS=7`、`KOLVIP_BACKFILL_SHADOW=0`（默认 shadow 是开的，不关则不会入库）。
+2. 重启 `pnpm run collect:ui`。
+3. 只对 8 个精选频道调用已有接口（不要 `POST /api/kolvip/backfill/start-all`，那会排队全站备选）：
+
+```bash
+for id in 1 4 8 10 11 12 16 22; do
+  curl -s -X POST http://127.0.0.1:3851/api/kolvip/backfill/start \
+    -H 'content-type: application/json' \
+    -d "{\"kolvipChannelId\":\"$id\"}"
+done
+```
+
+回溯写入 `source=kolvip_api_backfill`。Show 在巨鲸开时只显示这些行；关掉巨鲸并重启后回到 Discord 原文。
+
 **历史卡升级**：早期建卡可能已是 `message_id=kolvip-*` 但 `source=auto`。回溯/扫描 ingest 遇正文去重时不会重插，但会走 `upgradeKolvipSignalCardSourceFromRow` 把 `source` / `source_type` / `source_ref`（必要时 `channel_id` 改为 `kolvip-scan-*`）写回已有行；日志 `source_upgraded`，**不计入** backfill `cardsCreated`。
 
 ---
@@ -117,7 +148,7 @@ Token：localStorage `wv.wtoken`（JSON 字符串）。写入 `data/kolvip-api-t
 | `kolvip-api-client.js` | HTTP |
 | `kolvip-api-auth.js` | wtoken |
 | `kolvip-api-catalog.js` | 全站目录 |
-| `kolvip-ingest.js` | 建卡 + 清算 |
+| `kolvip-ingest.js` | Show 消息 upsert + 建卡 + 清算 |
 | `kolvip-scan-config.js` | 备选虚拟 channel |
 | `kolvip-cdp-service.js` | 实时轮询 |
 | `kolvip-cdp-backfill.js` | 30 天回溯 |
