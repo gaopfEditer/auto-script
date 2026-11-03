@@ -4,8 +4,16 @@ import mysql from "mysql2/promise";
 import { bufferToPlainPayloadText } from "./collect-ws-decode.js";
 import { bindCommunitySqliteToStore, openCommunitySqliteStore } from "./community-sqlite-store.js";
 import { config } from "./config.js";
+import {
+  partitionIncomingDiscordMessages,
+  shouldIndexDiscordChannelForMessage,
+  softDeleteFieldsForDiscordMessage,
+  sqlExcludeKolvipRows,
+  kolvipShowListVisibilityWhere,
+} from "./discord-message-source-isolation.js";
 import { resolveDiscordMessageCreatedAtMs } from "./discord-gateway.js";
 import { minDiscordSnowflakeId } from "./discord-show-history-cache.js";
+import { kolvipScanVirtualChannelIdFrom, isDiscordSnowflakeMessageId, sqlKolvipSourcePredicate } from "./kolvip-show-messages.js";
 import { serializeRawJsonColumnForMysql } from "./mysql-json.js";
 
 /**
@@ -82,7 +90,7 @@ export async function openStore(cfg, log) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS discord_messages (
       id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      message_id VARCHAR(32) NOT NULL,
+      message_id VARCHAR(64) NOT NULL,
       guild_id VARCHAR(32) NOT NULL DEFAULT '',
       guild_name VARCHAR(256) NULL,
       channel_id VARCHAR(32) NOT NULL DEFAULT '',
@@ -96,6 +104,8 @@ export async function openStore(cfg, log) {
       source VARCHAR(32) NOT NULL DEFAULT 'gateway_ws',
       raw_json JSON NULL,
       received_at DATETIME(3) NOT NULL,
+      deleted_at DATETIME(3) NULL,
+      deleted_reason VARCHAR(32) NULL,
       UNIQUE KEY uk_discord_message_id (message_id),
       KEY idx_discord_guild (guild_id),
       KEY idx_discord_channel_time (channel_id, created_at_ms),
@@ -107,12 +117,22 @@ export async function openStore(cfg, log) {
     "ADD COLUMN guild_name VARCHAR(256) NULL AFTER guild_id",
     "ADD COLUMN channel_name VARCHAR(256) NULL AFTER channel_id",
     "ADD COLUMN author_avatar VARCHAR(512) NULL AFTER author_global_name",
+    "ADD COLUMN deleted_at DATETIME(3) NULL AFTER received_at",
+    "ADD COLUMN deleted_reason VARCHAR(32) NULL AFTER deleted_at",
   ]) {
     try {
       await pool.query(`ALTER TABLE discord_messages ${col}`);
     } catch {
       /* 列已存在 */
     }
+  }
+
+  try {
+    await pool.query(
+      `ALTER TABLE discord_messages MODIFY COLUMN message_id VARCHAR(64) NOT NULL`
+    );
+  } catch {
+    /* 已是目标宽度或表未就绪 */
   }
 
   await pool.query(`
@@ -424,7 +444,8 @@ export async function openStore(cfg, log) {
   const insertMsgSql = `
     INSERT INTO discord_messages (
       message_id, guild_id, guild_name, channel_id, channel_name, author_id, created_at_ms,
-      content, author_username, author_global_name, author_avatar, event_type, source, raw_json, received_at
+      content, author_username, author_global_name, author_avatar, event_type, source, raw_json, received_at,
+      deleted_at, deleted_reason
     ) VALUES ?
     ON DUPLICATE KEY UPDATE
       guild_id = IF(VALUES(guild_id) != '', VALUES(guild_id), guild_id),
@@ -440,6 +461,8 @@ export async function openStore(cfg, log) {
       source = VALUES(source),
       raw_json = VALUES(raw_json),
       received_at = VALUES(received_at),
+      deleted_at = VALUES(deleted_at),
+      deleted_reason = VALUES(deleted_reason),
       created_at_ms = CASE
         WHEN COALESCE(created_at_ms, 0) <= 0 AND COALESCE(VALUES(created_at_ms), 0) > 0 THEN VALUES(created_at_ms)
         WHEN COALESCE(VALUES(created_at_ms), 0) > COALESCE(created_at_ms, 0) THEN VALUES(created_at_ms)
@@ -502,44 +525,63 @@ export async function openStore(cfg, log) {
     if (!valid.length) return { inserted: 0, duplicate: 0, insertedRows: [] };
 
     const ids = valid.map((r) => String(r.messageId));
-    /** @type {Set<string>} */
-    let existing = new Set();
+    /** @type {Map<string, string>} */
+    const existingSourceById = new Map();
     if (ids.length) {
       const [existingRows] = await pool.query(
-        `SELECT message_id FROM discord_messages WHERE message_id IN (?)`,
+        `SELECT message_id, source FROM discord_messages WHERE message_id IN (?)`,
         [ids]
       );
-      existing = new Set(existingRows.map((r) => String(r.message_id)));
+      for (const row of existingRows) {
+        existingSourceById.set(String(row.message_id), String(row.source ?? ""));
+      }
     }
-    const insertedRows = valid.filter((r) => !existing.has(String(r.messageId)));
+    const partitioned = partitionIncomingDiscordMessages(existingSourceById, valid);
+    const toWrite = partitioned.keep;
+    if (partitioned.preservedKolvip.length) {
+      log.info(
+        `Discord upsert 保留巨鲸消息 ${partitioned.preservedKolvip.length} 条（不覆盖 kolvip_*）`
+      );
+    }
+    if (!toWrite.length) {
+      return { inserted: 0, duplicate: 0, insertedRows: [], preservedKolvip: partitioned.preservedKolvip.length };
+    }
+    const insertedRows = toWrite.filter((r) => !existingSourceById.has(String(r.messageId)));
 
     const now = isoToMysqlDatetime3(new Date().toISOString());
+    const nowIso = new Date().toISOString();
     /** @type {unknown[][]} */
-    const tuples = valid.map((r) => [
-      r.messageId,
-      r.guildId ?? "",
-      r.guildName ?? null,
-      r.channelId ?? "",
-      r.channelName ?? null,
-      r.authorId ?? "",
-      Number(r.createdAtMs) || 0,
-      r.content ?? "",
-      r.authorUsername ?? null,
-      r.authorGlobalName ?? null,
-      r.authorAvatar ?? null,
-      r.eventType ?? "MESSAGE_CREATE",
-      r.source ?? "gateway_ws",
-      serializeRawJsonColumnForMysql(r.rawJson),
-      isoToMysqlDatetime3(r.receivedAt ?? new Date().toISOString()) || now,
-    ]);
+    const tuples = toWrite.map((r) => {
+      const soft = softDeleteFieldsForDiscordMessage(r.channelId, r.source, nowIso);
+      return [
+        r.messageId,
+        r.guildId ?? "",
+        r.guildName ?? null,
+        r.channelId ?? "",
+        r.channelName ?? null,
+        r.authorId ?? "",
+        Number(r.createdAtMs) || 0,
+        r.content ?? "",
+        r.authorUsername ?? null,
+        r.authorGlobalName ?? null,
+        r.authorAvatar ?? null,
+        r.eventType ?? "MESSAGE_CREATE",
+        r.source ?? "gateway_ws",
+        serializeRawJsonColumnForMysql(r.rawJson),
+        isoToMysqlDatetime3(r.receivedAt ?? nowIso) || now,
+        soft.deletedAt ? isoToMysqlDatetime3(soft.deletedAt) : null,
+        soft.deletedReason,
+      ];
+    });
 
     await pool.query(insertMsgSql, [tuples]);
 
     // 批量 upsert channels（按 channelId 去重，每 channel 只保留最新一条）
     /** @type {Map<string, {channelId:string, guildId:string, name:string, preview:string|null, atMs:number, receivedAt:string}>} */
     const channelMap = new Map();
-    for (const r of valid) {
+    for (const r of toWrite) {
       if (!r.channelId) continue;
+      if (!shouldIndexDiscordChannelForMessage(r)) continue;
       const atMs = Number(r.createdAtMs) || 0;
       const key = r.channelId;
       if (!channelMap.has(key) || atMs > channelMap.get(key).atMs) {
@@ -578,8 +620,9 @@ export async function openStore(cfg, log) {
 
     return {
       inserted: insertedRows.length,
-      duplicate: valid.length - insertedRows.length,
+      duplicate: toWrite.length - insertedRows.length,
       insertedRows,
+      preservedKolvip: partitioned.preservedKolvip.length,
     };
   }
 
@@ -733,7 +776,8 @@ export async function openStore(cfg, log) {
        FROM discord_channels WHERE guild_id = ? ORDER BY name ASC`,
       [gid]
     );
-    if (rows.length) return rows;
+    const listed = rows.filter((r) => !kolvipScanVirtualChannelIdFrom(r.channel_id));
+    if (listed.length) return listed;
 
     const [fromMsgs] = await pool.query(
       `SELECT channel_id, guild_id,
@@ -743,12 +787,12 @@ export async function openStore(cfg, log) {
               MAX(created_at_ms) AS last_message_at_ms,
               MAX(received_at) AS updated_at
        FROM discord_messages
-       WHERE guild_id = ?
+       WHERE guild_id = ? AND channel_id NOT LIKE 'kolvip-scan-%'
        GROUP BY channel_id, guild_id
        ORDER BY name ASC`,
       [gid]
     );
-    return fromMsgs;
+    return fromMsgs.filter((r) => !kolvipScanVirtualChannelIdFrom(r.channel_id));
   }
 
   async function listRecentMessages(limit = 120, filters = {}, { includeRaw = true } = {}) {
@@ -777,8 +821,27 @@ export async function openStore(cfg, log) {
     }
     const beforeMessageId = String(filters.beforeMessageId ?? filters.before ?? "").trim();
     if (beforeMessageId) {
-      where.push("CAST(message_id AS UNSIGNED) < CAST(? AS UNSIGNED)");
-      params.push(beforeMessageId);
+      if (isDiscordSnowflakeMessageId(beforeMessageId)) {
+        where.push("CAST(message_id AS UNSIGNED) < CAST(? AS UNSIGNED)");
+        params.push(beforeMessageId);
+      } else {
+        where.push(`(
+          created_at_ms < (SELECT created_at_ms FROM discord_messages WHERE message_id = ? LIMIT 1)
+          OR (
+            created_at_ms = (SELECT created_at_ms FROM discord_messages WHERE message_id = ? LIMIT 1)
+            AND message_id < ?
+          )
+        )`);
+        params.push(beforeMessageId, beforeMessageId, beforeMessageId);
+      }
+    }
+    if (!filters.includeDeleted) {
+      where.push("deleted_at IS NULL");
+    }
+    const visibility = kolvipShowListVisibilityWhere();
+    if (visibility.sql) {
+      where.push(visibility.sql);
+      params.push(...visibility.params);
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
@@ -786,7 +849,7 @@ export async function openStore(cfg, log) {
       `SELECT message_id, guild_id, guild_name, channel_id, channel_name, author_id, created_at_ms, content,
               author_username, author_global_name, author_avatar, event_type, source, received_at${rawCol}
        FROM discord_messages ${whereSql}
-       ORDER BY created_at_ms ${orderSql}, CAST(message_id AS UNSIGNED) ${orderSql}
+       ORDER BY created_at_ms ${orderSql}, CAST(message_id AS UNSIGNED) ${orderSql}, message_id ${orderSql}
        LIMIT ${lim}`,
       params
     );
@@ -824,7 +887,8 @@ export async function openStore(cfg, log) {
   async function getOldestDiscordMessageIdForChannel(channelId, opts = {}) {
     const cid = String(channelId ?? "").trim();
     if (!cid) return "";
-    const params = [cid];
+    const exclude = sqlExcludeKolvipRows();
+    const params = [cid, ...exclude.params];
     let fromSql = "";
     const fromMs = Number(opts.fromMs);
     if (Number.isFinite(fromMs) && fromMs > 0) {
@@ -833,7 +897,7 @@ export async function openStore(cfg, log) {
     }
     const [rows] = await pool.query(
       `SELECT message_id FROM discord_messages
-       WHERE channel_id = ?${fromSql}
+       WHERE channel_id = ? AND ${exclude.sql}${fromSql}
        ORDER BY CAST(message_id AS UNSIGNED) ASC
        LIMIT 1`,
       params
@@ -845,12 +909,13 @@ export async function openStore(cfg, log) {
   async function getOldestDiscordMessageRowForChannel(channelId) {
     const cid = String(channelId ?? "").trim();
     if (!cid) return null;
+    const exclude = sqlExcludeKolvipRows();
     const [rows] = await pool.query(
       `SELECT message_id, created_at_ms FROM discord_messages
-       WHERE channel_id = ?
+       WHERE channel_id = ? AND ${exclude.sql}
        ORDER BY CAST(message_id AS UNSIGNED) ASC
        LIMIT 1`,
-      [cid],
+      [cid, ...exclude.params],
     );
     return rows[0] ?? null;
   }
@@ -867,8 +932,9 @@ export async function openStore(cfg, log) {
     const lim = Math.min(20_000, Math.max(1, Number(limit) || 12_000));
     const f = Number(fromMs) || 0;
     const t = Number(toMs) || 0;
+    const exclude = sqlExcludeKolvipRows();
     /** @type {unknown[]} */
-    const params = [cid];
+    const params = [cid, ...exclude.params];
     let timeSql = "";
     if (f > 0 && t > 0) {
       timeSql = " AND created_at_ms >= ? AND created_at_ms <= ?";
@@ -884,7 +950,7 @@ export async function openStore(cfg, log) {
       `SELECT message_id, guild_id, guild_name, channel_id, channel_name, author_id, created_at_ms, content,
               author_username, author_global_name, author_avatar, event_type, source, raw_json
        FROM discord_messages
-       WHERE channel_id = ?${timeSql}
+       WHERE channel_id = ? AND ${exclude.sql}${timeSql}
        ORDER BY CAST(message_id AS UNSIGNED) ASC
        LIMIT ${lim}`,
       params,
@@ -1623,6 +1689,54 @@ export async function openStore(cfg, log) {
     if (!Number.isFinite(n) || n <= 0) return false;
     const [r] = await pool.execute(`DELETE FROM discord_signal_cards WHERE id = ?`, [n]);
     return Number(/** @type {{ affectedRows?: number }} */ (r).affectedRows) > 0;
+  }
+
+  /**
+   * @param {{
+   *   channelIds: string[],
+   *   enabled: boolean,
+   *   reason: string,
+   *   kolvipSources?: string[],
+   * }} opts
+   */
+  async function applyKolvipDiscordMessageSoftDelete(opts) {
+    const ids = [...new Set((opts.channelIds ?? []).map((id) => String(id).trim()).filter(Boolean))];
+    const reason = String(opts.reason ?? "").trim();
+    if (!ids.length || !reason) return { softDeleted: 0, restored: 0 };
+    const ph = ids.map(() => "?").join(", ");
+    const pred = sqlKolvipSourcePredicate(opts.kolvipSources);
+    if (opts.enabled) {
+      const [marked] = await pool.query(
+        `UPDATE discord_messages
+         SET deleted_at = NOW(3), deleted_reason = ?
+         WHERE channel_id IN (${ph})
+           AND deleted_at IS NULL
+           AND NOT ${pred.sql}`,
+        [reason, ...ids, ...pred.params]
+      );
+      const [cleared] = await pool.query(
+        `UPDATE discord_messages
+         SET deleted_at = NULL, deleted_reason = NULL
+         WHERE channel_id IN (${ph})
+           AND deleted_reason = ?
+           AND ${pred.sql}`,
+        [...ids, reason, ...pred.params]
+      );
+      return {
+        softDeleted: Number(/** @type {{ affectedRows?: number }} */ (marked).affectedRows) || 0,
+        restored: Number(/** @type {{ affectedRows?: number }} */ (cleared).affectedRows) || 0,
+      };
+    }
+    const [restored] = await pool.query(
+      `UPDATE discord_messages
+       SET deleted_at = NULL, deleted_reason = NULL
+       WHERE channel_id IN (${ph}) AND deleted_reason = ?`,
+      [...ids, reason]
+    );
+    return {
+      softDeleted: 0,
+      restored: Number(/** @type {{ affectedRows?: number }} */ (restored).affectedRows) || 0,
+    };
   }
 
   /** @param {string} messageId */
@@ -2391,6 +2505,7 @@ export async function openStore(cfg, log) {
     listCardsForEval,
     updateSignalCard,
     deleteSignalCard,
+    applyKolvipDiscordMessageSoftDelete,
     deleteDiscordMessageIfCardApi,
     deleteCommunityFeedByCardId,
     communityEnsureSchema,
@@ -2530,6 +2645,7 @@ export function createOfflineStore() {
     listCardsForEval: async () => [],
     updateSignalCard: async () => null,
     deleteSignalCard: async () => false,
+    applyKolvipDiscordMessageSoftDelete: async () => ({ softDeleted: 0, restored: 0 }),
     deleteDiscordMessageIfCardApi: async () => false,
     deleteCommunityFeedByCardId: async () => 0,
     communityEnsureSchema: async () => {},

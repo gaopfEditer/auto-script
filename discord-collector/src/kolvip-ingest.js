@@ -1,5 +1,6 @@
 /**
- * 巨鲸消息批次 → 建卡（实时 / 回溯共用）。
+ * 巨鲸消息批次 → Show 消息行 + 建卡（实时 / 回溯共用）。
+ * 消息 upsert 进 discord_messages（Show 读取的同一张表）；建卡/Telegram 仍走原管道。
  */
 import { runSignalCardPipelineForRows } from "./discord-signal-pipeline.js";
 import { kolvipMessageToDiscordRow } from "./kolvip-cdp-message.js";
@@ -8,6 +9,8 @@ import { kolvipScanVirtualChannelId } from "./kolvip-scan-config.js";
 import { runBatchLiquidation } from "./card-liquidation-engine.js";
 import { archiveCardToClient } from "./card-archive-service.js";
 import { summarizeKolvipChannelEval } from "./kolvip-cdp-eval.js";
+import { messageRowToClientForPush } from "./discord-message-format.js";
+import { messageVisibleForKolvipShow } from "./discord-message-source-isolation.js";
 
 export async function loadKolvipSeen(fs, seenPath) {
   try {
@@ -40,6 +43,45 @@ export async function rememberKolvipDataIds(all, kolvipChannelId, dataIds) {
 }
 
 /**
+ * @param {import('./kolvip-cdp-message.js').KolvipDomMessage[]} messages
+ * @param {{ kolvipChannelId: string, discordChannelId: string, source: string }} map
+ */
+function kolvipRowsFromMessages(messages, map) {
+  /** @type {Record<string, unknown>[]} */
+  const rows = [];
+  for (const msg of messages) {
+    if (!msg?.dataId) continue;
+    rows.push(kolvipMessageToDiscordRow(msg, map));
+  }
+  return rows;
+}
+
+/**
+ * @param {ReturnType<typeof import('./store.js').openStore>} store
+ * @param {Record<string, unknown>[]} rows
+ * @param {((channel: string, payload: Record<string, unknown>) => void) | undefined} broadcast
+ * @param {boolean} pushLive
+ */
+async function upsertKolvipShowMessages(store, rows, broadcast, pushLive) {
+  if (!rows.length || typeof store?.insertDiscordMessagesBatch !== "function") return 0;
+  await store.insertDiscordMessagesBatch(rows);
+  if (!pushLive || typeof broadcast !== "function") return rows.length;
+  const visible = rows.filter((r) => messageVisibleForKolvipShow(r.channelId, r.source));
+  if (!visible.length) return rows.length;
+  try {
+    broadcast("message", {
+      kind: "discord_message_batch",
+      source: String(visible[0]?.source ?? "kolvip_api"),
+      count: visible.length,
+      rows: visible.map((r) => messageRowToClientForPush(r)),
+    });
+  } catch {
+    /* Show 仍可从接口读到已入库行 */
+  }
+  return rows.length;
+}
+
+/**
  * @param {{
  *   kolvipChannelId: string,
  *   channelName: string,
@@ -50,6 +92,7 @@ export async function rememberKolvipDataIds(all, kolvipChannelId, dataIds) {
  *   signalCards: NonNullable<Parameters<typeof runSignalCardPipelineForRows>[1]['signalCards']>,
  *   store: ReturnType<typeof import('./store.js').openStore>,
  *   log: ReturnType<typeof import('./logger.js').createLogger>,
+ *   broadcast?: (channel: string, payload: Record<string, unknown>) => void,
  * }} opts
  */
 export async function ingestKolvipMessageBatch(opts) {
@@ -78,6 +121,17 @@ export async function ingestKolvipMessageBatch(opts) {
     const set = new Set(Array.isArray(bucket.ids) ? bucket.ids.map(String) : []);
     const hadHistory = set.size > 0;
     if (!hadHistory) {
+      const seedRows = kolvipRowsFromMessages(messages, {
+        kolvipChannelId: kid,
+        discordChannelId,
+        source,
+      });
+      const messagesUpserted = await upsertKolvipShowMessages(
+        opts.store,
+        seedRows,
+        opts.broadcast,
+        true
+      );
       await rememberKolvipDataIds(opts.seen, kid, allIds);
       return {
         fetched: messages.length,
@@ -85,6 +139,7 @@ export async function ingestKolvipMessageBatch(opts) {
         cardsQueued: 0,
         cardsCreated: 0,
         sourceUpgraded: 0,
+        messagesUpserted,
         seeded: true,
         cardIds: [],
         skipCounts: {},
@@ -97,17 +152,17 @@ export async function ingestKolvipMessageBatch(opts) {
     await rememberKolvipDataIds(opts.seen, kid, allIds);
   }
 
-  /** @type {Record<string, unknown>[]} */
-  const rows = [];
-  for (const msg of toProcess) {
-    rows.push(
-      kolvipMessageToDiscordRow(msg, {
-        kolvipChannelId: kid,
-        discordChannelId,
-        source,
-      })
-    );
-  }
+  const rows = kolvipRowsFromMessages(toProcess, {
+    kolvipChannelId: kid,
+    discordChannelId,
+    source,
+  });
+  const messagesUpserted = await upsertKolvipShowMessages(
+    opts.store,
+    rows,
+    opts.broadcast,
+    opts.mode === "live"
+  );
 
   /** @type {number[]} */
   const cardIds = [];
@@ -156,6 +211,7 @@ export async function ingestKolvipMessageBatch(opts) {
   return {
     fetched: messages.length,
     rowsQueued: rows.length,
+    messagesUpserted,
     cardsQueued: rows.length,
     cardsCreated,
     sourceUpgraded,

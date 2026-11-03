@@ -146,6 +146,7 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
           signalCards,
           store,
           log,
+          broadcast,
         });
         if (result.seeded) {
           pushLog(
