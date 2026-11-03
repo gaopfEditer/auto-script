@@ -2,7 +2,13 @@
  * 信号卡片：去重 → 解析 → AI 多风格 → 入库 → Telegram → WS 广播。
  */
 import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
-import { resolveSignalCardInsertSource, assertSignalCardSourceLength, isKolvipIngestSource, upgradeKolvipSignalCardSourceFromRow } from "./discord-signal-card-source.js";
+import {
+  resolveSignalCardInsertSource,
+  assertSignalCardSourceLength,
+  isKolvipIngestSource,
+  shouldRunOllamaIngestFallback,
+  upgradeKolvipSignalCardSourceFromRow,
+} from "./discord-signal-card-source.js";
 import { createChannelTextDedup, normalizeSignalText, signalTextHash } from "./discord-signal-dedup.js";
 import {
   isReplyRepostOfReference,
@@ -590,7 +596,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
 
   /**
    * @param {Record<string, unknown>} row
-   * @param {{ skipDedup?: boolean; skipTelegram?: boolean; debugSimulate?: boolean; tradePlatforms?: { bitget?: boolean; weex?: boolean }; contentOverride?: string; preParsed?: Record<string, unknown>; ocrFingerprint?: string }} [opts]
+   * @param {{ skipDedup?: boolean; skipTelegram?: boolean; skipAiFallback?: boolean; debugSimulate?: boolean; tradePlatforms?: { bitget?: boolean; weex?: boolean }; contentOverride?: string; preParsed?: Record<string, unknown>; ocrFingerprint?: string }} [opts]
    * @returns {Promise<{ skipped?: string; card?: Record<string, unknown>; parsed?: Record<string, unknown>; bitgetResult?: unknown; merged?: boolean }>}
    */
   async function onMessage(row, opts = {}) {
@@ -632,7 +638,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       opts.preParsed && typeof opts.preParsed === "object"
         ? /** @type {Record<string, unknown>} */ ({ ...opts.preParsed })
         : parseSignalText(content, chCfg.parser);
-    if (!parsed && config.ollamaEnabled && !opts.debugSimulate) {
+    if (!parsed && shouldRunOllamaIngestFallback(row, opts, config)) {
       parsed = await extractSignalWithAi(content, chCfg.parser, chCfg.name, {
         debug: (s) => log.debug(s),
       });

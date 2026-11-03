@@ -20,6 +20,7 @@ import {
  *   telegramPush?: ReturnType<typeof import("./discord-telegram-message-push.js").createDiscordTelegramMessagePush> | null,
  *   respectKolvipBypass?: boolean,
  *   skipTelegram?: boolean,
+ *   skipOllamaFallback?: boolean,
  * }} SignalPipelineDeps
  */
 
@@ -43,8 +44,15 @@ export function isSignalIngestOcrEligible(channelId) {
  * @returns {Promise<{ rows: number, created: number, sourceUpgraded: number, skipCounts: Record<string, number> }>}
  */
 export async function runSignalCardPipelineForRows(rows, deps) {
-  const { signalCards, store, log, telegramPush, respectKolvipBypass = true, skipTelegram = false } =
-    deps;
+  const {
+    signalCards,
+    store,
+    log,
+    telegramPush,
+    respectKolvipBypass = true,
+    skipTelegram = false,
+    skipOllamaFallback = false,
+  } = deps;
   /** @type {Record<string, number>} */
   const skipCounts = {};
   const bump = (/** @type {string} */ k) => {
@@ -155,6 +163,7 @@ export async function runSignalCardPipelineForRows(rows, deps) {
       cardResult = await signalCards.onMessage(r, {
         skipDedup: true,
         skipTelegram: skipTelegram,
+        skipAiFallback: skipOllamaFallback,
         contentOverride: content,
         preParsed: ocrPreParsed,
         ocrFingerprint,
