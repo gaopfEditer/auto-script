@@ -38,6 +38,7 @@ import {
   isPlaceholderChannelName,
   mergeChannelMessages,
   filterMessagesForChannel,
+  isolateShowChannelMessages,
   messageContentPreview,
   upsertChannelItem,
   buildChannelListSections,
@@ -114,6 +115,8 @@ const navPending = ref(false);
 const navError = ref("");
 const cacheBanner = ref("");
 const channelMessagesHint = ref("");
+/** @type {import('vue').Ref<{ mode?: string, channelIds?: string[], enabled?: boolean } | null>} */
+const kolvipShowIsolation = ref(null);
 /** 与侧栏更新隔离：仅消息数组引用变化时更新子组件 */
 const paneMessages = shallowRef(/** @type {Record<string, unknown>[]} */ ([]));
 
@@ -942,6 +945,7 @@ async function warmGuildMessageSnapshot(guildId) {
   warmSnapshotInflight = (async () => {
     try {
       const snap = await fetchGuildMessagesSnapshot(gid, { days: SHOW_SNAPSHOT_DAYS });
+      noteKolvipShowIsolation(snap.kolvipShowIsolation);
       const byChannel = snap.byChannel ?? {};
       for (const [cid, rows] of Object.entries(byChannel)) {
         if (!Array.isArray(rows) || !rows.length) continue;
@@ -976,11 +980,12 @@ async function loadMessagesForChannel(ch, opts = {}) {
 
   const task = (async () => {
     try {
-      const { rows, fallbackOlder } = await fetchChannelMessages({
+      const { rows, fallbackOlder, kolvipShowIsolation: isolation } = await fetchChannelMessages({
         channelId: cid,
         limit: 250,
         days: SHOW_SNAPSHOT_DAYS,
       });
+      noteKolvipShowIsolation(isolation);
       channelMessagesHint.value = fallbackOlder
         ? "近 7 天无新消息，已展示该频道最近入库的历史记录（可能早于 7 天）。"
         : "";
@@ -1160,7 +1165,11 @@ async function selectChannel(ch) {
   }
   paneMessages.value = filterMessagesForChannel(
     ch.channelId,
-    messagesByChannelId[ch.channelId] ?? [],
+    isolateShowChannelMessages(
+      ch.channelId,
+      messagesByChannelId[ch.channelId] ?? [],
+      kolvipShowIsolation.value
+    )
   );
   channelMessagesHint.value = "";
   if (channelHasMoreOlder[ch.channelId] === undefined) {
@@ -1382,12 +1391,13 @@ async function loadOlderMessagesForChannel(ch, opts = {}) {
 
   try {
     const cdpTask = scrollDiscordChannelHistory(gid, cid, { beforeMessageId: beforeId }).catch(() => {});
-    const { rows } = await fetchChannelMessages({
+    const { rows, kolvipShowIsolation: isolation } = await fetchChannelMessages({
       channelId: cid,
       guildId: gid,
       limit: LOAD_OLDER_PAGE_SIZE,
       before: beforeId,
     });
+    noteKolvipShowIsolation(isolation);
     await cdpTask;
 
     if (rows.length > 0 && rows.length < LOAD_OLDER_PAGE_SIZE) {
@@ -1506,19 +1516,62 @@ function applyChannelUpdate(row) {
  * @param {Array<Record<string, unknown>>} prev
  * @param {Array<Record<string, unknown>>} rows
  */
+/** @param {Record<string, unknown> | null | undefined} payload */
+function noteKolvipShowIsolation(payload) {
+  if (!payload || typeof payload !== "object") return;
+  const prev = kolvipShowIsolation.value;
+  const prevIds = (prev?.channelIds ?? []).join(",");
+  const nextIds = (Array.isArray(payload.channelIds) ? payload.channelIds : []).join(",");
+  kolvipShowIsolation.value = payload;
+  if (!prev || prev.mode !== payload.mode || prevIds !== nextIds) {
+    applyKolvipIsolationToCache();
+  }
+}
+
+function applyKolvipIsolationToCache() {
+  const iso = kolvipShowIsolation.value;
+  if (!iso) return;
+  let changed = false;
+  for (const cid of Object.keys(messagesByChannelId)) {
+    const prev = messagesByChannelId[cid] ?? [];
+    const next = isolateShowChannelMessages(cid, prev, iso);
+    if (next.length !== prev.length) {
+      messagesByChannelId[cid] = next;
+      changed = true;
+    }
+  }
+  if (changed) {
+    syncPaneMessagesFromStore();
+    scheduleSave();
+  }
+}
+
 function syncPaneMessagesFromStore() {
   const ch = selectedChannel.value?.channelId;
   if (!ch) {
     paneMessages.value = [];
     return;
   }
-  paneMessages.value = filterMessagesForChannel(ch, messagesByChannelId[ch] ?? []);
+  paneMessages.value = filterMessagesForChannel(
+    ch,
+    isolateShowChannelMessages(ch, messagesByChannelId[ch] ?? [], kolvipShowIsolation.value)
+  );
 }
 
 function commitChannelMessages(cid, prev, rows) {
-  const scoped = filterMessagesForChannel(cid, rows);
-  if (!scoped.length) return prev;
-  let next = mergeChannelMessages(prev, scoped);
+  const iso = kolvipShowIsolation.value;
+  const base = isolateShowChannelMessages(cid, prev, iso);
+  const baseChanged = base.length !== prev.length;
+  const scoped = filterMessagesForChannel(cid, isolateShowChannelMessages(cid, rows, iso));
+  if (!scoped.length) {
+    if (!baseChanged) return prev;
+    messagesByChannelId[cid] = base;
+    if (selectedChannel.value?.channelId === cid) {
+      paneMessages.value = base;
+    }
+    return base;
+  }
+  let next = mergeChannelMessages(baseChanged ? base : prev, scoped);
   if (next.length > MAX_MSGS_PER_CHANNEL) {
     next = next.slice(-MAX_MSGS_PER_CHANNEL);
   }

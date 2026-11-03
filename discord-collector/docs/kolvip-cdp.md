@@ -125,4 +125,10 @@ Token：localStorage `wv.wtoken`（JSON 字符串）。写入 `data/kolvip-api-t
 | `kolvip-cdp-backfill.js` | 30 天回溯 |
 | `kolvip-cdp-eval.js` | 面板聚合 |
 
+## 8. Show 消息硬隔离（#34）
+
+- 巨鲸开：映射信号频道的 Show / `/api/discord/messages` 只显示 `source=kolvip_*`；同频道 Discord 原文软删（`deleted_reason=kolvip_primary`）。
+- 巨鲸关并重启 `collect:ui`：清这批软删，Show 恢复 Discord；kolvip 行对 Show 隐藏但留库。
+- ingest 同时 upsert `discord_messages`（`message_id=kolvip-{ch}-{dataId}`）。
+
 维护：改行为时同步 `.env.example` 与本文。

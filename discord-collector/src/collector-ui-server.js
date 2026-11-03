@@ -84,6 +84,10 @@ import {
 import { isChannelShowHistoryFresh } from "./discord-show-history-cache.js";
 import { registerDiscordCdnProxyRoutes } from "./discord-cdn-proxy.js";
 import { extractAttachmentsForClient } from "./discord-message-format.js";
+import {
+  kolvipShowIsolationPayload,
+  syncKolvipMappedDiscordMessageVisibility,
+} from "./discord-message-source-isolation.js";
 
 /** 慢客户端：超过 soft 跳过 diag/frame；超过 hard 断开（防 WS 发送队列撑爆堆） */
 const showHistoryWarmInflight = new Map();
@@ -1254,6 +1258,7 @@ async function main() {
         fromMs: fallbackOlder ? null : fromMs ?? null,
         fallbackOlder,
         showHistory,
+        kolvipShowIsolation: kolvipShowIsolationPayload(),
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -1314,6 +1319,7 @@ async function main() {
         perChannel,
         channelCount: channelIds.length,
         byChannel,
+        kolvipShowIsolation: kolvipShowIsolationPayload(),
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -1627,6 +1633,9 @@ async function main() {
   void twitterCdp.start().catch((e) =>
     log.warn(`Twitter CDP 启动: ${/** @type {Error} */ (e).message}`)
   );
+  if (!mysqlOffline) {
+    void syncKolvipMappedDiscordMessageVisibility(store, log);
+  }
   void kolvipCdp.start().catch((e) =>
     log.warn(`Kolvip CDP 启动: ${/** @type {Error} */ (e).message}`)
   );
