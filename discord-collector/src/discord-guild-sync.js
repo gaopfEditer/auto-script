@@ -1,3 +1,4 @@
+import { isPlaceholderDiscordChannelName } from "./discord-channel-name.js";
 /**
  * 从 Gateway / REST 解析群组、频道并写入 MySQL。
  */
@@ -32,12 +33,14 @@ export function normalizeChannelRow(ch) {
   if (!o?.id) return null;
   const type = typeof o.type === "number" ? o.type : 0;
   if (!TEXT_CHANNEL_TYPES.has(type)) return null;
-  const name = o.name != null ? String(o.name) : "";
-  if (!name) return null;
+  let name = o.name != null ? String(o.name) : "";
+  const channelId = String(o.id);
+  if (isPlaceholderDiscordChannelName(name, channelId)) name = "";
+  // 允许无 name 的频道入库（占位留空，由 upsert 保护不覆盖真名）
   return {
-    channelId: String(o.id),
+    channelId,
     guildId: o.guild_id != null ? String(o.guild_id) : "",
-    name: name || guildId,
+    name,
     type,
   };
 }

@@ -12,6 +12,7 @@ export const SOURCE_OPTIONS = [
   { value: "telegram", label: "Telegram" },
   { value: "x", label: "推特" },
   { value: "binance", label: "币安" },
+  { value: "kolvip", label: "巨鲸" },
   { value: "api", label: "外部 API" },
   { value: "manual", label: "手动" },
 ];
@@ -25,7 +26,7 @@ export const EXTRA_SOURCE_OPTIONS = SOURCE_OPTIONS.filter(
  * /cards 默认一并展示的来源（可在「来源」中取消勾选以隐藏）。
  * 含 Telegram 实时建卡、python-ai-operate 抓取的 X/币安信号卡（source 如 python-ai-operate:x）。
  */
-export const DEFAULT_ARCHIVE_EXTRA_SOURCES = ["telegram", "x", "binance"];
+export const DEFAULT_ARCHIVE_EXTRA_SOURCES = ["telegram", "x", "binance", "kolvip"];
 
 export const PERIOD_OPTIONS = [
   { value: "today", label: "今天" },

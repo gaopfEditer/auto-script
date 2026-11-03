@@ -1,3 +1,4 @@
+import { isPlaceholderDiscordChannelName } from "../../../src/discord-channel-name.js";
 export { isolateShowChannelMessages } from "../../../src/kolvip-show-messages.js";
 
 /** @param {string} userId */
@@ -499,10 +500,7 @@ export function channelRowToClient(row) {
 
 /** @param {string} name @param {string} channelId */
 export function isPlaceholderChannelName(name, channelId) {
-  const n = String(name ?? "").trim();
-  const id = String(channelId ?? "").trim();
-  if (!n || !id) return false;
-  return n === id || n === id.slice(-6);
+  return isPlaceholderDiscordChannelName(name, channelId);
 }
 
 /**

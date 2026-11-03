@@ -3,6 +3,7 @@ import mysql from "mysql2/promise";
 
 import { bufferToPlainPayloadText } from "./collect-ws-decode.js";
 import { bindCommunitySqliteToStore, openCommunitySqliteStore } from "./community-sqlite-store.js";
+import { isPlaceholderDiscordChannelName } from "./discord-channel-name.js";
 import { config } from "./config.js";
 import {
   partitionIncomingDiscordMessages,
@@ -588,7 +589,12 @@ export async function openStore(cfg, log) {
         channelMap.set(key, {
           channelId: r.channelId,
           guildId: r.guildId ?? "",
-          name: r.channelName ?? "",
+          name: (() => {
+            const cid = String(r.channelId ?? "").trim();
+            let n = String(r.channelName ?? "").trim();
+            if (isPlaceholderDiscordChannelName(n, cid)) n = "";
+            return n;
+          })(),
           preview: String(r.content ?? "").replace(/\s+/g, " ").trim().slice(0, 200) || null,
           atMs,
           receivedAt: r.receivedAt ?? new Date().toISOString(),
@@ -606,7 +612,14 @@ export async function openStore(cfg, log) {
          VALUES ${placeholders}
          ON DUPLICATE KEY UPDATE
            guild_id = IF(VALUES(guild_id) != '', VALUES(guild_id), guild_id),
-           name = IF(VALUES(name) != '', VALUES(name), name),
+           name = CASE
+             WHEN VALUES(name) = '' THEN name
+             WHEN VALUES(name) IN ('___hidden___', 'hidden', '#hidden', '(hidden)', 'unknown', '未命名频道')
+               AND name <> ''
+               AND name NOT IN ('___hidden___', 'hidden', '#hidden', '(hidden)', 'unknown', '未命名频道')
+               THEN name
+             ELSE VALUES(name)
+           END,
            last_message_preview = IF(
              VALUES(last_message_at_ms) >= COALESCE(last_message_at_ms, 0),
              VALUES(last_message_preview),
@@ -676,13 +689,12 @@ export async function openStore(cfg, log) {
     const valid = rows.filter((r) => r?.channelId);
     if (!valid.length) return 0;
     const now = isoToMysqlDatetime3(new Date().toISOString());
-    const tuples = valid.map((r) => [
-      r.channelId,
-      r.guildId ?? "",
-      r.name ?? "",
-      Number(r.type) || 0,
-      now,
-    ]);
+    const tuples = valid.map((r) => {
+      const cid = String(r.channelId ?? "").trim();
+      let name = String(r.name ?? "").trim();
+      if (isPlaceholderDiscordChannelName(name, cid)) name = "";
+      return [cid, r.guildId ?? "", name, Number(r.type) || 0, now];
+    });
     const placeholders = tuples.map(() => "(?, ?, ?, ?, ?)").join(", ");
     const flat = tuples.flat();
     await pool.execute(
@@ -690,7 +702,14 @@ export async function openStore(cfg, log) {
        VALUES ${placeholders}
        ON DUPLICATE KEY UPDATE
          guild_id = IF(VALUES(guild_id) != '', VALUES(guild_id), guild_id),
-         name = IF(VALUES(name) != '', VALUES(name), name),
+         name = CASE
+           WHEN VALUES(name) = '' THEN name
+           WHEN VALUES(name) IN ('___hidden___', 'hidden', '#hidden', '(hidden)', 'unknown', '未命名频道')
+             AND name <> ''
+             AND name NOT IN ('___hidden___', 'hidden', '#hidden', '(hidden)', 'unknown', '未命名频道')
+             THEN name
+           ELSE VALUES(name)
+         END,
          channel_type = VALUES(channel_type),
          updated_at = VALUES(updated_at)`,
       flat
