@@ -100,6 +100,8 @@ Token：localStorage `wv.wtoken`（JSON 字符串）。写入 `data/kolvip-api-t
 
 ## 5. Show 胜率面板
 
+本机手动统计页也可看回溯进度：`http://localhost:5178/local/manual-stats/kolvip-backfill`（与 Telegram/Discord 统计同级 tab）。
+
 `KolvipEvalPanel.vue`：**精选（跟单）** + **全站备选（按胜率排序）**。口径同 `GET /api/v1/cards/eval/summary`。
 
 ---

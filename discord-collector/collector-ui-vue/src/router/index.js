@@ -113,6 +113,11 @@ function buildRoutes() {
           name: "manual-stats-discord-backfill",
           component: () => import("../components/DiscordBackfillPanel.vue"),
         },
+        {
+          path: "kolvip-backfill",
+          name: "manual-stats-kolvip-backfill",
+          component: () => import("../components/KolvipBackfillPanel.vue"),
+        },
       ],
     });
     routes.push({ path: "/local", redirect: "/local/manual-stats" });

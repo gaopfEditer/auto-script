@@ -9,6 +9,7 @@ const tabs = [
   { to: "/local/manual-stats", label: "手动统计", exact: true },
   { to: "/local/manual-stats/telegram-backfill", label: "Telegram 统计", exact: true },
   { to: "/local/manual-stats/discord-backfill", label: "Discord 统计", exact: true },
+  { to: "/local/manual-stats/kolvip-backfill", label: "巨鲸 kolvip", exact: true },
 ];
 
 function isActive(tab) {
