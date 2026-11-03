@@ -31,6 +31,12 @@ function rowAttachmentCount(r) {
   return Array.isArray(att) ? att.length : 0;
 }
 
+/** 仅 OCR 白名单频道（非 kolvip 全量带图）；与 discord-signal-ocr-config 一致。 */
+export function isSignalIngestOcrEligible(channelId) {
+  const cid = String(channelId ?? "").trim();
+  return cid.length > 0 && isSignalChannel(cid) && isDiscordSignalOcrChannel(cid);
+}
+
 /**
  * @param {Record<string, unknown>[]} rows
  * @param {SignalPipelineDeps} deps
@@ -76,9 +82,7 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     /** @type {Record<string, unknown> | undefined} */
     let ocrPreParsed;
     const attN = rowAttachmentCount(r);
-    const ocrEligible =
-      isSignalChannel(cid) &&
-      (isDiscordSignalOcrChannel(cid) || (src.startsWith("kolvip") && attN > 0));
+    const ocrEligible = isSignalIngestOcrEligible(cid);
 
     if (ocrEligible) {
       const ocrResolved = await resolveSignalFromRowWithOcr(r, { log });
