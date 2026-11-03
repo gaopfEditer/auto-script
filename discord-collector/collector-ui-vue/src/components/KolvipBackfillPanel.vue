@@ -1,155 +1,649 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { dedupeBackfillCards } from "../lib/backfillCardDedup.js";
+import { hydrateBackfillCardList } from "../lib/backfillCardTime.js";
+import { backfillOutcomeShortLabel, isBackfillKlineMiss } from "../lib/backfillCardQuality.js";
 import {
-  fetchKolvipBackfillStatus,
-  fetchKolvipEvalSummary,
-  pauseKolvipBackfill,
-  startKolvipBackfillAll,
-  startKolvipBackfillPilot,
-  syncKolvipCatalog,
-} from "../lib/kolvipApi.js";
+  BACKFILL_PERIOD_OPTIONS,
+  backfillCardDigest,
+  fetchKolvipManualBackfillConfig,
+  fetchKolvipManualBackfillHistory,
+  fetchKolvipManualBackfillResults,
+  fetchKolvipManualBackfillStatus,
+  loadBackfillCacheLocal,
+  loadSelectedChannelIdsLocal,
+  rebacktestKolvipManualBackfill,
+  runKolvipManualBackfill,
+  saveBackfillCacheLocal,
+  saveSelectedChannelIdsLocal,
+  stopKolvipManualBackfill,
+} from "../lib/kolvipBackfillApi.js";
 
 defineOptions({ name: "KolvipBackfillPanel" });
 
+/** @type {import("vue").Ref<import("../lib/kolvipBackfillApi.js").BackfillPeriod>} */
+const period = ref("week");
+const configGroups = ref(
+  /** @type {Array<{ channelId: string, name: string, enabled?: boolean, note?: string }>} */ ([]),
+);
+/** @type {import("vue").Ref<string[]>} */
+const selectedChannelIds = ref([]);
+const rows = ref(/** @type {Array<Record<string, unknown>>} */ ([]));
+const historyRuns = ref(
+  /** @type {Array<{ id: string, generatedAt: string, groupCount: number }>} */ ([]),
+);
+const selectedRunId = ref("");
+const generatedAt = ref("");
+const fromMs = ref(0);
+const toMs = ref(0);
 const loading = ref(false);
-const acting = ref(false);
+const running = ref(false);
+const runPeriod = ref("");
 const error = ref("");
 const note = ref("");
-const enabled = ref(false);
-const shadow = ref(false);
-const globalPaused = ref(false);
-const catalogSyncedAt = ref("");
-/** @type {import("vue").Ref<Record<string, any>>} */
-const jobs = ref({});
-/** @type {import("vue").Ref<Record<string, any>>} */
-const config = ref({});
-const curatedEval = ref(/** @type {any[]} */ ([]));
-const candidateEval = ref(/** @type {any[]} */ ([]));
-const pilotId = ref("16");
-const filter = ref("all"); // all | curated | scan | active
+const rebacktestLoading = ref(false);
+const rebacktestRunning = ref(false);
+const lastRebacktestFinishedAt = ref("");
+const pollForRebacktest = ref(false);
+const skipBacktestCache = ref(false);
+const runProgress = ref("");
+const detailOpen = ref(false);
+/** @type {import("vue").Ref<Record<string, unknown> | null>} */
+const detailGroup = ref(null);
+const cardFilterFrom = ref("");
+const cardFilterTo = ref("");
 
 /** @type {ReturnType<typeof setInterval> | null} */
 let pollTimer = null;
 
-function statusCounts() {
-  /** @type {Record<string, number>} */
-  const c = { pending: 0, running: 0, done: 0, error: 0, paused: 0, other: 0 };
-  for (const j of Object.values(jobs.value)) {
-    const s = String(j?.status || "other");
-    if (s in c) c[s] += 1;
-    else c.other += 1;
-  }
-  return c;
+const periodLabel = computed(
+  () => BACKFILL_PERIOD_OPTIONS.find((o) => o.id === period.value)?.label ?? period.value,
+);
+const viewingHistory = computed(() => Boolean(selectedRunId.value));
+const selectedCount = computed(() => selectedChannelIds.value.length);
+const allGroupsSelected = computed(() => {
+  const n = configGroups.value.length;
+  return n > 0 && selectedChannelIds.value.length === n;
+});
+
+/** @param {string} channelId */
+function isGroupSelected(channelId) {
+  return selectedChannelIds.value.includes(channelId);
 }
 
-const counts = computed(() => statusCounts());
+function syncSelectionFromConfig() {
+  const ids = configGroups.value.map((g) => String(g.channelId));
+  if (!ids.length) {
+    selectedChannelIds.value = [];
+    return;
+  }
+  const saved = loadSelectedChannelIdsLocal();
+  if (saved.length) {
+    const picked = ids.filter((id) => saved.includes(id));
+    selectedChannelIds.value = picked.length ? picked : [...ids];
+  } else {
+    const curated = configGroups.value
+      .filter((g) => g.curated === true)
+      .map((g) => String(g.channelId));
+    selectedChannelIds.value = curated.length ? curated : [...ids];
+  }
+  saveSelectedChannelIdsLocal(selectedChannelIds.value);
+}
 
-const jobRows = computed(() => {
-  const rows = Object.entries(jobs.value).map(([id, j]) => ({
-    id,
-    channelName: j?.channelName || `ch ${id}`,
-    curated: !!j?.curated,
-    status: String(j?.status || "—"),
-    cardsCreated: Number(j?.cardsCreated) || 0,
-    sampleCount: Number(j?.sampleCount) || 0,
-    batchesDone: Number(j?.batchesDone) || 0,
-    lastError: j?.lastError || null,
-    updatedAt: j?.updatedAt || null,
-    backfillCursor: j?.backfillCursor ?? null,
-  }));
-  rows.sort((a, b) => {
-    const rank = { running: 0, error: 1, paused: 2, pending: 3, done: 4 };
-    const ra = rank[a.status] ?? 9;
-    const rb = rank[b.status] ?? 9;
-    if (ra !== rb) return ra - rb;
-    if (a.curated !== b.curated) return a.curated ? -1 : 1;
-    return String(a.channelName).localeCompare(String(b.channelName), "zh");
-  });
-  return rows.filter((r) => {
-    if (filter.value === "curated") return r.curated;
-    if (filter.value === "scan") return !r.curated;
-    if (filter.value === "active") return r.status === "running" || r.status === "pending" || r.status === "error";
+function selectAllGroups() {
+  selectedChannelIds.value = configGroups.value.map((g) => String(g.channelId));
+  saveSelectedChannelIdsLocal(selectedChannelIds.value);
+}
+
+function selectNoGroups() {
+  selectedChannelIds.value = [];
+  saveSelectedChannelIdsLocal(selectedChannelIds.value);
+}
+
+/** @param {string} channelId @param {Event} e */
+function onGroupCheck(channelId, e) {
+  const checked = /** @type {HTMLInputElement} */ (e.target).checked;
+  const set = new Set(selectedChannelIds.value);
+  if (checked) set.add(channelId);
+  else set.delete(channelId);
+  selectedChannelIds.value = [...set];
+  saveSelectedChannelIdsLocal(selectedChannelIds.value);
+}
+
+function formatRange() {
+  if (!fromMs.value || !toMs.value) return "";
+  const f = new Date(fromMs.value).toLocaleDateString("zh-CN");
+  const t = new Date(toMs.value).toLocaleDateString("zh-CN");
+  return `${f} — ${t}`;
+}
+
+function formatRangeFull() {
+  if (!fromMs.value || !toMs.value) return "";
+  const f = new Date(fromMs.value).toLocaleString("zh-CN", { hour12: false });
+  const t = new Date(toMs.value).toLocaleString("zh-CN", { hour12: false });
+  return `${f} — ${t}`;
+}
+
+function symbolSummary(symbols) {
+  if (!symbols || typeof symbols !== "object") return "—";
+  const entries = Object.entries(symbols);
+  if (!entries.length) return "—";
+  return entries
+    .slice(0, 5)
+    .map(([k, v]) => `${k}×${v}`)
+    .join(" · ");
+}
+
+function formatHistoryLabel(run) {
+  if (!run?.generatedAt) return run?.id || "—";
+  const d = new Date(run.generatedAt);
+  const t = Number.isNaN(d.getTime()) ? run.generatedAt : d.toLocaleString("zh-CN", { hour12: false });
+  return `${t} · ${run.groupCount ?? "?"} 频道`;
+}
+
+function formatWinRate(r) {
+  const agg = groupStatsFromDeduped(r);
+  const w = agg.wins;
+  const decided = agg.wins + agg.losses;
+  if (!decided) {
+    const w0 = r?.winRate;
+    if (w0 == null || Number.isNaN(Number(w0))) return "—";
+    return `${Math.round(Number(w0) * 100)}% (${r.wins ?? 0}/${decided || "?"})`;
+  }
+  return `${Math.round((agg.wins / decided) * 100)}% (${agg.wins}/${decided})`;
+}
+
+/** @param {Array<Record<string, unknown>>} items */
+function sumPnlFromItems(items) {
+  let sum = 0;
+  let count = 0;
+  for (const c of items) {
+    const p = Number(c.pnlPct);
+    if (Number.isFinite(p)) {
+      sum += p;
+      count += 1;
+    }
+  }
+  return { sum, count };
+}
+
+/** @param {Record<string, unknown>} g */
+function groupHasPnlBacktest(g) {
+  if (g?.backtestEnrichedAt) return true;
+  const items = g?.backtestItems;
+  if (!Array.isArray(items) || !items.length) return false;
+  return items.some((c) => c && ("entered" in c || "pnlPct" in c || c.outcome));
+}
+
+function cardsForGroup(g) {
+  /** 批量回溯后才有 backtestItems；仅「获取数据」阶段只看 cards */
+  let list;
+  if (groupHasPnlBacktest(g) && Array.isArray(g.backtestItems) && g.backtestItems.length) {
+    list = g.backtestItems;
+  } else if (Array.isArray(g.cards) && g.cards.length) {
+    list = g.cards;
+  } else {
+    list = Array.isArray(g.samples) ? g.samples : [];
+  }
+  const hydrated = hydrateBackfillCardList(list);
+  const cardMeta = Array.isArray(g.cards) ? hydrateBackfillCardList(g.cards) : [];
+  if (cardMeta.length && list === g.backtestItems) {
+    const metaByDigest = new Map(
+      cardMeta.map((c) => [backfillCardDigest(c), c]),
+    );
+    for (let i = 0; i < hydrated.length; i += 1) {
+      const key = backfillCardDigest(hydrated[i]);
+      const meta = metaByDigest.get(key);
+      if (!meta) continue;
+      if (!hydrated[i].signalAt && meta.signalAt) {
+        hydrated[i] = { ...hydrated[i], signalAt: meta.signalAt, messageId: meta.messageId ?? hydrated[i].messageId };
+      }
+    }
+  }
+  return dedupeBackfillCards(hydrated).filter((c) => !c.backtestInvalid);
+}
+
+/** @param {Record<string, unknown>} r */
+function groupStatsFromDeduped(r) {
+  const list = cardsForGroup(r);
+  let wins = 0;
+  let losses = 0;
+  for (const c of list) {
+    if (isBackfillKlineMiss(c) || c.backtestInvalid) continue;
+    if (!c.entered || c.skipped) continue;
+    const p = Number(c.pnlPct);
+    if (Number.isFinite(p) && p > 0) wins += 1;
+    else if (Number.isFinite(p) && p < 0) losses += 1;
+    else if (c.outcome === "take_profit") wins += 1;
+    else if (c.outcome === "stop_loss") losses += 1;
+  }
+  return { wins, losses, list };
+}
+
+/** @param {Record<string, unknown>} r */
+function groupPnlAggregate(r) {
+  const cached = Number(r.totalPnlPct);
+  const cachedN = Number(r.pnlSummedCount);
+  const deduped = cardsForGroup(r);
+  const fromDedup = sumPnlFromItems(deduped.filter((c) => c.entered && !c.skipped));
+  if (fromDedup.count > 0) return fromDedup;
+  if (Number.isFinite(cached) && cachedN > 0) {
+    return { sum: cached, count: cachedN };
+  }
+  return { sum: 0, count: 0 };
+}
+
+/** @param {Record<string, unknown>} r */
+function formatTotalPnl(r) {
+  const { sum, count } = groupPnlAggregate(r);
+  if (!count) return "—";
+  const sign = sum >= 0 ? "+" : "";
+  return `${sign}${sum.toFixed(2)}%`;
+}
+
+/** @param {Record<string, unknown>} r */
+function dedupedSignalCount(r) {
+  return cardsForGroup(r).length;
+}
+
+const tableGrandTotal = computed(() => {
+  let sum = 0;
+  let count = 0;
+  for (const r of rows.value) {
+    const { sum: s, count: n } = groupPnlAggregate(r);
+    sum += s;
+    count += n;
+  }
+  return { sum, count };
+});
+
+function formatPnl(c) {
+  if (c?.pnlLabel) return String(c.pnlLabel);
+  const p = Number(c?.pnlPct);
+  if (Number.isFinite(p)) return `${p >= 0 ? "+" : ""}${p.toFixed(2)}%`;
+  return "—";
+}
+
+/** @param {number} ms */
+function msToDatetimeLocal(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+/** @param {string} v */
+function datetimeLocalToMs(v) {
+  if (!v) return 0;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : 0;
+}
+
+/** @param {Record<string, unknown>} g */
+function openDetail(g) {
+  detailGroup.value = g;
+  cardFilterFrom.value = msToDatetimeLocal(fromMs.value);
+  cardFilterTo.value = msToDatetimeLocal(toMs.value);
+  detailOpen.value = true;
+}
+
+function closeDetail() {
+  detailOpen.value = false;
+  detailGroup.value = null;
+}
+
+const filteredDetailCards = computed(() => {
+  const g = detailGroup.value;
+  if (!g) return [];
+  const from = datetimeLocalToMs(cardFilterFrom.value) || fromMs.value;
+  const to = datetimeLocalToMs(cardFilterTo.value) || toMs.value;
+  const filtered = cardsForGroup(g).filter((c) => {
+    const t = Date.parse(String(c.signalAt ?? c.at ?? ""));
+    if (!Number.isFinite(t)) return true;
+    if (from && t < from) return false;
+    if (to && t > to) return false;
     return true;
   });
+  return filtered.sort((a, b) => {
+    const ta = Date.parse(String(a.signalAt ?? a.at ?? ""));
+    const tb = Date.parse(String(b.signalAt ?? b.at ?? ""));
+    if (!Number.isFinite(ta) && !Number.isFinite(tb)) return 0;
+    if (!Number.isFinite(ta)) return 1;
+    if (!Number.isFinite(tb)) return -1;
+    return tb - ta;
+  });
 });
 
-const totals = computed(() => {
-  let cards = 0;
-  let samples = 0;
-  for (const j of Object.values(jobs.value)) {
-    cards += Number(j?.cardsCreated) || 0;
-    samples += Number(j?.sampleCount) || 0;
+const detailSummary = computed(() => {
+  const list = filteredDetailCards.value;
+  let wins = 0;
+  let losses = 0;
+  let errors = 0;
+  let klineMiss = 0;
+  for (const c of list) {
+    const p = Number(c.pnlPct);
+    if (isBackfillKlineMiss(c)) {
+      klineMiss += 1;
+      continue;
+    }
+    if (c.backtestInvalid || (c.error && !c.entered && !c.skipped)) errors += 1;
+    else if (!c.entered || c.skipped) continue;
+    else if (Number.isFinite(p) && p > 0) wins += 1;
+    else if (Number.isFinite(p) && p < 0) losses += 1;
+    else if (c.outcome === "take_profit") wins += 1;
+    else if (c.outcome === "stop_loss") losses += 1;
   }
-  return { cards, samples, jobs: Object.keys(jobs.value).length };
+  const decided = wins + losses;
+  const { sum: totalPnl, count: pnlN } = sumPnlFromItems(list);
+  return {
+    total: list.length,
+    wins,
+    losses,
+    errors,
+    klineMiss,
+    winRate: decided ? wins / decided : null,
+    totalPnl,
+    pnlN,
+  };
 });
 
-function fmtTime(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
-  return d.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" });
+function formatSignalTime(c) {
+  const raw = String(c.signalAt ?? c.at ?? "");
+  if (!raw) return "—";
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? raw : d.toLocaleString("zh-CN", { hour12: false });
 }
 
-async function refresh() {
-  loading.value = true;
-  error.value = "";
+function outcomeLabel(c) {
+  return backfillOutcomeShortLabel(c);
+}
+
+/** @param {Record<string, unknown>} c */
+function outcomeCellClass(c) {
+  if (c.outcome === "take_profit") return "ok";
+  if (c.outcome === "stop_loss") return "err";
+  if (isBackfillKlineMiss(c)) return "muted";
+  if (c.backtestInvalid || (c.error && !c.entered && !c.skipped)) return "warn";
+  return "";
+}
+
+async function loadConfig() {
   try {
-    const [st, ev] = await Promise.all([
-      fetchKolvipBackfillStatus(),
-      fetchKolvipEvalSummary({ days: Number(config.value?.days) || 30 }).catch(() => null),
-    ]);
-    enabled.value = !!st.enabled;
-    shadow.value = !!st.shadow;
-    globalPaused.value = !!st.globalPaused;
-    catalogSyncedAt.value = st.catalogSyncedAt || "";
-    jobs.value = st.jobs && typeof st.jobs === "object" ? st.jobs : {};
-    config.value = st.config && typeof st.config === "object" ? st.config : {};
-    if (ev) {
-      curatedEval.value = ev.curated || [];
-      candidateEval.value = ev.candidates || [];
-      note.value = ev.note || "";
+    const cfg = await fetchKolvipManualBackfillConfig();
+    configGroups.value = Array.isArray(cfg.groups) ? cfg.groups : [];
+    syncSelectionFromConfig();
+  } catch (e) {
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  }
+}
+
+async function loadHistoryList() {
+  try {
+    const data = await fetchKolvipManualBackfillHistory(period.value);
+    historyRuns.value = Array.isArray(data.runs) ? data.runs : [];
+  } catch {
+    historyRuns.value = [];
+  }
+}
+
+async function loadResults() {
+  loading.value = true;
+  if (!rebacktestRunning.value) error.value = "";
+  const runId = selectedRunId.value || null;
+  try {
+    const data = await fetchKolvipManualBackfillResults(period.value, runId);
+    if (data.cached && Array.isArray(data.groups)) {
+      applyPayload(data);
+      if (!runId) saveBackfillCacheLocal(period.value, data);
+    } else if (!runId) {
+      const local = loadBackfillCacheLocal(period.value);
+      if (local && Array.isArray(local.groups)) {
+        applyPayload(local);
+        note.value = "暂无服务端缓存，已显示本机上次结果";
+      } else {
+        rows.value = [];
+        generatedAt.value = "";
+        note.value = "尚未拉取，选择周期后点「开始获取数据」，再点「批量回溯盈亏」";
+      }
+    } else {
+      rows.value = [];
+      note.value = "该历史记录不存在或已删除";
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    if (!runId) {
+      const local = loadBackfillCacheLocal(period.value);
+      if (local?.groups) {
+        applyPayload(local);
+        note.value = "API 不可用，已读浏览器缓存";
+      } else {
+        error.value = String(/** @type {Error} */ (e).message ?? e);
+      }
+    } else {
+      error.value = String(/** @type {Error} */ (e).message ?? e);
+    }
   } finally {
     loading.value = false;
   }
 }
 
-async function withAct(fn) {
-  acting.value = true;
-  error.value = "";
-  try {
-    await fn();
-    await refresh();
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    acting.value = false;
+/** @param {Record<string, unknown>} data */
+function applyPayload(data) {
+  const list = Array.isArray(data.groups) ? data.groups : [];
+  generatedAt.value = String(data.generatedAt ?? "");
+  fromMs.value = Number(data.fromMs) || 0;
+  toMs.value = Number(data.toMs) || 0;
+  if (!note.value) note.value = "";
+  const sorted = [...list].sort(
+    (a, b) =>
+      Number(b.parsedSignalCount ?? b.cardEmitCount ?? 0) -
+        Number(a.parsedSignalCount ?? a.cardEmitCount ?? 0) ||
+      Number(b.tradeLikeCount ?? 0) - Number(a.tradeLikeCount ?? 0),
+  );
+  let cardN = 0;
+  for (const g of sorted) {
+    if (Array.isArray(g.cards)) cardN += g.cards.length;
+  }
+  if (cardN > 600) {
+    note.value = note.value || `共 ${cardN} 张卡片，表格渲染中…`;
+    setTimeout(() => {
+      rows.value = sorted;
+    }, 0);
+  } else {
+    rows.value = sorted;
   }
 }
 
-function onSyncCatalog() {
-  return withAct(() => syncKolvipCatalog());
+/** @param {Record<string, unknown> | null | undefined} lastRun */
+function applyLastRunFailure(lastRun) {
+  if (!lastRun || lastRun.ok === true) return;
+  if (String(lastRun.period ?? "") !== period.value) return;
+  if (rows.value.length > 0) return;
+  error.value = String(lastRun.failHint || `回溯失败（退出码 ${lastRun.exitCode ?? "?"}）`);
+  const tail = String(lastRun.stderrTail ?? "").trim();
+  if (tail) note.value = tail.split("\n").filter(Boolean).slice(-6).join("\n");
 }
-function onStartAll() {
-  return withAct(() => startKolvipBackfillAll());
-}
-function onPause() {
-  return withAct(() => pauseKolvipBackfill());
-}
-function onStartPilot() {
-  const id = String(pilotId.value || "").trim();
-  if (!id) {
-    error.value = "请填写 kolvip 频道 id（如 16）";
+
+/** @param {Record<string, unknown> | null | undefined} rb */
+function applyRebacktestStatus(rb) {
+  if (!rb || typeof rb !== "object") return;
+  const active = Boolean(rb.running);
+  rebacktestRunning.value = active;
+  if (active) {
+    rebacktestLoading.value = true;
+    const p = rb.progress && typeof rb.progress === "object" ? rb.progress : null;
+    if (p) {
+      note.value = `批量盈亏进行中：频道 ${p.groupIndex}/${p.groupTotal} ${String(p.groupName ?? "")}`;
+    }
     return;
   }
-  return withAct(() => startKolvipBackfillPilot(id));
+  rebacktestLoading.value = false;
+  pollForRebacktest.value = false;
+  if (String(rb.period ?? "") !== period.value) return;
+  if (rb.error && rb.finishedAt) {
+    error.value = String(rb.error);
+    return;
+  }
+  const doneAt = String(rb.finishedAt ?? "");
+  if (doneAt && doneAt !== lastRebacktestFinishedAt.value) {
+    lastRebacktestFinishedAt.value = doneAt;
+    void loadResults().then(() => {
+      note.value = skipBacktestCache.value
+        ? "后台 batch 盈亏已完成（已忽略 digest 缓存）"
+        : "后台 batch 盈亏已完成";
+      if (detailGroup.value) {
+        const id = String(detailGroup.value.channelId ?? "");
+        const updated = rows.value.find((r) => String(r.channelId) === id);
+        if (updated) detailGroup.value = updated;
+      }
+    });
+  }
 }
 
+function formatRunProgress(progress) {
+  if (!progress || typeof progress !== "object") return "";
+  const p = /** @type {Record<string, unknown>} */ (progress);
+  const name = String(p.name ?? p.channelId ?? "").trim();
+  const phase = String(p.phase ?? "");
+  if (phase === "fetch") {
+    return `${name} · API 翻页第 ${Number(p.pagesDone ?? 0) + 1} 页`;
+  }
+  if (phase === "ingest") {
+    const t = Number(p.messageTotal ?? 0);
+    return t > 0 ? `${name} · 建卡中（本批 ${t} 条）` : `${name} · 建卡中…`;
+  }
+  if (phase === "parse" || phase === "parse_start") {
+    const cards = Number(p.cardsCreated ?? p.parsedSignalCount ?? 0);
+    return `${name} · 汇总卡片${cards ? ` · 新建 ${cards}` : ""}`;
+  }
+  if (phase === "start") return `${name} · 准备拉取…`;
+  return name ? `${name} · ${phase || "进行中"}` : phase || "";
+}
+
+async function refreshStatus() {
+  try {
+    const st = await fetchKolvipManualBackfillStatus();
+    running.value = Boolean(st.running);
+    if (st.running && st.period) runPeriod.value = String(st.period);
+    if (st.running && st.progress) {
+      runProgress.value = formatRunProgress(st.progress);
+    } else if (!st.running) {
+      runProgress.value = "";
+    }
+    applyRebacktestStatus(
+      st.rebacktest && typeof st.rebacktest === "object"
+        ? /** @type {Record<string, unknown>} */ (st.rebacktest)
+        : null,
+    );
+    if (!st.running && !rebacktestRunning.value && pollTimer) {
+      if (!pollForRebacktest.value) {
+        runPeriod.value = "";
+        clearInterval(pollTimer);
+        pollTimer = null;
+        await loadHistoryList();
+        if (!selectedRunId.value) {
+          await loadResults();
+          if (!error.value && rows.value.length) {
+            note.value = "获取数据完成（仅解析卡片）。请点「批量回溯盈亏」开始 K 线回溯与胜率统计";
+          }
+        }
+        applyLastRunFailure(st.lastRun);
+      } else {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        pollForRebacktest.value = false;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function onRebacktest() {
+  rebacktestLoading.value = true;
+  error.value = "";
+  try {
+    const data = await rebacktestKolvipManualBackfill(period.value, selectedRunId.value || null, {
+      skipCache: skipBacktestCache.value,
+    });
+    if (data.async) {
+      rebacktestRunning.value = true;
+      rebacktestLoading.value = true;
+      pollForRebacktest.value = true;
+      note.value = "批量盈亏在后台运行；请勿重复点击";
+      if (!pollTimer) {
+        pollTimer = setInterval(() => void refreshStatus(), 2500);
+      }
+      return;
+    }
+    await loadResults();
+    note.value = "已重新跑 batch 盈亏回溯";
+  } catch (e) {
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    rebacktestLoading.value = false;
+  }
+}
+
+async function onRun() {
+  error.value = "";
+  note.value = "";
+  selectedRunId.value = "";
+  if (!selectedChannelIds.value.length) {
+    error.value = "请至少勾选一个频道";
+    return;
+  }
+  try {
+    await runKolvipManualBackfill(period.value, selectedChannelIds.value);
+    running.value = true;
+    runPeriod.value = period.value;
+    if (!pollTimer) pollTimer = setInterval(() => void refreshStatus(), 2800);
+    note.value = `已提交：限速拉取并建卡 ${selectedChannelIds.value.length} 个频道 ·「${periodLabel.value}」。完成后点「批量回溯盈亏」才算盈亏`;
+  } catch (e) {
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  }
+}
+
+async function onStop() {
+  error.value = "";
+  try {
+    await stopKolvipManualBackfill();
+    note.value = "已请求停止（当前频道处理完后结束）";
+    await refreshStatus();
+  } catch (e) {
+    error.value = String(/** @type {Error} */ (e).message ?? e);
+  }
+}
+
+function selectLatest() {
+  selectedRunId.value = "";
+  void loadResults();
+}
+
+/** @param {string} id */
+function selectHistoryRun(id) {
+  selectedRunId.value = id;
+  void loadResults();
+}
+
+watch(period, () => {
+  selectedRunId.value = "";
+  void loadHistoryList();
+  void loadResults();
+});
+
 onMounted(() => {
-  void refresh();
-  pollTimer = setInterval(() => void refresh(), 8000);
+  void loadConfig();
+  void loadHistoryList();
+  void loadResults();
+  void refreshStatus().then(() => {
+    if ((running.value || rebacktestRunning.value) && !pollTimer) {
+      pollTimer = setInterval(() => void refreshStatus(), 2800);
+    } else if (!running.value && !rebacktestRunning.value) {
+      void fetchKolvipManualBackfillStatus()
+        .then((s) => applyLastRunFailure(s.lastRun))
+        .catch(() => {});
+    }
+  });
 });
 
 onUnmounted(() => {
@@ -163,10 +657,9 @@ onUnmounted(() => {
       <div>
         <h1>巨鲸 kolvip 回溯</h1>
         <p>
-          数据源 <code>kolvip.vip</code>（HTTP API）→ 建卡进
-          <code>discord_signal_cards</code>，精选可跟单、全站备选仅评估。状态文件
-          <code>data/kolvip-backfill.json</code>。胜率侧栏仍在
-          <code>/show</code>。
+          数据源 <code>kolvip.vip</code> HTTP API → 建卡进 <code>discord_signal_cards</code>。
+          精选映射见 <code>kolvip-cdp-config</code>，并可勾选目录 browse 频道。
+          「开始获取数据」只拉取/建卡（限速）；盈亏请点「批量回溯盈亏」（与 Discord 回溯一致，K 线请求限速）。
         </p>
       </div>
     </header>
@@ -175,159 +668,269 @@ onUnmounted(() => {
       <div class="list-head">
         <h2>回溯控制</h2>
         <div class="filters control-row">
-          <button type="button" class="btn" :disabled="loading || acting" @click="refresh">
-            {{ loading ? "刷新中…" : "刷新状态" }}
+          <div class="period-tabs" role="tablist" aria-label="回溯周期">
+            <button
+              v-for="opt in BACKFILL_PERIOD_OPTIONS"
+              :key="opt.id"
+              type="button"
+              class="btn tiny"
+              :class="{ primary: period === opt.id }"
+              :disabled="running"
+              @click="period = opt.id"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+          <button type="button" class="btn" :disabled="loading || running" @click="loadResults">
+            {{ loading ? "加载…" : "刷新结果" }}
           </button>
-          <button type="button" class="btn" :disabled="acting" @click="onSyncCatalog">同步目录</button>
-          <button type="button" class="btn primary" :disabled="acting || !enabled" @click="onStartAll">
-            全站排队 start-all
-          </button>
-          <button type="button" class="btn danger" :disabled="acting" @click="onPause">全部暂停</button>
-        </div>
-        <div class="pilot-row">
-          <label class="pilot-label">
-            试点频道 id
-            <input v-model="pilotId" class="pilot-input" :disabled="acting" placeholder="16" />
-          </label>
-          <button type="button" class="btn" :disabled="acting || !enabled" @click="onStartPilot">启动试点</button>
-        </div>
-      </div>
-
-      <p v-if="error" class="warn">{{ error }}</p>
-      <p v-if="!enabled" class="warn tiny">
-        后端 <code>KOLVIP_BACKFILL_ENABLED</code> 未开或状态接口返回 enabled=false；请检查
-        <code>discord-collector/.env</code> 后重启 <code>collect:ui</code>。
-      </p>
-      <p v-if="shadow" class="warn tiny">当前为 shadow 模式：只跑状态机，不真正 ingest。</p>
-      <p v-if="globalPaused" class="run-banner">全局已暂停（globalPaused）</p>
-
-      <div class="summary-grid">
-        <div class="stat">
-          <span class="stat-k">任务</span>
-          <span class="stat-v">{{ totals.jobs }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-k">running</span>
-          <span class="stat-v">{{ counts.running }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-k">pending</span>
-          <span class="stat-v">{{ counts.pending }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-k">done</span>
-          <span class="stat-v">{{ counts.done }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-k">cardsCreatedΣ</span>
-          <span class="stat-v">{{ totals.cards }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-k">sampleΣ</span>
-          <span class="stat-v">{{ totals.samples }}</span>
-        </div>
-      </div>
-      <p class="muted tiny">
-        窗口 {{ config.days || 30 }} 天 · 批大小 {{ config.batchSize || "—" }} · 全站
-        {{ config.allChannels ? "开" : "关" }} · 目录同步 {{ fmtTime(catalogSyncedAt) }}
-      </p>
-    </section>
-
-    <section class="panel">
-      <div class="list-head">
-        <h2>频道任务</h2>
-        <div class="filters control-row">
           <button
-            v-for="opt in [
-              { id: 'all', label: '全部' },
-              { id: 'curated', label: '精选' },
-              { id: 'scan', label: '全站备选' },
-              { id: 'active', label: '进行中' },
-            ]"
-            :key="opt.id"
             type="button"
-            class="btn tiny"
-            :class="{ primary: filter === opt.id }"
-            @click="filter = opt.id"
+            class="btn"
+            :disabled="rebacktestLoading || rebacktestRunning || running || !rows.length"
+            @click="onRebacktest"
           >
-            {{ opt.label }}
+            {{ rebacktestLoading ? "回溯盈亏…" : "批量回溯盈亏" }}
+          </button>
+          <button
+            type="button"
+            class="btn primary"
+            :disabled="running || rebacktestRunning || !selectedCount"
+            @click="onRun"
+          >
+            开始获取数据（{{ selectedCount }}）
+          </button>
+          <button type="button" class="btn danger" :disabled="!running" @click="onStop">停止</button>
+        </div>
+        <div class="control-flags">
+          <label class="flag-check" title="批量回溯盈亏时不用磁盘 digest 缓存">
+            <input v-model="skipBacktestCache" type="checkbox" :disabled="rebacktestLoading" />
+            盈亏重算忽略缓存
+          </label>
+        </div>
+      </div>
+
+      <p class="warn tiny">
+        巨鲸 API 限速：频道间 <code>KOLVIP_API_CHANNEL_DELAY_MS</code>（默认 800ms），翻页
+        <code>KOLVIP_MANUAL_BACKFILL_PAGE_DELAY_MS</code>；盈亏批量沿用
+        <code>TELEGRAM_BACKFILL_BACKTEST_DELAY_MS</code>（默认 450ms+）。信号多时请分批勾选频道。
+      </p>
+      <p v-if="running" class="run-banner">
+        正在获取数据（拉取/解析信号，不算盈亏）
+        <template v-if="runPeriod">
+          · {{ BACKFILL_PERIOD_OPTIONS.find((o) => o.id === runPeriod)?.label ?? runPeriod }}
+        </template>
+        <template v-if="runProgress">
+          <br />
+          <span class="run-progress">{{ runProgress }}</span>
+        </template>
+      </p>
+
+      <div v-if="configGroups.length" class="group-pick">
+        <div class="group-pick-head">
+          <span class="group-pick-title">选择频道</span>
+          <span class="muted tiny">{{ selectedCount }} / {{ configGroups.length }}</span>
+          <button type="button" class="btn tiny" :disabled="running || allGroupsSelected" @click="selectAllGroups">
+            全选
+          </button>
+          <button type="button" class="btn tiny" :disabled="running || !selectedCount" @click="selectNoGroups">
+            清空
           </button>
         </div>
+        <div class="group-grid" role="group" aria-label="巨鲸频道多选">
+          <label
+            v-for="g in configGroups"
+            :key="g.channelId"
+            class="group-chip"
+            :class="{ on: isGroupSelected(g.channelId), off: !isGroupSelected(g.channelId) }"
+          >
+            <input
+              type="checkbox"
+              class="group-chip-input"
+              :checked="isGroupSelected(g.channelId)"
+              :disabled="running"
+              @change="onGroupCheck(g.channelId, $event)"
+            />
+            <span class="group-chip-name">{{ g.name || "频道" }}</span>
+          </label>
+        </div>
+      </div>
+      <p v-else class="summary muted">未配置频道：检查精选映射或先在旧队列页同步目录</p>
+
+      <p v-if="formatRangeFull()" class="range-banner">
+        回溯时间窗口 · {{ periodLabel }} · {{ formatRangeFull() }}
+      </p>
+
+      <p class="summary muted">
+        {{ periodLabel }}
+        <template v-if="formatRange()"> · {{ formatRange() }}</template>
+        · 配置频道 {{ configGroups.length }} 个
+        <template v-if="viewingHistory"> · 查看历史快照</template>
+        <template v-else-if="generatedAt">
+          · 最新生成 {{ new Date(generatedAt).toLocaleString("zh-CN") }}
+        </template>
+      </p>
+      <p v-if="note" class="tiny" :class="error ? 'run-fail-detail' : 'ok'">{{ note }}</p>
+      <p v-if="error" class="err">{{ error }}</p>
+
+      <div v-if="historyRuns.length" class="history-bar">
+        <span class="history-label">历史记录</span>
+        <button type="button" class="hist-chip" :class="{ on: !selectedRunId }" @click="selectLatest">
+          最新缓存
+        </button>
+        <button
+          v-for="h in historyRuns.slice(0, 10)"
+          :key="h.id"
+          type="button"
+          class="hist-chip"
+          :class="{ on: selectedRunId === h.id }"
+          @click="selectHistoryRun(h.id)"
+        >
+          {{ formatHistoryLabel(h) }}
+        </button>
       </div>
 
       <div class="table-wrap">
-        <table class="kv-table">
+        <table>
           <thead>
             <tr>
-              <th>ch</th>
               <th>频道</th>
-              <th>类型</th>
-              <th>状态</th>
-              <th>建卡</th>
-              <th>采样</th>
-              <th>批次</th>
-              <th>更新(上海)</th>
-              <th>错误</th>
+              <th>翻页</th>
+              <th>消息</th>
+              <th>信号(去重)</th>
+              <th>盈亏回溯</th>
+              <th>胜率</th>
+              <th>合计盈亏</th>
+              <th>热门币</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in jobRows" :key="r.id">
-              <td><code>{{ r.id }}</code></td>
-              <td>{{ r.channelName }}</td>
-              <td>{{ r.curated ? "精选" : "备选" }}</td>
-              <td>
-                <span class="pill" :class="r.status">{{ r.status }}</span>
+            <tr v-for="r in rows" :key="String(r.channelId)">
+              <td>{{ r.name || "—" }}</td>
+              <td>{{ r.scrollPages ?? "—" }}</td>
+              <td>{{ r.messageCount ?? "—" }}</td>
+              <td>{{ dedupedSignalCount(r) }}</td>
+              <td>{{ r.backtestsRun ?? "—" }}</td>
+              <td class="tiny">{{ formatWinRate(r) }}</td>
+              <td
+                class="tiny mono pnl-total"
+                :class="{ ok: groupPnlAggregate(r).sum > 0, err: groupPnlAggregate(r).sum < 0 }"
+              >
+                {{ formatTotalPnl(r) }}
+                <span v-if="groupPnlAggregate(r).count" class="muted">
+                  · {{ groupPnlAggregate(r).count }}张
+                </span>
               </td>
-              <td>{{ r.cardsCreated }}</td>
-              <td>{{ r.sampleCount }}</td>
-              <td>{{ r.batchesDone }}</td>
-              <td class="tiny">{{ fmtTime(r.updatedAt) }}</td>
-              <td class="err tiny">{{ r.lastError || "—" }}</td>
+              <td class="tiny">{{ symbolSummary(r.symbols) }}</td>
+              <td>
+                <button type="button" class="btn tiny" @click="openDetail(r)">卡片</button>
+              </td>
             </tr>
-            <tr v-if="!jobRows.length">
-              <td colspan="9" class="muted">暂无任务。可先「同步目录」再「全站排队」或启动试点。</td>
+            <tr v-if="!loading && !rows.length">
+              <td colspan="9" class="empty">暂无结果 — 选周期后点「开始获取数据」，再点「批量回溯盈亏」</td>
+            </tr>
+            <tr v-if="rows.length && tableGrandTotal.count" class="table-total-row">
+              <td colspan="6">全表合计</td>
+              <td class="tiny">—</td>
+              <td
+                class="tiny mono"
+                :class="{ ok: tableGrandTotal.sum > 0, err: tableGrandTotal.sum < 0 }"
+              >
+                {{ tableGrandTotal.sum >= 0 ? "+" : "" }}{{ tableGrandTotal.sum.toFixed(2) }}%
+                <span class="muted"> · {{ tableGrandTotal.count }}张</span>
+              </td>
+              <td colspan="2"></td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <section class="panel">
-      <div class="list-head">
-        <h2>胜率摘要（同 /show）</h2>
-      </div>
-      <p v-if="note" class="muted tiny">{{ note }}</p>
-      <div class="eval-cols">
-        <div>
-          <h3 class="subh">精选</h3>
-          <ul class="eval-list">
-            <li v-for="row in curatedEval" :key="'c' + row.kolvipChannelId">
-              <strong>{{ row.logicName }}</strong>
-              <span class="muted">
-                卡 {{ row.pushedCount || 0 }} ·
-                <template v-if="row.metrics?.winRate != null">胜率 {{ row.metrics.winRate }}%</template>
-                <template v-else>{{ row.displayState }}</template>
-              </span>
-            </li>
-            <li v-if="!curatedEval.length" class="muted">暂无</li>
-          </ul>
+    <div v-if="detailOpen && detailGroup" class="modal-backdrop" @click.self="closeDetail">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dc-card-modal-title">
+        <header class="modal-head">
+          <div>
+            <h3 id="dc-card-modal-title">{{ detailGroup.name }} · 回溯卡片</h3>
+            <p class="modal-sub">
+              周期 {{ periodLabel }}
+              <template v-if="formatRangeFull()"> · {{ formatRangeFull() }}</template>
+            </p>
+          </div>
+          <button type="button" class="btn tiny" @click="closeDetail">关闭</button>
+        </header>
+
+        <div class="modal-filters">
+          <label class="filter-field">
+            <span>信号自</span>
+            <input v-model="cardFilterFrom" type="datetime-local" class="dt-input" />
+          </label>
+          <label class="filter-field">
+            <span>信号至</span>
+            <input v-model="cardFilterTo" type="datetime-local" class="dt-input" />
+          </label>
+          <button
+            type="button"
+            class="btn tiny"
+            @click="
+              cardFilterFrom = msToDatetimeLocal(fromMs);
+              cardFilterTo = msToDatetimeLocal(toMs);
+            "
+          >
+            重置为回溯窗口
+          </button>
         </div>
-        <div>
-          <h3 class="subh">全站备选（节选）</h3>
-          <ul class="eval-list">
-            <li v-for="row in candidateEval.slice(0, 12)" :key="'a' + row.kolvipChannelId">
-              <strong>{{ row.channelName || row.logicName }}</strong>
-              <span class="muted">
-                卡 {{ row.pushedCount || 0 }} ·
-                <template v-if="row.metrics?.winRate != null">胜率 {{ row.metrics.winRate }}%</template>
-                <template v-else>{{ row.displayState }}</template>
-              </span>
-            </li>
-            <li v-if="!candidateEval.length" class="muted">暂无（多在扫描频道建卡后出现）</li>
-          </ul>
+
+        <p class="modal-summary">
+          筛选后 {{ detailSummary.total }} 张（已去重）
+          <template v-if="detailSummary.winRate != null">
+            · 胜率 {{ Math.round(detailSummary.winRate * 100) }}%
+            （{{ detailSummary.wins }}/{{ detailSummary.wins + detailSummary.losses }}）
+          </template>
+          <template v-if="detailSummary.klineMiss"> · K线暂缺 {{ detailSummary.klineMiss }}</template>
+          <template v-if="detailSummary.pnlN">
+            · 合计盈亏
+            {{ detailSummary.totalPnl >= 0 ? "+" : "" }}{{ detailSummary.totalPnl.toFixed(2) }}%
+          </template>
+          <span v-if="!detailGroup.backtestsRun && cardsForGroup(detailGroup).length" class="muted">
+            · 尚未 batch 盈亏，可点「批量回溯盈亏」
+          </span>
+          <span class="muted tiny"> · 同币/方向/阶段 20 分钟内仅保留最早一条</span>
+        </p>
+
+        <div class="modal-table-wrap">
+          <table class="modal-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>币</th>
+                <th>方向</th>
+                <th>阶段</th>
+                <th>盈亏率</th>
+                <th>结果</th>
+                <th>摘要</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(c, i) in filteredDetailCards" :key="backfillCardDigest(c) + i">
+                <td class="tiny">{{ formatSignalTime(c) }}</td>
+                <td>{{ c.symbol || "—" }}</td>
+                <td>{{ c.direction ?? "—" }}</td>
+                <td class="tiny">{{ c.phase ?? "—" }}</td>
+                <td :class="{ ok: Number(c.pnlPct) > 0, err: Number(c.pnlPct) < 0 }">
+                  {{ formatPnl(c) }}
+                </td>
+                <td :class="outcomeCellClass(c)">{{ outcomeLabel(c) }}</td>
+                <td class="preview-cell tiny">{{ c.preview || "—" }}</td>
+              </tr>
+              <tr v-if="!filteredDetailCards.length">
+                <td colspan="7" class="empty">该时间范围内无卡片</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
-    </section>
+    </div>
   </div>
 </template>
 
@@ -335,80 +938,74 @@ onUnmounted(() => {
 .kv-backfill-page {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 1rem 1.5rem 2.5rem;
+  padding: 0.5rem 1.5rem 3rem;
   color: #dbdee1;
 }
-.head h1 {
+.head {
+  margin-bottom: 1rem;
+}
+h1 {
   margin: 0 0 0.35rem;
   font-size: 1.35rem;
+  color: #f2f3f5;
 }
-.head p {
+h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #f2f3f5;
+}
+p {
   margin: 0;
   color: #949ba4;
+  line-height: 1.5;
   font-size: 0.9rem;
-  line-height: 1.45;
+}
+code {
+  font-size: 0.82em;
+  color: #dbdee1;
+  background: #1e1f22;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
 }
 .panel {
-  margin-top: 1rem;
-  padding: 1rem 1.1rem;
-  border: 1px solid #404249;
-  border-radius: 12px;
   background: #2b2d31;
+  border-radius: 12px;
+  padding: 1.15rem 1.25rem;
 }
 .list-head {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem 1rem;
-  align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.75rem;
+  align-items: center;
+  gap: 0.75rem;
 }
-.list-head h2 {
-  margin: 0;
-  font-size: 1.05rem;
-}
-.control-row,
 .filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
   align-items: center;
+  gap: 0.45rem;
 }
-.pilot-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-  width: 100%;
-  margin-top: 0.35rem;
-}
-.pilot-label {
+.period-tabs {
   display: inline-flex;
-  gap: 0.4rem;
-  align-items: center;
-  font-size: 0.85rem;
-  color: #b5bac1;
-}
-.pilot-input {
-  width: 4.5rem;
-  padding: 0.28rem 0.45rem;
-  border-radius: 6px;
-  border: 1px solid #404249;
-  background: #1e1f22;
-  color: #dbdee1;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 .btn {
   border: 1px solid #404249;
-  background: #1e1f22;
-  color: #dbdee1;
+  background: #25262b;
+  color: #e3e5e8;
   border-radius: 8px;
-  padding: 0.38rem 0.7rem;
-  font-size: 0.85rem;
+  padding: 0.45rem 0.9rem;
+  min-height: 2.05rem;
   font-weight: 600;
   cursor: pointer;
+  font-size: 0.84rem;
+}
+.btn:hover:not(:disabled) {
+  border-color: #5865f2;
 }
 .btn:disabled {
-  opacity: 0.45;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 .btn.primary {
@@ -416,129 +1013,280 @@ onUnmounted(() => {
   border-color: #5865f2;
   color: #fff;
 }
-.btn.danger {
-  background: #4a1d1f;
-  border-color: #a12d37;
-  color: #ffb4b8;
-}
 .btn.tiny {
   padding: 0.28rem 0.55rem;
-  font-size: 0.8rem;
+  min-height: 1.85rem;
+  font-size: 0.78rem;
 }
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 0.5rem;
-  margin: 0.75rem 0 0.5rem;
+.btn.danger {
+  border-color: #ed4245;
+  color: #ed4245;
 }
-.stat {
-  background: #1e1f22;
-  border: 1px solid #404249;
-  border-radius: 8px;
-  padding: 0.55rem 0.65rem;
+.control-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.55rem;
+  font-size: 0.78rem;
+  color: #b5bac1;
 }
-.stat-k {
-  display: block;
-  font-size: 0.72rem;
-  color: #949ba4;
+.flag-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
 }
-.stat-v {
-  font-size: 1.15rem;
-  font-weight: 700;
-}
-.table-wrap {
-  overflow: auto;
-}
-.kv-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.86rem;
-}
-.kv-table th,
-.kv-table td {
-  text-align: left;
-  padding: 0.45rem 0.5rem;
-  border-bottom: 1px solid #3f4147;
-  white-space: nowrap;
-}
-.kv-table th {
-  color: #949ba4;
-  font-weight: 600;
-}
-.pill {
-  display: inline-block;
-  padding: 0.12rem 0.45rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  background: #404249;
-}
-.pill.running {
-  background: #3d4a1f;
-  color: #c3e06a;
-}
-.pill.pending {
-  background: #3a3d45;
-  color: #c7ccd1;
-}
-.pill.done {
-  background: #1f3d32;
-  color: #6dd6a4;
-}
-.pill.error {
-  background: #4a1d1f;
-  color: #ffb4b8;
-}
-.warn {
-  color: #f0b232;
-  margin: 0.4rem 0;
+.flag-check input {
+  accent-color: #5865f2;
 }
 .run-banner {
-  margin: 0.5rem 0;
-  padding: 0.55rem 0.7rem;
+  margin-top: 0.65rem;
+  padding: 0.45rem 0.65rem;
   border-radius: 8px;
-  background: #3d4a1f;
-  color: #e8f5b5;
+  background: rgba(88, 101, 242, 0.15);
+  color: #e3e5e8;
+  font-size: 0.85rem;
+}
+.run-progress {
+  font-size: 0.78rem;
+  color: #b5bac1;
+  margin-top: 0.25rem;
+  display: inline-block;
+}
+.warn {
+  color: #faa61a;
+  margin-top: 0.45rem;
+}
+.summary {
+  margin: 0.65rem 0 0.5rem;
+  font-size: 0.85rem;
 }
 .muted {
   color: #949ba4;
 }
 .tiny {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
+}
+.mono {
+  font-family: ui-monospace, monospace;
 }
 .err {
-  color: #ff8e95;
-  max-width: 220px;
-  white-space: normal;
+  color: #ed4245;
 }
-.eval-cols {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
+.ok {
+  color: #3ba55d;
 }
-@media (max-width: 800px) {
-  .eval-cols {
-    grid-template-columns: 1fr;
-  }
+.run-fail-detail {
+  margin-top: 0.35rem;
+  color: #b5bac1;
+  white-space: pre-wrap;
+  font-family: ui-monospace, monospace;
+  font-size: 0.68rem;
 }
-.subh {
-  margin: 0 0 0.4rem;
-  font-size: 0.92rem;
+.group-pick {
+  margin: 0.75rem 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  background: #1e1f22;
+  border: 1px solid #35373c;
 }
-.eval-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.group-pick-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.55rem;
 }
-.eval-list li {
+.group-pick-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e3e5e8;
+}
+.group-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.38rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid #404249;
+  background: #25262b;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.group-chip.on {
+  border-color: #5865f2;
+  background: rgba(88, 101, 242, 0.18);
+}
+.group-chip.off {
+  opacity: 0.62;
+}
+.group-chip-input {
+  accent-color: #5865f2;
+}
+.range-banner {
+  margin: 0.55rem 0 0;
+  padding: 0.45rem 0.65rem;
+  border-radius: 8px;
+  background: #1e1f22;
+  border: 1px solid #35373c;
+  font-size: 0.78rem;
+  color: #dbdee1;
+}
+.history-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.85rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: #1e1f22;
+}
+.history-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #7c8490;
+  margin-right: 0.25rem;
+}
+.hist-chip {
+  border: 1px solid #404249;
+  background: #25262b;
+  color: #b5bac1;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.hist-chip.on {
+  border-color: #5865f2;
+  color: #fff;
+  background: #5865f2;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.45rem 0.35rem;
+  vertical-align: middle;
+}
+th {
+  color: #949ba4;
+  font-weight: 600;
+  background: #1e1f22;
+}
+.empty {
+  text-align: center;
+  color: #949ba4;
+  padding: 1.5rem !important;
+}
+.table-total-row td {
+  font-weight: 700;
+  border-top: 1px solid #52565e;
+  background: #25262b;
+}
+.pnl-total .muted {
+  font-weight: 400;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.modal {
+  width: min(920px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #2b2d31;
+  border: 1px solid #404249;
+  border-radius: 12px;
+}
+.modal-head {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 0.75rem;
-  padding: 0.35rem 0;
-  border-bottom: 1px solid #3f4147;
-  font-size: 0.86rem;
+  padding: 1rem 1.1rem 0.65rem;
+  border-bottom: 1px solid #35373c;
 }
-code {
-  font-size: 0.84em;
+.modal-head h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+  color: #f2f3f5;
+}
+.modal-sub {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #949ba4;
+}
+.modal-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: flex-end;
+  padding: 0.65rem 1.1rem;
+  border-bottom: 1px solid #35373c;
+}
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.68rem;
+  color: #949ba4;
+}
+.dt-input {
+  background: #1e1f22;
+  border: 1px solid #404249;
+  border-radius: 6px;
+  color: #e3e5e8;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+}
+.modal-summary {
+  margin: 0;
+  padding: 0.55rem 1.1rem;
+  font-size: 0.78rem;
+  color: #b5bac1;
+  border-bottom: 1px solid #35373c;
+}
+.modal-table-wrap {
+  overflow: auto;
+  flex: 1;
+  padding: 0.5rem 1.1rem 1rem;
+}
+.modal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+.modal-table th,
+.modal-table td {
+  padding: 0.38rem 0.4rem;
+  border-bottom: 1px solid #35373c;
+  text-align: left;
+  vertical-align: top;
+}
+.preview-cell {
+  max-width: 220px;
+  word-break: break-word;
+  color: #949ba4;
 }
 </style>

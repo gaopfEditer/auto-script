@@ -72,6 +72,7 @@ import { createTwitterCdpService } from "./twitter-cdp-service.js";
 import { createKolvipCdpService } from "./kolvip-cdp-service.js";
 import { createKolvipBackfillService } from "./kolvip-cdp-backfill.js";
 import { registerKolvipCdpRoutes } from "./kolvip-cdp-api.js";
+import { registerKolvipManualBackfillRoutes } from "./kolvip-backfill-manual-api.js";
 import { registerTwitterCdpRoutes } from "./twitter-cdp-api.js";
 import {
   getAutoTradeChannelIds,
@@ -308,6 +309,7 @@ async function main() {
   registerTelegramBackfillRoutes(app);
   registerTwitterCdpRoutes(app, twitterCdp);
   registerKolvipCdpRoutes(app, kolvipCdp, store, kolvipBackfill);
+  registerKolvipManualBackfillRoutes(app, { store, signalCards });
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")

@@ -50,6 +50,7 @@ export async function rememberKolvipDataIds(all, kolvipChannelId, dataIds) {
  *   signalCards: NonNullable<Parameters<typeof runSignalCardPipelineForRows>[1]['signalCards']>,
  *   store: ReturnType<typeof import('./store.js').openStore>,
  *   log: ReturnType<typeof import('./logger.js').createLogger>,
+ *   skipLiquidation?: boolean,
  * }} opts
  */
 export async function ingestKolvipMessageBatch(opts) {
@@ -148,7 +149,8 @@ export async function ingestKolvipMessageBatch(opts) {
     );
   }
 
-  if (opts.mode === "backfill" && cardIds.length) {
+  // 手动 period 回溯：skipLiquidation=true，盈亏改走 /rebacktest 限速批量
+  if (opts.mode === "backfill" && cardIds.length && !opts.skipLiquidation) {
     await runBatchLiquidation(opts.store, opts.log, { cardIds, limit: cardIds.length });
   }
 
