@@ -2,10 +2,56 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   legacySignalSourceNeedsKolvipUpgrade,
+  shouldRunOllamaIngestFallback,
   upgradeKolvipSignalCardSourceFromRow,
 } from "./discord-signal-card-source.js";
 import { kolvipMessageToDiscordRow } from "./kolvip-cdp-message.js";
 import { DEFAULT_KOLVIP_CHANNEL_MAPPINGS } from "./kolvip-cdp-config.js";
+
+const OLLAMA_ON = { ollamaEnabled: true, ollamaBackfillEnabled: false };
+const OLLAMA_BACKFILL_OPT_IN = { ollamaEnabled: true, ollamaBackfillEnabled: true };
+
+describe("shouldRunOllamaIngestFallback", () => {
+  it("live gateway 仍允许 Ollama 兜底", () => {
+    assert.equal(
+      shouldRunOllamaIngestFallback({ source: "gateway_ws" }, {}, OLLAMA_ON),
+      true,
+    );
+  });
+
+  it("kolvip_api live 仍允许 Ollama 兜底", () => {
+    assert.equal(shouldRunOllamaIngestFallback({ source: "kolvip_api" }, {}, OLLAMA_ON), true);
+  });
+
+  it("kolvip_api_backfill 默认跳过 Ollama", () => {
+    assert.equal(
+      shouldRunOllamaIngestFallback({ source: "kolvip_api_backfill" }, {}, OLLAMA_ON),
+      false,
+    );
+  });
+
+  it("回溯 pipeline skipAiFallback 跳过 kolvip_api_scan 等批量源", () => {
+    assert.equal(
+      shouldRunOllamaIngestFallback(
+        { source: "kolvip_api_scan" },
+        { skipAiFallback: true },
+        OLLAMA_ON,
+      ),
+      false,
+    );
+  });
+
+  it("OLLAMA_BACKFILL_ENABLED=1 时回溯仍调 Ollama", () => {
+    assert.equal(
+      shouldRunOllamaIngestFallback(
+        { source: "kolvip_api_backfill" },
+        { skipAiFallback: true },
+        OLLAMA_BACKFILL_OPT_IN,
+      ),
+      true,
+    );
+  });
+});
 
 describe("legacySignalSourceNeedsKolvipUpgrade", () => {
   it("auto → kolvip_api_backfill", () => {

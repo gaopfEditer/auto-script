@@ -52,6 +52,26 @@ export function isKolvipIngestSource(source) {
   return String(source ?? "").trim().startsWith("kolvip");
 }
 
+/** 巨鲸精选频道 API 周回溯入库 source */
+export function isKolvipApiBackfillSource(source) {
+  return String(source ?? "").trim() === "kolvip_api_backfill";
+}
+
+/**
+ * 规则解析失败后是否调用 Ollama（live 默认开；回溯默认关，见 OLLAMA_BACKFILL_ENABLED）。
+ * @param {Record<string, unknown>} row
+ * @param {{ skipAiFallback?: boolean; debugSimulate?: boolean }} [opts]
+ * @param {{ ollamaEnabled: boolean; ollamaBackfillEnabled: boolean }} cfg
+ */
+export function shouldRunOllamaIngestFallback(row, opts = {}, cfg) {
+  if (!cfg.ollamaEnabled) return false;
+  if (opts.debugSimulate) return false;
+  if (cfg.ollamaBackfillEnabled) return true;
+  if (opts.skipAiFallback) return false;
+  if (isKolvipApiBackfillSource(row.source)) return false;
+  return true;
+}
+
 /**
  * 旧卡 source=auto/gateway 或较早 kolvip 值 → 允许写入回溯/扫描 source。
  * @param {unknown} existingSource

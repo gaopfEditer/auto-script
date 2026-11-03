@@ -12,7 +12,7 @@ export const DEFAULT_DISCORD_SIGNAL_OCR_CHANNEL_IDS = [PANGMAO_SIGNAL_CHANNEL_ID
 /** @returns {Set<string>} */
 export function getDiscordSignalOcrChannelIds() {
   const fromEnv = config.discordSignalOcrChannelIds;
-  if (fromEnv && fromEnv.size > 0) return fromEnv;
+  if (Array.isArray(fromEnv) && fromEnv.length > 0) return new Set(fromEnv);
   return new Set(DEFAULT_DISCORD_SIGNAL_OCR_CHANNEL_IDS);
 }
 

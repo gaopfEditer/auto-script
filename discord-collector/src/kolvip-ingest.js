@@ -124,6 +124,7 @@ export async function ingestKolvipMessageBatch(opts) {
       telegramPush: null,
       respectKolvipBypass: false,
       skipTelegram: opts.mode === "backfill" || !curated,
+      skipOllamaFallback: opts.mode === "backfill",
     });
     pipelineCreated = pipe.created;
     sourceUpgraded = pipe.sourceUpgraded ?? 0;

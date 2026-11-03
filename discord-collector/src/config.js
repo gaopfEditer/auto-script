@@ -338,6 +338,10 @@ export const config = {
   ollamaEnabled: !["0", "false", "no", "off"].includes(
     String(process.env.OLLAMA_ENABLED ?? "1").toLowerCase()
   ),
+  /** 回溯/批量 ingest 是否在规则解析失败后调 Ollama（默认关，避免 ~60s/条） */
+  ollamaBackfillEnabled: ["1", "true", "yes", "on"].includes(
+    String(process.env.OLLAMA_BACKFILL_ENABLED ?? "0").toLowerCase()
+  ),
   telegramSendUrl: (process.env.TELEGRAM_SEND_URL ?? "http://127.0.0.1:8000/api/telegram/send").trim(),
   /** HTTP 网关失败时兜底（与 oi_mornitor notify_telegram 同源 env） */
   telegramBotToken: (process.env.TELEGRAM_BOT_TOKEN ?? "").trim(),
