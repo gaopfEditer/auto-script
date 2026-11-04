@@ -12,7 +12,6 @@ from oi_mornitor.config import (
     PATTERN_OI_COMBO_TELEGRAM,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
-    TELEGRAM_PUSH_CHAT_ID,
     TELEGRAM_SEND_URL,
 )
 
@@ -193,10 +192,10 @@ def format_candle_oi_short_message(alert: dict[str, Any]) -> str:
 
 
 def _resolve_chat_id(override: str | None = None) -> str:
+    """OI 形态/K 线群：不用 TELEGRAM_PUSH_CHAT_ID（该群仅 collect:ui / listen 交易卡片）。"""
     return (
         (override or "").strip()
         or CANDLE_CARD_TELEGRAM_CHAT_ID
-        or TELEGRAM_PUSH_CHAT_ID
         or TELEGRAM_CHAT_ID
         or ""
     ).strip()
@@ -282,7 +281,7 @@ def send_telegram_text(text: str, *, chat_id: str | None = None) -> bool:
 
 
 def _pattern_push_chat_order(primary_chat_id: str | None = None) -> list[str]:
-    """形态卡片推送顺序：主目标群 → TELEGRAM_PUSH_CHAT_ID → TELEGRAM_CHAT_ID（去重、保序）。"""
+    """形态/OI 卡片推送顺序：主目标群 → TELEGRAM_CHAT_ID（去重、保序；不含交易卡片群）。"""
     out: list[str] = []
     seen: set[str] = set()
 
@@ -294,7 +293,6 @@ def _pattern_push_chat_order(primary_chat_id: str | None = None) -> list[str]:
         out.append(c)
 
     add(primary_chat_id)
-    add(TELEGRAM_PUSH_CHAT_ID)
     add(TELEGRAM_CHAT_ID)
     return out
 
@@ -362,13 +360,16 @@ def format_ma144_candle_message(alert: dict[str, Any]) -> str:
 
 
 def send_ma144_main_card_telegram(alert: dict[str, Any]) -> bool:
-    """144 均线形态 → MAIN 群（不受 MAIN 白名单限制）。"""
+    """144 均线形态 → MAIN 群（须在 OI_MAIN_CARD_DEFAULT_SYMBOLS 白名单内）。"""
+    from oi_mornitor.main_card_policy import is_main_card_symbol
     from oi_mornitor.ma144_reversal_config import is_ma144_main_enabled
     from oi_mornitor.telegram_push_toggles import is_main_push_enabled
 
     if not is_ma144_main_enabled():
         return False
     if str(alert.get("type") or "") != "ma144_candle_card":
+        return False
+    if not is_main_card_symbol(str(alert.get("symbol") or "")):
         return False
     if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
         return False
@@ -412,11 +413,19 @@ def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
     return _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
 
 
+def _candle_group_push_allowed(alert: dict[str, Any]) -> bool:
+    from oi_mornitor.candle_card_policy import is_candle_card_push_symbol
+
+    return is_candle_card_push_symbol(str(alert.get("symbol") or ""))
+
+
 def send_candle_card_telegram(alert: dict[str, Any]) -> bool:
     """射击之星 / 倒锤子 → OI_CANDLE_CARD 形态群（MAIN 由 pattern_monitor 另推）。"""
     from oi_mornitor.telegram_push_toggles import is_candle_push_enabled
 
     if not is_candle_push_enabled():
+        return False
+    if not _candle_group_push_allowed(alert):
         return False
     if not _confluence_gate_or_observation(alert):
         return False
@@ -449,6 +458,8 @@ def send_structure_card_telegram(alert: dict[str, Any]) -> bool:
     from oi_mornitor.telegram_push_toggles import is_structure_push_enabled
 
     if not is_structure_push_enabled():
+        return False
+    if not _candle_group_push_allowed(alert):
         return False
     if not _confluence_gate_or_observation(alert):
         return False
@@ -500,6 +511,8 @@ def send_volume_price_card_telegram(alert: dict[str, Any]) -> bool:
     if alert.get("observation_only") or not alert.get("vp_formal"):
         return False
     if not is_candle_push_enabled():
+        return False
+    if not _candle_group_push_allowed(alert):
         return False
     from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
 
@@ -614,6 +627,20 @@ def send_rev_vol_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     iv = str(alert.get("interval") or "").strip()
     if is_disabled_pattern_interval(iv):
+        return False
+    if not _candle_group_push_allowed(alert):
+        ok_main = False
+        if is_main_push_enabled() and MAIN_CARD_TELEGRAM_CHAT_ID:
+            from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
+
+            if is_main_card_mirror_eligible(alert):
+                text = _message_with_confluence(alert, format_rev_vol_card_message(alert))
+                ok_main = _send_card_text_with_fallback(
+                    alert, text, MAIN_CARD_TELEGRAM_CHAT_ID
+                )
+                if ok_main:
+                    _after_candle_card_pushed(alert)
+                return ok_main
         return False
     # 不强制共振档：NLV 本身即主信号；仍附加共振文案便于对照
     text = _message_with_confluence(alert, format_rev_vol_card_message(alert))

@@ -32,7 +32,6 @@ from oi_mornitor.config import (
     MAIN_CARD_TELEGRAM_CHAT_ID,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
-    TELEGRAM_PUSH_CHAT_ID,
     TELEGRAM_SEND_URL,
 )
 from oi_mornitor.derivatives_metrics import (
@@ -593,13 +592,12 @@ def get_btc_signals_feed(limit: int = 30, timeframe: str = "", symbol: str = "")
 
 
 def _ai_judge_telegram_chats() -> list[str]:
-    """Prefer AI_JUDGE_TELEGRAM_CHAT_ID, then MAIN/CANDLE/TELEGRAM_* groups (deduped)."""
+    """Prefer AI_JUDGE_TELEGRAM_CHAT_ID, then MAIN/CANDLE/TELEGRAM_CHAT_ID（不含 TELEGRAM_PUSH 交易卡片群）。"""
     chats: list[str] = []
     for c in (
         AI_JUDGE_TELEGRAM_CHAT_ID,
         MAIN_CARD_TELEGRAM_CHAT_ID,
         CANDLE_CARD_TELEGRAM_CHAT_ID,
-        TELEGRAM_PUSH_CHAT_ID,
         TELEGRAM_CHAT_ID,
     ):
         cs = str(c or "").strip()
