@@ -612,19 +612,10 @@ TV_ALERT_SCRIPT_TIMEOUT_SEC = float(os.getenv("OI_TV_ALERT_SCRIPT_TIMEOUT_SEC", 
 
 
 def proxy_url() -> str | None:
-    """读取代理，与仓库 volumn 模块一致。"""
-    for key in (
-        "HTTPS_PROXY",
-        "https_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-        "HTTP_PROXY",
-        "http_proxy",
-    ):
-        v = (os.getenv(key) or "").strip()
-        if v:
-            return v
-    return None
+    """读取代理（本地 7890/7891 不可达时自动互备）。"""
+    from oi_mornitor.proxy_resolve import resolve_effective_proxy_url
+
+    return resolve_effective_proxy_url()
 
 # —— 潜力暴涨漏斗 A/B/C（并行于 LH→HL；默认开猎场内 A 扫）——
 MOONSHOT_ENABLED = os.getenv("OI_MOONSHOT_ENABLED", "1").strip().lower() in (

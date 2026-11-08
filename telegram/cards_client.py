@@ -21,6 +21,7 @@ from default_tpsl import apply_default_tpsl_if_needed
 from trade_signal_detect import (
     TradeSignal,
     dedupe_trade_text_lines,
+    format_signal_push,
     refine_trade_text,
     strip_promotional_lines,
 )

@@ -64,7 +64,20 @@ def update_funnel_snapshot(
 
             _fast_at = now
 
+    try:
+        from oi_mornitor.scan_timeline_archive import (
+            last_radar_scan_ts,
+            persist_dormant_funnel_snapshot,
+        )
 
+        src = "funnel_fast" if fast_scan else ("funnel_slow" if slow_scan else "funnel")
+        persist_dormant_funnel_snapshot(
+            scan_ts=last_radar_scan_ts() or now,
+            payload=get_funnel_payload(),
+            source=src,
+        )
+    except Exception:
+        pass
 
 
 

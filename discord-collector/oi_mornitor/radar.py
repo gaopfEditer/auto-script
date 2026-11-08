@@ -527,9 +527,12 @@ class BinanceOIRadar:
         return time.time() < self._proxy_disabled_until
 
     def mark_proxy_down(self, reason: str = "connect_failed", cooldown_sec: float = 180.0) -> None:
+        from oi_mornitor.proxy_resolve import invalidate_proxy_cache
+
+        invalidate_proxy_cache()
         self._proxy_disabled_until = time.time() + cooldown_sec
         logger.warning(
-            "代理不可用（%s），%.0fs 内改直连；请检查 HTTPS_PROXY / 本地代理是否启动",
+            "代理不可用（%s），%.0fs 内改直连；将重试 OI_PROXY_FALLBACK_PORTS（7890/7891）",
             reason,
             cooldown_sec,
         )
@@ -767,6 +770,8 @@ class BinanceOIRadar:
             pool = await self._pool_from_fallback(session, reason="primary_fallback")
             if pool:
                 return pool
+            if proxy_url() and not self.proxy_disabled():
+                self.mark_proxy_down(reason="fallback_all_failed")
             # fallback 全部失败，兜底试 Binance（仍可能 ban）
             logger.warning("备选所全部为空，降级到币安 ticker/24hr（可能被 ban）")
 
@@ -1354,21 +1359,28 @@ class RadarService:
         self._equity_scan_ts: float = 0.0
         self._running = False
 
+    async def _reset_session(self) -> None:
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+        self._session_trust_env = None
+
     async def _ensure_session(self) -> aiohttp.ClientSession:
         from oi_mornitor.http_session import make_http_session
 
         # 显式 proxy=，避免 trust_env + NO_PROXY 导致币安 data 接口直连 451/超时
         px = proxy_url() if not self.radar.proxy_disabled() else None
         want_proxy = bool(px)
-        # 禁止在并发请求中途 close 旧 session（会导致 AssertionError / Session is closed，主循环假死）
         if self._session is not None and not self._session.closed:
             if self._session_trust_env != want_proxy:
                 logger.warning(
-                    "代理状态变化（显式代理 %s→%s），本轮仍复用旧 session，避免并发关闭",
+                    "代理状态变化（显式代理 %s→%s），重建 HTTP session",
                     self._session_trust_env,
                     want_proxy,
                 )
-            return self._session
+                await self._reset_session()
+            else:
+                return self._session
         self._session = make_http_session(trust_env=False, default_proxy=px)
         self._session_trust_env = want_proxy
         logger.info(
@@ -1381,7 +1393,27 @@ class RadarService:
     async def scan_once(self) -> list[dict[str, Any]]:
         session = await self._ensure_session()
         hot = await self.radar.scan(session)
-        self.matrix.update_from_rows(self.radar.last_all_rows, scan_ts=self.radar.last_scan_ts)
+        if not self.radar.last_all_rows and proxy_url() and not self.radar.proxy_disabled():
+            from oi_mornitor.proxy_resolve import invalidate_proxy_cache, resolve_effective_proxy_url
+
+            invalidate_proxy_cache()
+            resolve_effective_proxy_url(force_refresh=True)
+            self.radar.mark_proxy_down(reason="pool_empty_with_proxy")
+            await self._reset_session()
+            session = await self._ensure_session()
+            hot = await self.radar.scan(session)
+        matrix = self.matrix.update_from_rows(self.radar.last_all_rows, scan_ts=self.radar.last_scan_ts)
+        try:
+            from oi_mornitor.dormant_funnel_store import get_funnel_payload
+            from oi_mornitor.scan_timeline_archive import persist_radar_scan
+
+            persist_radar_scan(
+                scan_ts=self.radar.last_scan_ts,
+                matrix=matrix,
+                dormant=get_funnel_payload(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("scan_timeline 落盘跳过: %s", exc)
         await self.breakout_engine.scan(
             session,
             self.radar.last_all_rows,
@@ -1552,6 +1584,21 @@ class RadarService:
                 continue
             await asyncio.sleep(interval_sec)
 
+    @staticmethod
+    async def _proxy_tcp_reachable(px: str) -> bool:
+        from urllib.parse import urlparse
+
+        try:
+            u = urlparse(px)
+            host = u.hostname or "127.0.0.1"
+            port = u.port or (443 if u.scheme == "https" else 80)
+            _r, w = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=2.5)
+            w.close()
+            await w.wait_closed()
+            return True
+        except Exception:
+            return False
+
     async def start_background(self, interval_sec: int = 60) -> None:
         if self._running:
             return
@@ -1560,6 +1607,16 @@ class RadarService:
         px = proxy_url()
         if px:
             logger.info("Binance REST 代理: %s", px)
+            if not await self._proxy_tcp_reachable(px):
+                from oi_mornitor.proxy_resolve import resolve_effective_proxy_url
+
+                alt = resolve_effective_proxy_url(force_refresh=True)
+                if alt and alt != px and await self._proxy_tcp_reachable(alt):
+                    logger.warning("主配置代理不可达，已改用 %s", alt)
+                elif not await self._proxy_tcp_reachable(alt or px):
+                    logger.error(
+                        "代理不可达（已尝试 7890/7891 互备）；请确认 Clash 已启动"
+                    )
         else:
             logger.warning(
                 "未检测到 HTTPS_PROXY，直连 fapi.binance.com；"

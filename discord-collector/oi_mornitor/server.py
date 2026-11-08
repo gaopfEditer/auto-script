@@ -136,6 +136,55 @@ async def handle_dormant_funnel(_request: web.Request) -> web.Response:
     return _json_response(get_funnel_payload())
 
 
+async def handle_scan_archive_status(_request: web.Request) -> web.Response:
+    from oi_mornitor.scan_timeline_archive import archive_stats
+
+    return _json_response({"ok": True, **archive_stats()})
+
+
+async def handle_scan_archive_matrix(request: web.Request) -> web.Response:
+    from oi_mornitor.scan_timeline_archive import list_matrix_scan_ts, load_matrix_snapshot
+
+    q = request.query
+    if q.get("scan_ts"):
+        try:
+            ts = int(float(q["scan_ts"]))
+        except (TypeError, ValueError):
+            return _json_response({"ok": False, "error": "invalid scan_ts"}, status=400)
+        body = load_matrix_snapshot(ts)
+        if body is None:
+            return _json_response({"ok": False, "error": "not_found", "scan_ts": ts}, status=404)
+        return _json_response({"ok": True, "scan_ts": ts, "matrix": body})
+    try:
+        start = int(float(q.get("start") or 0))
+        end = int(float(q.get("end") or 2**31 - 1))
+    except (TypeError, ValueError):
+        return _json_response({"ok": False, "error": "invalid start/end"}, status=400)
+    keys = list_matrix_scan_ts(start, end)
+    return _json_response({"ok": True, "start": start, "end": end, "scan_ts_list": keys, "count": len(keys)})
+
+
+async def handle_scan_archive_dormant(request: web.Request) -> web.Response:
+    from oi_mornitor.scan_timeline_archive import load_dormant_at_or_before, load_dormant_snapshot
+
+    q = request.query
+    if q.get("scan_ts"):
+        try:
+            ts = int(float(q["scan_ts"]))
+        except (TypeError, ValueError):
+            return _json_response({"ok": False, "error": "invalid scan_ts"}, status=400)
+        if str(q.get("at_or_before") or "").lower() in ("1", "true", "yes"):
+            key, body = load_dormant_at_or_before(ts)
+            if body is None:
+                return _json_response({"ok": False, "error": "not_found", "scan_ts": ts}, status=404)
+            return _json_response({"ok": True, "scan_ts": ts, "archive_key": key, "funnel": body})
+        body = load_dormant_snapshot(ts)
+        if body is None:
+            return _json_response({"ok": False, "error": "not_found", "scan_ts": ts}, status=404)
+        return _json_response({"ok": True, "scan_ts": ts, "funnel": body})
+    return _json_response({"ok": False, "error": "scan_ts required"}, status=400)
+
+
 async def handle_potential_discovery(_request: web.Request) -> web.Response:
     """形态页「潜力发现」：多模型共振列表。"""
     from oi_mornitor.potential_discovery_runner import get_potential_scan_diagnostics
@@ -1711,6 +1760,9 @@ def create_app() -> web.Application:
     app.router.add_get("/api/matrix", handle_matrix)
 
     app.router.add_get("/api/dormant-funnel", handle_dormant_funnel)
+    app.router.add_get("/api/scan-archive/status", handle_scan_archive_status)
+    app.router.add_get("/api/scan-archive/matrix", handle_scan_archive_matrix)
+    app.router.add_get("/api/scan-archive/dormant-funnel", handle_scan_archive_dormant)
     app.router.add_get("/api/potential-discovery", handle_potential_discovery)
     app.router.add_get("/api/binance/leaderboards", handle_binance_leaderboards)
 
