@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parsePangmao, parseSignalText } from "./discord-signal-parsers.js";
+import { parsePangmao, parseSignalText, formatCardFallback } from "./discord-signal-parsers.js";
 import { DEFAULT_SIGNAL_CHANNELS, isSignalChannel, getSignalChannelConfig } from "./discord-signal-config.js";
 import { isStagedTradeChannel, STAGED_TRADE_PARSERS } from "./discord-signal-staged-trade.js";
 
@@ -85,4 +85,22 @@ describe("胖猫社区 parser + 频道配置", () => {
     assert.ok(r);
     assert.equal(r.symbol, "MAGMA");
   });
+
+  it("formatCardFallback 胖猫用可读卡片而非 JSON", () => {
+    const open = parsePangmao("以太坊2426附近空，2450止损");
+    assert.ok(open);
+    const text = formatCardFallback(open, "cn_brief");
+    assert.equal(text.includes("{"), false);
+    assert.match(text, /ETH/);
+    assert.match(text, /做空/);
+    assert.match(text, /入场：2426/);
+    assert.match(text, /止损：2450/);
+
+    const tpsl = parsePangmao("0.059止损");
+    assert.ok(tpsl);
+    const tpslText = formatCardFallback(tpsl, "cn_brief");
+    assert.equal(tpslText.trim().startsWith("{"), false);
+    assert.match(tpslText, /止损：0\.059/);
+  });
+
 });
