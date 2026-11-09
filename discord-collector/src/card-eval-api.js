@@ -206,6 +206,54 @@ function groupByChannel(cards) {
 }
 
 /**
+ * @param {ReturnType<typeof archiveCardToClient>[]} cards
+ */
+export function buildEvalCardListItems(cards) {
+  return cards.map((card) => {
+    const c = classifyCardEval(card);
+    const ex = card.execution && typeof card.execution === "object" ? card.execution : null;
+    const planned = ex?.planned && typeof ex.planned === "object" ? ex.planned : null;
+    return {
+      id: card.id,
+      symbol: card.symbol,
+      direction: ex?.direction ?? null,
+      channelId: card.channelId,
+      channelName: card.channelName,
+      sourceType: card.sourceType,
+      signalAt: card.signalAt,
+      entry: planned?.entryPrice ?? null,
+      takeProfits: planned?.takeProfitPrices ?? [],
+      stopLoss: planned?.stopLossPrice ?? null,
+      status: c.progress?.status ?? null,
+      outcome: c.outcome,
+      entered: c.entered,
+      pnlPct: c.pnlPct,
+      tpHits: c.tpHits,
+      progress: c.progress,
+      execution: card.execution ?? null,
+      backtest: card.backtest ?? null,
+    };
+  });
+}
+
+/** 三窗口：近 30 天滚动 / 近 7 天滚动 / 上一自然周（与 channel-strip 一致，本地时区周一界）。 */
+export function resolveTelegramGroupEvalWindows() {
+  const month = resolveEvalRangeMs("30d");
+  const week = resolveEvalRangeMs("7d");
+  const lastWeek = resolveLastWeekMs();
+  return {
+    month: { key: "month", label: "近一个月", fromMs: month.fromMs, toMs: month.toMs },
+    week: { key: "week", label: "近一周", fromMs: week.fromMs, toMs: week.toMs },
+    lastWeek: {
+      key: "lastWeek",
+      label: "上一周",
+      fromMs: lastWeek.fromMs,
+      toMs: lastWeek.toMs,
+    },
+  };
+}
+
+/**
  * @param {import("express").Express} app
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  * @param {{ requireOpenApiKey?: import("express").RequestHandler }} [deps]
@@ -341,31 +389,7 @@ export function registerCardEvalRoutes(app, store, deps = {}) {
         cards = cards.filter((c) => !String(c.channelId ?? "").trim());
       }
 
-      const items = cards.map((card) => {
-        const c = classifyCardEval(card);
-        const ex = card.execution && typeof card.execution === "object" ? card.execution : null;
-        const planned = ex?.planned && typeof ex.planned === "object" ? ex.planned : null;
-        return {
-          id: card.id,
-          symbol: card.symbol,
-          direction: ex?.direction ?? null,
-          channelId: card.channelId,
-          channelName: card.channelName,
-          sourceType: card.sourceType,
-          signalAt: card.signalAt,
-          entry: planned?.entryPrice ?? null,
-          takeProfits: planned?.takeProfitPrices ?? [],
-          stopLoss: planned?.stopLossPrice ?? null,
-          status: c.progress?.status ?? null,
-          outcome: c.outcome,
-          entered: c.entered,
-          pnlPct: c.pnlPct,
-          tpHits: c.tpHits,
-          progress: c.progress,
-          execution: card.execution ?? null,
-          backtest: card.backtest ?? null,
-        };
-      });
+      const items = buildEvalCardListItems(cards);
 
       res.json({
         ok: true,
