@@ -1090,6 +1090,7 @@ export function formatCardFallback(parsed, styleId) {
   // 军长 / 币圈所长等同款简体极简（cn_brief / cn_formal）
   if (
     parsed.parser === "junzhang" ||
+    parsed.parser === "pangmao" ||
     ((parsed.parser === "biquan_suozhang" ||
       parsed.parser === "dabiaoke" ||
       parsed.parser === "feiyang" ||
