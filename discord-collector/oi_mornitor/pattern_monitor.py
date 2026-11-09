@@ -1803,28 +1803,31 @@ class PatternMonitorEngine:
                 logger.info("📩 形态卡片 %s %s %s @%s", sym, type_label, iv, close_ts)
                 card_vol_ok = bool(alert.get("card_vol_ok", True))
                 ok = False
-                if is_candle_push_enabled():
-                    if card_vol_ok:
-                        try:
-                            ok = await send_candle_card_telegram_async(alert)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
-                            ok = False
-                    else:
-                        try:
-                            ok = await send_main_card_telegram_async(alert)
-                            if ok:
-                                from oi_mornitor.notify_telegram import _after_candle_card_pushed
+                from oi_mornitor.candle_card_policy import is_candle_card_push_symbol
+                from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
+                from oi_mornitor.notify_telegram import _after_candle_card_pushed
 
-                                _after_candle_card_pushed(alert)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning("Telegram MAIN 形态卡片失败 %s: %s", sym, exc)
-                            ok = False
-                else:
-                    # 推送关闭：仍写入形态信号列表 / ticker（closed-bar）
+                candle_path = (
+                    is_candle_push_enabled()
+                    and card_vol_ok
+                    and is_candle_card_push_symbol(sym)
+                )
+                if candle_path:
                     try:
-                        from oi_mornitor.notify_telegram import _after_candle_card_pushed
+                        ok = await send_candle_card_telegram_async(alert)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Telegram 形态卡片失败 %s: %s", sym, exc)
+                        ok = False
 
+                if not ok and is_main_card_mirror_eligible(alert):
+                    try:
+                        ok = await send_main_card_telegram_async(alert)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Telegram MAIN 形态卡片失败 %s: %s", sym, exc)
+                        ok = False
+                elif not ok:
+                    # 形态群未发（开关关 / 非 LONG·OTHER 名单 / 量能）：仍入库
+                    try:
                         _after_candle_card_pushed(alert)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("形态信号入库失败 %s: %s", sym, exc)
