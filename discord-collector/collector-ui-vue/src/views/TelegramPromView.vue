@@ -8,6 +8,12 @@ import {
   getTelegramShowRealIdentity,
   setTelegramShowRealIdentity,
 } from "../lib/telegramChannelPersona.js";
+import {
+  fetchTelegramGroupEval,
+  fetchTelegramGroupEvalCards,
+  formatTotalPnlLabel,
+} from "../lib/telegramGroupEvalApi.js";
+import { directionLabel, outcomeLabel } from "../lib/signalExecution.js";
 
 defineOptions({ name: "TelegramPromView" });
 
@@ -28,6 +34,12 @@ defineOptions({ name: "TelegramPromView" });
  *   imageUrls?: string[],
  * }} LiveMessage */
 
+const EVAL_WINDOWS = [
+  { key: "month", label: "近一个月" },
+  { key: "week", label: "近一周" },
+  { key: "lastWeek", label: "上一周" },
+];
+
 const TIME_OPTIONS = [
   { value: "1h", label: "近 1 小时" },
   { value: "6h", label: "近 6 小时" },
@@ -47,6 +59,19 @@ const error = ref("");
 const status = ref("连接中…");
 const showRealIdentity = ref(getTelegramShowRealIdentity());
 const canToggleIdentity = canToggleTelegramRealIdentity();
+
+const groupEvalNote = ref("");
+const groupEvalRows = ref(/** @type {import("../lib/telegramGroupEvalApi.js").TgGroupEvalRow[]} */ ([]));
+const groupEvalLoading = ref(false);
+const groupEvalError = ref("");
+
+const detailOpen = ref(false);
+const detailLoading = ref(false);
+/** @type {import("vue").Ref<Record<string, unknown> | null>} */
+const detailPayload = ref(null);
+const detailChatId = ref("");
+/** @type {import("vue").Ref<"month"|"week"|"lastWeek">} */
+const detailWindowKey = ref("week");
 
 const displayChannels = computed(() =>
   channels.value.map((c) => disguiseChannel(c, showRealIdentity.value)),
@@ -136,6 +161,52 @@ const visibleChannels = computed(() => {
   if (!id) return displayChannels.value;
   return displayChannels.value.filter((c) => c.chatId === id);
 });
+
+const groupEvalMap = computed(() => {
+  /** @type {Record<string, import("../lib/telegramGroupEvalApi.js").TgGroupEvalRow>} */
+  const map = {};
+  for (const g of groupEvalRows.value) {
+    map[g.chatId] = g;
+    const n = Number(g.chatId);
+    if (Number.isFinite(n)) map[String(n)] = g;
+  }
+  return map;
+});
+
+/** @param {string} chatId @param {"month"|"week"|"lastWeek"} key */
+function windowMetrics(chatId, key) {
+  const row =
+    groupEvalMap.value[chatId] || groupEvalMap.value[String(Number(chatId))];
+  if (!row) return null;
+  return row[key];
+}
+
+/** @param {number|null|undefined} pnl */
+function pnlToneClass(pnl) {
+  const v = Number(pnl);
+  if (!Number.isFinite(v) || v === 0) return "";
+  return v > 0 ? "gain" : "loss";
+}
+
+/** @param {string} chatId @param {"month"|"week"|"lastWeek"} key @param {string} label */
+function windowPnlLabel(chatId, key, label) {
+  const m = windowMetrics(chatId, key);
+  if (!m && groupEvalLoading.value) return `${label} …`;
+  return formatTotalPnlLabel(m?.totalPnlPct, m ?? undefined);
+}
+
+/** @param {Record<string, unknown>} card */
+function cardPnlText(card) {
+  const p = Number(card.pnlPct);
+  if (Number.isFinite(p)) return `${p >= 0 ? "+" : ""}${p.toFixed(2)}%`;
+  return "—";
+}
+
+/** @param {string} iso */
+function formatSignalTime(iso) {
+  if (!iso) return "—";
+  return formatTime(iso);
+}
 
 function toggleRealIdentity() {
   showRealIdentity.value = !showRealIdentity.value;
@@ -242,6 +313,47 @@ async function loadChannels() {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   }
 }
+
+async function loadGroupEval() {
+  groupEvalLoading.value = true;
+  try {
+    const data = await fetchTelegramGroupEval();
+    groupEvalRows.value = data.groups;
+    groupEvalNote.value = data.note || "";
+    groupEvalError.value = "";
+  } catch (e) {
+    groupEvalError.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    groupEvalLoading.value = false;
+  }
+}
+
+/** @param {string} chatId @param {"month"|"week"|"lastWeek"} windowKey */
+async function openGroupEvalDetail(chatId, windowKey) {
+  detailChatId.value = chatId;
+  detailWindowKey.value = windowKey;
+  detailOpen.value = true;
+  detailLoading.value = true;
+  detailPayload.value = null;
+  try {
+    detailPayload.value = await fetchTelegramGroupEvalCards(chatId, windowKey);
+    groupEvalError.value = "";
+  } catch (e) {
+    groupEvalError.value = String(/** @type {Error} */ (e).message ?? e);
+  } finally {
+    detailLoading.value = false;
+  }
+}
+
+function closeGroupDetail() {
+  detailOpen.value = false;
+  detailPayload.value = null;
+}
+
+const detailWindowLabel = computed(() => {
+  const hit = EVAL_WINDOWS.find((w) => w.key === detailWindowKey.value);
+  return hit?.label ?? detailWindowKey.value;
+});
 
 async function loadMessages() {
   loading.value = true;
@@ -376,12 +488,13 @@ async function loadListenStatus() {
 onMounted(() => {
   void (async () => {
     await loadChannels();
-    await loadMessages();
+    await Promise.all([loadMessages(), loadGroupEval()]);
     await loadListenStatus();
   })();
   unsub = subscribeCollectorSocket(onWs);
   pollTimer = setInterval(() => {
     void loadMessages();
+    void loadGroupEval();
     void loadListenStatus();
   }, 20_000);
 });
@@ -425,6 +538,8 @@ onUnmounted(() => {
     </header>
 
     <p v-if="error" class="err">{{ error }}</p>
+    <p v-if="groupEvalError" class="err subtle">{{ groupEvalError }}</p>
+    <p v-else-if="groupEvalNote" class="eval-note muted">{{ groupEvalNote }}</p>
 
     <section class="filters" aria-label="筛选">
       <label class="field">
@@ -510,9 +625,33 @@ onUnmounted(() => {
         <header class="col-head">
           <img v-if="c.avatarUrl" class="col-av" :src="c.avatarUrl" alt="" />
           <div v-else class="col-av fallback">{{ (c.name || "?").slice(0, 1) }}</div>
-          <div class="col-title">
-            <strong>{{ c.name }}</strong>
-            <span>{{ messagesForChannel(c.chatId).length }} 条</span>
+          <div class="col-head-main">
+            <div class="col-title">
+              <strong>{{ c.name }}</strong>
+              <span>{{ messagesForChannel(c.chatId).length }} 条实时消息</span>
+            </div>
+            <div class="col-eval" aria-label="信号卡总盈利率">
+              <span class="col-eval-hint">总盈利率（MySQL 信号卡）</span>
+              <div class="col-eval-grid">
+                <button
+                  v-for="w in EVAL_WINDOWS"
+                  :key="c.chatId + '-' + w.key"
+                  type="button"
+                  class="eval-pill"
+                  :title="`查看${w.label}单子详情`"
+                  @click="openGroupEvalDetail(c.chatId, w.key)"
+                >
+                  <span class="eval-pill-label">{{ w.label }}</span>
+                  <span
+                    class="eval-pill-pnl"
+                    :class="pnlToneClass(windowMetrics(c.chatId, w.key)?.totalPnlPct)"
+                  >
+                    {{ windowPnlLabel(c.chatId, w.key, w.label) }}
+                  </span>
+                  <span class="eval-pill-more">详情</span>
+                </button>
+              </div>
+            </div>
           </div>
         </header>
         <div
@@ -553,6 +692,70 @@ onUnmounted(() => {
         暂无频道。请确认 collect:ui + listen.py + channel_profiles.json
       </p>
     </section>
+
+    <div v-if="detailOpen" class="modal group-eval-modal" role="dialog" aria-modal="true">
+      <div class="modal-card wide">
+        <header>
+          <div>
+            <strong
+              >{{ detailPayload?.name || detailChatId }} · {{ detailWindowLabel }} ·
+              单子详情</strong
+            >
+            <p v-if="detailPayload?.note" class="muted tiny">{{ detailPayload.note }}</p>
+          </div>
+          <button type="button" class="ghost" @click="closeGroupDetail">关闭</button>
+        </header>
+        <p v-if="detailLoading" class="muted">加载中…</p>
+        <template v-else-if="detailPayload">
+          <p class="detail-summary muted">
+            总盈利率
+            <span
+              :class="pnlToneClass(Number(detailPayload.metrics?.totalPnlPct))"
+              class="mono"
+            >
+              {{
+                formatTotalPnlLabel(
+                  Number(detailPayload.metrics?.totalPnlPct),
+                  detailPayload.metrics,
+                )
+              }}
+            </span>
+            <template v-if="detailPayload.metrics?.winRate != null">
+              · 胜率 {{ Number(detailPayload.metrics.winRate).toFixed(1) }}%
+            </template>
+          </p>
+          <div class="detail-table-wrap">
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>币种</th>
+                  <th>方向</th>
+                  <th>入场</th>
+                  <th>结果</th>
+                  <th>盈亏</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="card in detailPayload.cards" :key="String(card.id ?? card.signalAt)">
+                  <td class="tiny">{{ formatSignalTime(String(card.signalAt || "")) }}</td>
+                  <td class="mono">{{ card.symbol || "—" }}</td>
+                  <td>{{ directionLabel(card.direction) }}</td>
+                  <td class="mono tiny">{{ card.entry ?? "—" }}</td>
+                  <td>{{ outcomeLabel(card.outcome) }}</td>
+                  <td class="mono" :class="pnlToneClass(Number(card.pnlPct))">
+                    {{ cardPnlText(card) }}
+                  </td>
+                </tr>
+                <tr v-if="!detailPayload.cards?.length">
+                  <td colspan="6" class="empty-cell">该窗口暂无已入库信号卡</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+    </div>
 
     <div v-if="editPin" class="modal" role="dialog" aria-modal="true">
       <div class="modal-card">
@@ -774,13 +977,125 @@ button.ghost {
   background: #2b2d31;
   overflow: hidden;
 }
+.eval-note {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+}
+.err.subtle {
+  opacity: 0.9;
+  font-size: 0.78rem;
+}
 .col-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.55rem;
   padding: 0.55rem 0.7rem;
   background: #232428;
   flex-shrink: 0;
+}
+.col-head-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.col-eval-hint {
+  display: block;
+  font-size: 0.65rem;
+  color: #848990;
+  margin-bottom: 0.2rem;
+}
+.col-eval-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.eval-pill {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.35rem;
+  border: 1px solid #404249;
+  background: #1e1f22;
+  border-radius: 8px;
+  padding: 0.22rem 0.45rem;
+  font-size: 0.68rem;
+  color: #b5bac1;
+  cursor: pointer;
+  text-align: left;
+}
+.eval-pill:hover {
+  border-color: #5865f2;
+  background: rgba(88, 101, 242, 0.12);
+}
+.eval-pill-label {
+  color: #949ba4;
+}
+.eval-pill-pnl {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  color: #e8eaed;
+}
+.eval-pill-pnl.gain {
+  color: #3ba55d;
+}
+.eval-pill-pnl.loss {
+  color: #ed4245;
+}
+.eval-pill-more {
+  color: #5865f2;
+  font-size: 0.62rem;
+}
+.gain {
+  color: #3ba55d;
+}
+.loss {
+  color: #ed4245;
+}
+.mono {
+  font-family: ui-monospace, monospace;
+}
+.tiny {
+  font-size: 0.72rem;
+}
+.modal-card.wide {
+  width: min(920px, 96vw);
+  max-height: 86vh;
+  overflow: auto;
+}
+.group-eval-modal .detail-summary {
+  margin: 0 0 0.65rem;
+  font-size: 0.8rem;
+}
+.detail-table-wrap {
+  overflow: auto;
+  max-height: 58vh;
+  border: 1px solid #383a40;
+  border-radius: 8px;
+}
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.detail-table th,
+.detail-table td {
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid #383a40;
+  text-align: left;
+}
+.detail-table th {
+  position: sticky;
+  top: 0;
+  background: #2b2d31;
+  color: #949ba4;
+  font-weight: 600;
+}
+.empty-cell {
+  text-align: center;
+  color: #949ba4;
+  padding: 1rem;
 }
 .col-av {
   width: 28px;

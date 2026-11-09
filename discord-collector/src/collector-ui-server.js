@@ -56,6 +56,7 @@ import { registerMainCardTelegramDigestRoutes } from "./card-main-telegram-diges
 import { registerCardValidateRoutes } from "./card-validate-api.js";
 import { registerTelegramPromRoutes } from "./telegram-prom-api.js";
 import { registerTelegramLiveRoutes } from "./telegram-live-api.js";
+import { registerTelegramGroupEvalRoutes } from "./telegram-group-eval-api.js";
 import { registerTelegramBackfillRoutes } from "./telegram-backfill-api.js";
 import { registerDiscordBackfillRoutes } from "./discord-backfill-api.js";
 import { registerCommunityRoutes } from "./community-api.js";
@@ -310,6 +311,7 @@ async function main() {
   /** @type {() => Record<string, unknown>} */
   let getTelegramListenStatus = () => ({ running: null, managed: false });
   registerTelegramLiveRoutes(app, broadcast, { getListenStatus: () => getTelegramListenStatus() });
+  registerTelegramGroupEvalRoutes(app, store);
   registerTelegramBackfillRoutes(app);
   registerTwitterCdpRoutes(app, twitterCdp);
   registerKolvipCdpRoutes(app, kolvipCdp, store, kolvipBackfill);
