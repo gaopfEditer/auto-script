@@ -4,6 +4,7 @@
  */
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 import { config } from "./config.js";
+import { invalidateLocalProxyCache, resolveReachableLocalProxy } from "./local-proxy.js";
 import { isShortDirection } from "./card-direction.js";
 import { createLogger } from "./logger.js";
 import {
@@ -59,12 +60,12 @@ export function resetBinanceKlineBlockForBacktest() {
 
 /** @type {import("undici").Dispatcher | undefined} */
 let marketDispatcher;
+/** @type {string} */
+let marketDispatcherProxy = "";
 
-function getMarketDispatcher() {
-  const proxy = config.binanceProxy;
-  if (!proxy) return undefined;
-  if (!marketDispatcher) marketDispatcher = new ProxyAgent(proxy);
-  return marketDispatcher;
+function resetMarketDispatcher() {
+  marketDispatcher = undefined;
+  marketDispatcherProxy = "";
 }
 
 /**
@@ -73,11 +74,28 @@ function getMarketDispatcher() {
  */
 async function marketFetch(url, init = {}) {
   const signal = init.signal ?? AbortSignal.timeout(config.binanceRequestTimeoutMs);
-  const dispatcher = getMarketDispatcher();
-  if (dispatcher) {
-    return undiciFetch(url, { ...init, signal, dispatcher });
+  const proxy = await resolveReachableLocalProxy(config.binanceProxy);
+  if (proxy) {
+    if (!marketDispatcher || marketDispatcherProxy !== proxy) {
+      marketDispatcher = new ProxyAgent(proxy);
+      marketDispatcherProxy = proxy;
+    }
+    return undiciFetch(url, { ...init, signal, dispatcher: marketDispatcher });
   }
   return fetch(url, { ...init, signal });
+}
+
+/** @param {unknown} err */
+function isProxyTransportError(err) {
+  const code = err && typeof err === "object" && "code" in err ? String(/** @type {{ code?: string }} */ (err).code) : "";
+  const cause =
+    err && typeof err === "object" && "cause" in err
+      ? String(/** @type {{ cause?: { code?: string } }} */ (err).cause?.code ?? "")
+      : "";
+  const msg = String(/** @type {{ message?: string }} */ (err)?.message ?? err);
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|UND_ERR|fetch failed|socket|network|PROXY_TRANSPORT/i.test(
+    `${code} ${cause} ${msg}`
+  );
 }
 
 /** @param {string} symbol */
@@ -98,9 +116,10 @@ function intervalSpanMs(interval) {
 }
 
 /**
- * @param {string} symbol 如 BTC 或 BTCUSDT
+ * @param {string} symbol
+ * @returns {Promise<{ symbol: string, price: number }>}
  */
-export async function fetchFuturesPrice(symbol) {
+async function fetchBinanceFuturesPrice(symbol) {
   const candidates = symbolLookupCandidates(symbol, "binance");
   let lastErr = null;
   for (const sym of candidates) {
@@ -110,10 +129,103 @@ export async function fetchFuturesPrice(symbol) {
       const res = await marketFetch(url);
       if (!res.ok) throw new Error(`Binance price HTTP ${res.status}`);
       const data = await res.json();
-      return { symbol: sym, price: Number(data.price) };
+      const price = Number(data.price);
+      if (!Number.isFinite(price) || price <= 0) throw new Error("Binance price empty");
+      return { symbol: sym, price };
     } catch (e) {
       lastErr = e;
     }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? "binance price failed"));
+}
+
+/** @param {string} symbol */
+async function fetchBybitFuturesPrice(symbol) {
+  const sym = normalizeUsdtSymbol(symbol);
+  const url = `${BYBIT_BASE}/v5/market/tickers?category=linear&symbol=${encodeURIComponent(sym)}`;
+  const res = await marketFetch(url);
+  if (!res.ok) throw new Error(`Bybit price HTTP ${res.status}`);
+  const data = await res.json();
+  if (Number(data?.retCode) !== 0) throw new Error(`Bybit price ${data?.retMsg ?? "error"}`);
+  const row = data?.result?.list?.[0];
+  const price = Number(row?.markPrice ?? row?.lastPrice);
+  if (!Number.isFinite(price) || price <= 0) throw new Error("Bybit price empty");
+  return { symbol: sym, price };
+}
+
+/** @param {string} symbol */
+async function fetchOkxFuturesPrice(symbol) {
+  const inst = symbolToOkxSwap(symbol);
+  const url = `${OKX_BASE}/api/v5/market/ticker?instId=${encodeURIComponent(inst)}`;
+  const res = await marketFetch(url);
+  if (!res.ok) throw new Error(`OKX price HTTP ${res.status}`);
+  const data = await res.json();
+  if (String(data?.code) !== "0") throw new Error(`OKX price ${data?.msg ?? "error"}`);
+  const row = data?.data?.[0];
+  const price = Number(row?.markPx ?? row?.last);
+  if (!Number.isFinite(price) || price <= 0) throw new Error("OKX price empty");
+  return { symbol: inst, price };
+}
+
+/** @param {string} symbol */
+async function fetchBitgetPublicPrice(symbol) {
+  const sym = normalizeUsdtSymbol(symbol);
+  const base = String(config.bitgetBaseUrl || "https://api.bitget.com").replace(/\/$/, "");
+  const url = `${base}/api/v2/mix/market/ticker?productType=USDT-FUTURES&symbol=${encodeURIComponent(sym)}`;
+  const res = await marketFetch(url);
+  if (!res.ok) throw new Error(`Bitget price HTTP ${res.status}`);
+  const data = await res.json();
+  if (data && typeof data === "object" && "code" in data && String(data.code) !== "00000") {
+    throw new Error(`Bitget price ${data.msg ?? data.code}`);
+  }
+  const row = Array.isArray(data?.data) ? data.data[0] : data?.data;
+  const price = Number(row?.markPrice ?? row?.lastPr);
+  if (!Number.isFinite(price) || price <= 0) throw new Error("Bitget price empty");
+  return { symbol: sym, price };
+}
+
+/**
+ * 币安失败时依次试 Bybit / OKX / Bitget 公开行情。代理端口全灭时换可达本地端口再试一次。
+ * @param {string} symbol 如 BTC 或 BTCUSDT
+ */
+export async function fetchFuturesPrice(symbol) {
+  try {
+    return await readFuturesPrice(symbol);
+  } catch (err) {
+    if (!isProxyTransportError(err)) throw err;
+    invalidateLocalProxyCache();
+    resetMarketDispatcher();
+    return readFuturesPrice(symbol);
+  }
+}
+
+/** @param {string} symbol */
+async function readFuturesPrice(symbol) {
+  /** @type {Array<() => Promise<{ symbol: string, price: number }>>} */
+  const sources = [
+    () => fetchBinanceFuturesPrice(symbol),
+    () => fetchBybitFuturesPrice(symbol),
+    () => fetchOkxFuturesPrice(symbol),
+    () => fetchBitgetPublicPrice(symbol),
+  ];
+  let lastErr = /** @type {unknown} */ (null);
+  let transportFails = 0;
+  for (const fn of sources) {
+    try {
+      const hit = await fn();
+      if (fn !== sources[0]) log.debug(`现价兜底 ${hit.symbol} ${hit.price}`);
+      return hit;
+    } catch (e) {
+      lastErr = e;
+      if (isProxyTransportError(e)) transportFails += 1;
+    }
+  }
+  if (transportFails === sources.length) {
+    const err = new Error(
+      `PROXY_TRANSPORT ${lastErr instanceof Error ? lastErr.message : String(lastErr ?? "price failed")}`
+    );
+    err.code = "PROXY_TRANSPORT";
+    throw err;
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? "price failed"));
 }

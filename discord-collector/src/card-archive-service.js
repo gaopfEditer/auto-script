@@ -52,6 +52,7 @@ import {
   TELEGRAM_TRADE_INITIAL_SL_PCT,
   telegramTradeRequiresStopLoss,
 } from "./telegram-auto-trade.js";
+import { isPlaceholderTradeSymbol } from "./symbol-aliases.js";
 import {
   isAutoTradeChannel,
   isAutoTradeExcludedMajorSymbol,
@@ -454,9 +455,32 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     let execution = normalizeExecution(executionJson, parsedJson);
     /** @type {Record<string, unknown>} */
     const parsedForTrade = { ...(parsedJson && typeof parsedJson === "object" ? parsedJson : {}) };
+    const rawBody = String(clientCard?.rawContent ?? clientCard?.body ?? "").trim();
+    if (rawBody && !String(parsedForTrade.rawContent ?? parsedForTrade.body ?? "").trim()) {
+      parsedForTrade.rawContent = rawBody;
+    }
     const prepared = await prepareAutoTradeForOrder(parsedForTrade, execution, symbol);
     execution = prepared.execution;
     const parsed = prepared.parsed;
+    const tradeSymbol = String(parsed.symbol || execution.symbol || symbol || "").trim();
+    const tradeDir = String(parsed.direction || execution.direction || "").trim();
+
+    if (!tradeSymbol || isPlaceholderTradeSymbol(tradeSymbol) || !tradeDir) {
+      log.info(
+        `Telegram 自动交易等待补全 card=#${cardId} symbol=${tradeSymbol || "待补充"} direction=${tradeDir || "待补充"}`
+      );
+      return {
+        bitget: { skipped: "incomplete_signal", symbol: tradeSymbol },
+        weex: { skipped: "incomplete_signal", symbol: tradeSymbol },
+      };
+    }
+    if (isAutoTradeExcludedMajorSymbol(tradeSymbol)) {
+      log.info(`Telegram 自动交易跳过主流币 symbol=${tradeSymbol} card=#${cardId}`);
+      return {
+        bitget: { skipped: "major_symbol_excluded", symbol: tradeSymbol },
+        weex: { skipped: "major_symbol_excluded", symbol: tradeSymbol },
+      };
+    }
 
     if (!telegramTradeRequiresStopLoss(execution)) {
       log.warn(
@@ -476,11 +500,11 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
           channelId,
           parsed,
           executionJson: execution,
-          symbol,
+          symbol: tradeSymbol,
           channelName: String(clientCard.channelName ?? ""),
         });
         log.info(
-          `Telegram Bitget 开单 card=#${cardId} symbol=${symbol} channel=${channelId} result=${JSON.stringify(results.bitget)?.slice(0, 200)}`
+          `Telegram Bitget 开单 card=#${cardId} symbol=${tradeSymbol} channel=${channelId} result=${JSON.stringify(results.bitget)?.slice(0, 200)}`
         );
       } catch (e) {
         log.warn(`Telegram Bitget 自动下单异常 card=#${cardId}: ${String(/** @type {Error} */ (e).message ?? e)}`);
@@ -496,11 +520,11 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
           channelId,
           parsed,
           executionJson: execution,
-          symbol,
+          symbol: tradeSymbol,
           channelName: String(clientCard.channelName ?? ""),
         });
         log.info(
-          `Telegram WEEX 开单 card=#${cardId} symbol=${symbol} channel=${channelId} result=${JSON.stringify(results.weex)?.slice(0, 200)}`
+          `Telegram WEEX 开单 card=#${cardId} symbol=${tradeSymbol} channel=${channelId} result=${JSON.stringify(results.weex)?.slice(0, 200)}`
         );
       } catch (e) {
         log.warn(`Telegram WEEX 自动下单异常 card=#${cardId}: ${String(/** @type {Error} */ (e).message ?? e)}`);

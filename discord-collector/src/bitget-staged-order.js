@@ -12,11 +12,13 @@ import { normalizeSymbol } from "./card-fields.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import {
   ensureBitgetPositionTpslAfterOpen,
+  enrichBitgetContractMeta,
   isValidStopLoss,
   isValidTakeProfit,
   placeBitgetOpenWithPresets,
   priceStr,
   resolveOpenTpslPrices,
+  sanitizeBitgetTriggerPrice,
 } from "./bitget-tpsl-guard.js";
 
 /** @param {number} ms */
@@ -94,6 +96,22 @@ export async function hasBitgetSymbolExposure(client, p) {
 const BITGET_OPEN_MAX_ATTEMPTS = 3;
 
 /** @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client @param {string} symbol @param {string} productType */
+/**
+ * @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client
+ * @param {Record<string, unknown> | null | undefined} meta
+ * @param {string} symbol
+ * @param {string} productType
+ */
+async function withPriceMeta(client, meta, symbol, productType) {
+  const base = enrichBitgetContractMeta(meta);
+  if (base.priceTickKnown || typeof client?.getMixContract !== "function") return base;
+  try {
+    return enrichBitgetContractMeta(await client.getMixContract({ symbol, productType }), base);
+  } catch {
+    return base;
+  }
+}
+
 async function fetchContractMeta(client, symbol, productType) {
   try {
     const contract = await client.getMixContract({ symbol, productType });
@@ -451,8 +469,8 @@ export async function executeStagedTpslUpdate(client, input) {
   const prev = input.prevOrder;
   const parsed = input.parsed;
   const ex = normalizeExecution(null, parsed);
-  const stopLossRaw = String(ex.planned.stopLossPrice ?? parsed.stopLoss ?? "").replace(/[^\d.]/g, "");
-  const takeProfits = (
+  let stopLossRaw = String(ex.planned.stopLossPrice ?? parsed.stopLoss ?? "").replace(/[^\d.]/g, "");
+  let takeProfits = (
     ex.planned.takeProfitPrices.length
       ? ex.planned.takeProfitPrices
       : Array.isArray(parsed.takeProfits)
@@ -473,6 +491,14 @@ export async function executeStagedTpslUpdate(client, input) {
   const contractMeta = input.dryRun
     ? parseBitgetContractMeta(prev)
     : await resolveStoredContractMeta(client, prev, symbol, productType);
+  const priceMeta = input.dryRun
+    ? enrichBitgetContractMeta(contractMeta)
+    : await withPriceMeta(client, contractMeta, symbol, productType);
+  stopLossRaw = sanitizeBitgetTriggerPrice(stopLossRaw, priceMeta) || stopLossRaw;
+  takeProfits = takeProfits
+    .map((p) => sanitizeBitgetTriggerPrice(p, priceMeta) || p)
+    .filter(Boolean);
+  if (!stopLossRaw || !takeProfits.length) return { ok: false, reason: "missing_tpsl" };
   const size = formatOrderSize(rawSize, contractMeta, { mode: "floor" }) || rawSize;
 
   /** @type {Record<string, unknown>} */
@@ -672,7 +698,11 @@ export async function executeBitgetMoveSlToEntry(client, input) {
     return { ok: false, reason: "missing_entry", record: prev };
   }
 
-  const entryStr = priceStr(entry);
+  const priceMeta =
+    input.dryRun || String(prev.status) === "dry_run"
+      ? null
+      : await withPriceMeta(client, null, symbol, productType);
+  const entryStr = sanitizeBitgetTriggerPrice(entry, priceMeta) || priceStr(entry);
   /** @type {Record<string, unknown>} */
   const record = {
     ...prev,

@@ -2,6 +2,7 @@
  * 同频道 + 同作者 + 同币种、30 分钟内 → 合并为一张卡片（时间取最新，止盈止损取最全）。
  */
 import { normalizeSymbol } from "./card-fields.js";
+import { isPlaceholderTradeSymbol } from "./symbol-aliases.js";
 import {
   executionFromParsed,
   normalizeExecution,
@@ -258,37 +259,69 @@ export function buildSignalCardMergePatch(input) {
  *   withinMs?: number,
  * }} opts
  */
-export async function findMergeTargetCard(store, opts) {
-  const ch = String(opts.channelId ?? "").trim();
-  const sym = normalizeSymbol(opts.symbol);
-  const authorKey = String(opts.authorKey ?? "").trim().toLowerCase();
-  if (!ch || !sym || !authorKey) return null;
-  if (!store.listRecentSignalCardsBySymbolChannel) return null;
+/** @param {unknown} row */
+function rowLooksLikeSymbolPlaceholder(row) {
+  const col = String(row?.symbol ?? "").trim();
+  const parsedSym = String(cardRowParsed(row)?.symbol ?? "").trim();
+  const sym = col || parsedSym;
+  if (!sym) return true;
+  return isPlaceholderTradeSymbol(sym);
+}
 
-  const signalAtMs = Number(opts.signalAtMs);
-  const newMs = Number.isFinite(signalAtMs) && signalAtMs > 0 ? signalAtMs : Date.now();
-  const withinMs = Number(opts.withinMs) > 0 ? Number(opts.withinMs) : SIGNAL_CARD_MERGE_WINDOW_MS;
-  const fromMs = newMs - withinMs;
-
-  const rows = await store.listRecentSignalCardsBySymbolChannel({
-    channelId: ch,
-    symbol: sym,
-    fromMs,
-    limit: 15,
-  });
-
+/**
+ * @param {unknown[]} rows
+ * @param {{ direction?: string, authorKey: string }} opts
+ * @param {number} newMs
+ * @param {number} withinMs
+ */
+function pickMergeRow(rows, opts, newMs, withinMs) {
   for (const row of rows) {
     if (!canMergeIntoCard(row)) continue;
     if (!isWithinMergeWindow(row, newMs, withinMs)) continue;
     const prevKey = resolveAuthorKey({
       parsedJson: cardRowParsed(row),
-      note: row.note,
+      note: row?.note,
     });
-    if (!authorKeysMatch(prevKey, authorKey)) continue;
+    if (!authorKeysMatch(prevKey, opts.authorKey)) continue;
     if (!directionsAllowMerge(row, { parsedJson: { direction: opts.direction }, direction: opts.direction })) {
       continue;
     }
     return row;
   }
   return null;
+}
+
+export async function findMergeTargetCard(store, opts) {
+  const ch = String(opts.channelId ?? "").trim();
+  const sym = normalizeSymbol(opts.symbol);
+  const authorKey = String(opts.authorKey ?? "").trim().toLowerCase();
+  if (!ch || !authorKey) return null;
+  if (!store.listRecentSignalCardsBySymbolChannel) return null;
+
+  const signalAtMs = Number(opts.signalAtMs);
+  const newMs = Number.isFinite(signalAtMs) && signalAtMs > 0 ? signalAtMs : Date.now();
+  const withinMs = Number(opts.withinMs) > 0 ? Number(opts.withinMs) : SIGNAL_CARD_MERGE_WINDOW_MS;
+  const fromMs = newMs - withinMs;
+  const pickOpts = { direction: opts.direction, authorKey };
+
+  if (sym && !isPlaceholderTradeSymbol(opts.symbol)) {
+    const rows = await store.listRecentSignalCardsBySymbolChannel({
+      channelId: ch,
+      symbol: sym,
+      fromMs,
+      limit: 15,
+    });
+    const direct = pickMergeRow(rows, pickOpts, newMs, withinMs);
+    if (direct) return direct;
+  } else if (!sym || isPlaceholderTradeSymbol(opts.symbol)) {
+    return null;
+  }
+
+  if (typeof store.listRecentSignalCardsByChannel !== "function") return null;
+  const recent = await store.listRecentSignalCardsByChannel({
+    channelId: ch,
+    fromMs,
+    limit: 20,
+  });
+  return pickMergeRow(recent.filter(rowLooksLikeSymbolPlaceholder), pickOpts, newMs, withinMs);
 }

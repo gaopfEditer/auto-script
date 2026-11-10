@@ -1376,6 +1376,33 @@ export async function openStore(cfg, log) {
     return rows.map((r) => normalizeSignalCardRow(r));
   }
 
+  /**
+   * 同频道最近卡片（不按币种过滤），用于把「待补充」占位卡并进随后补上的币种。
+   * @param {{ channelId: string, withinMs?: number, limit?: number, fromMs?: number }} opts
+   */
+  async function listRecentSignalCardsByChannel(opts) {
+    const ch = String(opts.channelId ?? "").trim();
+    if (!ch) return [];
+    const ms = Number(opts.withinMs);
+    const fromMs =
+      Number.isFinite(Number(opts.fromMs)) && Number(opts.fromMs) > 0
+        ? Number(opts.fromMs)
+        : Number.isFinite(ms) && ms > 0
+          ? Date.now() - ms
+          : Date.now() - 600_000;
+    const lim = Math.min(50, Math.max(1, Number(opts.limit) || 15));
+    const { where, params } = buildSignalCardFilters({ channelId: ch, fromMs });
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const [rows] = await pool.query(
+      `SELECT ${SIGNAL_CARD_SELECT}
+       FROM discord_signal_cards sc
+       ${SIGNAL_CARD_JOIN}
+       ${whereSql} ORDER BY sc.id DESC LIMIT ${lim}`,
+      params
+    );
+    return rows.map((r) => normalizeSignalCardRow(r));
+  }
+
   /** @param {{ channelId: string, withinMs?: number }} opts */
   async function getRecentSignalCardByChannel({ channelId, withinMs = 1_800_000 }) {
     const ch = String(channelId ?? "").trim();
@@ -2513,6 +2540,7 @@ export async function openStore(cfg, log) {
     listSignalCards,
     getRecentSignalCardBySymbolChannel,
     listRecentSignalCardsBySymbolChannel,
+    listRecentSignalCardsByChannel,
     getRecentSignalCardByChannel,
     listSignalCardChannels,
     getSignalCardById,
@@ -2653,6 +2681,7 @@ export function createOfflineStore() {
     listSignalCards: async () => [],
     getRecentSignalCardBySymbolChannel: async () => null,
     listRecentSignalCardsBySymbolChannel: async () => [],
+    listRecentSignalCardsByChannel: async () => [],
     getRecentSignalCardByChannel: async () => null,
     listSignalCardChannels: async () => [],
     getSignalCardById: async () => null,

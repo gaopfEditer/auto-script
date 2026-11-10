@@ -72,3 +72,14 @@ export function symbolLookupCandidates(symbol, venue = "binance") {
   }
   return out;
 }
+
+/**
+ * Telegram TP/SL-only 占位币种。空字符串不算占位（调用方另判缺币种）。
+ * @param {unknown} symbol
+ */
+export function isPlaceholderTradeSymbol(symbol) {
+  const s = String(symbol ?? "").trim();
+  if (!s) return false;
+  const bare = s.replace(/USDT$/i, "").trim();
+  return bare === "待补充" || s === "待补充";
+}

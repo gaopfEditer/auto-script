@@ -45,11 +45,11 @@ import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
 import { STAGED_TP_PARTIAL_RATIOS } from "./discord-signal-staged-trade.js";
 import {
   ensureBitgetPositionTpslAfterOpen,
+  enrichBitgetContractMeta,
   placeBitgetOpenWithPresets,
   placeBitgetPartialTakeProfits,
   resolveOpenTpslPrices,
 } from "./bitget-tpsl-guard.js";
-import { parseBitgetContractMeta } from "./bitget-order-from-signal.js";
 
 
 
@@ -897,13 +897,13 @@ export function createBitgetOrderService(store, log) {
 
       if (tpList.length > 1) {
 
-        let contractMeta = parseBitgetContractMeta(null);
+        let contractMeta = enrichBitgetContractMeta(null);
 
         try {
 
           const contract = await client.getMixContract({ symbol: plan.symbol, productType: plan.productType });
 
-          contractMeta = parseBitgetContractMeta(contract);
+          contractMeta = enrichBitgetContractMeta(contract);
 
         } catch {
 

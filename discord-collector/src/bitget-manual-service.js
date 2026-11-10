@@ -5,7 +5,6 @@ import { config } from "./config.js";
 import { createBitgetClient } from "./bitget-api.js";
 import {
   calcBaseSize,
-  parseBitgetContractMeta,
   resolveOrderLeverage,
   resolveBitgetOrderSize,
   roundUsdt2,
@@ -14,7 +13,12 @@ import { normalizeSymbol } from "./card-fields.js";
 import { detectSymbolTier } from "./card-backtest-policy.js";
 import { loadBitgetTradeConfig } from "./bitget-trade-config.js";
 import { appendBitgetOrderHistory, listBitgetOrderHistory } from "./bitget-order-history.js";
-import { ensureBitgetPositionTpslAfterOpen, resolveOpenTpslPrices } from "./bitget-tpsl-guard.js";
+import {
+  ensureBitgetPositionTpslAfterOpen,
+  enrichBitgetContractMeta,
+  resolveOpenTpslPrices,
+  sanitizeBitgetTriggerPrice,
+} from "./bitget-tpsl-guard.js";
 
 /**
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
@@ -72,10 +76,10 @@ export function createBitgetManualService(log) {
       const lastPrice = Number(ticker?.lastPr ?? ticker?.markPrice ?? 0);
       if (Number.isFinite(lastPrice) && lastPrice > 0) {
         out.lastPrice = lastPrice;
-        let contractMeta = parseBitgetContractMeta(null);
+        let contractMeta = enrichBitgetContractMeta(null);
         try {
           const contract = await client.getMixContract({ symbol, productType });
-          contractMeta = parseBitgetContractMeta(contract);
+          contractMeta = enrichBitgetContractMeta(contract);
           out.minTradeUsdt = contractMeta.minTradeUsdt;
           out.minTradeNum = contractMeta.minTradeNum;
         } catch {
@@ -152,11 +156,11 @@ export function createBitgetManualService(log) {
     }
     if (!Number.isFinite(refPrice) || refPrice <= 0) return { ok: false, error: "no_market_price" };
 
-    let contractMeta = parseBitgetContractMeta(null);
-    try {
-      const contract = await client.getMixContract({ symbol, productType });
-      contractMeta = parseBitgetContractMeta(contract);
-    } catch {
+        let contractMeta = enrichBitgetContractMeta(null);
+        try {
+          const contract = await client.getMixContract({ symbol, productType });
+          contractMeta = enrichBitgetContractMeta(contract);
+        } catch {
       /* ignore */
     }
 
@@ -225,8 +229,8 @@ export function createBitgetManualService(log) {
         orderType,
         price: orderType === "limit" ? String(refPrice) : undefined,
         clientOid: `manual-${Date.now()}`,
-        presetStopLossPrice: body.stopLossPrice ? String(body.stopLossPrice) : undefined,
-        presetStopSurplusPrice: body.takeProfitPrice ? String(body.takeProfitPrice) : undefined,
+        presetStopLossPrice: sanitizeBitgetTriggerPrice(body.stopLossPrice, contractMeta) || undefined,
+        presetStopSurplusPrice: sanitizeBitgetTriggerPrice(body.takeProfitPrice, contractMeta) || undefined,
       });
       const data = resp && typeof resp === "object" && "data" in resp ? /** @type {Record<string, unknown>} */ (resp.data) : {};
       record.status = "placed";

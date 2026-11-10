@@ -120,6 +120,30 @@ export function executionFromParsed(parsed) {
   return { symbol, direction, planned, actual: emptyActualLeg(), outcome: "pending", outcomeNote: "" };
 }
 
+/** @param {unknown} v */
+function nonBlank(v) {
+  return String(v ?? "").trim();
+}
+
+/**
+ * planned 为空时，用同一条信号的 parsed 补入场/止盈/止损。
+ * 开放建卡把 stopLoss 放在扁平字段和 parsedJson 上，不能让空的 planned.stopLossPrice 盖掉它们。
+ * @param {SignalExecution} ex
+ * @param {unknown} parsedJson
+ */
+function fillExecutionBlanks(ex, parsedJson) {
+  if (!parsedJson || typeof parsedJson !== "object" || Array.isArray(parsedJson)) return ex;
+  const from = executionFromParsed(/** @type {Record<string, unknown>} */ (parsedJson));
+  if (!nonBlank(ex.symbol)) ex.symbol = from.symbol;
+  if (!nonBlank(ex.direction)) ex.direction = from.direction;
+  if (!nonBlank(ex.planned.entryPrice)) ex.planned.entryPrice = from.planned.entryPrice;
+  if (!nonBlank(ex.planned.stopLossPrice)) ex.planned.stopLossPrice = from.planned.stopLossPrice;
+  if (!ex.planned.takeProfitPrices.length && from.planned.takeProfitPrices.length) {
+    ex.planned.takeProfitPrices = from.planned.takeProfitPrices;
+  }
+  return ex;
+}
+
 /** @param {unknown} raw @param {unknown} [parsedJson] @returns {SignalExecution} */
 export function normalizeExecution(raw, parsedJson) {
   let ex = raw;
@@ -133,34 +157,40 @@ export function normalizeExecution(raw, parsedJson) {
   if (ex && typeof ex === "object") {
     const o = /** @type {Record<string, unknown>} */ (ex);
     if (o.planned || o.actual) {
-      return {
+      return fillExecutionBlanks(
+        {
+          symbol: String(o.symbol ?? ""),
+          direction: String(o.direction ?? ""),
+          planned: normalizeTradeLeg(o.planned),
+          actual: normalizeActualLeg(o.actual),
+          outcome: String(o.outcome ?? "pending") || "pending",
+          outcomeNote: String(o.outcomeNote ?? ""),
+        },
+        parsedJson
+      );
+    }
+    return fillExecutionBlanks(
+      {
         symbol: String(o.symbol ?? ""),
         direction: String(o.direction ?? ""),
-        planned: normalizeTradeLeg(o.planned),
-        actual: normalizeActualLeg(o.actual),
+        planned: normalizeTradeLeg({
+          entryPrice: o.entryPrice ?? o.entry,
+          takeProfitPrices: o.takeProfitPrices ?? o.takeProfits ?? o.targets,
+          stopLossPrice: o.stopLossPrice ?? o.stopLoss,
+        }),
+        actual: normalizeActualLeg({
+          buyPrice: o.actualBuyPrice ?? o.buyPrice,
+          sellPrice: o.actualSellPrice ?? o.sellPrice,
+          takeProfitPrices: o.actualTakeProfitPrices,
+          stopLossPrice: o.actualStopLossPrice,
+          exitPrice: o.actualExitPrice ?? o.exitPrice,
+          closedAt: o.closedAt,
+        }),
         outcome: String(o.outcome ?? "pending") || "pending",
         outcomeNote: String(o.outcomeNote ?? ""),
-      };
-    }
-    return {
-      symbol: String(o.symbol ?? ""),
-      direction: String(o.direction ?? ""),
-      planned: normalizeTradeLeg({
-        entryPrice: o.entryPrice,
-        takeProfitPrices: o.takeProfitPrices,
-        stopLossPrice: o.stopLossPrice,
-      }),
-      actual: normalizeActualLeg({
-        buyPrice: o.actualBuyPrice ?? o.buyPrice,
-        sellPrice: o.actualSellPrice ?? o.sellPrice,
-        takeProfitPrices: o.actualTakeProfitPrices,
-        stopLossPrice: o.actualStopLossPrice,
-        exitPrice: o.actualExitPrice ?? o.exitPrice,
-        closedAt: o.closedAt,
-      }),
-      outcome: String(o.outcome ?? "pending") || "pending",
-      outcomeNote: String(o.outcomeNote ?? ""),
-    };
+      },
+      parsedJson
+    );
   }
   return executionFromParsed(
     parsedJson && typeof parsedJson === "object"

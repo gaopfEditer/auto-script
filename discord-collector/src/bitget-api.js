@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import { ProxyAgent, request } from "undici";
 
 import { config } from "./config.js";
+import { invalidateLocalProxyCache, resolveReachableLocalProxy } from "./local-proxy.js";
 
 
 
@@ -85,16 +86,18 @@ function wrapBitgetNetworkError(err, proxyUrl) {
 export function createBitgetClient(creds) {
   const baseUrl = (creds.baseUrl ?? config.bitgetBaseUrl ?? "https://api.bitget.com").replace(/\/$/, "");
   const timeoutMs = creds.timeoutMs ?? config.bitgetRequestTimeoutMs ?? 15_000;
-  const proxyUrl = resolveBitgetProxyUrl(creds.proxy);
+  const configuredProxy = resolveBitgetProxyUrl(creds.proxy);
 
   /** @param {string} url @param {import("undici").Dispatcher.RequestOptions} opts */
   async function httpRequest(url, opts) {
     const maxAttempts = 3;
     /** @type {unknown} */
     let lastErr = null;
+    let proxyUrl = configuredProxy;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const dispatcher = getBitgetDispatcher(creds.proxy);
+        proxyUrl = await resolveReachableLocalProxy(configuredProxy);
+        const dispatcher = getBitgetDispatcher(proxyUrl);
         return await request(url, {
           ...opts,
           dispatcher,
@@ -106,7 +109,10 @@ export function createBitgetClient(creds) {
         const code = e && typeof e === "object" && "code" in e ? String(e.code) : "";
         const retryable = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].includes(code);
         if (attempt < maxAttempts && retryable) {
-          if (code === "ECONNRESET") invalidateBitgetDispatcher(creds.proxy);
+          if (code === "ECONNRESET" || code === "ECONNREFUSED") {
+            invalidateBitgetDispatcher(proxyUrl);
+            invalidateLocalProxyCache();
+          }
           await new Promise((r) => setTimeout(r, 400 * attempt));
           continue;
         }
