@@ -433,8 +433,12 @@ def send_ma144_main_card_telegram(alert: dict[str, Any]) -> bool:
         return False
     if str(alert.get("type") or "") != "ma144_candle_card":
         return False
-    if not is_main_card_symbol(str(alert.get("symbol") or "")):
+    
+    # 归一化币种别名后检查白名单
+    sym = str(alert.get("symbol") or "")
+    if not is_main_card_symbol(sym):
         return False
+    
     if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
         return False
     if not _confluence_gate_or_observation(alert):
@@ -445,8 +449,13 @@ def send_ma144_main_card_telegram(alert: dict[str, Any]) -> bool:
 
 def send_main_card_telegram(alert: dict[str, Any]) -> bool:
     """仅推 MAIN 群（形态群未发或只满足 MAIN 量能口径时）。"""
-    from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
+    from oi_mornitor.main_card_policy import is_main_card_mirror_eligible, is_main_card_symbol
     from oi_mornitor.telegram_push_toggles import is_main_push_enabled
+
+    # 显式白名单检查（修复：防止非 DEFAULT_SYMBOLS 币种通过镜像路径进入 MAIN）
+    sym = str(alert.get("symbol") or "")
+    if not is_main_card_symbol(sym):
+        return False
 
     if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
         return False
@@ -462,11 +471,17 @@ def send_main_card_telegram(alert: dict[str, Any]) -> bool:
 
 def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
     """形态群已发送的正文，原样复制到 MAIN（仅白名单币）。"""
-    from oi_mornitor.main_card_policy import is_main_card_mirror_eligible
+    from oi_mornitor.main_card_policy import is_main_card_mirror_eligible, is_main_card_symbol
     from oi_mornitor.telegram_push_toggles import is_main_push_enabled
 
     if not text.strip():
         return False
+    
+    # 显式白名单检查（修复：镜像前确认币种在 DEFAULT_SYMBOLS 中）
+    sym = str(alert.get("symbol") or "")
+    if not is_main_card_symbol(sym):
+        return False
+    
     if not MAIN_CARD_TELEGRAM_CHAT_ID or not is_main_push_enabled():
         return False
     primary = (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip()

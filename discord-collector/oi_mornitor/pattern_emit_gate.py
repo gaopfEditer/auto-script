@@ -82,8 +82,21 @@ def telegram_push_allowed_or_record_observation(
     if not passes_pattern_card_emit_gate(alert, peers):
         return False
     attach_confluence_on_alert(alert, peers)
+    
+    # 增强日志：记录共振门控结果（便于排查 C 档绕过问题）
+    conf = alert.get("confluence", {})
+    tier = conf.get("tier", "?")
+    score = conf.get("score", "?")
+    sym = alert.get("symbol", "?")
+    iv = alert.get("interval", "?")
+    
     if passes_confluence_tier_push_gate(alert):
+        logger.info("✅ 共振门控通过: %s %s 档位=%s 分=%s", sym, iv, tier, score)
         return True
+    
+    logger.info("⏸️ 共振门控观察: %s %s 档位=%s 分=%s (未达推送门槛 %s)", 
+                sym, iv, tier, score, 
+                __import__("oi_mornitor.signal_confluence", fromlist=["confluence_push_min_tier"]).confluence_push_min_tier())
     record_confluence_observation_only(alert)
     return False
 
