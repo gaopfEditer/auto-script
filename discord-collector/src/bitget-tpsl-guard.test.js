@@ -9,6 +9,7 @@ import {
   resolveRepairTpslLevels,
   isValidTakeProfit,
   isValidStopLoss,
+  roundBitgetTriggerPrice,
   bitgetRequireTpslEnabled,
   bitgetNakedPositionAction,
   bitgetTpslVerifyWindowMs,
@@ -369,5 +370,65 @@ describe("bitget tpsl env defaults", () => {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
+  });
+});
+
+describe("roundBitgetTriggerPrice", () => {
+  it("WLD 浮点尾数按 pricePlace=4、endStep=1 收成 0.0001 的倍数", () => {
+    const meta = { pricePlace: 4, priceEndStep: 1 };
+    const rounded = roundBitgetTriggerPrice(0.40015500000000004, meta);
+    assert.equal(rounded, "0.4002");
+    assert.equal(/0{5,}/.test(rounded), false);
+    assert.equal(roundBitgetTriggerPrice(1.23456, meta), "1.2346");
+  });
+
+  it("UAI pricePlace=5 收到 0.00001", () => {
+    assert.equal(roundBitgetTriggerPrice(0.012345678, { pricePlace: 5, priceEndStep: 1 }), "0.01235");
+  });
+
+  it("RUNE pricePlace=4 收到 0.0001", () => {
+    assert.equal(roundBitgetTriggerPrice(0.61234, { pricePlace: 4, priceEndStep: 1 }), "0.6123");
+  });
+
+  it("把 10-30 文案识别为精度错误", () => {
+    assert.equal(
+      classifyBitgetTpslRepairError("The price you enter should be a multiple of 0.0001", "long"),
+      "precision"
+    );
+    assert.equal(
+      classifyBitgetTpslRepairError("Parameter verification exception 0.40015500000000004", "long"),
+      "precision"
+    );
+  });
+});
+
+describe("placeBitgetOpenWithPresets tick", () => {
+  it("开仓 preset 在送出前按合约 tick 取整", async () => {
+    /** @type {string[]} */
+    const bodies = [];
+    const client = {
+      getMixContract: async () => ({ pricePlace: "4", priceEndStep: "1" }),
+      placeOrder: async (body) => {
+        bodies.push(JSON.stringify(body));
+        return { data: { orderId: "1" } };
+      },
+    };
+    const result = await placeBitgetOpenWithPresets(client, {
+      openBase: { symbol: "WLDUSDT", side: "buy", size: "2" },
+      symbol: "WLDUSDT",
+      productType: "USDT-FUTURES",
+      marginCoin: "USDT",
+      holdSide: "long",
+      direction: "做多",
+      size: "2",
+      stopLossStr: "0.40015500000000004",
+      takeProfitStr: "0.451234567",
+      fetchMark: async () => 0.42,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(bodies.length, 1);
+    const body = JSON.parse(bodies[0]);
+    assert.equal(body.presetStopLossPrice, "0.4002");
+    assert.equal(body.presetStopSurplusPrice, "0.4512");
   });
 });

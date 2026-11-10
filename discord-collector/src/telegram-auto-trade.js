@@ -8,6 +8,7 @@ import { normalizeExecution } from "./discord-signal-execution.js";
 import { applyDefaultTpSl } from "./card-liquidation-engine.js";
 import { parseEntryPriceForOrder } from "./bitget-order-from-signal.js";
 import { isCdpSendChannel } from "./telegram-channel-profiles.js";
+import { isPlaceholderTradeSymbol } from "./symbol-aliases.js";
 
 export const TELEGRAM_TRADE_LEVERAGE = 20;
 export const TELEGRAM_TRADE_INITIAL_SL_PCT = 5;
@@ -43,27 +44,54 @@ function isMarketEntryLabel(entry) {
   return !s || /市[价價]|现价|market/i.test(s);
 }
 
+/** @param {unknown[]} vals */
+function firstNonBlank(...vals) {
+  for (const v of vals) {
+    const s = String(v ?? "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+/** @param {unknown[]} vals */
+function firstRealSymbol(...vals) {
+  for (const v of vals) {
+    const s = String(v ?? "").trim();
+    if (s && !isPlaceholderTradeSymbol(s)) return s;
+  }
+  return "";
+}
+
+/** @param {number} price */
+function formatFetchedPrice(price) {
+  return price.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+}
+
 /**
- * 紧凑信号（#SYMBOL + 方向）无数字入场价时，用 Binance 现价补全以便默认 TP/SL。
+ * 市价 / 缺价时补标记价或最新价，便于默认止盈止损。
+ * `fetchPrice` 可注入，单测不访问网络。
  * @param {Record<string, unknown>} parsed
  * @param {ReturnType<typeof normalizeExecution>} execution
  * @param {string} symbol
+ * @param {{ fetchPrice?: (symbol: string) => Promise<{ price?: number }> }} [opts]
  */
-export async function enrichTelegramMarketEntry(parsed, execution, symbol) {
-  const sym = String(symbol ?? parsed.symbol ?? execution.symbol ?? "").trim();
+export async function enrichTelegramMarketEntry(parsed, execution, symbol, opts = {}) {
+  const sym = firstRealSymbol(symbol, parsed.symbol, execution.symbol);
   if (!sym) return;
-  const entryRaw = String(parsed.entry ?? execution.planned?.entryPrice ?? "").trim();
+  const entryRaw = firstNonBlank(parsed.entry, execution.planned?.entryPrice);
   if (!isMarketEntryLabel(entryRaw)) return;
+  const fetchPrice = opts.fetchPrice ?? fetchFuturesPrice;
   try {
-    const { price } = await fetchFuturesPrice(sym);
+    const { price } = await fetchPrice(sym);
     if (!Number.isFinite(price) || price <= 0) return;
-    const entry = String(price);
+    const entry = formatFetchedPrice(price);
     parsed.entry = entry;
     parsed.orderMode = String(parsed.orderMode ?? "market");
     execution.planned.entryPrice = entry;
-    if (!execution.symbol) execution.symbol = sym;
+    if (!execution.symbol || isPlaceholderTradeSymbol(execution.symbol)) execution.symbol = sym;
+    if (!parsed.symbol || isPlaceholderTradeSymbol(String(parsed.symbol))) parsed.symbol = sym;
   } catch {
-    /* 无价则 maybeAutoTrade 仍会因缺 TP/SL 跳过 */
+    /* 拉价失败时，若正文/解析里已有止损，后续仍可下单 */
   }
 }
 
@@ -77,17 +105,26 @@ export function prepareTelegramTradeParsed(parsed, execution) {
   const next = { ...parsed };
   next.parser = String(next.parser ?? "telegram");
   next.orderMode = "market";
-  next.symbol = String(execution.symbol ?? next.symbol ?? "").trim();
-  next.direction = String(execution.direction ?? next.direction ?? "").trim();
-  next.entry = String(execution.planned?.entryPrice ?? next.entry ?? "").trim();
+  const realSymbol = firstRealSymbol(execution.symbol, next.symbol);
+  next.symbol = realSymbol || firstNonBlank(execution.symbol, next.symbol);
+  next.direction = firstNonBlank(execution.direction, next.direction);
+  next.entry = firstNonBlank(next.entry, execution.planned?.entryPrice);
+  if (isMarketEntryLabel(next.entry)) {
+    const plannedEntry = String(execution.planned?.entryPrice ?? "").trim();
+    if (plannedEntry && !isMarketEntryLabel(plannedEntry)) next.entry = plannedEntry;
+  }
 
   /** @type {string[]} */
-  let tps = execution.planned?.takeProfitPrices?.length
-    ? execution.planned.takeProfitPrices.map((x) => String(x ?? "").trim()).filter(Boolean)
-    : Array.isArray(next.takeProfits)
-      ? next.takeProfits.map((x) => String(x ?? "").trim()).filter(Boolean)
-      : [];
-  let slRaw = String(execution.planned?.stopLossPrice ?? next.stopLoss ?? "").trim();
+  let tps = [];
+  const plannedTps = execution.planned?.takeProfitPrices ?? [];
+  const parsedTps = Array.isArray(next.takeProfits) ? next.takeProfits : [];
+  const tpSource = plannedTps.length ? plannedTps : parsedTps;
+  tps = tpSource.map((x) => String(x ?? "").trim()).filter(Boolean);
+  tps = tps.flatMap((p) => {
+    const parts = p.split(/[,，/|｜\s—–~～-]+/).map((s) => s.trim()).filter((s) => /^[\d.]+$/.test(s) && Number(s) > 0);
+    return parts.length ? parts : [];
+  });
+  let slRaw = firstNonBlank(next.stopLoss, execution.planned?.stopLossPrice);
 
   const direction = next.direction;
   const entryNum =
@@ -138,9 +175,11 @@ export function prepareTelegramTradeParsed(parsed, execution) {
   }
   execution.planned.takeProfitPrices = tps;
   execution.planned.stopLossPrice = slRaw;
-  if (!execution.planned.entryPrice && next.entry) {
+  if (next.entry && (!execution.planned.entryPrice || isMarketEntryLabel(execution.planned.entryPrice))) {
     execution.planned.entryPrice = next.entry;
   }
+  if (next.symbol) execution.symbol = String(next.symbol);
+  if (next.direction) execution.direction = String(next.direction);
 
   return { parsed: next, execution };
 }
@@ -151,10 +190,73 @@ export function prepareTelegramTradeParsed(parsed, execution) {
  * @param {ReturnType<typeof normalizeExecution>} execution
  * @param {string} symbol
  */
-export async function prepareAutoTradeForOrder(parsed, execution, symbol) {
+/**
+ * 把正文里的币种/方向/入场/止盈/止损补进空白字段。已有数值不被覆盖。
+ * @param {Record<string, unknown>} parsed
+ * @param {ReturnType<typeof normalizeExecution>} execution
+ */
+export function absorbTelegramSignalFields(parsed, execution) {
+  if (!execution.planned) execution.planned = { entryPrice: "", takeProfitPrices: [], stopLossPrice: "" };
+  const raw = firstNonBlank(parsed.rawContent, parsed.body, parsed.text);
+  const fromText = raw ? extractTelegramTradeFields(raw) : null;
+
+  const symbol = firstRealSymbol(parsed.symbol, execution.symbol, fromText?.symbol);
+  if (symbol) {
+    parsed.symbol = symbol;
+    if (!execution.symbol || isPlaceholderTradeSymbol(execution.symbol)) execution.symbol = symbol;
+  }
+
+  const direction = firstNonBlank(parsed.direction, execution.direction, fromText?.direction);
+  if (direction) {
+    parsed.direction = direction;
+    if (!String(execution.direction ?? "").trim()) execution.direction = direction;
+  }
+
+  let entry = firstNonBlank(parsed.entry, execution.planned.entryPrice);
+  if ((!entry || isMarketEntryLabel(entry)) && fromText?.entry && !isMarketEntryLabel(fromText.entry)) {
+    entry = fromText.entry;
+  }
+  if (entry) {
+    parsed.entry = entry;
+    const plannedEntry = String(execution.planned.entryPrice ?? "").trim();
+    if (!plannedEntry || (isMarketEntryLabel(plannedEntry) && !isMarketEntryLabel(entry))) {
+      execution.planned.entryPrice = entry;
+    }
+  }
+
+  const plannedTps = Array.isArray(execution.planned.takeProfitPrices) ? execution.planned.takeProfitPrices : [];
+  const parsedTps = Array.isArray(parsed.takeProfits) ? parsed.takeProfits : [];
+  /** @type {string[]} */
+  let tps = (plannedTps.length ? plannedTps : parsedTps).map((x) => String(x ?? "").trim()).filter(Boolean);
+  if (!tps.length && fromText?.takeProfits?.length) tps = fromText.takeProfits;
+  if (tps.length) {
+    parsed.takeProfits = tps;
+    if (!plannedTps.length) execution.planned.takeProfitPrices = tps;
+  }
+
+  const sl = firstNonBlank(parsed.stopLoss, execution.planned.stopLossPrice, fromText?.stopLoss);
+  if (sl) {
+    parsed.stopLoss = sl;
+    if (!String(execution.planned.stopLossPrice ?? "").trim()) execution.planned.stopLossPrice = sl;
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} parsed
+ * @param {ReturnType<typeof normalizeExecution>} execution
+ * @param {string} symbol
+ * @param {{ fetchPrice?: (symbol: string) => Promise<{ price?: number }> }} [opts]
+ */
+export async function prepareAutoTradeForOrder(parsed, execution, symbol, opts = {}) {
   const nextParsed = { ...parsed };
-  const nextEx = { ...execution, planned: { ...execution.planned } };
-  await enrichTelegramMarketEntry(nextParsed, nextEx, symbol);
+  const nextEx = { ...execution, planned: { ...(execution.planned ?? {}) } };
+  const hinted = firstRealSymbol(symbol);
+  if (hinted) {
+    if (!nextParsed.symbol || isPlaceholderTradeSymbol(String(nextParsed.symbol))) nextParsed.symbol = hinted;
+    if (!nextEx.symbol || isPlaceholderTradeSymbol(nextEx.symbol)) nextEx.symbol = hinted;
+  }
+  absorbTelegramSignalFields(nextParsed, nextEx);
+  await enrichTelegramMarketEntry(nextParsed, nextEx, hinted || String(nextParsed.symbol ?? ""), opts);
   return prepareTelegramTradeParsed(nextParsed, nextEx);
 }
 
@@ -186,20 +288,26 @@ export function telegramTradeCanStagedOpen(parsed, execution) {
 }
 
 /**
- * Debug 模拟用：轻量解析 Telegram 结构化信号正文。
+ * 从 Telegram 正文抽出可用字段。缺币种或方向时仍返回已识别的止盈止损。
  * @param {unknown} raw
- * @returns {{ symbol: string; direction: string; entry: string; takeProfits: string[]; stopLoss: string } | null}
  */
-export function parseTelegramTradeTextLite(raw) {
+export function extractTelegramTradeFields(raw) {
   const text = String(raw ?? "").trim();
-  if (!text) return null;
+  if (!text) return { symbol: "", direction: "", entry: "", takeProfits: [], stopLoss: "" };
 
   let symbol = "";
-  const symM =
-    text.match(/币[种種][：:]\s*([A-Z0-9]+)/i) ??
-    text.match(/#[\s]*([A-Z0-9]{2,12})/i) ??
-    text.match(/\b([A-Z]{2,12})\s*\/\s*USDT/i);
-  if (symM) symbol = String(symM[1]).replace(/USDT$/i, "").toUpperCase();
+  const labeled = text.match(/币[种種][：:]\s*([A-Z0-9]+)/i);
+  if (labeled) symbol = String(labeled[1]).replace(/USDT$/i, "").toUpperCase();
+  if (!symbol) {
+    const hashes = [...text.matchAll(/#\s*([A-Z0-9]{2,12})/gi)]
+      .map((m) => String(m[1]).toUpperCase())
+      .filter((s) => s !== "PROM");
+    if (hashes.length) symbol = hashes[0].replace(/USDT$/i, "");
+  }
+  if (!symbol) {
+    const pair = text.match(/\b([A-Z]{2,12})\s*\/\s*USDT/i);
+    if (pair) symbol = String(pair[1]).toUpperCase();
+  }
 
   let direction = "";
   const dirBlock = text.match(/方向[：:][^\n]*/i)?.[0] ?? text;
@@ -208,7 +316,8 @@ export function parseTelegramTradeTextLite(raw) {
   } else if (/多|📈|🚀|long|buy/i.test(dirBlock)) {
     direction = "long";
   }
-  if (!symbol || !direction) return null;
+  if (!direction && /市[价價]\s*空|空\s*市[价價]/.test(text)) direction = "short";
+  if (!direction && /市[价價]\s*多|多\s*市[价價]/.test(text)) direction = "long";
 
   const entry =
     text.match(/(?:进场|進場|入场|入場)[点點][：:]\s*([^\n]+)/i)?.[1]?.trim() ??
@@ -222,9 +331,9 @@ export function parseTelegramTradeTextLite(raw) {
   /** @type {string[]} */
   const takeProfits = tpRaw
     ? tpRaw
-        .split(/[,，/|\s—–-]+/)
+        .split(/[,，/|\s—–~～-]+/)
         .map((s) => s.trim())
-        .filter((s) => /[\d.]/.test(s))
+        .filter((s) => /^[\d.]+$/.test(s) && Number(s) > 0)
     : [];
 
   const stopLoss =
@@ -233,4 +342,15 @@ export function parseTelegramTradeTextLite(raw) {
     "";
 
   return { symbol, direction, entry, takeProfits, stopLoss };
+}
+
+/**
+ * Debug 模拟用：轻量解析 Telegram 结构化信号正文。
+ * @param {unknown} raw
+ * @returns {{ symbol: string; direction: string; entry: string; takeProfits: string[]; stopLoss: string } | null}
+ */
+export function parseTelegramTradeTextLite(raw) {
+  const fields = extractTelegramTradeFields(raw);
+  if (!fields.symbol || !fields.direction) return null;
+  return fields;
 }
