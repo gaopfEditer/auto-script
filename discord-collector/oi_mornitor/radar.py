@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import statistics
 import time
 from collections import deque
@@ -87,6 +88,9 @@ from oi_mornitor.taker_flow import (
 )
 
 logger = logging.getLogger("OI_Radar")
+
+# 扫描失败后的重试间隔。测试可改这个模块级常量，避免真的睡 5 秒。
+_SCAN_RETRY_SLEEP_SEC = 5.0
 
 # 前端 tf-btn 对应 OI 差分窗口（分钟）— 含 5m 短周期便于抓刚起的热币
 OI_TF_WINDOWS: dict[str, int] = {
@@ -527,12 +531,21 @@ class BinanceOIRadar:
         return time.time() < self._proxy_disabled_until
 
     def mark_proxy_down(self, reason: str = "connect_failed", cooldown_sec: float = 180.0) -> None:
-        from oi_mornitor.proxy_resolve import invalidate_proxy_cache
+        """代理失败时先互备到可达端口。只有 7890/7891 都连不上才短暂直连。"""
+        from oi_mornitor.proxy_resolve import (
+            invalidate_proxy_cache,
+            proxy_endpoint_verified,
+            resolve_effective_proxy_url,
+        )
 
         invalidate_proxy_cache()
+        alt = resolve_effective_proxy_url(force_refresh=True)
+        if alt and proxy_endpoint_verified():
+            logger.warning("代理不可用（%s），已改用可达代理 %s（不改直连）", reason, alt)
+            return
         self._proxy_disabled_until = time.time() + cooldown_sec
         logger.warning(
-            "代理不可用（%s），%.0fs 内改直连；将重试 OI_PROXY_FALLBACK_PORTS（7890/7891）",
+            "代理不可用（%s），本地回退端口均不可达，%.0fs 内改直连",
             reason,
             cooldown_sec,
         )
@@ -1342,7 +1355,7 @@ class RadarService:
         self.pattern_engine.moonshot_engine = self.moonshot_engine
         self.tv_alert_sync = TvAlertSync()
         self._session: aiohttp.ClientSession | None = None
-        self._session_trust_env: bool | None = None
+        self._session_proxy: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._card_lifecycle_task: asyncio.Task[None] | None = None
         self._card_price_task: asyncio.Task[None] | None = None
@@ -1363,45 +1376,138 @@ class RadarService:
         if self._session is not None and not self._session.closed:
             await self._session.close()
         self._session = None
-        self._session_trust_env = None
+        self._session_proxy = None
+
+    def _scan_timeout_sec(self) -> float:
+        """整轮 scan_once 的上限，避免一次卡住的扫描把后台循环挂住数小时。"""
+        raw = (os.getenv("OI_SCAN_TIMEOUT_SEC") or "900").strip()
+        try:
+            timeout = float(raw)
+        except ValueError:
+            timeout = 900.0
+        return max(60.0, timeout)
+
+    def _radar_scan_timeout_sec(self) -> float:
+        """BinanceOIRadar.scan（K 线 / 候选池）单独上限。形态扫描另有自己的超时。"""
+        raw = (os.getenv("OI_RADAR_SCAN_TIMEOUT_SEC") or "480").strip()
+        try:
+            timeout = float(raw)
+        except ValueError:
+            timeout = 480.0
+        return max(30.0, timeout)
+
+    @staticmethod
+    def _is_closed_session_error(exc: BaseException) -> bool:
+        seen: set[int] = set()
+        cur: BaseException | None = exc
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if "session is closed" in str(cur).lower():
+                return True
+            cur = cur.__cause__ or cur.__context__
+        return False
+
+    async def _recover_after_stuck_scan(self, reason: str) -> None:
+        """超时或 Session is closed：丢掉旧 session，并按当前可达端口重建代理。"""
+        from oi_mornitor.proxy_resolve import (
+            invalidate_proxy_cache,
+            proxy_endpoint_verified,
+            resolve_effective_proxy_url,
+        )
+
+        invalidate_proxy_cache()
+        alt = resolve_effective_proxy_url(force_refresh=True)
+        if alt and proxy_endpoint_verified():
+            self.radar._proxy_disabled_until = 0.0
+        logger.error(
+            "雷达扫描中断（%s），已重置 HTTP session，当前代理=%s",
+            reason,
+            alt or "直连",
+        )
+        await self._reset_session()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         from oi_mornitor.http_session import make_http_session
 
-        # 显式 proxy=，避免 trust_env + NO_PROXY 导致币安 data 接口直连 451/超时
+        # 显式 proxy=，避免 trust_env + NO_PROXY 导致币安 data 接口直连 451/超时。
+        # 比较的是代理 URL 本身：7891→7890 时 want_proxy 仍为 True，必须重建 session。
+        # 直连冷却期间如果 7890/7891 又通了，马上改回代理，避免币安直连 451。
+        if self.radar.proxy_disabled():
+            from oi_mornitor.proxy_resolve import proxy_endpoint_verified, resolve_effective_proxy_url
+
+            alt = resolve_effective_proxy_url()
+            if alt and proxy_endpoint_verified():
+                logger.warning("直连窗口内发现可达代理 %s，恢复走代理", alt)
+                self.radar._proxy_disabled_until = 0.0
         px = proxy_url() if not self.radar.proxy_disabled() else None
-        want_proxy = bool(px)
+        if self._session is not None and self._session.closed:
+            logger.warning("HTTP session 已关闭，按当前代理重建")
+            self._session = None
+            self._session_proxy = None
         if self._session is not None and not self._session.closed:
-            if self._session_trust_env != want_proxy:
+            if self._session_proxy != px:
                 logger.warning(
-                    "代理状态变化（显式代理 %s→%s），重建 HTTP session",
-                    self._session_trust_env,
-                    want_proxy,
+                    "代理 URL 变化（%s → %s），重建 HTTP session",
+                    self._session_proxy or "直连",
+                    px or "直连",
                 )
                 await self._reset_session()
             else:
                 return self._session
         self._session = make_http_session(trust_env=False, default_proxy=px)
-        self._session_trust_env = want_proxy
+        self._session_proxy = px
         logger.info(
             "HTTP session 显式代理=%s（%s）",
-            want_proxy,
+            bool(px),
             px or "直连",
         )
         return self._session
 
+    async def _open_session_with_fresh_proxy(self) -> None:
+        """先探测可达代理，再按该 URL 建 session。
+
+        不能先 _ensure_session() 再用 force_refresh 只打日志：那样 session 会留在
+        已关闭的 7891 上，后续 K 线继续 Connection refused。
+        """
+        from oi_mornitor.proxy_resolve import invalidate_proxy_cache, resolve_effective_proxy_url
+
+        # 启动/重启重新允许走代理。只有回退端口也全灭时，才由 mark_proxy_down 短暂直连。
+        self.radar._proxy_disabled_until = 0.0
+        invalidate_proxy_cache()
+        resolve_effective_proxy_url(force_refresh=True)
+        await self._reset_session()
+        await self._ensure_session()
+
+    async def _await_radar_scan(self, session: aiohttp.ClientSession) -> list[dict[str, Any]] | None:
+        """跑一轮雷达扫描。超时或 Session is closed 时重置 session 并返回 None。"""
+        try:
+            return await asyncio.wait_for(
+                self.radar.scan(session),
+                timeout=self._radar_scan_timeout_sec(),
+            )
+        except TimeoutError:
+            await self._recover_after_stuck_scan(
+                f"scan 超时 {self._radar_scan_timeout_sec():.0f}s"
+            )
+            return None
+        except Exception as exc:
+            if self._is_closed_session_error(exc):
+                await self._recover_after_stuck_scan("Session is closed")
+                return None
+            raise
+
     async def scan_once(self) -> list[dict[str, Any]]:
         session = await self._ensure_session()
-        hot = await self.radar.scan(session)
+        hot = await self._await_radar_scan(session)
+        if hot is None:
+            return []
         if not self.radar.last_all_rows and proxy_url() and not self.radar.proxy_disabled():
-            from oi_mornitor.proxy_resolve import invalidate_proxy_cache, resolve_effective_proxy_url
-
-            invalidate_proxy_cache()
-            resolve_effective_proxy_url(force_refresh=True)
             self.radar.mark_proxy_down(reason="pool_empty_with_proxy")
             await self._reset_session()
             session = await self._ensure_session()
-            hot = await self.radar.scan(session)
+            hot = await self._await_radar_scan(session)
+            if hot is None:
+                return []
         matrix = self.matrix.update_from_rows(self.radar.last_all_rows, scan_ts=self.radar.last_scan_ts)
         try:
             from oi_mornitor.dormant_funnel_store import get_funnel_payload
@@ -1575,12 +1681,21 @@ class RadarService:
     async def _loop(self, interval_sec: int) -> None:
         while self._running:
             try:
-                await self.scan_once()
+                await asyncio.wait_for(self.scan_once(), timeout=self._scan_timeout_sec())
             except asyncio.CancelledError:
                 raise
+            except TimeoutError:
+                await self._recover_after_stuck_scan(
+                    f"整轮超时 {self._scan_timeout_sec():.0f}s"
+                )
+                await asyncio.sleep(_SCAN_RETRY_SLEEP_SEC)
+                continue
             except Exception as exc:
-                logger.exception("雷达循环异常，5s 后重试: %s", exc)
-                await asyncio.sleep(5)
+                if self._is_closed_session_error(exc):
+                    await self._recover_after_stuck_scan("Session is closed")
+                else:
+                    logger.exception("雷达循环异常，5s 后重试: %s", exc)
+                await asyncio.sleep(_SCAN_RETRY_SLEEP_SEC)
                 continue
             await asyncio.sleep(interval_sec)
 
@@ -1603,20 +1718,12 @@ class RadarService:
         if self._running:
             return
         self._running = True
-        await self._ensure_session()
-        px = proxy_url()
+        await self._open_session_with_fresh_proxy()
+        px = self._session_proxy
         if px:
             logger.info("Binance REST 代理: %s", px)
             if not await self._proxy_tcp_reachable(px):
-                from oi_mornitor.proxy_resolve import resolve_effective_proxy_url
-
-                alt = resolve_effective_proxy_url(force_refresh=True)
-                if alt and alt != px and await self._proxy_tcp_reachable(alt):
-                    logger.warning("主配置代理不可达，已改用 %s", alt)
-                elif not await self._proxy_tcp_reachable(alt or px):
-                    logger.error(
-                        "代理不可达（已尝试 7890/7891 互备）；请确认 Clash 已启动"
-                    )
+                logger.error("代理不可达（已尝试 7890/7891 互备）；请确认 Clash 已启动")
         else:
             logger.warning(
                 "未检测到 HTTPS_PROXY，直连 fapi.binance.com；"
@@ -1757,9 +1864,7 @@ class RadarService:
                 except asyncio.CancelledError:
                     pass
                 setattr(self, attr, None)
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self._session = None
+        await self._reset_session()
 
     def get_snapshot(self) -> dict[str, Any]:
         pool_meta = merge_equity_into_pool_meta(
