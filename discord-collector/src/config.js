@@ -560,7 +560,10 @@ export const config = {
   bitgetRequestTimeoutMs: Number(process.env.BITGET_REQUEST_TIMEOUT_MS ?? 15_000),
   /** Bitget API 代理（国内直连常失败；默认 COMMON_PROXY） */
   bitgetProxy: envProxy("BITGET_PROXY", "COMMON_PROXY", "DISCORD_WEBHOOK_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
-  /** 非空时仅这些频道触发下单（否则读 JSON channels） */
+  /**
+   * Discord 雪花频道白名单。非空时仅这些频道走环境变量/JSON 策略。
+   * Telegram 群（`-100…`）不看此列表，只看 channel_profiles.json 的 placeAnOrder。
+   */
   bitgetAutoTradeChannelIds: parseIdList(process.env.BITGET_AUTO_TRADE_CHANNEL_IDS ?? ""),
   bitgetDefaultLeverage: Number(process.env.BITGET_DEFAULT_LEVERAGE ?? 30),
   bitgetOrderSizeUsdt: Number(process.env.BITGET_ORDER_SIZE_USDT ?? 1),
@@ -581,6 +584,7 @@ export const config = {
   weexBaseUrl: (process.env.WEEX_BASE_URL ?? "https://api-contract.weex.com").trim(),
   weexRequestTimeoutMs: Number(process.env.WEEX_REQUEST_TIMEOUT_MS ?? process.env.BITGET_REQUEST_TIMEOUT_MS ?? 15_000),
   weexProxy: envProxy("WEEX_PROXY", "COMMON_PROXY", "BITGET_PROXY", "DISCORD_WEBHOOK_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
+  /** Discord 频道白名单；留空则回退 BITGET_AUTO_TRADE_CHANNEL_IDS。不作用于 Telegram 群。 */
   weexAutoTradeChannelIds: parseIdList(
     process.env.WEEX_AUTO_TRADE_CHANNEL_IDS ?? process.env.BITGET_AUTO_TRADE_CHANNEL_IDS ?? ""
   ),

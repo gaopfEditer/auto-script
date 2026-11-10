@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { config } from "./config.js";
+import { isTelegramGroupChatId } from "./telegram-channel-profiles.js";
+import { isTelegramAutoTradeChannel } from "./telegram-auto-trade.js";
 import { loadBitgetTradeConfig, resolveChannelBitgetTrade } from "./bitget-trade-config.js";
 
 const _dir = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +39,26 @@ export function loadWeexTradeConfig(filePath = config.bitgetTradeConfigFile) {
   };
 }
 
+/**
+ * WEEX 频道资格。Telegram 群只看 placeAnOrder；
+ * WEEX_AUTO_TRADE_CHANNEL_IDS / BITGET_AUTO_TRADE_CHANNEL_IDS 只约束 Discord 雪花频道。
+ * 非空的 Discord 白名单不能把 placeAnOrder 群挡在外面，也不能单独放行一个 Telegram 群。
+ * @param {unknown} channelId
+ * @param {readonly unknown[]} envList
+ * @param {string} [profilesFile]
+ * @returns {"telegram"|"discord"|"reject"}
+ */
+export function classifyWeexAutoTradeChannel(channelId, envList, profilesFile) {
+  const cid = String(channelId ?? "").trim();
+  if (!cid) return "reject";
+  if (isTelegramGroupChatId(cid)) {
+    return isTelegramAutoTradeChannel(cid, profilesFile) ? "telegram" : "reject";
+  }
+  const ids = (Array.isArray(envList) ? envList : []).map((id) => String(id ?? "").trim()).filter(Boolean);
+  if (ids.length && !ids.includes(cid)) return "reject";
+  return "discord";
+}
+
 /** @param {string} channelId @param {ReturnType<typeof loadWeexTradeConfig>} cfg */
 export function resolveChannelWeexTrade(channelId, cfg) {
   if (!readWeexEnabledFromEnv()) return null;
@@ -44,12 +66,13 @@ export function resolveChannelWeexTrade(channelId, cfg) {
   if (!cid) return null;
 
   const envList = config.weexAutoTradeChannelIds;
-  if (envList.length && !envList.includes(cid)) return null;
+  const kind = classifyWeexAutoTradeChannel(cid, envList);
+  if (kind === "reject") return null;
 
   const bitgetResolved = resolveChannelBitgetTrade(channelId, { ...cfg, enabled: true, dryRun: cfg.dryRun });
   if (bitgetResolved) return { ...bitgetResolved, dryRun: cfg.dryRun };
 
-  if (envList.includes(cid)) {
+  if (kind === "discord" && envList.includes(cid)) {
     return { enabled: true, dryRun: cfg.dryRun, channel: { ...cfg.default } };
   }
   return null;

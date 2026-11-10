@@ -429,7 +429,8 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
   }
 
   /**
-   * channel_profiles.send 白名单 Telegram 卡片 → 按 Debug 勾选平台自动开单（须含止盈止损）。
+   * channel_profiles.placeAnOrder 白名单的 Telegram 卡片 → 按 Debug 勾选平台自动开单（须含止盈止损）。
+   * 仅在 send 里、或不在 placeAnOrder 里的群不会下单。
    * @param {ReturnType<typeof archiveCardToClient>} clientCard
    * @param {ReturnType<typeof normalizeExecution>} executionJson
    * @param {Record<string, unknown>} parsedJson
@@ -537,7 +538,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
   }
 
   /**
-   * send 白名单 Telegram 卡片：先 await Bitget/WEEX 下单，再触发 CDP（避免 CDP 占用浏览器导致下单失败）。
+   * placeAnOrder 群：先 await Bitget/WEEX 下单，再按 send 白名单决定是否 CDP（避免 CDP 占用浏览器导致下单失败）。
    * @param {ReturnType<typeof archiveCardToClient>} clientCard
    * @param {ReturnType<typeof normalizeExecution>} executionJson
    * @param {Record<string, unknown>} parsedJson
@@ -1249,9 +1250,9 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       log.info(`卡片→频道消息 跳过: injectChannelMessage=false source=${sourceType}`);
     }
 
-    const isSendTelegram =
+    const autoTradeTelegram =
       resolveSourcePlatform(sourceType) === "telegram" && isTelegramAutoTradeChannel(channelId);
-    if (isSendTelegram) {
+    if (autoTradeTelegram) {
       await runTelegramAutoTradeThenCdp(clientCard, execution, parsedJson, {
         tradePlatforms:
           input.tradePlatforms && typeof input.tradePlatforms === "object"

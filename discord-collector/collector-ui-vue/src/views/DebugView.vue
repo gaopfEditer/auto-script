@@ -40,7 +40,7 @@ const simHints = ref(/** @type {string[]} */ ([]));
 const simHistory = ref(
   /** @type {Array<{ ts: number; content: string; skipped?: string; cardId?: number; ok: boolean }>} */ ([])
 );
-const telegramSendChannels = ref(/** @type {Array<{ id: string; name: string }>} */ ([]));
+const telegramPlaceAnOrderChannels = ref(/** @type {Array<{ id: string; name: string }>} */ ([]));
 const simSendLoadError = ref("");
 const exampleSignal = ref("");
 
@@ -241,11 +241,10 @@ async function loadTelegramSendChannels() {
     try {
       const res = await fetch(url);
       const data = await res.json();
+      const placeList = normalizeSendChannelList(data.telegramPlaceAnOrderChannels);
+      if (placeList.length) telegramPlaceAnOrderChannels.value = placeList;
       list = normalizeSendChannelList(data.telegramSendChannels);
-      if (list.length) {
-        telegramSendChannels.value = list;
-        return;
-      }
+      if (placeList.length || list.length) return;
       if (data.channelProfilesError) {
         simSendLoadError.value = String(data.channelProfilesError);
       }
@@ -258,8 +257,19 @@ async function loadTelegramSendChannels() {
     const res = await fetch("/api/telegram/live/channels");
     const data = await res.json();
     list = sendChannelsFromLiveApi(data);
-    if (list.length) {
-      telegramSendChannels.value = list;
+    const placeIds = Array.isArray(data.placeAnOrderChatIds)
+      ? data.placeAnOrderChatIds.map((x) => String(x).trim()).filter(Boolean)
+      : [];
+    if (placeIds.length) {
+      const nameById = new Map();
+      for (const item of Array.isArray(data.channels) ? data.channels : []) {
+        if (!item || typeof item !== "object") continue;
+        const id = String(item.chatId ?? item.id ?? "").trim();
+        if (id) nameById.set(id, String(item.name ?? item.channelName ?? id).trim() || id);
+      }
+      telegramPlaceAnOrderChannels.value = placeIds.map((id) => ({ id, name: nameById.get(id) ?? id }));
+    }
+    if (list.length || placeIds.length) {
       simSendLoadError.value = "";
       return;
     }
@@ -272,7 +282,7 @@ async function loadTelegramSendChannels() {
   }
 
   if (!list.length && !simSendLoadError.value) {
-    simSendLoadError.value = "send 数组为空，请检查 telegram/channel_profiles.json";
+    simSendLoadError.value = "placeAnOrder 为空，请检查 telegram/channel_profiles.json";
   }
 }
 
@@ -282,8 +292,8 @@ async function loadSimulateConfig() {
     const res = await fetch("/api/debug/simulate-signal");
     const data = await res.json();
     if (data.ok) {
-      const fromApi = normalizeSendChannelList(data.telegramSendChannels);
-      if (fromApi.length) telegramSendChannels.value = fromApi;
+      const placeFromApi = normalizeSendChannelList(data.telegramPlaceAnOrderChannels);
+      if (placeFromApi.length) telegramPlaceAnOrderChannels.value = placeFromApi;
       simBitget.value = data.bitget ?? null;
       simWeex.value = data.weex ?? null;
       simHints.value = Array.isArray(data.hints) ? data.hints : [];
@@ -601,10 +611,10 @@ function isDiscordRow(row) {
             WEEX {{ simWeex?.dryRun ? "Dry-run" : simWeex?.enabled ? "实盘" : "关" }}
           </span>
         </div>
-        <div v-if="telegramSendChannels.length" class="sim-send-groups">
-          <span class="sim-send-title">send 白名单</span>
+        <div v-if="telegramPlaceAnOrderChannels.length" class="sim-send-groups">
+          <span class="sim-send-title">placeAnOrder 下单白名单</span>
           <div class="sim-send-chips">
-            <span v-for="ch in telegramSendChannels" :key="ch.id" class="sim-send-chip" :title="ch.id">
+            <span v-for="ch in telegramPlaceAnOrderChannels" :key="ch.id" class="sim-send-chip" :title="ch.id">
               {{ ch.name }}
               <em>{{ ch.id.slice(-6) }}</em>
             </span>
@@ -613,7 +623,7 @@ function isDiscordRow(row) {
         <p v-else class="sim-send-empty">
           {{
             simSendLoadError ||
-              "未读到 send 白名单（请确认 telegram/channel_profiles.json 含 send 数组，并重启 collect:ui）"
+              "未读到 placeAnOrder（请在 telegram/channel_profiles.json 写入带 -100 前缀的群 id，并重启 collect:ui）。send 只转发，不能下单。"
           }}
         </p>
         <div class="sim-trade-grid">

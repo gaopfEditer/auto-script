@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
 import { config } from "./config.js";
+import { isTelegramGroupChatId } from "./telegram-channel-profiles.js";
 import { isTelegramAutoTradeChannel, TELEGRAM_TRADE_INITIAL_SL_PCT, TELEGRAM_TRADE_LEVERAGE } from "./telegram-auto-trade.js";
 import { getTradeOrderSizeUsdt } from "./trade-platform-toggles.js";
 
@@ -146,13 +147,15 @@ export function loadBitgetTradeConfig(filePath = config.bitgetTradeConfigFile) {
 /**
  * @param {string} channelId
  * @param {BitgetTradeConfig} cfg
+ * @param {string} [profilesFile] 测试注入 channel_profiles.json；生产不传
  * @returns {{ enabled: boolean; dryRun: boolean; channel: Required<BitgetTradeDefaults> & { name?: string } } | null}
  */
-export function resolveChannelBitgetTrade(channelId, cfg) {
+export function resolveChannelBitgetTrade(channelId, cfg, profilesFile) {
   const cid = String(channelId ?? "").trim();
   if (!cid || !cfg?.enabled) return null;
 
-  if (isTelegramAutoTradeChannel(cid)) {
+  if (isTelegramGroupChatId(cid)) {
+    if (!isTelegramAutoTradeChannel(cid, profilesFile)) return null;
     return {
       enabled: true,
       dryRun: cfg.dryRun,
