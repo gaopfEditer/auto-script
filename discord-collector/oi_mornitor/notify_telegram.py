@@ -201,8 +201,27 @@ def _resolve_chat_id(override: str | None = None) -> str:
     ).strip()
 
 
-def _post_json(url: str, payload: dict[str, Any], *, timeout: float = 20.0) -> tuple[int, str]:
-    """stdlib JSON POST，避免依赖 requests（oi venv 默认未装）。"""
+def _redact_secrets(text: str, *extra: str) -> str:
+    """日志里去掉 bot token / chat id。"""
+    redacted = text
+    secrets = [s for s in ((TELEGRAM_BOT_TOKEN or "").strip(), *extra) if s]
+    for secret in secrets:
+        redacted = redacted.replace(secret, "***")
+    return redacted[:240]
+
+
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    timeout: float = 20.0,
+    proxy: str | None = None,
+) -> tuple[int, str]:
+    """stdlib JSON POST，避免依赖 requests（oi venv 默认未装）。
+
+    ``proxy`` 是显式代理。``None`` 表示直连，并忽略环境变量里的 HTTP(S)_PROXY，
+    这样本机 gateway 不会被已经关掉的 7891 代理打断，Bot API 也不会误走死端口。
+    """
     import json
     import urllib.error
     import urllib.request
@@ -214,8 +233,10 @@ def _post_json(url: str, payload: dict[str, Any], *, timeout: float = 20.0) -> t
         headers={"Content-Type": "application/json; charset=utf-8"},
         method="POST",
     )
+    proxies = {"http": proxy, "https": proxy} if proxy else {}
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with opener.open(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
             return int(resp.status), body
     except urllib.error.HTTPError as exc:
@@ -223,25 +244,62 @@ def _post_json(url: str, payload: dict[str, Any], *, timeout: float = 20.0) -> t
         return int(exc.code), body
 
 
+def _proxy_for_url(url: str) -> str | None:
+    """本机地址直连；外网地址走已解析的可达代理，不用环境里可能已死的端口。"""
+    from urllib.parse import urlparse
+
+    from oi_mornitor.proxy_resolve import resolve_effective_proxy_url
+
+    host = (urlparse(url).hostname or "").lower()
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return None
+    return resolve_effective_proxy_url()
+
+
 def _send_via_bot_api(text: str, chat_id: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not chat_id:
         return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        status, body = _post_json(url, {"chat_id": chat_id, "text": text})
-        try:
-            import json
+    from oi_mornitor.proxy_resolve import invalidate_proxy_cache, resolve_effective_proxy_url
 
-            parsed = json.loads(body) if body else {}
-        except Exception:  # noqa: BLE001
-            parsed = {}
-        ok = bool(isinstance(parsed, dict) and parsed.get("ok"))
-        if not ok:
-            logger.warning("Telegram bot API 失败 HTTP %s: %s", status, body[:300])
-        return ok
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+
+    def _once(proxy: str | None) -> tuple[int, str]:
+        return _post_json(url, payload, proxy=proxy)
+
+    proxy = resolve_effective_proxy_url()
+    try:
+        status, body = _once(proxy)
+    except (OSError, TimeoutError) as exc:
+        invalidate_proxy_cache()
+        alt = resolve_effective_proxy_url(force_refresh=True)
+        if alt == proxy:
+            logger.warning("Telegram bot API 连接失败: %s", _redact_secrets(str(exc), chat_id))
+            return False
+        try:
+            status, body = _once(alt)
+        except (OSError, TimeoutError) as exc2:
+            logger.warning(
+                "Telegram bot API 连接失败: %s", _redact_secrets(str(exc2), chat_id)
+            )
+            return False
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Telegram bot API 异常: %s", exc)
+        logger.warning("Telegram bot API 异常: %s", _redact_secrets(str(exc), chat_id))
         return False
+    try:
+        import json
+
+        parsed = json.loads(body) if body else {}
+    except Exception:  # noqa: BLE001
+        parsed = {}
+    ok = bool(isinstance(parsed, dict) and parsed.get("ok"))
+    if not ok:
+        logger.warning(
+            "Telegram bot API 失败 HTTP %s: %s",
+            status,
+            _redact_secrets(body[:300], chat_id),
+        )
+    return ok
 
 
 def _send_via_http_gateway(text: str, chat_id: str) -> bool:
@@ -249,14 +307,20 @@ def _send_via_http_gateway(text: str, chat_id: str) -> bool:
         return False
     try:
         status, body = _post_json(
-            TELEGRAM_SEND_URL, {"chat_id": chat_id, "text": text}
+            TELEGRAM_SEND_URL,
+            {"chat_id": chat_id, "text": text},
+            proxy=_proxy_for_url(TELEGRAM_SEND_URL),
         )
         if status >= 400:
-            logger.warning("Telegram gateway HTTP %s: %s", status, body[:200])
+            logger.warning(
+                "Telegram gateway HTTP %s: %s",
+                status,
+                _redact_secrets(body[:200], chat_id),
+            )
             return False
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Telegram gateway 异常: %s", exc)
+        logger.warning("Telegram gateway 异常: %s", _redact_secrets(str(exc), chat_id))
         return False
 
 
@@ -272,10 +336,10 @@ def send_telegram_text(text: str, *, chat_id: str | None = None) -> bool:
     if TELEGRAM_BOT_TOKEN and chat:
         return _send_via_bot_api(text, chat)
     logger.warning(
-        "Telegram 发送失败：gateway=%s bot_token=%s chat=%s",
+        "Telegram 发送失败：gateway=%s bot_token=%s chat_configured=%s",
         bool(TELEGRAM_SEND_URL),
         bool(TELEGRAM_BOT_TOKEN),
-        chat,
+        bool(chat),
     )
     return False
 
