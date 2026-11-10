@@ -8,6 +8,8 @@ import unittest
 from unittest import mock
 
 from oi_mornitor.proxy_resolve import (
+    _DEFAULT_FALLBACK_PORTS,
+    _fallback_ports,
     invalidate_proxy_cache,
     proxy_endpoint_verified,
     resolve_effective_proxy_url,
@@ -145,6 +147,88 @@ class ProxyResolveTests(unittest.TestCase):
                 radar.mark_proxy_down("pool_empty", cooldown_sec=120)
                 self.assertTrue(radar.proxy_disabled())
                 self.assertGreater(radar._proxy_disabled_until, time.time())
+
+    def test_default_fallback_ports_are_7890_through_7894(self) -> None:
+        with mock.patch.dict(os.environ, _env(OI_PROXY_FALLBACK_PORTS=""), clear=False):
+            self.assertEqual(_fallback_ports(), (7890, 7891, 7892, 7893, 7894))
+            self.assertEqual(_fallback_ports(), _DEFAULT_FALLBACK_PORTS)
+        with mock.patch.dict(os.environ, _env(OI_PROXY_FALLBACK_PORTS="nope,,"), clear=False):
+            self.assertEqual(_fallback_ports(), (7890, 7891, 7892, 7893, 7894))
+
+    def test_default_order_uses_first_open_later_port(self) -> None:
+        seen: list[int] = []
+
+        def reach(host: str, port: int, timeout: float = 1.2) -> bool:
+            seen.append(int(port))
+            return int(port) == 7892
+
+        with mock.patch.dict(
+            os.environ,
+            _env(HTTPS_PROXY="http://127.0.0.1:7890", OI_PROXY_FALLBACK_PORTS=""),
+            clear=False,
+        ):
+            with mock.patch("oi_mornitor.proxy_resolve._tcp_reachable", reach):
+                picked = resolve_effective_proxy_url(force_refresh=True)
+        self.assertEqual(picked, "http://127.0.0.1:7892")
+        self.assertTrue(proxy_endpoint_verified())
+        # 配置端口先探一次，再按 7890→7894 顺序，遇到第一个可达端口就停。
+        self.assertEqual(seen, [7890, 7890, 7891, 7892])
+
+    def test_default_order_reaches_7894_when_earlier_ports_are_down(self) -> None:
+        seen: list[int] = []
+
+        def reach(host: str, port: int, timeout: float = 1.2) -> bool:
+            seen.append(int(port))
+            return int(port) == 7894
+
+        with mock.patch.dict(
+            os.environ,
+            _env(HTTPS_PROXY="http://127.0.0.1:7890", OI_PROXY_FALLBACK_PORTS=""),
+            clear=False,
+        ):
+            with mock.patch("oi_mornitor.proxy_resolve._tcp_reachable", reach):
+                picked = resolve_effective_proxy_url(force_refresh=True)
+        self.assertEqual(picked, "http://127.0.0.1:7894")
+        self.assertEqual(seen, [7890, 7890, 7891, 7892, 7893, 7894])
+
+    def test_env_override_still_limits_probe_list(self) -> None:
+        seen: list[int] = []
+
+        def reach(host: str, port: int, timeout: float = 1.2) -> bool:
+            seen.append(int(port))
+            return int(port) == 7894
+
+        with mock.patch.dict(
+            os.environ,
+            _env(HTTPS_PROXY="http://127.0.0.1:7890", OI_PROXY_FALLBACK_PORTS="7892,7894"),
+            clear=False,
+        ):
+            with mock.patch("oi_mornitor.proxy_resolve._tcp_reachable", reach):
+                picked = resolve_effective_proxy_url(force_refresh=True)
+        self.assertEqual(picked, "http://127.0.0.1:7894")
+        self.assertEqual(seen, [7890, 7892, 7894])
+        self.assertNotIn(7891, seen)
+        self.assertNotIn(7893, seen)
+
+    def test_dead_cache_switches_to_later_default_port(self) -> None:
+        clock = _Clock()
+        with mock.patch.dict(
+            os.environ,
+            _env(HTTPS_PROXY="http://127.0.0.1:7890", OI_PROXY_FALLBACK_PORTS=""),
+            clear=False,
+        ):
+            with mock.patch("oi_mornitor.proxy_resolve.time.monotonic", clock):
+                with mock.patch("oi_mornitor.proxy_resolve._tcp_reachable", _tcp(set())):
+                    self.assertEqual(
+                        resolve_effective_proxy_url(force_refresh=True),
+                        "http://127.0.0.1:7890",
+                    )
+                    self.assertFalse(proxy_endpoint_verified())
+                with mock.patch("oi_mornitor.proxy_resolve._tcp_reachable", _tcp({7894})):
+                    self.assertEqual(resolve_effective_proxy_url(), "http://127.0.0.1:7890")
+                    clock.t += 5.1
+                    self.assertEqual(resolve_effective_proxy_url(), "http://127.0.0.1:7894")
+                    self.assertTrue(proxy_endpoint_verified())
 
 
 class _RadarProxyHarness(unittest.IsolatedAsyncioTestCase):

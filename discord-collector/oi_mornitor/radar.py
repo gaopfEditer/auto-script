@@ -531,7 +531,7 @@ class BinanceOIRadar:
         return time.time() < self._proxy_disabled_until
 
     def mark_proxy_down(self, reason: str = "connect_failed", cooldown_sec: float = 180.0) -> None:
-        """代理失败时先互备到可达端口。只有 7890/7891 都连不上才短暂直连。"""
+        """代理失败时先互备到可达端口。只有回退端口（默认 7890–7894）都连不上才短暂直连。"""
         from oi_mornitor.proxy_resolve import (
             invalidate_proxy_cache,
             proxy_endpoint_verified,
@@ -1431,7 +1431,7 @@ class RadarService:
 
         # 显式 proxy=，避免 trust_env + NO_PROXY 导致币安 data 接口直连 451/超时。
         # 比较的是代理 URL 本身：7891→7890 时 want_proxy 仍为 True，必须重建 session。
-        # 直连冷却期间如果 7890/7891 又通了，马上改回代理，避免币安直连 451。
+        # 直连冷却期间如果 7890–7894（或 OI_PROXY_FALLBACK_PORTS）里又有端口通了，马上改回代理，避免币安直连 451。
         if self.radar.proxy_disabled():
             from oi_mornitor.proxy_resolve import proxy_endpoint_verified, resolve_effective_proxy_url
 
@@ -1723,7 +1723,9 @@ class RadarService:
         if px:
             logger.info("Binance REST 代理: %s", px)
             if not await self._proxy_tcp_reachable(px):
-                logger.error("代理不可达（已尝试 7890/7891 互备）；请确认 Clash 已启动")
+                logger.error(
+                    "代理不可达（已尝试回退端口，默认 7890–7894）；请确认 Clash 已启动"
+                )
         else:
             logger.warning(
                 "未检测到 HTTPS_PROXY，直连 fapi.binance.com；"

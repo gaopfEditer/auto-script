@@ -1,4 +1,4 @@
-"""解析可用的本地 HTTP 代理（兼容 Clash 7890 / 7891 等常见端口）。"""
+"""解析可用的本地 HTTP 代理（Clash 常见端口 7890–7894，按顺序用第一个可达的）。"""
 from __future__ import annotations
 
 import logging
@@ -42,8 +42,15 @@ def _ttl_dead() -> float:
         return 5.0
 
 
+# 靠前的端口经常被别的进程占用，所以按顺序继续试后面的。
+_DEFAULT_FALLBACK_PORTS: tuple[int, ...] = (7890, 7891, 7892, 7893, 7894)
+
+
 def _fallback_ports() -> tuple[int, ...]:
-    raw = (os.getenv("OI_PROXY_FALLBACK_PORTS") or "7890,7891").strip()
+    """OI_PROXY_FALLBACK_PORTS 可覆盖；空或非法时用 7890–7894。"""
+    raw = (os.getenv("OI_PROXY_FALLBACK_PORTS") or "").strip()
+    if not raw:
+        return _DEFAULT_FALLBACK_PORTS
     out: list[int] = []
     for part in raw.split(","):
         p = part.strip()
@@ -53,7 +60,7 @@ def _fallback_ports() -> tuple[int, ...]:
             out.append(int(p))
         except ValueError:
             continue
-    return tuple(out) or (7890, 7891)
+    return tuple(out) or _DEFAULT_FALLBACK_PORTS
 
 
 def _proxy_from_env() -> str | None:
@@ -149,9 +156,10 @@ def _probe_host(host: str) -> str:
 def resolve_effective_proxy_url(*, force_refresh: bool = False) -> str | None:
     """返回当前进程应使用的代理 URL。
 
-    本地 7890/7891 会互备。可达结果缓存 ``OI_PROXY_CACHE_TTL_SEC``（默认 30s）；
+    本地默认按 7890,7891,7892,7893,7894 顺序互备（可用 ``OI_PROXY_FALLBACK_PORTS`` 覆盖）。
+    可达结果缓存 ``OI_PROXY_CACHE_TTL_SEC``（默认 30s）；
     端口全灭时只短缓存死地址（``OI_PROXY_CACHE_TTL_DEAD_SEC``，默认 5s），
-    Clash 换到另一端口后会重新探测，而不是一直使用已关闭的端口。
+    Clash 换到后面的端口后会重新探测，而不是一直停在已经关掉的前面端口。
     全灭时仍返回配置里的 URL（不改成 None），避免调用方在代理其实还在的窗口里改直连。
     """
     now = time.monotonic()
@@ -188,7 +196,7 @@ def resolve_effective_proxy_url(*, force_refresh: bool = False) -> str | None:
                 _log_switch(configured, picked)
             return _store(picked, verified=True)
         _log_all_dead(configured)
-        # 短缓存死配置。下次解析会再探 7890/7891，Clash 起来后能切走。
+        # 短缓存死配置。下次解析会再按回退端口顺序探测，Clash 换端口后能切走。
         return _store(configured, verified=False)
 
     probe = _probe_host(host)
