@@ -57,7 +57,7 @@ def local_paths_to_media_urls(paths: list[str] | None) -> list[str]:
     return out
 
 
-_PROFILE_RESERVED_KEYS = frozenset({"send"})
+_PROFILE_RESERVED_KEYS = frozenset({"send", "placeAnOrder"})
 
 
 def load_profile_chat_ids() -> list[int]:

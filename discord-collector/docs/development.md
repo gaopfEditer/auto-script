@@ -161,7 +161,7 @@ flowchart LR
 1. `discord-signal-config.js` 加 `channelId` + `parser` + 风格
 2. `discord-signal-parsers.js` 实现该 `parser`
 3. 需要分批开仓/补 TP：看 `discord-signal-staged-trade.js`（seven / 山寨之王已有模式）
-4. 自动下单：`trade-platform-toggles.js` / `BITGET_AUTO_TRADE_CHANNEL_IDS`
+4. 自动下单：Discord 雪花频道用 `trade-platform-toggles.js` / `BITGET_AUTO_TRADE_CHANNEL_IDS`。Telegram 群只看 `telegram/channel_profiles.json` 的 `placeAnOrder`（`-100…` 字符串全等）。`send` 只控制转发/CDP，不能单独下单。
 
 ### 5.4 新表或新列
 

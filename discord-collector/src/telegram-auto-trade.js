@@ -1,5 +1,6 @@
 /**
- * channel_profiles.json `send` 白名单 Telegram 群 → Debug 勾选平台自动开单。
+ * channel_profiles.json `placeAnOrder` 白名单 Telegram 群 → Debug 勾选平台自动开单。
+ * `send` 只控制转发/CDP，不能单独授权下单。
  * 默认 20x、保证金 orderSizeUsdt（Debug 可调，默认 1U）、市价开仓 + 完整 TP/SL（5% SL + 5/8/12% 三档）。
  */
 import { fetchFuturesPrice, parseEntryPrice } from "./card-price-fetch.js";
@@ -7,15 +8,19 @@ import { isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { applyDefaultTpSl } from "./card-liquidation-engine.js";
 import { parseEntryPriceForOrder } from "./bitget-order-from-signal.js";
-import { isCdpSendChannel } from "./telegram-channel-profiles.js";
+import { isPlaceAnOrderChannel } from "./telegram-channel-profiles.js";
 import { isPlaceholderTradeSymbol } from "./symbol-aliases.js";
 
 export const TELEGRAM_TRADE_LEVERAGE = 20;
 export const TELEGRAM_TRADE_INITIAL_SL_PCT = 5;
 
-/** @param {unknown} channelId */
-export function isTelegramAutoTradeChannel(channelId) {
-  return isCdpSendChannel(channelId);
+/**
+ * Telegram 来源卡片能否自动下单。只认 placeAnOrder，不认 send，也不认 BITGET_AUTO_TRADE_CHANNEL_IDS。
+ * @param {unknown} channelId
+ * @param {string} [profilesFile]
+ */
+export function isTelegramAutoTradeChannel(channelId, profilesFile) {
+  return isPlaceAnOrderChannel(channelId, profilesFile);
 }
 
 /** @returns {Record<string, unknown>} */

@@ -2,8 +2,9 @@
 实时监听新消息（events.NewMessage），适合信号/推送场景，避免轮询。
 
 监听与建卡来源：
-  - channel_profiles.json → send 白名单
+  - channel_profiles.json → send 白名单（转发/CDP；不是下单白名单）
   - channel_profiles.json → 含 only_names 的群（按发言人模糊匹配后建卡推 TG）
+  - 自动下单另看 placeAnOrder，由 discord-collector 判定，本脚本不下单
 
 推送目标：
   - discord-collector 归档卡片 → TELEGRAM_PUSH_CHAT_ID（collect:ui）

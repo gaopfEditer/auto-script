@@ -27,6 +27,7 @@ import { getWeexTradeStatus, loadWeexTradeConfig } from "./weex-trade-config.js"
 import { parseTelegramTradeTextLite, buildDefaultTelegramExitPlan } from "./telegram-auto-trade.js";
 import {
   isCdpSendChannel,
+  listTelegramPlaceAnOrderChannelsWithNames,
   listTelegramSendChannelsWithNames,
   readTelegramChannelProfiles,
 } from "./telegram-channel-profiles.js";
@@ -762,6 +763,7 @@ async function main() {
 
   app.get("/api/debug/trade-platforms", (_req, res) => {
     const telegramSendChannels = listTelegramSendChannelsWithNames();
+    const telegramPlaceAnOrderChannels = listTelegramPlaceAnOrderChannelsWithNames();
     const profiles = readTelegramChannelProfiles();
     res.json({
       ok: true,
@@ -769,6 +771,7 @@ async function main() {
       orderSizeUsdt: getTradeOrderSizeUsdt(),
       requiredChannelIds: getAutoTradeChannelIds(),
       telegramSendChannels,
+      telegramPlaceAnOrderChannels,
       channelProfilesFile: profiles.file,
       channelProfilesOk: profiles.ok,
       channelProfilesError: profiles.error ?? null,
@@ -878,10 +881,12 @@ async function main() {
 
   app.get("/api/debug/simulate-signal", (_req, res) => {
     const telegramSendChannels = listTelegramSendChannelsWithNames();
+    const telegramPlaceAnOrderChannels = listTelegramPlaceAnOrderChannelsWithNames();
     const profiles = readTelegramChannelProfiles();
     res.json({
       ok: true,
       telegramSendChannels,
+      telegramPlaceAnOrderChannels,
       channelProfilesFile: profiles.file,
       channelProfilesOk: profiles.ok,
       channelProfilesError: profiles.error ?? null,
@@ -895,8 +900,10 @@ async function main() {
 ✔️获利目标：2625—2690—2790
 ❌止损位置：2490`,
       hints: [
-        "白名单来源：telegram/channel_profiles.json 的 send 数组（下方群名）",
-        "listen.py 监听到上述群的结构化信号 → 建卡 + 推 TELEGRAM_PUSH_CHAT_ID + 按勾选平台开单",
+        "自动下单只看 telegram/channel_profiles.json 的 placeAnOrder（下方群，id 须为 -100… 字符串）",
+        "send 只控制转发/CDP，出现在 send 里不会因此下单",
+        "BITGET_AUTO_TRADE_CHANNEL_IDS / WEEX_AUTO_TRADE_CHANNEL_IDS 只约束 Discord 雪花频道，不是 Telegram 群白名单",
+        "listen.py 建卡后：placeAnOrder 群按勾选平台开单；send 群照常转发",
         "Bitget / WEEX 勾选与单笔保证金会同步到服务端（localStorage 备份）",
         "Telegram 开单：20x · 市价 · 必须挂止损（缺省 5%）；止盈缺省 5/8/12%（分批 30/30/40）；无有效止损不会下单",
         "TP1 后止损移至开仓价，TP2 后移至 TP1；清算/回溯与 exitPlan 一致",
@@ -912,13 +919,22 @@ async function main() {
       res.status(400).json({ ok: false, error: "content_required" });
       return;
     }
+    const placeList = listTelegramPlaceAnOrderChannelsWithNames();
     const sendList = listTelegramSendChannelsWithNames();
-    if (!sendList.length) {
-      res.status(400).json({ ok: false, error: "send_list_empty", hint: "channel_profiles.json send 为空" });
+    if (!placeList.length && !sendList.length) {
+      res.status(400).json({
+        ok: false,
+        error: "send_list_empty",
+        hint: "channel_profiles.json 的 placeAnOrder 与 send 都为空",
+      });
       return;
     }
     const reqChannelId = String(req.body?.channelId ?? "").trim();
-    const picked = sendList.find((c) => c.id === reqChannelId && isCdpSendChannel(c.id)) ?? sendList[0];
+    const picked =
+      placeList.find((c) => c.id === reqChannelId) ??
+      sendList.find((c) => c.id === reqChannelId && isCdpSendChannel(c.id)) ??
+      placeList[0] ??
+      sendList[0];
     const channelId = picked.id;
     const channelName = picked.name;
 
@@ -995,6 +1011,8 @@ async function main() {
         tradePlatforms: getTradePlatformToggles(),
         orderSizeUsdt: getTradeOrderSizeUsdt(),
         telegramSendChannels: sendList,
+        telegramPlaceAnOrderChannels: placeList,
+        autoTradeEligible: placeList.some((c) => c.id === channelId),
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });

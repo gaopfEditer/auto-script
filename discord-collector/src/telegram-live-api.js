@@ -84,6 +84,7 @@ export function readChannelProfiles() {
       ok: false,
       error: parsed.error,
       sendChatIds: parsed.sendChatIds,
+      placeAnOrderChatIds: parsed.placeAnOrderChatIds,
     };
   }
   return {
@@ -91,6 +92,7 @@ export function readChannelProfiles() {
     file: parsed.file,
     ok: true,
     sendChatIds: parsed.sendChatIds,
+    placeAnOrderChatIds: parsed.placeAnOrderChatIds,
   };
 }
 
@@ -139,11 +141,12 @@ export function registerTelegramLiveRoutes(app, broadcast, deps = {}) {
   });
 
   app.get("/api/telegram/live/channels", (_req, res) => {
-    const { channels, file, ok, error, sendChatIds } = readChannelProfiles();
+    const { channels, file, ok, error, sendChatIds, placeAnOrderChatIds } = readChannelProfiles();
     res.json({
       ok: true,
       channels,
       sendChatIds: sendChatIds ?? [],
+      placeAnOrderChatIds: placeAnOrderChatIds ?? [],
       file,
       profilesOk: ok,
       error: error || undefined,

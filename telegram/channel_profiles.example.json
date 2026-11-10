@@ -1,11 +1,21 @@
 {
-  "_comment_send": "send 不是频道条目，而是「来源群 id 白名单」：这些群产生交易信号并推送到 Telegram 后，会额外转发到 python-ai-operate POST /api/v1/trade-signal/publish（CDP 发布）。需 TRADE_SIGNAL_AI_PUBLISH=1",
+  "_comment_send": "send 不是频道条目，而是「来源群 id 白名单」：这些群产生交易信号并推送到 Telegram 后，会额外转发到 python-ai-operate POST /api/v1/trade-signal/publish（CDP 发布）。需 TRADE_SIGNAL_AI_PUBLISH=1。send 不能单独授权 Bitget/WEEX 下单。",
+  "_comment_placeAnOrder": "placeAnOrder 不是频道条目，而是 Telegram 自动下单白名单。只比较完整字符串（必须保留 -100 前缀）。BITGET_AUTO_TRADE_CHANNEL_IDS 只用于 Discord 雪花频道，不会放行这些群。",
   "send":[
     "-1004346465376",
     "-1001720924085",
     "-1003962150986",
     "-1001908181865",
     "-1002355647897"
+  ],
+  "placeAnOrder": [
+    "-1001720924085",
+    "-1003962150986",
+    "-1001908181865",
+    "-1002404948215",
+    "-1001766481463",
+    "-1002355647897",
+    "-1003938902957"
   ],
   "-1001766481463": {
     "name": "",

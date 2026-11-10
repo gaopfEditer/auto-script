@@ -1,11 +1,17 @@
 /**
  * 交易平台开关：Debug 页 localStorage 同步到服务端，信号建卡时决定是否向 Bitget / WEEX 下单。
- * 频道白名单：BITGET_AUTO_TRADE_CHANNEL_IDS（Discord）+ telegram/channel_profiles.json `send`（Telegram 来源群）。
- * 主流币种 BTC/ETH 不参与自动交易。
+ * 频道白名单分成两条，互不借用：
+ * - Discord 雪花频道：BITGET_AUTO_TRADE_CHANNEL_IDS（WEEX 默认同此列表）
+ * - Telegram 群：telegram/channel_profiles.json 的 `placeAnOrder`（`-100…` 字符串全等）
+ * `send` 只控制转发/CDP。主流币种 BTC/ETH 不参与自动交易。
  */
 import { config } from "./config.js";
 import { detectSymbolTier } from "./card-backtest-policy.js";
-import { readTelegramChannelProfiles } from "./telegram-channel-profiles.js";
+import {
+  isTelegramGroupChatId,
+  readTelegramChannelProfiles,
+  telegramChatIdInExactList,
+} from "./telegram-channel-profiles.js";
 import { isTelegramAutoTradeChannel } from "./telegram-auto-trade.js";
 
 /** @typedef {{ bitget: boolean; weex: boolean }} TradePlatformToggles */
@@ -28,25 +34,56 @@ export function setTradeOrderSizeUsdt(v) {
   return orderSizeUsdt;
 }
 
-/** @returns {string[]} */
-export function getAutoTradeChannelIds() {
-  const discord = [...config.bitgetAutoTradeChannelIds];
-  const { sendChatIds } = readTelegramChannelProfiles();
-  const out = [...discord];
-  for (const id of sendChatIds) {
-    if (!out.includes(id)) out.push(id);
+/**
+ * @typedef {{
+ *   profilesFile?: string,
+ *   placeAnOrderIds?: readonly unknown[],
+ *   discordChannelIds?: readonly unknown[],
+ * }} AutoTradeChannelOverride
+ */
+
+/**
+ * Discord 雪花白名单 + Telegram placeAnOrder。环境变量里的 `-100…` 群 id 会被丢掉，避免误当成 Telegram 白名单。
+ * @param {AutoTradeChannelOverride} [override]
+ * @returns {string[]}
+ */
+export function getAutoTradeChannelIds(override) {
+  const envIds = override?.discordChannelIds ?? config.bitgetAutoTradeChannelIds;
+  /** @type {string[]} */
+  const out = [];
+  for (const raw of envIds) {
+    const id = String(raw ?? "").trim();
+    if (!id || isTelegramGroupChatId(id) || out.includes(id)) continue;
+    out.push(id);
+  }
+  const placeIds = Array.isArray(override?.placeAnOrderIds)
+    ? override.placeAnOrderIds
+    : readTelegramChannelProfiles(override?.profilesFile).placeAnOrderChatIds;
+  for (const raw of placeIds) {
+    const id = String(raw ?? "").trim();
+    if (!id || out.includes(id)) continue;
+    out.push(id);
   }
   return out;
 }
 
-/** @param {string} channelId */
-export function isAutoTradeChannel(channelId) {
+/**
+ * Telegram 群只看 placeAnOrder。BITGET_AUTO_TRADE_CHANNEL_IDS 只放行非 Telegram 的 Discord 频道。
+ * @param {string} channelId
+ * @param {AutoTradeChannelOverride} [override]
+ */
+export function isAutoTradeChannel(channelId, override) {
   const cid = String(channelId ?? "").trim();
   if (!cid) return false;
-  if (isTelegramAutoTradeChannel(cid)) return true;
-  const ids = config.bitgetAutoTradeChannelIds;
+  if (isTelegramGroupChatId(cid)) {
+    if (Array.isArray(override?.placeAnOrderIds)) {
+      return telegramChatIdInExactList(cid, override.placeAnOrderIds);
+    }
+    return isTelegramAutoTradeChannel(cid, override?.profilesFile);
+  }
+  const ids = override?.discordChannelIds ?? config.bitgetAutoTradeChannelIds;
   if (!ids.length) return false;
-  return ids.includes(cid);
+  return ids.some((id) => String(id ?? "").trim() === cid);
 }
 
 /**
