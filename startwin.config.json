@@ -6,7 +6,8 @@
     "chrome",
     "cursor",
     "pull_code_script",
-    "grokbot"
+    "grokbot",
+    "openmausbot"
   ],
   "apps": {
     "vpn": {
@@ -70,6 +71,13 @@
       "enabled": true,
       "label": "打开 Grok Bot",
       "path": "C:\\\\Users\\\\eason\\\\AppData\\\\Local\\\\Programs\\\\Grok Bot\\\\Grok Bot.exe",
+      "args": "",
+      "delay": 300
+    },
+    "openmausbot": {
+      "enabled": true,
+      "label": "打开 OpenMaus Bot",
+      "path": "C:\\\\Users\\\\eason\\\\AppData\\\\Local\\\\Programs\\\\openmausbot\\\\OpenMausBot.exe",
       "args": "",
       "delay": 300
     }
