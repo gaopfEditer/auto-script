@@ -220,7 +220,7 @@ def _post_json(
     """stdlib JSON POST，避免依赖 requests（oi venv 默认未装）。
 
     ``proxy`` 是显式代理。``None`` 表示直连，并忽略环境变量里的 HTTP(S)_PROXY，
-    这样本机 gateway 不会被已经关掉的 7891 代理打断，Bot API 也不会误走死端口。
+    这样本机 gateway 不会被已经关掉的本地代理端口打断，Bot API 也不会误走死端口。
     """
     import json
     import urllib.error
