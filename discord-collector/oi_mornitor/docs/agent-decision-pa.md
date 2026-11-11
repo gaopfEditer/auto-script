@@ -1,5 +1,7 @@
 # Agent decision / price-action layer (read-only)
 
+> **完整信号清单与交易/决策边界**（含既有形态 + B 组 PA + C 组共振 + Bitget/WEEX 实盘路径）见 **[signals-and-decision-logic.md](./signals-and-decision-logic.md)**。
+
 Inspired by [rasattrading-mcp](https://github.com/saldraykee22/rasattrading-mcp) analysis ideas — **no** order execution, credentials, or exchange daemons.
 
 ## Parallel groups
