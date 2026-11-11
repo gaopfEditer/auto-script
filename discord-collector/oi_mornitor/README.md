@@ -6,7 +6,7 @@
 前端：**React 18 + Vite**（组件 memo 优化，SSE 实时推送）。
 
 > **信号 / 拐点 / 扳机线 / Vegas / 锤子完整说明** → [`docs/signal-logic.md`](./docs/signal-logic.md)
-> **文档索引** → [`docs/README.md`](./docs/README.md)（币种捕获 + 信号逻辑）
+> **文档索引** → [`docs/index.md`](./docs/index.md)（含 Agent 决策与 **§10 研究回测 Playbook**）
 
 ## 功能
 

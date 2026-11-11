@@ -1,6 +1,7 @@
 # Agent decision / price-action layer (read-only)
 
-> **完整信号清单与交易/决策边界**见 **[signals-and-decision-logic.md](./signals-and-decision-logic.md)**（含 P0 方向一致性、B 分类、流动性五态、Shadow Veto、三类研究策略）。
+> **完整信号清单与交易/决策边界**见 **[signals-and-decision-logic.md](./signals-and-decision-logic.md)**（含 P0 方向一致性、B 分类、流动性五态、Shadow Veto、三类研究策略）。  
+> **研究回测逐步操作**：[§10 Playbook](./signals-and-decision-logic.md#10-研究回测操作手册-playbook)。
 
 ## Parallel groups (A / B / C)
 

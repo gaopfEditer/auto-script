@@ -133,9 +133,11 @@
 - **`backtestStatus`**: `planned_p1` — **无**历史回测结果写入本文或代码。  
 - **`scheduler`**: `none` — **不**合并为统一 live 打分或 Bitget/WEEX 路径。
 
-### 4.1 条件实验室（规划）
+### 4.1 条件实验室（研究设计，非已有结果）
 
-长下影线等分桶 A/B/C/D/E、仅 A、仅 B、A+B 增量评估：**研究方案**，P1 实现回测引擎后再落数。禁止在同一测试集反复调参后宣称有效（文档约束，非本 PR 代码）。
+长下影线等分桶见 **§10.4 步骤 D**；产出为自行导出的 CSV/JSON，**不是**仓库内置回测结论。
+
+> **可执行全流程**：下文 **[§10 研究回测操作手册（Playbook）](#10-研究回测操作手册-playbook)**。
 
 ---
 
@@ -144,7 +146,7 @@
 | 优先级 | 内容 |
 |--------|------|
 | **P0（已做）** | B 标签分类与激活规则；A/B 方向一致性；流动性五态；Shadow Veto 三态；三类策略 schema + 当前数据匹配 |
-| **P1（规划）** | 多周期 Context；三类策略**独立回测**；条件期望与样本量；可能 promoted 至调度器（需人工决策） |
+| **P1（规划）** | 多周期 Context；三类策略**自动化回测引擎**（Playbook 可先手工跑）；条件期望与样本量；可能 promoted 至调度器（需人工决策） |
 | **P2（规划）** | Agent 多空辩论；动态选工具；决策反馈与规则自优化 |
 
 ---
@@ -189,6 +191,230 @@ PA 原语模块表见 `pa/analysis.py`、`pa/liquidity.py`、`pa/swings.py` 等�
 | 三类研究策略 | `pa/research_strategies.py` |
 | PA 原语 | `pa/*` |
 | 单元测试 | `tests/test_agent_decision_pa.py` |
+| 研究导出（JSONL） | `scripts/research_export_agent_decisions.py` |
+| 期望聚合 | `scripts/backfill_agent_decision_expectancy.py` |
 | PA API 摘要 | `docs/agent-decision-pa.md` |
+| 文档索引 | `docs/index.md` |
+| **研究回测 Playbook** | 本文 **§10** |
 
-更细的拐点 / Vegas 图表说明见 [signal-logic.md](./signal-logic.md)。
+更细的拐点 / Vegas 图表说明见 [signal-logic.md](./signal-logic.md)。纸面 vs Live 差异见 [backtest-vs-live.md](./backtest-vs-live.md)。
+
+---
+
+## 10. 研究回测操作手册（Playbook）
+
+> **定位**：仅研究 / 纸面统计；**不**接入 Bitget/WEEX、`shouldPushToTradePlatform`、统一调度器。  
+> **状态**：按当前仓库可跑的命令编写；**完整自动化策略回测引擎仍为 P1**。本文**不包含**任何预填胜率或期望值数字。
+
+### 10.1 前提与路径
+
+| 项 | 说明 |
+|----|------|
+| 仓库根 | `discord-collector/oi_mornitor/`（下文命令默认在此目录） |
+| Python 路径 | `cd discord-collector/oi_mornitor && PYTHONPATH=..` |
+| 胜率库 | `data/pattern_alert_stats.json`（`pattern_alert_stats.list_alert_stats()`） |
+| 纸面结算 | `pattern_settle.py` + `pattern_settle_profile.py`；服务端批量：`POST /api/pattern-alert-stats/recalculate-v2` |
+| Agent 标注 | `agentDecision` 字段；仅当扫描时 `OI_AGENT_DECISION_ENABLED=1` 且带 `pa_klines` 时写入新记录 |
+| PA 快照（可选） | `data/pa_analysis/{SYMBOL}_{interval}.jsonl`（`OI_AGENT_DECISION_PERSIST_PA=1`） |
+| 期望表（研究） | `data/agent_decision_expectancy.json`（`scripts/backfill_agent_decision_expectancy.py`） |
+| 单元测试 | `tests/test_agent_decision_pa.py` |
+
+**环境（研究采集，不改实盘默认）**
+
+```bash
+# discord-collector/.env — 仅在你自己的研究环境开启，勿当作生产默认
+# OI_AGENT_DECISION_ENABLED=1      # 默认仍为 0；开启后新入库 alert 才带 agentDecision
+# OI_AGENT_DECISION_PERSIST_PA=0   # 可选 1 → JSONL
+# OI_AGENT_DECISION_EXPECTANCY_MIN_N=5   # evidenceSufficient 阈值（表内字段）
+```
+
+`agentDecision.readOnly` 恒 `true`；`evidenceSufficient` 在单条 alert 上**默认 false**，仅聚合表达到 `OI_AGENT_DECISION_EXPECTANCY_MIN_N` 时分桶标记 `evidenceSufficient: true`。
+
+### 10.2 第 0 步：确认 PA / 决策层可用
+
+```bash
+cd discord-collector/oi_mornitor
+PYTHONPATH=.. python3 -m unittest tests.test_agent_decision_pa -v
+```
+
+预期：`OK`（10 tests）。
+
+### 10.3 第 1 步：纸面结算与胜率库字段
+
+1. **启动 OI 服务**（若需拉 K 线 / 重算）：在 `discord-collector/` 按 [development.md](../../docs/development.md) 运行 `pnpm run oi:start` 或等价方式。
+2. **批量重算 V2 结算**（纸面 TP/SL，非交易所成交）：
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:8765/api/pattern-alert-stats/recalculate-v2?limit=5000' | head -c 2000
+```
+
+3. **读懂纸面 vs 实盘**（必读 [backtest-vs-live.md](./backtest-vs-live.md)）：
+   - 胜率库 `movePct` / `pnlPct`：标的价格变动或规则内纸面盈亏；**不含**完整滑点/资金费率/成交延迟（结构回测可用 `OI_BT_*`，见该文档）。
+   - Live 下单路径与 OI stats **独立**；Agent / 策略标签**不会**改变 Bitget/WEEX。
+
+研究用单条记录关键字段：
+
+| 字段 | 用途 |
+|------|------|
+| `signalAt` | 时间序切分 train/val/test |
+| `outcome` | `take_profit` / `stop_loss` / `pending`（纸面） |
+| `movePct`, `pnlPct`, `maxProfitPct` | 盈亏与 **MFE** 近似（核实窗内最大浮盈%） |
+| `slPrice`, `tp1Price`, entry | 纸面风险定义；算 R 倍数 |
+| `agentDecision` | A/B/C、方向、`researchStrategies.matchedIds`、`expectancyKey` |
+| `confluence` | 综合共振 tier（**≠** Agent C 组） |
+
+**MAE**：当前 stats 无独立 `maxAdversePct` 字段；Playbook 阶段用「结算 `movePct` 为负时的幅度」或 P1 引擎从 K 线重放。MFE 优先用 `maxProfitPct`。
+
+### 10.4 第 2 步：为历史记录补算 `agentDecision`（手工回测入口）
+
+> **P1** 将提供批量 job；**现在**用下面脚本对胜率库**只读补标注**（不写回 json，除非你自行加 `--write`）。
+
+仓库脚本：`scripts/research_export_agent_decisions.py`（只读导出，不改胜率库）。
+
+运行示例（**需 OI :8765 可访问币安或代理**）：
+
+```bash
+cd discord-collector/oi_mornitor
+mkdir -p data/research
+PYTHONPATH=.. python3 scripts/research_export_agent_decisions.py \
+  --start-ms 1700000000000 --end-ms 1730000000000 \
+  > data/research/agent_decisions_2024.jsonl
+```
+
+向前采集（免补算）：在研究 `.env` 设 `OI_AGENT_DECISION_ENABLED=1`，重启 OI；新 TG 入库行将自带 `agentDecision`（`pattern_emit_gate.attach_confluence_on_alert`）。
+
+### 10.5 实验矩阵（必须分开统计，禁止混成一项总分）
+
+#### A. 三类研究策略（互不合成）
+
+对每条导出记录，按 `agentDecision.researchStrategies.matchedIds` **分别**建 cohort（一条可进多策略）：
+
+| `matchedIds` | 策略 |
+|--------------|------|
+| `liquidity_reversal` | 流动性反转 |
+| `trend_pullback_continuation` | 趋势回调延续 |
+| `range_mean_reversion` | 震荡区间 |
+
+**禁止**：把三策略胜率加权合成「总策略分」或写入调度器（`scheduler: none` 不变）。
+
+#### B. Agent 层增量：A-only / B-only / A+B 方向一致
+
+在同一 `signalAt` 窗口内，用 SQL 式过滤（Python 示例如下）：
+
+| Cohort | 过滤条件 |
+|--------|----------|
+| **A-only** | `primaryGroup == "A"` 或 `groups.A.active && !groups.B.active` |
+| **B-only** | `primaryGroup == "B"` 或 `groups.B.active && !groups.A.active` |
+| **A+B 共振** | `groups.C.active` 且 `directionAgreement == true` 且 `classification` 为 Bullish/Bearish Confluence |
+| **对照：旧交集** | `groups.C.legacyIntersection`（方向冲突时可能为 true 但新 C 不为 active） |
+
+#### C. 条件实验室示例：长下影线 A–E（研究设计）
+
+在 A 组形态上叠加 B/PA 条件（**结果须你自己跑，本文无数值**）：
+
+| 组 | 条件（示意） |
+|----|----------------|
+| **A** | 仅 `kind` 含 hammer / 倒锤 / 长下影形态（`groups.A.tags`） |
+| **B** | A + 放量（`volume_price` 或量能 feat） |
+| **C** | A + `liq_state:*:swept` 且 `reclaimed` |
+| **D** | A + `event:choch_*` 或 B 方向结构事件 |
+| **E** | D + `vwap_*` 或 VWAP reclaim |
+
+实现：在 §10.4 的 JSONL 上按 `tags` / `liquidityStates` 过滤即可。
+
+### 10.6 指标计算（纸面口径）
+
+对每个 cohort 单独调用 `pattern_alert_stats.summarize` 逻辑（或 `backtest_metrics.summarize_backtest_extended` 若你已转为 backtest item 形状）：
+
+| 指标 | 来源 |
+|------|------|
+| 样本量 `n` | settled = `take_profit` + `stop_loss` |
+| 胜率 | `wins / settled` |
+| 平均盈亏 | `avgPnlPct`（`summarize`） |
+| 扣费后期望 | 结构回测项用 `netMovePct`/`pnlPct`（`OI_BT_FEE_PCT`）；stats 库默认**未扣费**，手工减 `2 × fee%` 或读 [backtest-vs-live.md](./backtest-vs-live.md) |
+| 最大回撤 | `backtest_metrics` 对已排序 `signalAt` 序列算 `maxDrawdownPct` |
+| MFE | `maxProfitPct` |
+| MAE | P1 或自算 K 线极端 |
+| 分环境 | 按 `interval`、`mcapTier`、`confluence.tier`、`agentDecision.shadowVeto.status` 分组 |
+
+**证据不足**：若 `n < OI_AGENT_DECISION_EXPECTANCY_MIN_N`（默认 5），该 cohort **必须**标注 `evidenceInsufficient: true`，**不得**写入「可推广」结论。
+
+聚合 `expectancyKey`（已有脚本，注意 outcome 兼容）：
+
+```bash
+cd discord-collector/oi_mornitor
+PYTHONPATH=.. python3 scripts/backfill_agent_decision_expectancy.py --dry-run | head
+PYTHONPATH=.. python3 scripts/backfill_agent_decision_expectancy.py
+# → data/agent_decision_expectancy.json
+```
+
+> **注意**：`aggregate_expectancy_from_stats` 当前过滤 `outcome in (win, loss)`；胜率库主路径为 `take_profit`/`stop_loss`。若 dry-run 行数为 0，请用 §10.7 片段按 `take_profit`/`stop_loss` 分桶，或先将 outcome 映射后再跑脚本（**不要**伪造样本）。
+
+### 10.7 第 3 步：时间序切分与滚动样本外（强制）
+
+```python
+# 在 research JSONL 或 list_alert_stats() 结果上执行（示意）
+import json
+from pathlib import Path
+
+rows = [json.loads(l) for l in Path("data/research/agent_decisions_2024.jsonl").open() if l.strip() and not l.startswith("#")]
+rows.sort(key=lambda r: int(r["signalAt"]))
+n = len(rows)
+train, val, test = rows[: int(n*0.6)], rows[int(n*0.6): int(n*0.8)], rows[int(n*0.8):]
+
+def metrics(chunk, pred):
+    settled = [r for r in chunk if str(r.get("outcome")) in ("take_profit","stop_loss") and pred(r)]
+    # ... 调用 summarize 或自算 win rate / avg pnl ...
+    return {"n": len(settled)}
+
+# 规则：仅在 train+val 上调参；test 只评估一次。
+# 禁止：在 test 上改阈值后再用同一 test 报告“验证通过”。
+```
+
+**滚动样本外**：按月滑动窗口，每次用过去 60d 作 train、接下来 14d 作 test，记录各 cohort 的 test 胜率序列（P1 引擎自动化；现用手工循环）。
+
+### 10.8 第 4 步：产出归档（字段约定）
+
+建议写入 `data/research/runs/{YYYYMMDD}_{cohort}.json`：
+
+```json
+{
+  "playbookVersion": "2026-03-26",
+  "cohort": "strategy:liquidity_reversal",
+  "timeSplit": "test",
+  "n": 0,
+  "evidenceInsufficient": true,
+  "metrics": {},
+  "filters": { "matchedIds": ["liquidity_reversal"] },
+  "notes": "paper settle only; agentDecision.expectancyKey optional"
+}
+```
+
+| 键 | 含义 |
+|----|------|
+| `cohort` | 策略 id 或 `agent:AB_confluence` 或 `lab:wick_E` |
+| `agentDecision.expectancyKey` | 细粒度分桶（mcap×group×tags） |
+| `researchStrategies.matchedIds` | 三策略并行登记 |
+| `evidenceInsufficient` | `n < EXPECTANCY_MIN_N` |
+
+### 10.9 何时可「晋升」到调度器（仅决策标准，**不实现**）
+
+须**全部**满足（人工门禁）：
+
+1. 三类策略**各自**在滚动 test 上 `evidenceSufficient` 且口径一致（纸面或明确标注 live 仿真）。
+2. A+B 方向一致 cohort 相对 A-only 的增量期望为**正**且样本量达标（条件实验室同理）。
+3. Shadow `veto` 比例与盈亏尾部已统计（仍可不拦截 live，但知情）。
+4. 产品明确选择**单一**策略或显式多策略路由（非本仓库自动合并）。
+5. **不改** `shouldPushToTradePlatform` 直至 Node 侧单独 PR。
+
+### 10.10 P1 与本文关系
+
+| 能力 | Playbook（今） | P1 引擎 |
+|------|----------------|---------|
+| 三策略独立 cohort | JSONL + 过滤 | 一键 job |
+| A/B/AB 增量 | 手动 summarize | 报告模板 |
+| 条件实验室 A–E | 标签过滤 | 配置化 YAML |
+| train/val/test | 脚本片段 | 内置 + 防泄漏 |
+| MAE / 资金费率 | 部分缺失 | 补齐 |
+
+**禁止**：在 P1 完成前将 Playbook 产出数字写入产品文案或调度器默认值。
