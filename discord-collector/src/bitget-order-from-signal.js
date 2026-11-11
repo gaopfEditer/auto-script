@@ -7,6 +7,7 @@ import { normalizeExecution } from "./discord-signal-execution.js";
 import { applyDefaultTpSl } from "./card-liquidation-engine.js";
 import { detectSymbolTier } from "./card-backtest-policy.js";
 import { config } from "./config.js";
+import { priceStr } from "./bitget-tpsl-guard.js";
 
 /**
  * @typedef {{
@@ -276,8 +277,8 @@ export function buildBitgetOrderPlan(input) {
 
   if ((!tpNums.length || slNum == null) && refPrice > 0) {
     const applied = applyDefaultTpSl(refPrice, isShortDirection(direction), tpNums, slNum);
-    tps = applied.tps.map((p) => String(p));
-    slRaw = String(applied.sl);
+    tps = applied.tps.map((p) => priceStr(p));
+    slRaw = priceStr(applied.sl);
     slNum = applied.sl;
     ex.planned.takeProfitPrices = tps;
     ex.planned.stopLossPrice = slRaw;

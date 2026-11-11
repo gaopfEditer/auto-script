@@ -8,6 +8,7 @@ import { isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { applyDefaultTpSl } from "./card-liquidation-engine.js";
 import { parseEntryPriceForOrder } from "./bitget-order-from-signal.js";
+import { priceStr } from "./bitget-tpsl-guard.js";
 import { isPlaceAnOrderChannel } from "./telegram-channel-profiles.js";
 import { isPlaceholderTradeSymbol } from "./symbol-aliases.js";
 
@@ -148,10 +149,10 @@ export function prepareTelegramTradeParsed(parsed, execution) {
     if (needDefaultTp || needDefaultSl) {
       const applied = applyDefaultTpSl(entryNum, isShort, tpNums, slNum);
       if (needDefaultTp) {
-        tps = applied.tps.map((p) => String(p));
+        tps = applied.tps.map((p) => priceStr(p));
       }
       if (needDefaultSl && applied.sl != null) {
-        slRaw = String(applied.sl);
+        slRaw = priceStr(applied.sl);
         slNum = applied.sl;
       }
       if (!next.exitPlan || typeof next.exitPlan !== "object") {

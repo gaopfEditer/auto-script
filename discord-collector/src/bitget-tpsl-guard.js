@@ -64,6 +64,44 @@ export function priceStr(price) {
   return price.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+/** Bitget 合约 pricePlace/tick 缓存（减轻自动下单路径对 getMixContract 的重复调用） */
+const BITGET_CONTRACT_META_TTL_MS = 15 * 60 * 1000;
+/** @type {Map<string, { at: number; meta: ReturnType<typeof enrichBitgetContractMeta> }>} */
+const bitgetContractMetaCache = new Map();
+
+/**
+ * @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client
+ * @param {{ symbol: string; productType: string }} p
+ */
+export async function loadBitgetContractPriceMeta(client, p) {
+  const symbol = String(p.symbol ?? "").toUpperCase();
+  const productType = String(p.productType ?? "USDT-FUTURES");
+  const key = `${productType}:${symbol}`;
+  const hit = bitgetContractMetaCache.get(key);
+  if (hit && Date.now() - hit.at < BITGET_CONTRACT_META_TTL_MS) return hit.meta;
+
+  /** @type {Record<string, unknown> | null} */
+  let raw = null;
+  try {
+    if (client && typeof client.getMixContract === "function") {
+      raw = await client.getMixContract({ symbol, productType });
+    }
+  } catch {
+    raw = null;
+  }
+  const meta = enrichBitgetContractMeta(raw);
+  bitgetContractMetaCache.set(key, { at: Date.now(), meta });
+  return meta;
+}
+
+/** @param {"long"|"short"|string} holdSide @param {"sl"|"tp"|"entry"} kind */
+export function bitgetPriceRoundMode(holdSide, kind) {
+  const short = String(holdSide).toLowerCase() === "short";
+  if (kind === "sl") return short ? "ceil" : "floor";
+  if (kind === "tp") return short ? "floor" : "ceil";
+  return "round";
+}
+
 /** @param {number} marketPrice @param {number} sl @param {"long"|"short"} holdSide */
 export function isValidStopLoss(marketPrice, sl, holdSide) {
   if (!Number.isFinite(marketPrice) || !Number.isFinite(sl) || marketPrice <= 0 || sl <= 0) return false;
@@ -158,17 +196,24 @@ export function enrichBitgetContractMeta(raw, base) {
   const priceEndRaw = o.priceEndStep ?? o.priceStep ?? b.priceEndStep ?? b.priceStep;
   const placeNum = Number(pricePlaceRaw);
   const endNum = Number(priceEndRaw);
-  const priceTickKnown =
-    (pricePlaceRaw != null && pricePlaceRaw !== "" && Number.isFinite(placeNum) && placeNum >= 0) ||
-    (priceEndRaw != null && priceEndRaw !== "" && Number.isFinite(endNum) && endNum > 0);
+  const hasPlace =
+    pricePlaceRaw != null && pricePlaceRaw !== "" && Number.isFinite(placeNum) && placeNum >= 0;
+  const hasEnd = priceEndRaw != null && priceEndRaw !== "" && Number.isFinite(endNum) && endNum > 0;
+  const pricePlace = hasPlace ? Math.min(8, Math.floor(placeNum)) : hasEnd && endNum < 1 ? decimalsOfTick(endNum) : null;
+  const priceEndStep = hasEnd ? endNum : 0;
+  const tickProbe = bitgetTriggerTick({
+    pricePlace: pricePlace ?? undefined,
+    priceEndStep,
+  });
   return {
     minTradeNum: Number(o.minTradeNum ?? b.minTradeNum ?? 0) || 0,
     minTradeUsdt: Number(o.minTradeUSDT ?? o.minTradeUsdt ?? b.minTradeUsdt ?? 0) || 0,
     volumePlace: Number(o.volumePlace ?? b.volumePlace ?? 8) || 8,
     sizeMultiplier: Number(o.sizeMultiplier ?? b.sizeMultiplier ?? 0) || 0,
-    pricePlace: Number.isFinite(placeNum) && placeNum >= 0 ? Math.min(8, Math.floor(placeNum)) : 2,
-    priceEndStep: Number.isFinite(endNum) && endNum > 0 ? endNum : 0,
-    priceTickKnown,
+    pricePlace: pricePlace ?? 2,
+    priceEndStep,
+    priceTickKnown: tickProbe > 0,
+    priceTick: tickProbe,
   };
 }
 
@@ -211,22 +256,49 @@ function formatScaledInt(scaled, decimals) {
 }
 
 /**
+ * @param {number} scaled
+ * @param {number} tickScaled
+ * @param {"round"|"floor"|"ceil"} mode
+ */
+function alignScaledToTick(scaled, tickScaled, mode) {
+  if (!(tickScaled > 0)) {
+    if (mode === "floor") return Math.floor(scaled + 1e-12);
+    if (mode === "ceil") return Math.ceil(scaled - 1e-12);
+    return Math.round(scaled);
+  }
+  const q = scaled / tickScaled;
+  if (mode === "floor") return Math.floor(q + 1e-12) * tickScaled;
+  if (mode === "ceil") return Math.ceil(q - 1e-12) * tickScaled;
+  return Math.round(q) * tickScaled;
+}
+
+/**
  * 按合约 tick 取整，并用整数刻度格式化，避免 0.40015500000000004 这类二进制尾数。
+ * 默认 nearest；SL/TP 可用 floor/ceil 以免相对 mark 的方向被 tick 取整「放宽」。
  * @param {number} price
  * @param {{ pricePlace?: number; priceEndStep?: number }} meta
+ * @param {{ mode?: "round"|"floor"|"ceil" }} [opts]
  */
-export function roundBitgetTriggerPrice(price, meta) {
+export function roundBitgetTriggerPrice(price, meta, opts = {}) {
   if (!Number.isFinite(price) || price <= 0) return "";
+  const mode = opts.mode ?? "round";
   const placeRaw = Number(meta?.pricePlace);
   const place = Number.isFinite(placeRaw) && placeRaw >= 0 ? Math.min(8, Math.floor(placeRaw)) : 8;
   const tick = bitgetTriggerTick(meta);
   const decimals = Math.min(8, Math.max(place, decimalsOfTick(tick)));
   const scale = 10 ** decimals;
-  let scaled = Math.round(price * scale);
+  let scaled = price * scale;
   if (tick > 0) {
     const tickScaled = Math.round(tick * scale);
-    if (tickScaled > 0) scaled = Math.round(scaled / tickScaled) * tickScaled;
+    if (tickScaled > 0) {
+      scaled = alignScaledToTick(scaled, tickScaled, mode);
+    } else {
+      scaled = Math.round(scaled);
+    }
+  } else {
+    scaled = alignScaledToTick(scaled, 0, mode);
   }
+  scaled = Math.round(scaled + 1e-9);
   return formatScaledInt(scaled, decimals);
 }
 
@@ -235,17 +307,42 @@ export function roundBitgetTriggerPrice(price, meta) {
  * @param {{ pricePlace?: number, priceEndStep?: number, priceTickKnown?: boolean } | null | undefined} meta
  * @param {number} [forcedTick]
  */
-export function sanitizeBitgetTriggerPrice(raw, meta, forcedTick = 0) {
+export function sanitizeBitgetTriggerPrice(raw, meta, forcedTick = 0, opts = {}) {
   const n = Number(String(raw ?? "").replace(/[^\d.]/g, ""));
   if (!Number.isFinite(n) || n <= 0) return "";
   if (forcedTick > 0) {
-    return roundBitgetTriggerPrice(n, {
-      pricePlace: decimalsOfTick(forcedTick),
-      priceEndStep: forcedTick,
-    });
+    return roundBitgetTriggerPrice(
+      n,
+      {
+        pricePlace: decimalsOfTick(forcedTick),
+        priceEndStep: forcedTick,
+      },
+      opts
+    );
   }
-  if (meta?.priceTickKnown) return roundBitgetTriggerPrice(n, meta);
+  const tick = bitgetTriggerTick(meta);
+  if (tick > 0) return roundBitgetTriggerPrice(n, meta, opts);
   return priceStr(n);
+}
+
+/**
+ * @param {{
+ *   stopLossRaw: unknown;
+ *   takeProfitRaw: unknown;
+ *   meta: ReturnType<typeof enrichBitgetContractMeta> | null;
+ *   holdSide: "long"|"short"|string;
+ *   forcedTick?: number;
+ * }} input
+ */
+export function sanitizeBitgetOpenPresetPrices(input) {
+  const slMode = bitgetPriceRoundMode(input.holdSide, "sl");
+  const tpMode = bitgetPriceRoundMode(input.holdSide, "tp");
+  const forcedTick = Number(input.forcedTick) > 0 ? Number(input.forcedTick) : 0;
+  const meta = input.meta;
+  return {
+    stopLossStr: sanitizeBitgetTriggerPrice(input.stopLossRaw, meta, forcedTick, { mode: slMode }),
+    takeProfitStr: sanitizeBitgetTriggerPrice(input.takeProfitRaw, meta, forcedTick, { mode: tpMode }),
+  };
 }
 
 /** @param {unknown} message */
@@ -314,9 +411,11 @@ export function resolveRepairTpslLevels(input) {
   let stopLossStr = useSignalSl ? priceStr(slNum) : resolved.stopLossStr;
   let takeProfitStr = useSignalTp ? priceStr(tpNum) : resolved.takeProfitStr;
 
-  if (input.contractMeta && (input.contractMeta.priceTickKnown || input.forcePrecisionRound)) {
-    const roundedSl = roundBitgetTriggerPrice(Number(stopLossStr), input.contractMeta);
-    const roundedTp = roundBitgetTriggerPrice(Number(takeProfitStr), input.contractMeta);
+  if (input.contractMeta && (bitgetTriggerTick(input.contractMeta) > 0 || input.forcePrecisionRound)) {
+    const slMode = bitgetPriceRoundMode(holdSide, "sl");
+    const tpMode = bitgetPriceRoundMode(holdSide, "tp");
+    const roundedSl = roundBitgetTriggerPrice(Number(stopLossStr), input.contractMeta, { mode: slMode });
+    const roundedTp = roundBitgetTriggerPrice(Number(takeProfitStr), input.contractMeta, { mode: tpMode });
     if (roundedSl) stopLossStr = roundedSl;
     if (roundedTp) takeProfitStr = roundedTp;
   }
@@ -540,6 +639,7 @@ export function formatBitgetNakedPositionAlert(details) {
  *   fillPrice: number;
  *   direction: string;
  *   initialSlPct: number;
+ *   contractMeta?: ReturnType<typeof enrichBitgetContractMeta> | null;
  * }} input
  */
 export function resolveOpenTpslPrices(input) {
@@ -573,6 +673,27 @@ export function resolveOpenTpslPrices(input) {
   const takeProfits = tpNums.map((n) => priceStr(n)).filter(Boolean);
   const stopLoss = priceStr(slNum);
   const firstTp = takeProfits[0] ?? "";
+
+  const contractMeta = input.contractMeta;
+  if (contractMeta && bitgetTriggerTick(contractMeta) > 0) {
+    const holdSide = isShort ? "short" : "long";
+  /** @type {string[]} */
+    const roundedTps = takeProfits.map((tp) =>
+      sanitizeBitgetTriggerPrice(tp, contractMeta, 0, { mode: bitgetPriceRoundMode(holdSide, "tp") })
+    );
+    const roundedSl = sanitizeBitgetTriggerPrice(stopLoss, contractMeta, 0, {
+      mode: bitgetPriceRoundMode(holdSide, "sl"),
+    });
+    if (roundedSl) {
+      return {
+        stopLossPrice: Number(roundedSl),
+        takeProfitPrice: Number(roundedTps[0] ?? 0),
+        stopLossStr: roundedSl,
+        takeProfitStr: roundedTps[0] ?? "",
+        takeProfits: roundedTps.filter(Boolean),
+      };
+    }
+  }
 
   return {
     stopLossPrice: slNum,
@@ -688,19 +809,13 @@ export async function placeBitgetOpenWithPresets(client, p) {
   const maxPresetAttempts = p.maxPresetAttempts ?? 3;
   /** @type {string[]} */
   const presetErrors = [];
-  /** @type {ReturnType<typeof enrichBitgetContractMeta> | null} */
-  let contractMeta = null;
-  try {
-    if (typeof client.getMixContract === "function") {
-      const raw = await client.getMixContract({ symbol: p.symbol, productType: p.productType });
-      contractMeta = enrichBitgetContractMeta(raw);
-    }
-  } catch {
-    contractMeta = null;
-  }
   let forcedTick = 0;
 
   for (let presetAttempt = 1; presetAttempt <= maxPresetAttempts; presetAttempt++) {
+    const contractMeta = await loadBitgetContractPriceMeta(client, {
+      symbol: p.symbol,
+      productType: p.productType,
+    });
     const mark = (await p.fetchMark()) ?? 0;
     if (!(mark > 0)) {
       return { ok: false, reason: "no_market_price", presetErrors };
@@ -712,17 +827,32 @@ export async function placeBitgetOpenWithPresets(client, p) {
       fillPrice: mark,
       direction: p.direction,
       initialSlPct: p.initialSlPct,
+      contractMeta,
     });
     let slStr = presetAttempt === 1 && p.stopLossStr ? p.stopLossStr : resolved.stopLossStr;
     let tpStr = presetAttempt === 1 && p.takeProfitStr ? p.takeProfitStr : resolved.takeProfitStr;
-    slStr = sanitizeBitgetTriggerPrice(slStr, contractMeta, forcedTick);
-    tpStr = sanitizeBitgetTriggerPrice(tpStr, contractMeta, forcedTick);
+    const presetPrices = sanitizeBitgetOpenPresetPrices({
+      stopLossRaw: slStr,
+      takeProfitRaw: tpStr,
+      meta: contractMeta,
+      holdSide,
+      forcedTick,
+    });
+    slStr = presetPrices.stopLossStr;
+    tpStr = presetPrices.takeProfitStr;
     let slNum = Number(slStr);
     let tpNum = Number(tpStr);
 
     if (!isValidStopLoss(mark, slNum, holdSide) || !isValidTakeProfit(mark, tpNum, holdSide)) {
-      slStr = sanitizeBitgetTriggerPrice(resolved.stopLossStr, contractMeta, forcedTick);
-      tpStr = sanitizeBitgetTriggerPrice(resolved.takeProfitStr, contractMeta, forcedTick);
+      const fallback = sanitizeBitgetOpenPresetPrices({
+        stopLossRaw: resolved.stopLossStr,
+        takeProfitRaw: resolved.takeProfitStr,
+        meta: contractMeta,
+        holdSide,
+        forcedTick,
+      });
+      slStr = fallback.stopLossStr;
+      tpStr = fallback.takeProfitStr;
       slNum = Number(slStr);
       tpNum = Number(tpStr);
     }
@@ -753,15 +883,7 @@ export async function placeBitgetOpenWithPresets(client, p) {
       const parsedTick = tickFromBitgetPriceError(msg);
       if (parsedTick > 0) forcedTick = parsedTick;
       if (classifyBitgetTpslRepairError(msg, holdSide) === "precision") {
-        try {
-          if (typeof client.getMixContract === "function") {
-            contractMeta = enrichBitgetContractMeta(
-              await client.getMixContract({ symbol: p.symbol, productType: p.productType })
-            );
-          }
-        } catch {
-          /* 保留已有 meta，下一轮仍按 forcedTick / 已有精度取整 */
-        }
+        bitgetContractMetaCache.delete(`${p.productType}:${String(p.symbol).toUpperCase()}`);
       }
       await sleep(350 * presetAttempt);
     }
@@ -835,9 +957,11 @@ export async function placeBitgetPartialTakeProfits(client, p) {
   const tpResults = [];
 
   const priceMeta = enrichBitgetContractMeta(p.contractMeta);
+  const tpMode = bitgetPriceRoundMode(p.holdSide, "tp");
   for (const tp of plans) {
     const triggerPrice =
-      sanitizeBitgetTriggerPrice(tp.price, priceMeta) || String(tp.price).replace(/[^\d.]/g, "");
+      sanitizeBitgetTriggerPrice(tp.price, priceMeta, 0, { mode: tpMode }) ||
+      String(tp.price).replace(/[^\d.]/g, "");
     if (!triggerPrice) continue;
     try {
       const resp = await client.withHoldSideFallback(
