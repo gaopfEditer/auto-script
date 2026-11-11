@@ -347,7 +347,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
   function sourcesHandler(_req, res) {
     res.json({
       ok: true,
-      sources: ["discord", "youtube", "telegram", "x", "api", "manual"],
+      sources: ["discord", "youtube", "telegram", "x", "binance", "api", "manual"],
     });
   }
 

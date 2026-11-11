@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "exitCode": 0,
+  "period": "month1",
+  "startedAt": "2026-10-24T14:46:20.887Z",
+  "finishedAt": "2026-10-24T14:46:32.482Z",
+  "outFile": "/Users/maotouying/frontend/code/1.operations/auto-script/telegram/.backfill_cache/month1.latest.json",
+  "outFileExists": true,
+  "sessionName": "telegram_client_backfill",
+  "stderrTail": "",
+  "failHint": ""
+}

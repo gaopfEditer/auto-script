@@ -52,6 +52,7 @@ import { createCardArchiveService } from "./card-archive-service.js";
 import { registerCardArchiveRoutes, requireOpenApiKey } from "./card-archive-api.js";
 import { createCommunityFeedService } from "./community-feed-service.js";
 import { registerCardEvalRoutes } from "./card-eval-api.js";
+import { registerMainCardTelegramDigestRoutes } from "./card-main-telegram-digest.js";
 import { registerCardValidateRoutes } from "./card-validate-api.js";
 import { registerTelegramPromRoutes } from "./telegram-prom-api.js";
 import { registerTelegramLiveRoutes } from "./telegram-live-api.js";
@@ -287,6 +288,7 @@ async function main() {
   const { listCache: cardArchiveListCacheRef } = registerCardArchiveRoutes(app, store, cardArchive, broadcast);
   cardArchiveListCache = cardArchiveListCacheRef;
   registerCardEvalRoutes(app, store, { requireOpenApiKey });
+  registerMainCardTelegramDigestRoutes(app, store, { requireOpenApiKey });
   registerCardValidateRoutes(app, store, cardArchiveListCacheRef, broadcast, { requireOpenApiKey });
   registerTelegramPromRoutes(app, store, cardArchiveListCacheRef, broadcast, { requireOpenApiKey });
   /** @type {() => Record<string, unknown>} */

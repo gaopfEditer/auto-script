@@ -10,7 +10,8 @@ export const SOURCE_OPTIONS = [
   { value: "discord", label: "Discord" },
   { value: "youtube", label: "YouTube" },
   { value: "telegram", label: "Telegram" },
-  { value: "x", label: "X / Twitter" },
+  { value: "x", label: "推特" },
+  { value: "binance", label: "币安" },
   { value: "api", label: "外部 API" },
   { value: "manual", label: "手动" },
 ];
@@ -19,6 +20,12 @@ export const SOURCE_OPTIONS = [
 export const EXTRA_SOURCE_OPTIONS = SOURCE_OPTIONS.filter(
   (o) => o.value && o.value !== BASE_ARCHIVE_SOURCE
 );
+
+/**
+ * /cards 默认一并展示的来源（可在「来源」中取消勾选以隐藏）。
+ * 含 Telegram 实时建卡、python-ai-operate 抓取的 X/币安信号卡（source 如 python-ai-operate:x）。
+ */
+export const DEFAULT_ARCHIVE_EXTRA_SOURCES = ["telegram", "x", "binance"];
 
 export const PERIOD_OPTIONS = [
   { value: "today", label: "今天" },
@@ -50,6 +57,33 @@ export function archivePeriodShowsWeekDividers(period) {
 }
 
 /**
+ * 卡片 sourceType 的平台段（与 card-archive-service.resolveSourcePlatform 对齐）。
+ * @param {unknown} raw
+ */
+export function resolveArchiveSourcePlatform(raw) {
+  const s = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if (!s) return "";
+  if (s === "twitter") return "x";
+  const colon = s.indexOf(":");
+  const platform = colon > 0 ? s.slice(colon + 1) : s;
+  return platform === "twitter" ? "x" : platform;
+}
+
+/**
+ * UI 展示用来源名（侧栏统计、详情「来源」）。
+ * @param {unknown} sourceType
+ */
+export function formatArchiveSourceLabel(sourceType) {
+  const platform = resolveArchiveSourcePlatform(sourceType);
+  const hit = SOURCE_OPTIONS.find((o) => o.value === platform);
+  if (hit?.label) return hit.label;
+  const raw = String(sourceType ?? "").trim();
+  return raw || "unknown";
+}
+
+/**
  * @param {string | string[]} [extra]
  * @returns {string[]}
  */
@@ -70,10 +104,12 @@ export function normalizeArchiveSourceList(extra) {
 export function cardMatchesArchiveSources(cardSourceType, sources) {
   if (!sources?.length) return true;
   const st = String(cardSourceType ?? "").trim().toLowerCase();
-  const platform = st.includes(":") ? st.split(":").pop() : st;
+  const platform = resolveArchiveSourcePlatform(st);
   return sources.some((s) => {
     const want = String(s).trim().toLowerCase();
-    return want && (st === want || platform === want);
+    if (!want) return false;
+    const wantPlatform = want === "twitter" ? "x" : want;
+    return st === want || st === wantPlatform || platform === want || platform === wantPlatform;
   });
 }
 

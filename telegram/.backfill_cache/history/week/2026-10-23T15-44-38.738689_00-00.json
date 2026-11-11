@@ -1,0 +1,829 @@
+{
+  "ok": true,
+  "replayMode": "trade_card_pusher",
+  "period": "week",
+  "periodDays": 7,
+  "fromMs": 1792165444090,
+  "toMs": 1792770244090,
+  "generatedAt": "2026-10-23T15:44:38.738689+00:00",
+  "configFile": "/Users/maotouying/frontend/code/1.operations/auto-script/telegram/backfill_groups.json",
+  "selectedChatIds": [
+    "-1001766481463",
+    "-1003938902957",
+    "-1001720924085",
+    "-1002666021235",
+    "-1003962150986",
+    "-1001908181865",
+    "-1002355647897",
+    "-1002404948215",
+    "-1002438953921",
+    "-1001976446916"
+  ],
+  "groupCount": 10,
+  "groups": [
+    {
+      "chatId": "-1001766481463",
+      "name": "砸锅卖铁去炒币",
+      "avatar": "avatar/1001766481463.png",
+      "ok": true,
+      "messageCount": 61,
+      "tradeLikeCount": 27,
+      "cardEmitCount": 27,
+      "parsedSignalCount": 27,
+      "symbols": {
+        "ICNT": 5,
+        "IRYS": 3,
+        "GWEI": 2,
+        "QNT": 2,
+        "AVA": 2,
+        "VVV": 2,
+        "CVX": 2,
+        "BAT": 2,
+        "UB": 2,
+        "WLD": 2,
+        "MEW": 2,
+        "CPO": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-17T04:08:55+00:00",
+          "preview": "#ICNT 三十倍拿下！漲幅61%"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-18T06:38:21+00:00",
+          "preview": "#ICNT 輕倉市價空 0.1925"
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-18T06:40:35+00:00",
+          "preview": "止损：0.2007 #ICNT 三十倍拿下！漲幅61% #ICNT 輕倉市價空 0.1925 止損：0.2007"
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "at": "2026-10-19T02:15:30+00:00",
+          "preview": "#GWEI 市价多 0.02197 止損：0.2007 #GWEI 市價多 0.02197"
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "at": "2026-10-19T02:19:48+00:00",
+          "preview": "止盈：0.0231-0.0245 止损：0.0208 止損：0.2007 #GWEI 市價多 0.02197 止盈：0.0231-0.0245 止損：0.0208"
+        },
+        {
+          "phase": "full",
+          "symbol": "QNT",
+          "direction": "多",
+          "at": "2026-10-19T07:39:10+00:00",
+          "preview": "#QNT 市价多 200.58 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 #QNT 市價多 200.58"
+        },
+        {
+          "phase": "full",
+          "symbol": "QNT",
+          "direction": "多",
+          "at": "2026-10-19T07:43:14+00:00",
+          "preview": "止盈：208.8-217.6 止损：193 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 #QNT 市價多 200.58 止盈：208.8-217.6 止損：193"
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-19T08:17:14+00:00",
+          "preview": "#ICNT 市价多 0.1709 #ICNT 輕倉市價空 0.1925 止損：0.2007 止盈：0.0231-0.0245 止損：0.0208 止盈：208.8-217.6 止損：193 #ICNT 市價多 0.1709"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1003938902957",
+      "name": "Nine Call",
+      "avatar": "avatar/1003169740057.png",
+      "ok": true,
+      "messageCount": 26,
+      "tradeLikeCount": 15,
+      "cardEmitCount": 15,
+      "parsedSignalCount": 15,
+      "symbols": {
+        "OKX": 2,
+        "DNA": 2,
+        "BMT": 2,
+        "BIRB": 2,
+        "COM": 2,
+        "ICNT": 1,
+        "WAL": 1,
+        "ERA": 1,
+        "AGENT": 1,
+        "IRYS": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": null,
+          "at": "2026-10-17T03:08:38+00:00",
+          "preview": "icnt复盘+后续看法 https://x.com/nine_defi/status/2111293076987912467?s=46"
+        },
+        {
+          "phase": "update",
+          "symbol": "WAL",
+          "direction": "多",
+          "at": "2026-10-18T04:00:49+00:00",
+          "preview": "买了wal，窄止损 尝试"
+        },
+        {
+          "phase": "full",
+          "symbol": "ERA",
+          "direction": "多",
+          "at": "2026-10-18T04:27:18+00:00",
+          "preview": "买了era，窄止损 尝试"
+        },
+        {
+          "phase": "initial",
+          "symbol": "OKX",
+          "direction": null,
+          "at": "2026-10-20T11:13:13+00:00",
+          "preview": "可以参与下okx的这个活动 行情差，这些活动能薅就薅 https://x.com/nine_defi/status/2112500988666065400?s=46"
+        },
+        {
+          "phase": "update",
+          "symbol": "OKX",
+          "direction": null,
+          "at": "2026-10-20T14:02:36+00:00",
+          "preview": "可以参与下okx的这个活动 行情差，这些活动能薅就薅 https://x.com/nine_defi/status/2112500988666065400?s=46"
+        },
+        {
+          "phase": "initial",
+          "symbol": "DNA",
+          "direction": "多",
+          "at": "2026-10-21T01:33:51+00:00",
+          "preview": "买了dna，赌后续合约或韩所 要么亏10个点，要么赚50个点 今天不上会走"
+        },
+        {
+          "phase": "update",
+          "symbol": "DNA",
+          "direction": "多",
+          "at": "2026-10-21T02:34:55+00:00",
+          "preview": "买了dna，赌后续合约或韩所 买了dna，赌后续合约或韩所 要么亏10个点，要么赚50个点 今天不上会走"
+        },
+        {
+          "phase": "full",
+          "symbol": "BMT",
+          "direction": "多",
+          "at": "2026-10-22T00:14:55+00:00",
+          "preview": "买了点bmt， 窄止损，尝试"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1001720924085",
+      "name": "Leo-加密貨幣頻道",
+      "avatar": "avatar/1001720924085.jpeg",
+      "ok": true,
+      "messageCount": 23,
+      "tradeLikeCount": 16,
+      "cardEmitCount": 16,
+      "parsedSignalCount": 16,
+      "symbols": {
+        "BTC": 6,
+        "GRASS": 5,
+        "GWEI": 3,
+        "ELAS": 1,
+        "ELSA": 1
+      },
+      "samples": [
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "at": "2026-10-19T03:05:41+00:00",
+          "preview": "#GWEI 小級別反轉三角突破，市价轻仓入多，止盈：0.02297-0.02427-0.0257 #GWEI 小級別反轉三角突破，市價輕倉入多，止盈：0.02297-0.02427-0.0257"
+        },
+        {
+          "phase": "full",
+          "symbol": "GWEI",
+          "direction": "多",
+          "at": "2026-10-19T04:42:00+00:00",
+          "preview": "#GWEI 小級別反轉三角突破，市價輕倉入多，止盈：0.02297-0.02427-0.0257 #GWEI TP1完成"
+        },
+        {
+          "phase": "initial",
+          "symbol": "BTC",
+          "direction": "空",
+          "at": "2026-10-19T07:20:42+00:00",
+          "preview": "#BTC 目前4小時處於下降楔形，有突破跡象，屬於多頭結構信號，但必須留意假突破，需要關注成交量與回測確認，是否成立。 短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。 下方支撐在80500-79700附近，若…"
+        },
+        {
+          "phase": "update",
+          "symbol": "BTC",
+          "direction": "空",
+          "at": "2026-10-19T10:12:41+00:00",
+          "preview": "#BTC 📉 SL：85500 #BTC 目前4小時處於下降楔形，有突破跡象，屬於多頭結構信號，但必須留意假突破，需要關注成交量與回測確認，是否成立。 短期上方壓力集中在83500-84300一帶，前面有一筆空單可繼續作為參考。 下方支撐…"
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "at": "2026-10-20T02:47:44+00:00",
+          "preview": "#GRASS 小級別反轉上升三角突破，市价轻仓入多，止盈：0.6337-0.657-0.679 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679"
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "at": "2026-10-20T09:21:19+00:00",
+          "preview": "#GRASS 止损帶在0.582 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582"
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "at": "2026-10-20T14:02:38+00:00",
+          "preview": "#GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582 #GRASS TP1完成✔️"
+        },
+        {
+          "phase": "full",
+          "symbol": "GRASS",
+          "direction": "多",
+          "at": "2026-10-21T03:48:39+00:00",
+          "preview": "#NEAR 市价轻仓入多，止盈：5.1397-5.307-5.5 #GRASS 小級別反轉上升三角突破，市價輕倉入多，止盈：0.6337-0.657-0.679 #GRASS 市價給一筆補倉 回成本出掉補倉 止損帶在0.582 #GRAS…"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1002666021235",
+      "name": "Ashley的旺財情報局",
+      "avatar": "avatar/1002666021235.jpeg",
+      "ok": true,
+      "messageCount": 1479,
+      "tradeLikeCount": 70,
+      "cardEmitCount": 31,
+      "parsedSignalCount": 31,
+      "symbols": {
+        "AVA": 7,
+        "ICNT": 6,
+        "MAGMA": 3,
+        "EPIC": 2,
+        "CT": 2,
+        "JCT": 2,
+        "WLD": 2,
+        "INJ": 2,
+        "IRYS": 2,
+        "TIA": 1,
+        "DOOD": 1,
+        "LUMIA": 1
+      },
+      "samples": [
+        {
+          "phase": "full",
+          "symbol": "EPIC",
+          "direction": "多",
+          "at": "2026-10-17T07:05:20+00:00",
+          "preview": "#EPIC 轻仓市价多 每單止盈止損寫清楚👀 每單都有出場及止盈提醒⚠️ 不模糊｜不馬後炮｜重紀律｜重風控 #EPIC 輕倉市價多"
+        },
+        {
+          "phase": "full",
+          "symbol": "EPIC",
+          "direction": "多",
+          "at": "2026-10-17T07:45:03+00:00",
+          "preview": "止盈：0.3301-0.395 止损：0.2243 每單止盈止損寫清楚👀 每單都有出場及止盈提醒⚠️ 不模糊｜不馬後炮｜重紀律｜重風控 #EPIC 輕倉市價多 止盈：0.3301-0.395 止損：0.2243"
+        },
+        {
+          "phase": "full",
+          "symbol": "TIA",
+          "direction": "空",
+          "at": "2026-10-18T02:16:03+00:00",
+          "preview": "#TIA轻仓空 止盈：0.3301-0.395 止損：0.2243 #TIA輕倉空 入場價格：0.635-0.645"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-19T02:53:01+00:00",
+          "preview": "#icnt 市價小倉空"
+        },
+        {
+          "phase": "initial",
+          "symbol": "AVA",
+          "direction": "多",
+          "at": "2026-10-19T03:17:35+00:00",
+          "preview": "AVA多單➕125.29🛍"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-19T05:04:46+00:00",
+          "preview": "ICNT第一止盈➕214.32🛍 頻道的空單吃一波，VIP群轉頭多單再吃一波 這誰受得了❔ 你還在觀望，別人兜里的錢已經焐燙啦‼️ 進群咨詢助理老師 @Kevinzz7"
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-19T06:21:59+00:00",
+          "preview": "#icnt 市价小仓空 #NEAR 4.8附近可進空單 #icnt 市價小倉空 ICNT 一發出來就跌？？？兄弟們，我真的不是莊家😂 ICNT第一止盈➕214.32🛍 頻道的空單吃一波，VIP群轉頭多單再吃一波 這誰受得了❔ 你還在觀望，…"
+        },
+        {
+          "phase": "update",
+          "symbol": "AVA",
+          "direction": "多",
+          "at": "2026-10-19T07:24:03+00:00",
+          "preview": "AVA多单➕125.29🛍 AVA多單➕125.29🛍"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1003962150986",
+      "name": "熊貓說交易🐼",
+      "avatar": "avatar/1003962150986.jpeg",
+      "ok": true,
+      "messageCount": 41,
+      "tradeLikeCount": 1,
+      "cardEmitCount": 1,
+      "parsedSignalCount": 1,
+      "symbols": {
+        "IRYS": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "IRYS",
+          "direction": null,
+          "at": "2026-10-22T06:32:04+00:00",
+          "preview": "#IRYS tp1拿下"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1001908181865",
+      "name": "Aura_幣圈策略",
+      "avatar": "avatar/1001908181865.png",
+      "ok": true,
+      "messageCount": 33,
+      "tradeLikeCount": 11,
+      "cardEmitCount": 11,
+      "parsedSignalCount": 11,
+      "symbols": {
+        "BASED": 3,
+        "ALT": 3,
+        "STRK": 1,
+        "SKHYNIX": 1,
+        "AURA": 1,
+        "DOOD": 1,
+        "CL": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "STRK",
+          "direction": null,
+          "at": "2026-10-17T04:32:52+00:00",
+          "preview": "#頻道高倍盈利 💰 STRK 本單最高10倍收益🤑 更多寶石信號聯係👇 https://t.me/xiaoya_ccm"
+        },
+        {
+          "phase": "update",
+          "symbol": "BASED",
+          "direction": "空",
+          "at": "2026-10-18T04:19:01+00:00",
+          "preview": "币種： BASED/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.05170—0.05480 ✔️获利目标：0.04815—0.04400—0.03885 ❌止损位置：0.05790 幣種： BASED/USDT 方向：👇👇👇📉…"
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "空",
+          "at": "2026-10-18T09:41:25+00:00",
+          "preview": "TP3完成🤪 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 #頻道高倍盈利 💰 STRK …"
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "多",
+          "at": "2026-10-19T02:55:27+00:00",
+          "preview": "💰 BASED 一覺醒來抵達原定TP1了 记得帶保本持有↗️別讓利潤回吐 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885…"
+        },
+        {
+          "phase": "full",
+          "symbol": "SKHYNIX",
+          "direction": "多",
+          "at": "2026-10-20T03:06:00+00:00",
+          "preview": "💰 SKHYNIX 1D 海力士自從高位回落後，日綫級別持續走弱，目前已來到前方低位区域，并回踩850—900前低位支撐後出現了初步的止跌反应 ↗️交易思路：觀察底部築底爲主，若前低不再下破，并伴隨低点上移提高，高点持續突破，底部確認可信…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "AURA",
+          "direction": "多",
+          "at": "2026-10-21T01:45:25+00:00",
+          "preview": "一次給出兩個交易思路、一個交易信號全部盈利⬆️ 超標Aura把市場當自己家，取錢來了"
+        },
+        {
+          "phase": "full",
+          "symbol": "DOOD",
+          "direction": "空",
+          "at": "2026-10-21T06:28:58+00:00",
+          "preview": "币種： DOOD/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.003060—0.003245 ✔️获利目标：0.002735—0.002160—0.001545 ❌止损位置：0.003430 高風險單❗️ 幣種： DOOD/U…"
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "at": "2026-10-22T02:21:21+00:00",
+          "preview": "币種： ALT/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.01249—0.012795 ✔️获利目标：0.011721—0.011221—0.009971 ❌止损位置：0.013245 本單墜機❌但不要氣餒 按照固定資金下單…"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1002355647897",
+      "name": "[KAI]的幣圈策略分享",
+      "avatar": "avatar/1002355647897.png",
+      "ok": true,
+      "messageCount": 35,
+      "tradeLikeCount": 9,
+      "cardEmitCount": 9,
+      "parsedSignalCount": 9,
+      "symbols": {
+        "ICNT": 3,
+        "BAT": 1,
+        "PHA": 1,
+        "AXIS": 1,
+        "MOODENG": 1,
+        "RUNE": 1,
+        "REZ": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "BAT",
+          "direction": "多",
+          "at": "2026-10-18T09:02:33+00:00",
+          "preview": "#BAT 多空雙殺 一個幣 兩個方向都精準拿捏 慧根不如會跟🥹🥹🥹"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-19T03:34:58+00:00",
+          "preview": "#ICNT 風險小多"
+        },
+        {
+          "phase": "update",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-19T05:13:21+00:00",
+          "preview": "#ICNT 風險小多 #ICNT 止盈：0.194–0.2074"
+        },
+        {
+          "phase": "initial",
+          "symbol": "PHA",
+          "direction": "多",
+          "at": "2026-10-20T03:08:12+00:00",
+          "preview": "#PHA 風險小多"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-21T06:25:05+00:00",
+          "preview": "#ICNT 波動就是很簡單的提款機🏧 一個15min短多摸頂 一個15min反手做空"
+        },
+        {
+          "phase": "full",
+          "symbol": "AXIS",
+          "direction": "多",
+          "at": "2026-10-22T02:09:41+00:00",
+          "preview": "#AXIS 新币轻仓多 大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔️老師一對一策略指導 ✔️每日5-…"
+        },
+        {
+          "phase": "full",
+          "symbol": "MOODENG",
+          "direction": "空",
+          "at": "2026-10-23T02:11:53+00:00",
+          "preview": "#MOODENG 打开空調 讓動物回暖😏 （河馬已布局） 大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔…"
+        },
+        {
+          "phase": "full",
+          "symbol": "RUNE",
+          "direction": "多",
+          "at": "2026-10-23T02:26:15+00:00",
+          "preview": "大的要來了，跟上賺💰回血💪 頻道的單子不知道拿多長時間，總是拿不住利潤⁉️ ✔️優先獲取交易信號策略推送 ✔️精准點位直達（開倉/止盈/止損） ✔️24小時實盤跟蹤提醒減倉離場 ✔️老師一對一策略指導 ✔️每日5-10高質量交易策略，勝率…"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1002404948215",
+      "name": "Fly-幣圈頭號玩家",
+      "avatar": "avatar/1002404948215.png",
+      "ok": true,
+      "messageCount": 33,
+      "tradeLikeCount": 11,
+      "cardEmitCount": 11,
+      "parsedSignalCount": 11,
+      "symbols": {
+        "BASED": 3,
+        "ALT": 3,
+        "STRK": 1,
+        "SKHYNIX": 1,
+        "FLY": 1,
+        "DOOD": 1,
+        "CL": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "STRK",
+          "direction": null,
+          "at": "2026-10-17T04:33:46+00:00",
+          "preview": "💰 STRK 本單最高10倍收益🤑 更多寶石信號聯係👇 https://t.me/zhuli_wahahaha"
+        },
+        {
+          "phase": "update",
+          "symbol": "BASED",
+          "direction": "空",
+          "at": "2026-10-18T04:19:08+00:00",
+          "preview": "币種： BASED/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.05170—0.05480 ✔️获利目标：0.04815—0.04400—0.03885 ❌止损位置：0.05790 幣種： BASED/USDT 方向：👇👇👇📉…"
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "空",
+          "at": "2026-10-18T09:41:48+00:00",
+          "preview": "TP3完成🤪 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885 ❌止損位置：0.05790 💰 STRK TP3完成🤪 底…"
+        },
+        {
+          "phase": "full",
+          "symbol": "BASED",
+          "direction": "多",
+          "at": "2026-10-19T02:55:47+00:00",
+          "preview": "💰 BASED 一覺醒來抵達原定TP1了 记得帶保本持有↗️別讓利潤回吐 幣種： BASED/USDT 方向：👇👇👇📉 策略屬性：市價 📌進場點：0.05170—0.05480 ✔️獲利目標：0.04815—0.04400—0.03885…"
+        },
+        {
+          "phase": "full",
+          "symbol": "SKHYNIX",
+          "direction": "多",
+          "at": "2026-10-20T03:06:35+00:00",
+          "preview": "💰 SKHYNIX 1D 海力士自從高位回落後，日綫級別持續走弱，目前已來到前方低位区域，并回踩850—900前低位支撐後出現了初步的止跌反应 ↗️交易思路：觀察底部築底爲主，若前低不再下破，并伴隨低点上移提高，高点持續突破，底部確認可信…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "FLY",
+          "direction": "多",
+          "at": "2026-10-21T01:45:46+00:00",
+          "preview": "一次給出兩個交易思路、一個交易信號全部盈利⬆️ 超標Fly把市場當自己家，取錢來了"
+        },
+        {
+          "phase": "full",
+          "symbol": "DOOD",
+          "direction": "空",
+          "at": "2026-10-21T06:29:05+00:00",
+          "preview": "币種： DOOD/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.003060—0.003245 ✔️获利目标：0.002735—0.002160—0.001545 ❌止损位置：0.003430 高風險單❗️ 幣種： DOOD/U…"
+        },
+        {
+          "phase": "full",
+          "symbol": "ALT",
+          "direction": "空",
+          "at": "2026-10-22T02:21:29+00:00",
+          "preview": "币種： ALT/USDT 方向：👇👇👇📉 策略属性：市价 📌进场点：0.01249—0.012795 ✔️获利目标：0.011721—0.011221—0.009971 ❌止损位置：0.013245 本單墜機❌但不要氣餒 按照固定資金下單…"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1002438953921",
+      "name": "陈哥交易",
+      "avatar": "avatar/1002404948215.png",
+      "ok": true,
+      "messageCount": 23,
+      "tradeLikeCount": 6,
+      "cardEmitCount": 6,
+      "parsedSignalCount": 6,
+      "symbols": {
+        "SOL": 3,
+        "BTC": 1
+      },
+      "samples": [
+        {
+          "phase": "initial",
+          "symbol": "待补充",
+          "direction": null,
+          "at": "2026-10-17T10:07:48+00:00",
+          "preview": "📝 AERO – LONG 🔜 入场价: 0.8968 📌 目标价: 0.9059, 0.9209, 0.9374, 0.9898 🙅‍♂️ 止损价: 0.8516 ✏️ 第一止盈后，止损移至入场价。"
+        },
+        {
+          "phase": "update",
+          "symbol": null,
+          "direction": null,
+          "at": "2026-10-19T11:55:39+00:00",
+          "preview": "🙅‍♂️ 止损价: 0.8516 ✏️ 第一止盈后，止损移至入场价。 📝 AERO – LONG 🔜 入场价: 0.8968 📌 目标价: 0.9059, 0.9209, 0.9374, 0.9898 🙅‍♂️ 止损价: 0.8516 ✏…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "SOL",
+          "direction": null,
+          "at": "2026-10-20T10:42:37+00:00",
+          "preview": "#SOL SOL 正在支撑区域上方形成新的盘整区间，短线趋势向上。BTC 已经来到支撑位. 🔴 入场价：103.87 📌 目标价：104.94, 107.40, 112.60 🙅‍♂️ 止损价：99.61"
+        },
+        {
+          "phase": "update",
+          "symbol": "SOL",
+          "direction": null,
+          "at": "2026-10-21T11:20:28+00:00",
+          "preview": "#SOL 🙅‍♂️ 止损价：99.61 📝 MINA – LONG 🔜 入场价: 0.07305 📌 目标价: 0.07379, 0.07508, 0.07650, 0.08123 🙅‍♂️ 止损价: 0.06936 ✏️ 第一止盈后，止…"
+        },
+        {
+          "phase": "update",
+          "symbol": "SOL",
+          "direction": null,
+          "at": "2026-10-22T11:19:07+00:00",
+          "preview": "#SOL 🙅‍♂️ 止损价：99.61 #SOL SOL 正在支撑区域上方形成新的盘整区间，短线趋势向上。BTC 已经来到支撑位. 🔴 入场价：103.87 📌 目标价：104.94, 107.40, 112.60 🙅‍♂️ 止损价：99…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "BTC",
+          "direction": null,
+          "at": "2026-10-23T10:33:27+00:00",
+          "preview": "📝 AR – LONG 🔜 入场价: 3.706 📌 目标价: 3.744, 3.807, 3.880, 4.103 🙅‍♂️ 止损价: 3.517 ✏️ 第一止盈后，止损移至入场价。"
+        }
+      ],
+      "error": null
+    },
+    {
+      "chatId": "-1001976446916",
+      "name": "熬惯合约",
+      "avatar": "avatar/1002404948215.png",
+      "ok": true,
+      "messageCount": 106,
+      "tradeLikeCount": 41,
+      "cardEmitCount": 38,
+      "parsedSignalCount": 38,
+      "symbols": {
+        "BTC": 8,
+        "CT": 5,
+        "IOST": 5,
+        "IRYS": 5,
+        "ALT": 3,
+        "ARIA": 3,
+        "ICNT": 2,
+        "ERA": 2,
+        "DOOD": 2,
+        "ETH": 1,
+        "HBAR": 1,
+        "ZEC": 1
+      },
+      "samples": [
+        {
+          "phase": "full",
+          "symbol": "ICNT",
+          "direction": "空",
+          "at": "2026-10-17T05:38:56+00:00",
+          "preview": "#ICNTUSDT 挂单空 📉 止盈：0.237-0.227-0.217 止损：0.273 点点👍，来个挂单，要么进场吃💩，要么进场爆赚的那种 #ICNTUSDT 挂单空 📉 杠杆：50x 分批进场：0.255-0.263 止盈：0.23…"
+        },
+        {
+          "phase": "full",
+          "symbol": "ETH",
+          "direction": "多",
+          "at": "2026-10-18T01:53:27+00:00",
+          "preview": "#ETHUSDT 挂单多 📈 止盈：2225-2300-2375 止损：2075 点点👍，来个挂单，要么进场吃💩，要么进场爆赚的那种 #ETHUSDT 挂单多 📈 杠杆：100x-150x 分批进场：2150-2125 止盈：2225-2…"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ICNT",
+          "direction": "多",
+          "at": "2026-10-18T03:10:20+00:00",
+          "preview": "#ICNT 涨幅8%📈"
+        },
+        {
+          "phase": "initial",
+          "symbol": "HBAR",
+          "direction": "空",
+          "at": "2026-10-19T02:18:17+00:00",
+          "preview": "VIP内部群周一早上睡醒先收米拿下💵💵 #HBARUSDT 空单 75x 331,58%🚀"
+        },
+        {
+          "phase": "initial",
+          "symbol": "ERA",
+          "direction": "空",
+          "at": "2026-10-19T02:41:12+00:00",
+          "preview": "#ERA 现价空（预留好补仓位）"
+        },
+        {
+          "phase": "update",
+          "symbol": "ERA",
+          "direction": "空",
+          "at": "2026-10-19T02:46:39+00:00",
+          "preview": "止盈：0,06845-0,06625-0,06363 止损：0,0772 #ERA 现价空（预留好补仓位） 补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772"
+        },
+        {
+          "phase": "full",
+          "symbol": "BTC",
+          "direction": "空",
+          "at": "2026-10-19T07:20:04+00:00",
+          "preview": "#BTCUSDT 挂单空 📉 止盈：82000-80500-79000 止损：85000 补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772 点点👍，来个主流币挂单挂挂 #BTCUSDT 挂单空…"
+        },
+        {
+          "phase": "full",
+          "symbol": "CT",
+          "direction": "空",
+          "at": "2026-10-19T07:55:02+00:00",
+          "preview": "补仓：补仓会现价通知 止盈：0,06845-0,06625-0,06363 止损：0,0772 点点👍，来个主流币挂单挂挂 #CT 现价空（ 波动大，轻仓即可，预留好补仓位 ）"
+        }
+      ],
+      "error": null
+    }
+  ],
+  "ranking": [
+    {
+      "chatId": "-1001976446916",
+      "name": "熬惯合约",
+      "cardEmitCount": 38,
+      "parsedSignalCount": 38,
+      "tradeLikeCount": 41,
+      "messageCount": 106
+    },
+    {
+      "chatId": "-1002666021235",
+      "name": "Ashley的旺財情報局",
+      "cardEmitCount": 31,
+      "parsedSignalCount": 31,
+      "tradeLikeCount": 70,
+      "messageCount": 1479
+    },
+    {
+      "chatId": "-1001766481463",
+      "name": "砸锅卖铁去炒币",
+      "cardEmitCount": 27,
+      "parsedSignalCount": 27,
+      "tradeLikeCount": 27,
+      "messageCount": 61
+    },
+    {
+      "chatId": "-1001720924085",
+      "name": "Leo-加密貨幣頻道",
+      "cardEmitCount": 16,
+      "parsedSignalCount": 16,
+      "tradeLikeCount": 16,
+      "messageCount": 23
+    },
+    {
+      "chatId": "-1003938902957",
+      "name": "Nine Call",
+      "cardEmitCount": 15,
+      "parsedSignalCount": 15,
+      "tradeLikeCount": 15,
+      "messageCount": 26
+    },
+    {
+      "chatId": "-1001908181865",
+      "name": "Aura_幣圈策略",
+      "cardEmitCount": 11,
+      "parsedSignalCount": 11,
+      "tradeLikeCount": 11,
+      "messageCount": 33
+    },
+    {
+      "chatId": "-1002404948215",
+      "name": "Fly-幣圈頭號玩家",
+      "cardEmitCount": 11,
+      "parsedSignalCount": 11,
+      "tradeLikeCount": 11,
+      "messageCount": 33
+    },
+    {
+      "chatId": "-1002355647897",
+      "name": "[KAI]的幣圈策略分享",
+      "cardEmitCount": 9,
+      "parsedSignalCount": 9,
+      "tradeLikeCount": 9,
+      "messageCount": 35
+    },
+    {
+      "chatId": "-1002438953921",
+      "name": "陈哥交易",
+      "cardEmitCount": 6,
+      "parsedSignalCount": 6,
+      "tradeLikeCount": 6,
+      "messageCount": 23
+    },
+    {
+      "chatId": "-1003962150986",
+      "name": "熊貓說交易🐼",
+      "cardEmitCount": 1,
+      "parsedSignalCount": 1,
+      "tradeLikeCount": 1,
+      "messageCount": 41
+    }
+  ]
+}

@@ -1132,6 +1132,18 @@ export async function openStore(cfg, log) {
       where.push("sc.id > ?");
       params.push(sinceId);
     }
+    const tgFrom = Number(filters.telegramPushedFromMs);
+    const tgTo = Number(filters.telegramPushedToMs);
+    if (Number.isFinite(tgFrom) && tgFrom > 0) {
+      where.push("sc.telegram_sent_at IS NOT NULL");
+      where.push("sc.telegram_sent_at >= ?");
+      params.push(isoToMysqlDatetime3(new Date(tgFrom).toISOString()));
+    }
+    if (Number.isFinite(tgTo) && tgTo > 0) {
+      where.push("sc.telegram_sent_at IS NOT NULL");
+      where.push("sc.telegram_sent_at <= ?");
+      params.push(isoToMysqlDatetime3(new Date(tgTo).toISOString()));
+    }
     return { where, params };
   }
 
@@ -1392,6 +1404,8 @@ export async function openStore(cfg, log) {
       symbol: opts.symbol,
       fromMs: opts.fromMs,
       toMs: opts.toMs,
+      telegramPushedFromMs: opts.telegramPushedFromMs,
+      telegramPushedToMs: opts.telegramPushedToMs,
     });
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const [rows] = await pool.query(

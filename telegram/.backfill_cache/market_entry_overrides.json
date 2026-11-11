@@ -1,0 +1,3493 @@
+{
+  "version": 1,
+  "periods": {
+    "week": {
+      "-1001766481463": {
+        "2026-10-20T07:23:35+00:00|VVV|full": {
+          "phase": "full",
+          "symbol": "VVV",
+          "direction": "空",
+          "signalAt": "2026-10-20T07:23:35+00:00",
+          "entry": "24.497",
+          "preview": "#VVV 市价空 24.497 止盈：0.3761-0.3565-0.329 止損：0.412 #VVV 市價空 24.497",
+          "digest": null,
+          "entered": true,
+          "outcome": "stop_loss",
+          "pnlPct": -22.95,
+          "pnlLabel": "-22.95% (@20x, 4h标记)",
+          "flat": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-20T07:23:35.000Z",
+            "symbol": "VVV",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "pending",
+                "isShort": true,
+                "leverage": 20,
+                "marketAtSignal": 26.053,
+                "plannedEntry": 24.497,
+                "entryPriceUsed": 26.053,
+                "entryHitAt": "2026-10-20T07:23:35.000Z",
+                "takeProfits": [
+                  24.75035,
+                  23.968760000000003,
+                  22.926640000000003
+                ],
+                "stopLoss": 27.35565,
+                "tpHits": [],
+                "slHitAt": null,
+                "settlementPrice": null,
+                "settlementAt": "",
+                "pnlPct": -22.95,
+                "pnlLabel": "-22.95% (@20x, 4h标记)",
+                "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+                "progress": {
+                  "entryHitAt": "2026-10-20T07:23:35.000Z",
+                  "entryPriceUsed": 26.053,
+                  "tpHits": [],
+                  "slHitAt": null,
+                  "slPrice": 27.35565,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:10.265Z",
+                  "lastPrice": 26.053,
+                  "pnlPct": 0,
+                  "outcome": "pending",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "note": "窗口内未触达止盈止损",
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792740215000,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T03:23:35.000Z",
+                    "ts": 1792725815000,
+                    "price": 25.872,
+                    "pnlPct": 13.89
+                  },
+                  {
+                    "at": "2026-10-23T07:23:35.000Z",
+                    "ts": 1792740215000,
+                    "price": 26.352,
+                    "pnlPct": -22.95
+                  }
+                ],
+                "taskCancelled": false,
+                "periodicMark": {
+                  "at": "2026-10-23T07:23:35.000Z",
+                  "ts": 1792740215000,
+                  "price": 26.352,
+                  "pnlPct": -22.95
+                }
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "take_profit",
+                "isShort": true,
+                "leverage": 20,
+                "marketAtSignal": 26.053,
+                "plannedEntry": 24.497,
+                "entryPriceUsed": 26.053,
+                "entryHitAt": "2026-10-20T07:23:35.000Z",
+                "takeProfits": [
+                  27.876710000000003,
+                  28.658300000000004,
+                  31.2636
+                ],
+                "stopLoss": 24.75035,
+                "tpHits": [],
+                "slHitAt": "2026-10-23T00:55:00.000Z",
+                "settlementPrice": 24.75035,
+                "settlementAt": "2026-10-23T00:55:00.000Z",
+                "pnlPct": 100,
+                "pnlLabel": "+100.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-20T07:23:35.000Z",
+                  "entryPriceUsed": 26.053,
+                  "tpHits": [],
+                  "slHitAt": "2026-10-23T00:55:00.000Z",
+                  "slPrice": 24.75035,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:10.267Z",
+                  "lastPrice": 24.75035,
+                  "pnlPct": 100,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792740215000,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T03:23:35.000Z",
+                    "ts": 1792725815000,
+                    "price": 25.872,
+                    "pnlPct": 13.89
+                  },
+                  {
+                    "at": "2026-10-23T07:23:35.000Z",
+                    "ts": 1792740215000,
+                    "price": 26.352,
+                    "pnlPct": -22.95
+                  }
+                ],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "pending",
+            "pnlPct": -22.95,
+            "pnlLabel": "-22.95% (@20x, 4h标记)",
+            "settledAt": "2026-10-24T01:54:10.267Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "entered",
+            "isShort": true,
+            "leverage": 20,
+            "marketAtSignal": 26.053,
+            "plannedEntry": 24.497,
+            "entryPriceUsed": 26.053,
+            "entryHitAt": "2026-10-20T07:23:35.000Z",
+            "takeProfits": [
+              24.75035,
+              23.968760000000003,
+              22.926640000000003
+            ],
+            "stopLoss": 27.35565,
+            "tpHits": [],
+            "slHitAt": null,
+            "settlementPrice": null,
+            "settlementAt": "",
+            "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+            "progress": {
+              "entryHitAt": "2026-10-20T07:23:35.000Z",
+              "entryPriceUsed": 26.053,
+              "tpHits": [],
+              "slHitAt": null,
+              "slPrice": 27.35565,
+              "status": "entered",
+              "lastCheckAt": "2026-10-24T01:54:10.265Z",
+              "lastPrice": 26.053,
+              "pnlPct": 0,
+              "outcome": "pending",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "note": "窗口内未触达止盈止损",
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792740215000,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T03:23:35.000Z",
+                "ts": 1792725815000,
+                "price": 25.872,
+                "pnlPct": 13.89
+              },
+              {
+                "at": "2026-10-23T07:23:35.000Z",
+                "ts": 1792740215000,
+                "price": 26.352,
+                "pnlPct": -22.95
+              }
+            ],
+            "periodicMark": {
+              "at": "2026-10-23T07:23:35.000Z",
+              "ts": 1792740215000,
+              "price": 26.352,
+              "pnlPct": -22.95
+            },
+            "entry": 26.053
+          },
+          "backtest": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-20T07:23:35.000Z",
+            "symbol": "VVV",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "pending",
+                "isShort": true,
+                "leverage": 20,
+                "marketAtSignal": 26.053,
+                "plannedEntry": 24.497,
+                "entryPriceUsed": 26.053,
+                "entryHitAt": "2026-10-20T07:23:35.000Z",
+                "takeProfits": [
+                  24.75035,
+                  23.968760000000003,
+                  22.926640000000003
+                ],
+                "stopLoss": 27.35565,
+                "tpHits": [],
+                "slHitAt": null,
+                "settlementPrice": null,
+                "settlementAt": "",
+                "pnlPct": -22.95,
+                "pnlLabel": "-22.95% (@20x, 4h标记)",
+                "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+                "progress": {
+                  "entryHitAt": "2026-10-20T07:23:35.000Z",
+                  "entryPriceUsed": 26.053,
+                  "tpHits": [],
+                  "slHitAt": null,
+                  "slPrice": 27.35565,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:10.265Z",
+                  "lastPrice": 26.053,
+                  "pnlPct": 0,
+                  "outcome": "pending",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "note": "窗口内未触达止盈止损",
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792740215000,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T03:23:35.000Z",
+                    "ts": 1792725815000,
+                    "price": 25.872,
+                    "pnlPct": 13.89
+                  },
+                  {
+                    "at": "2026-10-23T07:23:35.000Z",
+                    "ts": 1792740215000,
+                    "price": 26.352,
+                    "pnlPct": -22.95
+                  }
+                ],
+                "taskCancelled": false,
+                "periodicMark": {
+                  "at": "2026-10-23T07:23:35.000Z",
+                  "ts": 1792740215000,
+                  "price": 26.352,
+                  "pnlPct": -22.95
+                }
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "take_profit",
+                "isShort": true,
+                "leverage": 20,
+                "marketAtSignal": 26.053,
+                "plannedEntry": 24.497,
+                "entryPriceUsed": 26.053,
+                "entryHitAt": "2026-10-20T07:23:35.000Z",
+                "takeProfits": [
+                  27.876710000000003,
+                  28.658300000000004,
+                  31.2636
+                ],
+                "stopLoss": 24.75035,
+                "tpHits": [],
+                "slHitAt": "2026-10-23T00:55:00.000Z",
+                "settlementPrice": 24.75035,
+                "settlementAt": "2026-10-23T00:55:00.000Z",
+                "pnlPct": 100,
+                "pnlLabel": "+100.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-20T07:23:35.000Z",
+                  "entryPriceUsed": 26.053,
+                  "tpHits": [],
+                  "slHitAt": "2026-10-23T00:55:00.000Z",
+                  "slPrice": 24.75035,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:10.267Z",
+                  "lastPrice": 24.75035,
+                  "pnlPct": 100,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792740215000,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T03:23:35.000Z",
+                    "ts": 1792725815000,
+                    "price": 25.872,
+                    "pnlPct": 13.89
+                  },
+                  {
+                    "at": "2026-10-23T07:23:35.000Z",
+                    "ts": 1792740215000,
+                    "price": 26.352,
+                    "pnlPct": -22.95
+                  }
+                ],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "pending",
+            "pnlPct": -22.95,
+            "pnlLabel": "-22.95% (@20x, 4h标记)",
+            "settledAt": "2026-10-24T01:54:10.267Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "entered",
+            "isShort": true,
+            "leverage": 20,
+            "marketAtSignal": 26.053,
+            "plannedEntry": 24.497,
+            "entryPriceUsed": 26.053,
+            "entryHitAt": "2026-10-20T07:23:35.000Z",
+            "takeProfits": [
+              24.75035,
+              23.968760000000003,
+              22.926640000000003
+            ],
+            "stopLoss": 27.35565,
+            "tpHits": [],
+            "slHitAt": null,
+            "settlementPrice": null,
+            "settlementAt": "",
+            "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+            "progress": {
+              "entryHitAt": "2026-10-20T07:23:35.000Z",
+              "entryPriceUsed": 26.053,
+              "tpHits": [],
+              "slHitAt": null,
+              "slPrice": 27.35565,
+              "status": "entered",
+              "lastCheckAt": "2026-10-24T01:54:10.265Z",
+              "lastPrice": 26.053,
+              "pnlPct": 0,
+              "outcome": "pending",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "note": "窗口内未触达止盈止损",
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792740215000,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T03:23:35.000Z",
+                "ts": 1792725815000,
+                "price": 25.872,
+                "pnlPct": 13.89
+              },
+              {
+                "at": "2026-10-23T07:23:35.000Z",
+                "ts": 1792740215000,
+                "price": 26.352,
+                "pnlPct": -22.95
+              }
+            ],
+            "periodicMark": {
+              "at": "2026-10-23T07:23:35.000Z",
+              "ts": 1792740215000,
+              "price": 26.352,
+              "pnlPct": -22.95
+            },
+            "entry": 26.053
+          },
+          "primaryProfile": "card",
+          "marketEntryOverride": true,
+          "marketAtSignal": 26.053,
+          "entryPriceUsed": 26.053,
+          "overrideAt": "2026-10-24T01:54:10.267Z"
+        },
+        "2026-10-21T02:07:58+00:00|CVX|full": {
+          "phase": "full",
+          "symbol": "CVX",
+          "direction": "多",
+          "signalAt": "2026-10-21T02:07:58+00:00",
+          "entry": "2.549",
+          "preview": "#CVX 市价多 2.549 止盈：0.3761-0.3565-0.329 止損：0.412 止盈：23.26-21.67 止損：25.724 #CVX 市價多 2.549",
+          "digest": null,
+          "entered": true,
+          "outcome": "stop_loss",
+          "pnlPct": -42.71,
+          "pnlLabel": "-42.71% (@20x, 4h标记)",
+          "flat": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-21T02:07:58.000Z",
+            "symbol": "CVX",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "pending",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 2.482,
+                "plannedEntry": 2.549,
+                "entryPriceUsed": 2.482,
+                "entryHitAt": "2026-10-21T02:07:58.000Z",
+                "takeProfits": [
+                  2.6061000000000005,
+                  2.6805600000000003,
+                  2.7798400000000005
+                ],
+                "stopLoss": 2.3579,
+                "tpHits": [],
+                "slHitAt": null,
+                "settlementPrice": null,
+                "settlementAt": "",
+                "pnlPct": -42.71,
+                "pnlLabel": "-42.71% (@20x, 4h标记)",
+                "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+                "progress": {
+                  "entryHitAt": "2026-10-21T02:07:58.000Z",
+                  "entryPriceUsed": 2.482,
+                  "tpHits": [],
+                  "slHitAt": null,
+                  "slPrice": 2.3579,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:11.241Z",
+                  "lastPrice": 2.482,
+                  "pnlPct": 0,
+                  "outcome": "pending",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "note": "窗口内未触达止盈止损",
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806850469,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T02:07:58.000Z",
+                    "ts": 1792721278000,
+                    "price": 2.474,
+                    "pnlPct": -6.45
+                  },
+                  {
+                    "at": "2026-10-23T06:07:58.000Z",
+                    "ts": 1792735678000,
+                    "price": 2.527,
+                    "pnlPct": 36.26
+                  },
+                  {
+                    "at": "2026-10-23T10:07:58.000Z",
+                    "ts": 1792750078000,
+                    "price": 2.498,
+                    "pnlPct": 12.89
+                  },
+                  {
+                    "at": "2026-10-23T14:07:58.000Z",
+                    "ts": 1792764478000,
+                    "price": 2.476,
+                    "pnlPct": -4.83
+                  },
+                  {
+                    "at": "2026-10-23T18:07:58.000Z",
+                    "ts": 1792778878000,
+                    "price": 2.469,
+                    "pnlPct": -10.48
+                  },
+                  {
+                    "at": "2026-10-23T22:07:58.000Z",
+                    "ts": 1792793278000,
+                    "price": 2.429,
+                    "pnlPct": -42.71
+                  }
+                ],
+                "taskCancelled": false,
+                "periodicMark": {
+                  "at": "2026-10-23T22:07:58.000Z",
+                  "ts": 1792793278000,
+                  "price": 2.429,
+                  "pnlPct": -42.71
+                }
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "pending",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 2.482,
+                "plannedEntry": 2.549,
+                "entryPriceUsed": 2.482,
+                "entryHitAt": "2026-10-21T02:07:58.000Z",
+                "takeProfits": [
+                  2.65574,
+                  2.7302000000000004,
+                  2.9784
+                ],
+                "stopLoss": 2.3579,
+                "tpHits": [],
+                "slHitAt": null,
+                "settlementPrice": null,
+                "settlementAt": "",
+                "pnlPct": -42.71,
+                "pnlLabel": "-42.71% (@20x, 4h标记)",
+                "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+                "progress": {
+                  "entryHitAt": "2026-10-21T02:07:58.000Z",
+                  "entryPriceUsed": 2.482,
+                  "tpHits": [],
+                  "slHitAt": null,
+                  "slPrice": 2.3579,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:11.242Z",
+                  "lastPrice": 2.482,
+                  "pnlPct": 0,
+                  "outcome": "pending",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "note": "窗口内未触达止盈止损",
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806850469,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T02:07:58.000Z",
+                    "ts": 1792721278000,
+                    "price": 2.474,
+                    "pnlPct": -6.45
+                  },
+                  {
+                    "at": "2026-10-23T06:07:58.000Z",
+                    "ts": 1792735678000,
+                    "price": 2.527,
+                    "pnlPct": 36.26
+                  },
+                  {
+                    "at": "2026-10-23T10:07:58.000Z",
+                    "ts": 1792750078000,
+                    "price": 2.498,
+                    "pnlPct": 12.89
+                  },
+                  {
+                    "at": "2026-10-23T14:07:58.000Z",
+                    "ts": 1792764478000,
+                    "price": 2.476,
+                    "pnlPct": -4.83
+                  },
+                  {
+                    "at": "2026-10-23T18:07:58.000Z",
+                    "ts": 1792778878000,
+                    "price": 2.469,
+                    "pnlPct": -10.48
+                  },
+                  {
+                    "at": "2026-10-23T22:07:58.000Z",
+                    "ts": 1792793278000,
+                    "price": 2.429,
+                    "pnlPct": -42.71
+                  }
+                ],
+                "taskCancelled": false,
+                "periodicMark": {
+                  "at": "2026-10-23T22:07:58.000Z",
+                  "ts": 1792793278000,
+                  "price": 2.429,
+                  "pnlPct": -42.71
+                }
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "pending",
+            "pnlPct": -42.71,
+            "pnlLabel": "-42.71% (@20x, 4h标记)",
+            "settledAt": "2026-10-24T01:54:11.242Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "entered",
+            "isShort": false,
+            "leverage": 20,
+            "marketAtSignal": 2.482,
+            "plannedEntry": 2.549,
+            "entryPriceUsed": 2.482,
+            "entryHitAt": "2026-10-21T02:07:58.000Z",
+            "takeProfits": [
+              2.6061000000000005,
+              2.6805600000000003,
+              2.7798400000000005
+            ],
+            "stopLoss": 2.3579,
+            "tpHits": [],
+            "slHitAt": null,
+            "settlementPrice": null,
+            "settlementAt": "",
+            "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+            "progress": {
+              "entryHitAt": "2026-10-21T02:07:58.000Z",
+              "entryPriceUsed": 2.482,
+              "tpHits": [],
+              "slHitAt": null,
+              "slPrice": 2.3579,
+              "status": "entered",
+              "lastCheckAt": "2026-10-24T01:54:11.241Z",
+              "lastPrice": 2.482,
+              "pnlPct": 0,
+              "outcome": "pending",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "note": "窗口内未触达止盈止损",
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806850469,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T02:07:58.000Z",
+                "ts": 1792721278000,
+                "price": 2.474,
+                "pnlPct": -6.45
+              },
+              {
+                "at": "2026-10-23T06:07:58.000Z",
+                "ts": 1792735678000,
+                "price": 2.527,
+                "pnlPct": 36.26
+              },
+              {
+                "at": "2026-10-23T10:07:58.000Z",
+                "ts": 1792750078000,
+                "price": 2.498,
+                "pnlPct": 12.89
+              },
+              {
+                "at": "2026-10-23T14:07:58.000Z",
+                "ts": 1792764478000,
+                "price": 2.476,
+                "pnlPct": -4.83
+              },
+              {
+                "at": "2026-10-23T18:07:58.000Z",
+                "ts": 1792778878000,
+                "price": 2.469,
+                "pnlPct": -10.48
+              },
+              {
+                "at": "2026-10-23T22:07:58.000Z",
+                "ts": 1792793278000,
+                "price": 2.429,
+                "pnlPct": -42.71
+              }
+            ],
+            "periodicMark": {
+              "at": "2026-10-23T22:07:58.000Z",
+              "ts": 1792793278000,
+              "price": 2.429,
+              "pnlPct": -42.71
+            },
+            "entry": 2.482
+          },
+          "backtest": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-21T02:07:58.000Z",
+            "symbol": "CVX",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "pending",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 2.482,
+                "plannedEntry": 2.549,
+                "entryPriceUsed": 2.482,
+                "entryHitAt": "2026-10-21T02:07:58.000Z",
+                "takeProfits": [
+                  2.6061000000000005,
+                  2.6805600000000003,
+                  2.7798400000000005
+                ],
+                "stopLoss": 2.3579,
+                "tpHits": [],
+                "slHitAt": null,
+                "settlementPrice": null,
+                "settlementAt": "",
+                "pnlPct": -42.71,
+                "pnlLabel": "-42.71% (@20x, 4h标记)",
+                "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+                "progress": {
+                  "entryHitAt": "2026-10-21T02:07:58.000Z",
+                  "entryPriceUsed": 2.482,
+                  "tpHits": [],
+                  "slHitAt": null,
+                  "slPrice": 2.3579,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:11.241Z",
+                  "lastPrice": 2.482,
+                  "pnlPct": 0,
+                  "outcome": "pending",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "note": "窗口内未触达止盈止损",
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806850469,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T02:07:58.000Z",
+                    "ts": 1792721278000,
+                    "price": 2.474,
+                    "pnlPct": -6.45
+                  },
+                  {
+                    "at": "2026-10-23T06:07:58.000Z",
+                    "ts": 1792735678000,
+                    "price": 2.527,
+                    "pnlPct": 36.26
+                  },
+                  {
+                    "at": "2026-10-23T10:07:58.000Z",
+                    "ts": 1792750078000,
+                    "price": 2.498,
+                    "pnlPct": 12.89
+                  },
+                  {
+                    "at": "2026-10-23T14:07:58.000Z",
+                    "ts": 1792764478000,
+                    "price": 2.476,
+                    "pnlPct": -4.83
+                  },
+                  {
+                    "at": "2026-10-23T18:07:58.000Z",
+                    "ts": 1792778878000,
+                    "price": 2.469,
+                    "pnlPct": -10.48
+                  },
+                  {
+                    "at": "2026-10-23T22:07:58.000Z",
+                    "ts": 1792793278000,
+                    "price": 2.429,
+                    "pnlPct": -42.71
+                  }
+                ],
+                "taskCancelled": false,
+                "periodicMark": {
+                  "at": "2026-10-23T22:07:58.000Z",
+                  "ts": 1792793278000,
+                  "price": 2.429,
+                  "pnlPct": -42.71
+                }
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "pending",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 2.482,
+                "plannedEntry": 2.549,
+                "entryPriceUsed": 2.482,
+                "entryHitAt": "2026-10-21T02:07:58.000Z",
+                "takeProfits": [
+                  2.65574,
+                  2.7302000000000004,
+                  2.9784
+                ],
+                "stopLoss": 2.3579,
+                "tpHits": [],
+                "slHitAt": null,
+                "settlementPrice": null,
+                "settlementAt": "",
+                "pnlPct": -42.71,
+                "pnlLabel": "-42.71% (@20x, 4h标记)",
+                "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+                "progress": {
+                  "entryHitAt": "2026-10-21T02:07:58.000Z",
+                  "entryPriceUsed": 2.482,
+                  "tpHits": [],
+                  "slHitAt": null,
+                  "slPrice": 2.3579,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:11.242Z",
+                  "lastPrice": 2.482,
+                  "pnlPct": 0,
+                  "outcome": "pending",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "note": "窗口内未触达止盈止损",
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806850469,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T02:07:58.000Z",
+                    "ts": 1792721278000,
+                    "price": 2.474,
+                    "pnlPct": -6.45
+                  },
+                  {
+                    "at": "2026-10-23T06:07:58.000Z",
+                    "ts": 1792735678000,
+                    "price": 2.527,
+                    "pnlPct": 36.26
+                  },
+                  {
+                    "at": "2026-10-23T10:07:58.000Z",
+                    "ts": 1792750078000,
+                    "price": 2.498,
+                    "pnlPct": 12.89
+                  },
+                  {
+                    "at": "2026-10-23T14:07:58.000Z",
+                    "ts": 1792764478000,
+                    "price": 2.476,
+                    "pnlPct": -4.83
+                  },
+                  {
+                    "at": "2026-10-23T18:07:58.000Z",
+                    "ts": 1792778878000,
+                    "price": 2.469,
+                    "pnlPct": -10.48
+                  },
+                  {
+                    "at": "2026-10-23T22:07:58.000Z",
+                    "ts": 1792793278000,
+                    "price": 2.429,
+                    "pnlPct": -42.71
+                  }
+                ],
+                "taskCancelled": false,
+                "periodicMark": {
+                  "at": "2026-10-23T22:07:58.000Z",
+                  "ts": 1792793278000,
+                  "price": 2.429,
+                  "pnlPct": -42.71
+                }
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "pending",
+            "pnlPct": -42.71,
+            "pnlLabel": "-42.71% (@20x, 4h标记)",
+            "settledAt": "2026-10-24T01:54:11.242Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "entered",
+            "isShort": false,
+            "leverage": 20,
+            "marketAtSignal": 2.482,
+            "plannedEntry": 2.549,
+            "entryPriceUsed": 2.482,
+            "entryHitAt": "2026-10-21T02:07:58.000Z",
+            "takeProfits": [
+              2.6061000000000005,
+              2.6805600000000003,
+              2.7798400000000005
+            ],
+            "stopLoss": 2.3579,
+            "tpHits": [],
+            "slHitAt": null,
+            "settlementPrice": null,
+            "settlementAt": "",
+            "note": "未触达止盈止损，按最近 4h 收盘价估算盈亏；续跑直至触达 TP/SL",
+            "progress": {
+              "entryHitAt": "2026-10-21T02:07:58.000Z",
+              "entryPriceUsed": 2.482,
+              "tpHits": [],
+              "slHitAt": null,
+              "slPrice": 2.3579,
+              "status": "entered",
+              "lastCheckAt": "2026-10-24T01:54:11.241Z",
+              "lastPrice": 2.482,
+              "pnlPct": 0,
+              "outcome": "pending",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "note": "窗口内未触达止盈止损",
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806850469,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T02:07:58.000Z",
+                "ts": 1792721278000,
+                "price": 2.474,
+                "pnlPct": -6.45
+              },
+              {
+                "at": "2026-10-23T06:07:58.000Z",
+                "ts": 1792735678000,
+                "price": 2.527,
+                "pnlPct": 36.26
+              },
+              {
+                "at": "2026-10-23T10:07:58.000Z",
+                "ts": 1792750078000,
+                "price": 2.498,
+                "pnlPct": 12.89
+              },
+              {
+                "at": "2026-10-23T14:07:58.000Z",
+                "ts": 1792764478000,
+                "price": 2.476,
+                "pnlPct": -4.83
+              },
+              {
+                "at": "2026-10-23T18:07:58.000Z",
+                "ts": 1792778878000,
+                "price": 2.469,
+                "pnlPct": -10.48
+              },
+              {
+                "at": "2026-10-23T22:07:58.000Z",
+                "ts": 1792793278000,
+                "price": 2.429,
+                "pnlPct": -42.71
+              }
+            ],
+            "periodicMark": {
+              "at": "2026-10-23T22:07:58.000Z",
+              "ts": 1792793278000,
+              "price": 2.429,
+              "pnlPct": -42.71
+            },
+            "entry": 2.482
+          },
+          "primaryProfile": "card",
+          "marketEntryOverride": true,
+          "marketAtSignal": 2.482,
+          "entryPriceUsed": 2.482,
+          "overrideAt": "2026-10-24T01:54:11.242Z"
+        },
+        "2026-10-21T07:13:43+00:00|BAT|full": {
+          "phase": "full",
+          "symbol": "BAT",
+          "direction": "多",
+          "signalAt": "2026-10-21T07:13:43+00:00",
+          "entry": "0.18543",
+          "preview": "#BAT 市价多 0.18543 止盈：23.26-21.67 止損：25.724 止損：2.43 #BAT 市價多 0.18543",
+          "digest": null,
+          "entered": true,
+          "outcome": "stop_loss",
+          "pnlPct": -100,
+          "pnlLabel": "-100.00% (@20x)",
+          "flat": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-21T07:13:43.000Z",
+            "symbol": "BAT",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_sl",
+                "outcome": "stop_loss",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.17302,
+                "plannedEntry": 0.18543,
+                "entryPriceUsed": 0.17302,
+                "entryHitAt": "2026-10-21T07:13:43.000Z",
+                "takeProfits": [
+                  0.18167100000000003,
+                  0.18686160000000002,
+                  0.19378240000000002
+                ],
+                "stopLoss": 0.164369,
+                "tpHits": [],
+                "slHitAt": "2026-10-23T22:50:00.000Z",
+                "settlementPrice": 0.164369,
+                "settlementAt": "2026-10-23T22:50:00.000Z",
+                "pnlPct": -100,
+                "pnlLabel": "-100.00% (@20x)",
+                "note": "止损结算",
+                "progress": {
+                  "entryHitAt": "2026-10-21T07:13:43.000Z",
+                  "entryPriceUsed": 0.17302,
+                  "tpHits": [],
+                  "slHitAt": "2026-10-23T22:50:00.000Z",
+                  "slPrice": 0.164369,
+                  "status": "closed_sl",
+                  "lastCheckAt": "2026-10-24T01:54:12.193Z",
+                  "lastPrice": 0.164369,
+                  "pnlPct": -100,
+                  "outcome": "stop_loss",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806851443,
+                "periodicSettlements": [],
+                "taskCancelled": false
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_sl",
+                "outcome": "stop_loss",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.17302,
+                "plannedEntry": 0.18543,
+                "entryPriceUsed": 0.17302,
+                "entryHitAt": "2026-10-21T07:13:43.000Z",
+                "takeProfits": [
+                  0.18513140000000003,
+                  0.19032200000000002,
+                  0.207624
+                ],
+                "stopLoss": 0.164369,
+                "tpHits": [],
+                "slHitAt": "2026-10-23T22:50:00.000Z",
+                "settlementPrice": 0.164369,
+                "settlementAt": "2026-10-23T22:50:00.000Z",
+                "pnlPct": -100,
+                "pnlLabel": "-100.00% (@20x)",
+                "note": "止损结算",
+                "progress": {
+                  "entryHitAt": "2026-10-21T07:13:43.000Z",
+                  "entryPriceUsed": 0.17302,
+                  "tpHits": [],
+                  "slHitAt": "2026-10-23T22:50:00.000Z",
+                  "slPrice": 0.164369,
+                  "status": "closed_sl",
+                  "lastCheckAt": "2026-10-24T01:54:12.193Z",
+                  "lastPrice": 0.164369,
+                  "pnlPct": -100,
+                  "outcome": "stop_loss",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806851443,
+                "periodicSettlements": [],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "stop_loss",
+            "pnlPct": -100,
+            "pnlLabel": "-100.00% (@20x)",
+            "settledAt": "2026-10-24T01:54:12.194Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "closed_sl",
+            "isShort": false,
+            "leverage": 20,
+            "marketAtSignal": 0.17302,
+            "plannedEntry": 0.18543,
+            "entryPriceUsed": 0.17302,
+            "entryHitAt": "2026-10-21T07:13:43.000Z",
+            "takeProfits": [
+              0.18167100000000003,
+              0.18686160000000002,
+              0.19378240000000002
+            ],
+            "stopLoss": 0.164369,
+            "tpHits": [],
+            "slHitAt": "2026-10-23T22:50:00.000Z",
+            "settlementPrice": 0.164369,
+            "settlementAt": "2026-10-23T22:50:00.000Z",
+            "note": "止损结算",
+            "progress": {
+              "entryHitAt": "2026-10-21T07:13:43.000Z",
+              "entryPriceUsed": 0.17302,
+              "tpHits": [],
+              "slHitAt": "2026-10-23T22:50:00.000Z",
+              "slPrice": 0.164369,
+              "status": "closed_sl",
+              "lastCheckAt": "2026-10-24T01:54:12.193Z",
+              "lastPrice": 0.164369,
+              "pnlPct": -100,
+              "outcome": "stop_loss",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806851443,
+            "periodicSettlements": [],
+            "entry": 0.17302
+          },
+          "backtest": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-21T07:13:43.000Z",
+            "symbol": "BAT",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_sl",
+                "outcome": "stop_loss",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.17302,
+                "plannedEntry": 0.18543,
+                "entryPriceUsed": 0.17302,
+                "entryHitAt": "2026-10-21T07:13:43.000Z",
+                "takeProfits": [
+                  0.18167100000000003,
+                  0.18686160000000002,
+                  0.19378240000000002
+                ],
+                "stopLoss": 0.164369,
+                "tpHits": [],
+                "slHitAt": "2026-10-23T22:50:00.000Z",
+                "settlementPrice": 0.164369,
+                "settlementAt": "2026-10-23T22:50:00.000Z",
+                "pnlPct": -100,
+                "pnlLabel": "-100.00% (@20x)",
+                "note": "止损结算",
+                "progress": {
+                  "entryHitAt": "2026-10-21T07:13:43.000Z",
+                  "entryPriceUsed": 0.17302,
+                  "tpHits": [],
+                  "slHitAt": "2026-10-23T22:50:00.000Z",
+                  "slPrice": 0.164369,
+                  "status": "closed_sl",
+                  "lastCheckAt": "2026-10-24T01:54:12.193Z",
+                  "lastPrice": 0.164369,
+                  "pnlPct": -100,
+                  "outcome": "stop_loss",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806851443,
+                "periodicSettlements": [],
+                "taskCancelled": false
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_sl",
+                "outcome": "stop_loss",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.17302,
+                "plannedEntry": 0.18543,
+                "entryPriceUsed": 0.17302,
+                "entryHitAt": "2026-10-21T07:13:43.000Z",
+                "takeProfits": [
+                  0.18513140000000003,
+                  0.19032200000000002,
+                  0.207624
+                ],
+                "stopLoss": 0.164369,
+                "tpHits": [],
+                "slHitAt": "2026-10-23T22:50:00.000Z",
+                "settlementPrice": 0.164369,
+                "settlementAt": "2026-10-23T22:50:00.000Z",
+                "pnlPct": -100,
+                "pnlLabel": "-100.00% (@20x)",
+                "note": "止损结算",
+                "progress": {
+                  "entryHitAt": "2026-10-21T07:13:43.000Z",
+                  "entryPriceUsed": 0.17302,
+                  "tpHits": [],
+                  "slHitAt": "2026-10-23T22:50:00.000Z",
+                  "slPrice": 0.164369,
+                  "status": "closed_sl",
+                  "lastCheckAt": "2026-10-24T01:54:12.193Z",
+                  "lastPrice": 0.164369,
+                  "pnlPct": -100,
+                  "outcome": "stop_loss",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806851443,
+                "periodicSettlements": [],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "stop_loss",
+            "pnlPct": -100,
+            "pnlLabel": "-100.00% (@20x)",
+            "settledAt": "2026-10-24T01:54:12.194Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "closed_sl",
+            "isShort": false,
+            "leverage": 20,
+            "marketAtSignal": 0.17302,
+            "plannedEntry": 0.18543,
+            "entryPriceUsed": 0.17302,
+            "entryHitAt": "2026-10-21T07:13:43.000Z",
+            "takeProfits": [
+              0.18167100000000003,
+              0.18686160000000002,
+              0.19378240000000002
+            ],
+            "stopLoss": 0.164369,
+            "tpHits": [],
+            "slHitAt": "2026-10-23T22:50:00.000Z",
+            "settlementPrice": 0.164369,
+            "settlementAt": "2026-10-23T22:50:00.000Z",
+            "note": "止损结算",
+            "progress": {
+              "entryHitAt": "2026-10-21T07:13:43.000Z",
+              "entryPriceUsed": 0.17302,
+              "tpHits": [],
+              "slHitAt": "2026-10-23T22:50:00.000Z",
+              "slPrice": 0.164369,
+              "status": "closed_sl",
+              "lastCheckAt": "2026-10-24T01:54:12.193Z",
+              "lastPrice": 0.164369,
+              "pnlPct": -100,
+              "outcome": "stop_loss",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806851443,
+            "periodicSettlements": [],
+            "entry": 0.17302
+          },
+          "primaryProfile": "card",
+          "marketEntryOverride": true,
+          "marketAtSignal": 0.17302,
+          "entryPriceUsed": 0.17302,
+          "overrideAt": "2026-10-24T01:54:12.194Z"
+        },
+        "2026-10-22T01:40:21+00:00|UB|full": {
+          "phase": "full",
+          "symbol": "UB",
+          "direction": "空",
+          "signalAt": "2026-10-22T01:40:21+00:00",
+          "entry": "0.13162",
+          "preview": "#UB 市价空 0.13162 止損：2.43 止盈：0.193-0.2043-0.2219 止損：0.177 #UB 市價空 0.13162",
+          "digest": null,
+          "entered": true,
+          "outcome": "take_profit",
+          "pnlPct": 100,
+          "pnlLabel": "+100.00% (@20x)",
+          "flat": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-22T01:40:21.000Z",
+            "symbol": "UB",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "partial_tp",
+                "outcome": "take_profit",
+                "isShort": true,
+                "leverage": 20,
+                "marketAtSignal": 0.12606,
+                "plannedEntry": 0.13162,
+                "entryPriceUsed": 0.12606,
+                "entryHitAt": "2026-10-22T01:40:21.000Z",
+                "takeProfits": [
+                  0.119757,
+                  0.11597520000000001,
+                  0.11093280000000001
+                ],
+                "stopLoss": 0.132363,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.119757,
+                    "hitAt": "2026-10-23T22:30:00.000Z",
+                    "sizePct": 0.3
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.119757,
+                "settlementAt": "2026-10-23T22:30:00.000Z",
+                "pnlPct": 100,
+                "pnlLabel": "+100.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-22T01:40:21.000Z",
+                  "entryPriceUsed": 0.12606,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.119757,
+                      "hitAt": "2026-10-23T22:30:00.000Z",
+                      "sizePct": 0.3
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.132363,
+                  "status": "partial_tp",
+                  "lastCheckAt": "2026-10-24T01:54:13.052Z",
+                  "lastPrice": 0.119757,
+                  "pnlPct": 100,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806852395,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T01:40:21.000Z",
+                    "ts": 1792719621000,
+                    "price": 0.12564,
+                    "pnlPct": 6.66
+                  },
+                  {
+                    "at": "2026-10-23T05:40:21.000Z",
+                    "ts": 1792734021000,
+                    "price": 0.12652,
+                    "pnlPct": -7.3
+                  },
+                  {
+                    "at": "2026-10-23T09:40:21.000Z",
+                    "ts": 1792748421000,
+                    "price": 0.12814,
+                    "pnlPct": -33
+                  },
+                  {
+                    "at": "2026-10-23T13:40:21.000Z",
+                    "ts": 1792762821000,
+                    "price": 0.12604,
+                    "pnlPct": 0.32
+                  },
+                  {
+                    "at": "2026-10-23T17:40:21.000Z",
+                    "ts": 1792777221000,
+                    "price": 0.12381,
+                    "pnlPct": 35.7
+                  },
+                  {
+                    "at": "2026-10-23T21:40:21.000Z",
+                    "ts": 1792791621000,
+                    "price": 0.12089,
+                    "pnlPct": 82.02
+                  },
+                  {
+                    "at": "2026-10-24T01:40:21.000Z",
+                    "ts": 1792806021000,
+                    "price": 0.1207,
+                    "pnlPct": 85.04
+                  }
+                ],
+                "taskCancelled": false
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "take_profit",
+                "isShort": true,
+                "leverage": 20,
+                "marketAtSignal": 0.12606,
+                "plannedEntry": 0.13162,
+                "entryPriceUsed": 0.12606,
+                "entryHitAt": "2026-10-22T01:40:21.000Z",
+                "takeProfits": [
+                  0.1348842,
+                  0.138666,
+                  0.151272
+                ],
+                "stopLoss": 0.119757,
+                "tpHits": [],
+                "slHitAt": "2026-10-23T00:55:00.000Z",
+                "settlementPrice": 0.119757,
+                "settlementAt": "2026-10-23T00:55:00.000Z",
+                "pnlPct": 100,
+                "pnlLabel": "+100.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-22T01:40:21.000Z",
+                  "entryPriceUsed": 0.12606,
+                  "tpHits": [],
+                  "slHitAt": "2026-10-23T00:55:00.000Z",
+                  "slPrice": 0.119757,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:13.053Z",
+                  "lastPrice": 0.119757,
+                  "pnlPct": 100,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806852395,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T01:40:21.000Z",
+                    "ts": 1792719621000,
+                    "price": 0.12564,
+                    "pnlPct": 6.66
+                  },
+                  {
+                    "at": "2026-10-23T05:40:21.000Z",
+                    "ts": 1792734021000,
+                    "price": 0.12652,
+                    "pnlPct": -7.3
+                  },
+                  {
+                    "at": "2026-10-23T09:40:21.000Z",
+                    "ts": 1792748421000,
+                    "price": 0.12814,
+                    "pnlPct": -33
+                  },
+                  {
+                    "at": "2026-10-23T13:40:21.000Z",
+                    "ts": 1792762821000,
+                    "price": 0.12604,
+                    "pnlPct": 0.32
+                  },
+                  {
+                    "at": "2026-10-23T17:40:21.000Z",
+                    "ts": 1792777221000,
+                    "price": 0.12381,
+                    "pnlPct": 35.7
+                  },
+                  {
+                    "at": "2026-10-23T21:40:21.000Z",
+                    "ts": 1792791621000,
+                    "price": 0.12089,
+                    "pnlPct": 82.02
+                  },
+                  {
+                    "at": "2026-10-24T01:40:21.000Z",
+                    "ts": 1792806021000,
+                    "price": 0.1207,
+                    "pnlPct": 85.04
+                  }
+                ],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "take_profit",
+            "pnlPct": 100,
+            "pnlLabel": "+100.00% (@20x)",
+            "settledAt": "2026-10-24T01:54:13.053Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "partial_tp",
+            "isShort": true,
+            "leverage": 20,
+            "marketAtSignal": 0.12606,
+            "plannedEntry": 0.13162,
+            "entryPriceUsed": 0.12606,
+            "entryHitAt": "2026-10-22T01:40:21.000Z",
+            "takeProfits": [
+              0.119757,
+              0.11597520000000001,
+              0.11093280000000001
+            ],
+            "stopLoss": 0.132363,
+            "tpHits": [
+              {
+                "index": 0,
+                "price": 0.119757,
+                "hitAt": "2026-10-23T22:30:00.000Z",
+                "sizePct": 0.3
+              }
+            ],
+            "slHitAt": null,
+            "settlementPrice": 0.119757,
+            "settlementAt": "2026-10-23T22:30:00.000Z",
+            "note": "止盈结算",
+            "progress": {
+              "entryHitAt": "2026-10-22T01:40:21.000Z",
+              "entryPriceUsed": 0.12606,
+              "tpHits": [
+                {
+                  "index": 0,
+                  "price": 0.119757,
+                  "hitAt": "2026-10-23T22:30:00.000Z",
+                  "sizePct": 0.3
+                }
+              ],
+              "slHitAt": null,
+              "slPrice": 0.132363,
+              "status": "partial_tp",
+              "lastCheckAt": "2026-10-24T01:54:13.052Z",
+              "lastPrice": 0.119757,
+              "pnlPct": 100,
+              "outcome": "take_profit",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806852395,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T01:40:21.000Z",
+                "ts": 1792719621000,
+                "price": 0.12564,
+                "pnlPct": 6.66
+              },
+              {
+                "at": "2026-10-23T05:40:21.000Z",
+                "ts": 1792734021000,
+                "price": 0.12652,
+                "pnlPct": -7.3
+              },
+              {
+                "at": "2026-10-23T09:40:21.000Z",
+                "ts": 1792748421000,
+                "price": 0.12814,
+                "pnlPct": -33
+              },
+              {
+                "at": "2026-10-23T13:40:21.000Z",
+                "ts": 1792762821000,
+                "price": 0.12604,
+                "pnlPct": 0.32
+              },
+              {
+                "at": "2026-10-23T17:40:21.000Z",
+                "ts": 1792777221000,
+                "price": 0.12381,
+                "pnlPct": 35.7
+              },
+              {
+                "at": "2026-10-23T21:40:21.000Z",
+                "ts": 1792791621000,
+                "price": 0.12089,
+                "pnlPct": 82.02
+              },
+              {
+                "at": "2026-10-24T01:40:21.000Z",
+                "ts": 1792806021000,
+                "price": 0.1207,
+                "pnlPct": 85.04
+              }
+            ],
+            "entry": 0.12606
+          },
+          "backtest": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-22T01:40:21.000Z",
+            "symbol": "UB",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "partial_tp",
+                "outcome": "take_profit",
+                "isShort": true,
+                "leverage": 20,
+                "marketAtSignal": 0.12606,
+                "plannedEntry": 0.13162,
+                "entryPriceUsed": 0.12606,
+                "entryHitAt": "2026-10-22T01:40:21.000Z",
+                "takeProfits": [
+                  0.119757,
+                  0.11597520000000001,
+                  0.11093280000000001
+                ],
+                "stopLoss": 0.132363,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.119757,
+                    "hitAt": "2026-10-23T22:30:00.000Z",
+                    "sizePct": 0.3
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.119757,
+                "settlementAt": "2026-10-23T22:30:00.000Z",
+                "pnlPct": 100,
+                "pnlLabel": "+100.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-22T01:40:21.000Z",
+                  "entryPriceUsed": 0.12606,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.119757,
+                      "hitAt": "2026-10-23T22:30:00.000Z",
+                      "sizePct": 0.3
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.132363,
+                  "status": "partial_tp",
+                  "lastCheckAt": "2026-10-24T01:54:13.052Z",
+                  "lastPrice": 0.119757,
+                  "pnlPct": 100,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806852395,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T01:40:21.000Z",
+                    "ts": 1792719621000,
+                    "price": 0.12564,
+                    "pnlPct": 6.66
+                  },
+                  {
+                    "at": "2026-10-23T05:40:21.000Z",
+                    "ts": 1792734021000,
+                    "price": 0.12652,
+                    "pnlPct": -7.3
+                  },
+                  {
+                    "at": "2026-10-23T09:40:21.000Z",
+                    "ts": 1792748421000,
+                    "price": 0.12814,
+                    "pnlPct": -33
+                  },
+                  {
+                    "at": "2026-10-23T13:40:21.000Z",
+                    "ts": 1792762821000,
+                    "price": 0.12604,
+                    "pnlPct": 0.32
+                  },
+                  {
+                    "at": "2026-10-23T17:40:21.000Z",
+                    "ts": 1792777221000,
+                    "price": 0.12381,
+                    "pnlPct": 35.7
+                  },
+                  {
+                    "at": "2026-10-23T21:40:21.000Z",
+                    "ts": 1792791621000,
+                    "price": 0.12089,
+                    "pnlPct": 82.02
+                  },
+                  {
+                    "at": "2026-10-24T01:40:21.000Z",
+                    "ts": 1792806021000,
+                    "price": 0.1207,
+                    "pnlPct": 85.04
+                  }
+                ],
+                "taskCancelled": false
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "entered",
+                "outcome": "take_profit",
+                "isShort": true,
+                "leverage": 20,
+                "marketAtSignal": 0.12606,
+                "plannedEntry": 0.13162,
+                "entryPriceUsed": 0.12606,
+                "entryHitAt": "2026-10-22T01:40:21.000Z",
+                "takeProfits": [
+                  0.1348842,
+                  0.138666,
+                  0.151272
+                ],
+                "stopLoss": 0.119757,
+                "tpHits": [],
+                "slHitAt": "2026-10-23T00:55:00.000Z",
+                "settlementPrice": 0.119757,
+                "settlementAt": "2026-10-23T00:55:00.000Z",
+                "pnlPct": 100,
+                "pnlLabel": "+100.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-22T01:40:21.000Z",
+                  "entryPriceUsed": 0.12606,
+                  "tpHits": [],
+                  "slHitAt": "2026-10-23T00:55:00.000Z",
+                  "slPrice": 0.119757,
+                  "status": "entered",
+                  "lastCheckAt": "2026-10-24T01:54:13.053Z",
+                  "lastPrice": 0.119757,
+                  "pnlPct": 100,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806852395,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T01:40:21.000Z",
+                    "ts": 1792719621000,
+                    "price": 0.12564,
+                    "pnlPct": 6.66
+                  },
+                  {
+                    "at": "2026-10-23T05:40:21.000Z",
+                    "ts": 1792734021000,
+                    "price": 0.12652,
+                    "pnlPct": -7.3
+                  },
+                  {
+                    "at": "2026-10-23T09:40:21.000Z",
+                    "ts": 1792748421000,
+                    "price": 0.12814,
+                    "pnlPct": -33
+                  },
+                  {
+                    "at": "2026-10-23T13:40:21.000Z",
+                    "ts": 1792762821000,
+                    "price": 0.12604,
+                    "pnlPct": 0.32
+                  },
+                  {
+                    "at": "2026-10-23T17:40:21.000Z",
+                    "ts": 1792777221000,
+                    "price": 0.12381,
+                    "pnlPct": 35.7
+                  },
+                  {
+                    "at": "2026-10-23T21:40:21.000Z",
+                    "ts": 1792791621000,
+                    "price": 0.12089,
+                    "pnlPct": 82.02
+                  },
+                  {
+                    "at": "2026-10-24T01:40:21.000Z",
+                    "ts": 1792806021000,
+                    "price": 0.1207,
+                    "pnlPct": 85.04
+                  }
+                ],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "take_profit",
+            "pnlPct": 100,
+            "pnlLabel": "+100.00% (@20x)",
+            "settledAt": "2026-10-24T01:54:13.053Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "partial_tp",
+            "isShort": true,
+            "leverage": 20,
+            "marketAtSignal": 0.12606,
+            "plannedEntry": 0.13162,
+            "entryPriceUsed": 0.12606,
+            "entryHitAt": "2026-10-22T01:40:21.000Z",
+            "takeProfits": [
+              0.119757,
+              0.11597520000000001,
+              0.11093280000000001
+            ],
+            "stopLoss": 0.132363,
+            "tpHits": [
+              {
+                "index": 0,
+                "price": 0.119757,
+                "hitAt": "2026-10-23T22:30:00.000Z",
+                "sizePct": 0.3
+              }
+            ],
+            "slHitAt": null,
+            "settlementPrice": 0.119757,
+            "settlementAt": "2026-10-23T22:30:00.000Z",
+            "note": "止盈结算",
+            "progress": {
+              "entryHitAt": "2026-10-22T01:40:21.000Z",
+              "entryPriceUsed": 0.12606,
+              "tpHits": [
+                {
+                  "index": 0,
+                  "price": 0.119757,
+                  "hitAt": "2026-10-23T22:30:00.000Z",
+                  "sizePct": 0.3
+                }
+              ],
+              "slHitAt": null,
+              "slPrice": 0.132363,
+              "status": "partial_tp",
+              "lastCheckAt": "2026-10-24T01:54:13.052Z",
+              "lastPrice": 0.119757,
+              "pnlPct": 100,
+              "outcome": "take_profit",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806852395,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T01:40:21.000Z",
+                "ts": 1792719621000,
+                "price": 0.12564,
+                "pnlPct": 6.66
+              },
+              {
+                "at": "2026-10-23T05:40:21.000Z",
+                "ts": 1792734021000,
+                "price": 0.12652,
+                "pnlPct": -7.3
+              },
+              {
+                "at": "2026-10-23T09:40:21.000Z",
+                "ts": 1792748421000,
+                "price": 0.12814,
+                "pnlPct": -33
+              },
+              {
+                "at": "2026-10-23T13:40:21.000Z",
+                "ts": 1792762821000,
+                "price": 0.12604,
+                "pnlPct": 0.32
+              },
+              {
+                "at": "2026-10-23T17:40:21.000Z",
+                "ts": 1792777221000,
+                "price": 0.12381,
+                "pnlPct": 35.7
+              },
+              {
+                "at": "2026-10-23T21:40:21.000Z",
+                "ts": 1792791621000,
+                "price": 0.12089,
+                "pnlPct": 82.02
+              },
+              {
+                "at": "2026-10-24T01:40:21.000Z",
+                "ts": 1792806021000,
+                "price": 0.1207,
+                "pnlPct": 85.04
+              }
+            ],
+            "entry": 0.12606
+          },
+          "primaryProfile": "card",
+          "marketEntryOverride": true,
+          "marketAtSignal": 0.12606,
+          "entryPriceUsed": 0.12606,
+          "overrideAt": "2026-10-24T01:54:13.053Z"
+        },
+        "2026-10-22T07:23:01+00:00|IRYS|full": {
+          "phase": "full",
+          "symbol": "IRYS",
+          "direction": "多",
+          "signalAt": "2026-10-22T07:23:01+00:00",
+          "entry": "0.01993",
+          "preview": "#IRYS 市价多 0.01993 止損：2.43 止盈：0.193-0.2043-0.2219 止損：0.177 止盈：0.12624-0.1182 止損：0.137 #IRYS 市價多 0.01993",
+          "digest": null,
+          "entered": true,
+          "outcome": "take_profit",
+          "pnlPct": 240,
+          "pnlLabel": "+240.00% (@20x)",
+          "flat": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-22T07:23:01.000Z",
+            "symbol": "IRYS",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_tp",
+                "outcome": "take_profit",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.02105,
+                "plannedEntry": 0.01993,
+                "entryPriceUsed": 0.02105,
+                "entryHitAt": "2026-10-22T07:23:01.000Z",
+                "takeProfits": [
+                  0.0221025,
+                  0.022734,
+                  0.023576
+                ],
+                "stopLoss": 0.019997499999999998,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.0221025,
+                    "hitAt": "2026-10-23T01:20:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 1,
+                    "price": 0.022734,
+                    "hitAt": "2026-10-23T01:35:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 2,
+                    "price": 0.023576,
+                    "hitAt": "2026-10-23T01:55:00.000Z",
+                    "sizePct": 0.4
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.023576,
+                "settlementAt": "2026-10-23T01:55:00.000Z",
+                "pnlPct": 240,
+                "pnlLabel": "+240.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-22T07:23:01.000Z",
+                  "entryPriceUsed": 0.02105,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.0221025,
+                      "hitAt": "2026-10-23T01:20:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 1,
+                      "price": 0.022734,
+                      "hitAt": "2026-10-23T01:35:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 2,
+                      "price": 0.023576,
+                      "hitAt": "2026-10-23T01:55:00.000Z",
+                      "sizePct": 0.4
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.019997499999999998,
+                  "status": "closed_tp",
+                  "lastCheckAt": "2026-10-24T01:54:13.925Z",
+                  "lastPrice": 0.023576,
+                  "pnlPct": 240,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806853255,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T03:23:01.000Z",
+                    "ts": 1792725781000,
+                    "price": 0.02523,
+                    "pnlPct": 397.15
+                  },
+                  {
+                    "at": "2026-10-23T07:23:01.000Z",
+                    "ts": 1792740181000,
+                    "price": 0.02823,
+                    "pnlPct": 682.19
+                  },
+                  {
+                    "at": "2026-10-23T11:23:01.000Z",
+                    "ts": 1792754581000,
+                    "price": 0.0414,
+                    "pnlPct": 1933.49
+                  },
+                  {
+                    "at": "2026-10-23T15:23:01.000Z",
+                    "ts": 1792768981000,
+                    "price": 0.05215,
+                    "pnlPct": 2954.87
+                  },
+                  {
+                    "at": "2026-10-23T19:23:01.000Z",
+                    "ts": 1792783381000,
+                    "price": 0.26396,
+                    "pnlPct": 23079.33
+                  },
+                  {
+                    "at": "2026-10-23T23:23:01.000Z",
+                    "ts": 1792797781000,
+                    "price": 0.07774,
+                    "pnlPct": 5386.22
+                  }
+                ],
+                "taskCancelled": false
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_tp",
+                "outcome": "take_profit",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.02105,
+                "plannedEntry": 0.01993,
+                "entryPriceUsed": 0.02105,
+                "entryHitAt": "2026-10-22T07:23:01.000Z",
+                "takeProfits": [
+                  0.022523500000000002,
+                  0.023155000000000002,
+                  0.025259999999999998
+                ],
+                "stopLoss": 0.019997499999999998,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.022523500000000002,
+                    "hitAt": "2026-10-23T01:35:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 1,
+                    "price": 0.023155000000000002,
+                    "hitAt": "2026-10-23T01:40:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 2,
+                    "price": 0.025259999999999998,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.4
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.025259999999999998,
+                "settlementAt": "2026-10-23T02:05:00.000Z",
+                "pnlPct": 400,
+                "pnlLabel": "+400.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-22T07:23:01.000Z",
+                  "entryPriceUsed": 0.02105,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.022523500000000002,
+                      "hitAt": "2026-10-23T01:35:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 1,
+                      "price": 0.023155000000000002,
+                      "hitAt": "2026-10-23T01:40:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 2,
+                      "price": 0.025259999999999998,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.4
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.019997499999999998,
+                  "status": "closed_tp",
+                  "lastCheckAt": "2026-10-24T01:54:13.926Z",
+                  "lastPrice": 0.025259999999999998,
+                  "pnlPct": 400,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806853255,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T03:23:01.000Z",
+                    "ts": 1792725781000,
+                    "price": 0.02523,
+                    "pnlPct": 397.15
+                  },
+                  {
+                    "at": "2026-10-23T07:23:01.000Z",
+                    "ts": 1792740181000,
+                    "price": 0.02823,
+                    "pnlPct": 682.19
+                  },
+                  {
+                    "at": "2026-10-23T11:23:01.000Z",
+                    "ts": 1792754581000,
+                    "price": 0.0414,
+                    "pnlPct": 1933.49
+                  },
+                  {
+                    "at": "2026-10-23T15:23:01.000Z",
+                    "ts": 1792768981000,
+                    "price": 0.05215,
+                    "pnlPct": 2954.87
+                  },
+                  {
+                    "at": "2026-10-23T19:23:01.000Z",
+                    "ts": 1792783381000,
+                    "price": 0.26396,
+                    "pnlPct": 23079.33
+                  },
+                  {
+                    "at": "2026-10-23T23:23:01.000Z",
+                    "ts": 1792797781000,
+                    "price": 0.07774,
+                    "pnlPct": 5386.22
+                  }
+                ],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "take_profit",
+            "pnlPct": 240,
+            "pnlLabel": "+240.00% (@20x)",
+            "settledAt": "2026-10-24T01:54:13.926Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "closed_tp",
+            "isShort": false,
+            "leverage": 20,
+            "marketAtSignal": 0.02105,
+            "plannedEntry": 0.01993,
+            "entryPriceUsed": 0.02105,
+            "entryHitAt": "2026-10-22T07:23:01.000Z",
+            "takeProfits": [
+              0.0221025,
+              0.022734,
+              0.023576
+            ],
+            "stopLoss": 0.019997499999999998,
+            "tpHits": [
+              {
+                "index": 0,
+                "price": 0.0221025,
+                "hitAt": "2026-10-23T01:20:00.000Z",
+                "sizePct": 0.3
+              },
+              {
+                "index": 1,
+                "price": 0.022734,
+                "hitAt": "2026-10-23T01:35:00.000Z",
+                "sizePct": 0.3
+              },
+              {
+                "index": 2,
+                "price": 0.023576,
+                "hitAt": "2026-10-23T01:55:00.000Z",
+                "sizePct": 0.4
+              }
+            ],
+            "slHitAt": null,
+            "settlementPrice": 0.023576,
+            "settlementAt": "2026-10-23T01:55:00.000Z",
+            "note": "止盈结算",
+            "progress": {
+              "entryHitAt": "2026-10-22T07:23:01.000Z",
+              "entryPriceUsed": 0.02105,
+              "tpHits": [
+                {
+                  "index": 0,
+                  "price": 0.0221025,
+                  "hitAt": "2026-10-23T01:20:00.000Z",
+                  "sizePct": 0.3
+                },
+                {
+                  "index": 1,
+                  "price": 0.022734,
+                  "hitAt": "2026-10-23T01:35:00.000Z",
+                  "sizePct": 0.3
+                },
+                {
+                  "index": 2,
+                  "price": 0.023576,
+                  "hitAt": "2026-10-23T01:55:00.000Z",
+                  "sizePct": 0.4
+                }
+              ],
+              "slHitAt": null,
+              "slPrice": 0.019997499999999998,
+              "status": "closed_tp",
+              "lastCheckAt": "2026-10-24T01:54:13.925Z",
+              "lastPrice": 0.023576,
+              "pnlPct": 240,
+              "outcome": "take_profit",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806853255,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T03:23:01.000Z",
+                "ts": 1792725781000,
+                "price": 0.02523,
+                "pnlPct": 397.15
+              },
+              {
+                "at": "2026-10-23T07:23:01.000Z",
+                "ts": 1792740181000,
+                "price": 0.02823,
+                "pnlPct": 682.19
+              },
+              {
+                "at": "2026-10-23T11:23:01.000Z",
+                "ts": 1792754581000,
+                "price": 0.0414,
+                "pnlPct": 1933.49
+              },
+              {
+                "at": "2026-10-23T15:23:01.000Z",
+                "ts": 1792768981000,
+                "price": 0.05215,
+                "pnlPct": 2954.87
+              },
+              {
+                "at": "2026-10-23T19:23:01.000Z",
+                "ts": 1792783381000,
+                "price": 0.26396,
+                "pnlPct": 23079.33
+              },
+              {
+                "at": "2026-10-23T23:23:01.000Z",
+                "ts": 1792797781000,
+                "price": 0.07774,
+                "pnlPct": 5386.22
+              }
+            ],
+            "entry": 0.02105
+          },
+          "backtest": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-22T07:23:01.000Z",
+            "symbol": "IRYS",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_tp",
+                "outcome": "take_profit",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.02105,
+                "plannedEntry": 0.01993,
+                "entryPriceUsed": 0.02105,
+                "entryHitAt": "2026-10-22T07:23:01.000Z",
+                "takeProfits": [
+                  0.0221025,
+                  0.022734,
+                  0.023576
+                ],
+                "stopLoss": 0.019997499999999998,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.0221025,
+                    "hitAt": "2026-10-23T01:20:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 1,
+                    "price": 0.022734,
+                    "hitAt": "2026-10-23T01:35:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 2,
+                    "price": 0.023576,
+                    "hitAt": "2026-10-23T01:55:00.000Z",
+                    "sizePct": 0.4
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.023576,
+                "settlementAt": "2026-10-23T01:55:00.000Z",
+                "pnlPct": 240,
+                "pnlLabel": "+240.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-22T07:23:01.000Z",
+                  "entryPriceUsed": 0.02105,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.0221025,
+                      "hitAt": "2026-10-23T01:20:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 1,
+                      "price": 0.022734,
+                      "hitAt": "2026-10-23T01:35:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 2,
+                      "price": 0.023576,
+                      "hitAt": "2026-10-23T01:55:00.000Z",
+                      "sizePct": 0.4
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.019997499999999998,
+                  "status": "closed_tp",
+                  "lastCheckAt": "2026-10-24T01:54:13.925Z",
+                  "lastPrice": 0.023576,
+                  "pnlPct": 240,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806853255,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T03:23:01.000Z",
+                    "ts": 1792725781000,
+                    "price": 0.02523,
+                    "pnlPct": 397.15
+                  },
+                  {
+                    "at": "2026-10-23T07:23:01.000Z",
+                    "ts": 1792740181000,
+                    "price": 0.02823,
+                    "pnlPct": 682.19
+                  },
+                  {
+                    "at": "2026-10-23T11:23:01.000Z",
+                    "ts": 1792754581000,
+                    "price": 0.0414,
+                    "pnlPct": 1933.49
+                  },
+                  {
+                    "at": "2026-10-23T15:23:01.000Z",
+                    "ts": 1792768981000,
+                    "price": 0.05215,
+                    "pnlPct": 2954.87
+                  },
+                  {
+                    "at": "2026-10-23T19:23:01.000Z",
+                    "ts": 1792783381000,
+                    "price": 0.26396,
+                    "pnlPct": 23079.33
+                  },
+                  {
+                    "at": "2026-10-23T23:23:01.000Z",
+                    "ts": 1792797781000,
+                    "price": 0.07774,
+                    "pnlPct": 5386.22
+                  }
+                ],
+                "taskCancelled": false
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_tp",
+                "outcome": "take_profit",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.02105,
+                "plannedEntry": 0.01993,
+                "entryPriceUsed": 0.02105,
+                "entryHitAt": "2026-10-22T07:23:01.000Z",
+                "takeProfits": [
+                  0.022523500000000002,
+                  0.023155000000000002,
+                  0.025259999999999998
+                ],
+                "stopLoss": 0.019997499999999998,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.022523500000000002,
+                    "hitAt": "2026-10-23T01:35:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 1,
+                    "price": 0.023155000000000002,
+                    "hitAt": "2026-10-23T01:40:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 2,
+                    "price": 0.025259999999999998,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.4
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.025259999999999998,
+                "settlementAt": "2026-10-23T02:05:00.000Z",
+                "pnlPct": 400,
+                "pnlLabel": "+400.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-22T07:23:01.000Z",
+                  "entryPriceUsed": 0.02105,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.022523500000000002,
+                      "hitAt": "2026-10-23T01:35:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 1,
+                      "price": 0.023155000000000002,
+                      "hitAt": "2026-10-23T01:40:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 2,
+                      "price": 0.025259999999999998,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.4
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.019997499999999998,
+                  "status": "closed_tp",
+                  "lastCheckAt": "2026-10-24T01:54:13.926Z",
+                  "lastPrice": 0.025259999999999998,
+                  "pnlPct": 400,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806853255,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T03:23:01.000Z",
+                    "ts": 1792725781000,
+                    "price": 0.02523,
+                    "pnlPct": 397.15
+                  },
+                  {
+                    "at": "2026-10-23T07:23:01.000Z",
+                    "ts": 1792740181000,
+                    "price": 0.02823,
+                    "pnlPct": 682.19
+                  },
+                  {
+                    "at": "2026-10-23T11:23:01.000Z",
+                    "ts": 1792754581000,
+                    "price": 0.0414,
+                    "pnlPct": 1933.49
+                  },
+                  {
+                    "at": "2026-10-23T15:23:01.000Z",
+                    "ts": 1792768981000,
+                    "price": 0.05215,
+                    "pnlPct": 2954.87
+                  },
+                  {
+                    "at": "2026-10-23T19:23:01.000Z",
+                    "ts": 1792783381000,
+                    "price": 0.26396,
+                    "pnlPct": 23079.33
+                  },
+                  {
+                    "at": "2026-10-23T23:23:01.000Z",
+                    "ts": 1792797781000,
+                    "price": 0.07774,
+                    "pnlPct": 5386.22
+                  }
+                ],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "take_profit",
+            "pnlPct": 240,
+            "pnlLabel": "+240.00% (@20x)",
+            "settledAt": "2026-10-24T01:54:13.926Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "closed_tp",
+            "isShort": false,
+            "leverage": 20,
+            "marketAtSignal": 0.02105,
+            "plannedEntry": 0.01993,
+            "entryPriceUsed": 0.02105,
+            "entryHitAt": "2026-10-22T07:23:01.000Z",
+            "takeProfits": [
+              0.0221025,
+              0.022734,
+              0.023576
+            ],
+            "stopLoss": 0.019997499999999998,
+            "tpHits": [
+              {
+                "index": 0,
+                "price": 0.0221025,
+                "hitAt": "2026-10-23T01:20:00.000Z",
+                "sizePct": 0.3
+              },
+              {
+                "index": 1,
+                "price": 0.022734,
+                "hitAt": "2026-10-23T01:35:00.000Z",
+                "sizePct": 0.3
+              },
+              {
+                "index": 2,
+                "price": 0.023576,
+                "hitAt": "2026-10-23T01:55:00.000Z",
+                "sizePct": 0.4
+              }
+            ],
+            "slHitAt": null,
+            "settlementPrice": 0.023576,
+            "settlementAt": "2026-10-23T01:55:00.000Z",
+            "note": "止盈结算",
+            "progress": {
+              "entryHitAt": "2026-10-22T07:23:01.000Z",
+              "entryPriceUsed": 0.02105,
+              "tpHits": [
+                {
+                  "index": 0,
+                  "price": 0.0221025,
+                  "hitAt": "2026-10-23T01:20:00.000Z",
+                  "sizePct": 0.3
+                },
+                {
+                  "index": 1,
+                  "price": 0.022734,
+                  "hitAt": "2026-10-23T01:35:00.000Z",
+                  "sizePct": 0.3
+                },
+                {
+                  "index": 2,
+                  "price": 0.023576,
+                  "hitAt": "2026-10-23T01:55:00.000Z",
+                  "sizePct": 0.4
+                }
+              ],
+              "slHitAt": null,
+              "slPrice": 0.019997499999999998,
+              "status": "closed_tp",
+              "lastCheckAt": "2026-10-24T01:54:13.925Z",
+              "lastPrice": 0.023576,
+              "pnlPct": 240,
+              "outcome": "take_profit",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806853255,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T03:23:01.000Z",
+                "ts": 1792725781000,
+                "price": 0.02523,
+                "pnlPct": 397.15
+              },
+              {
+                "at": "2026-10-23T07:23:01.000Z",
+                "ts": 1792740181000,
+                "price": 0.02823,
+                "pnlPct": 682.19
+              },
+              {
+                "at": "2026-10-23T11:23:01.000Z",
+                "ts": 1792754581000,
+                "price": 0.0414,
+                "pnlPct": 1933.49
+              },
+              {
+                "at": "2026-10-23T15:23:01.000Z",
+                "ts": 1792768981000,
+                "price": 0.05215,
+                "pnlPct": 2954.87
+              },
+              {
+                "at": "2026-10-23T19:23:01.000Z",
+                "ts": 1792783381000,
+                "price": 0.26396,
+                "pnlPct": 23079.33
+              },
+              {
+                "at": "2026-10-23T23:23:01.000Z",
+                "ts": 1792797781000,
+                "price": 0.07774,
+                "pnlPct": 5386.22
+              }
+            ],
+            "entry": 0.02105
+          },
+          "primaryProfile": "card",
+          "marketEntryOverride": true,
+          "marketAtSignal": 0.02105,
+          "entryPriceUsed": 0.02105,
+          "overrideAt": "2026-10-24T01:54:13.926Z"
+        },
+        "2026-10-23T01:51:20+00:00|IRYS|initial": {
+          "phase": "initial",
+          "symbol": "IRYS",
+          "direction": "多",
+          "signalAt": "2026-10-23T01:51:20+00:00",
+          "entry": "0.01993",
+          "preview": "止盈：0.12624-0.1182 止損：0.137 #IRYS 市價多 0.01993 止盈：0.021-0.0223-0.024 止損：0.0189 #PROM TP1",
+          "digest": null,
+          "entered": true,
+          "outcome": "take_profit",
+          "pnlPct": 240,
+          "pnlLabel": "+240.00% (@20x)",
+          "flat": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-23T01:51:20.000Z",
+            "symbol": "IRYS",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_tp",
+                "outcome": "take_profit",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.02315,
+                "plannedEntry": 0.01993,
+                "entryPriceUsed": 0.02315,
+                "entryHitAt": "2026-10-23T01:51:20.000Z",
+                "takeProfits": [
+                  0.024307500000000003,
+                  0.025002000000000003,
+                  0.025928000000000003
+                ],
+                "stopLoss": 0.021992499999999998,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.024307500000000003,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 1,
+                    "price": 0.025002000000000003,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 2,
+                    "price": 0.025928000000000003,
+                    "hitAt": "2026-10-23T02:10:00.000Z",
+                    "sizePct": 0.4
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.025928000000000003,
+                "settlementAt": "2026-10-23T02:10:00.000Z",
+                "pnlPct": 240,
+                "pnlLabel": "+240.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-23T01:51:20.000Z",
+                  "entryPriceUsed": 0.02315,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.024307500000000003,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 1,
+                      "price": 0.025002000000000003,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 2,
+                      "price": 0.025928000000000003,
+                      "hitAt": "2026-10-23T02:10:00.000Z",
+                      "sizePct": 0.4
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.021992499999999998,
+                  "status": "closed_tp",
+                  "lastCheckAt": "2026-10-24T01:54:14.595Z",
+                  "lastPrice": 0.025928000000000003,
+                  "pnlPct": 240,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806854127,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T05:51:20.000Z",
+                    "ts": 1792734680000,
+                    "price": 0.02752,
+                    "pnlPct": 377.54
+                  },
+                  {
+                    "at": "2026-10-23T09:51:20.000Z",
+                    "ts": 1792749080000,
+                    "price": 0.03656,
+                    "pnlPct": 1158.53
+                  },
+                  {
+                    "at": "2026-10-23T13:51:20.000Z",
+                    "ts": 1792763480000,
+                    "price": 0.04221,
+                    "pnlPct": 1646.65
+                  },
+                  {
+                    "at": "2026-10-23T17:51:20.000Z",
+                    "ts": 1792777880000,
+                    "price": 0.13109,
+                    "pnlPct": 9325.27
+                  },
+                  {
+                    "at": "2026-10-23T21:51:20.000Z",
+                    "ts": 1792792280000,
+                    "price": 0.0777,
+                    "pnlPct": 4712.74
+                  },
+                  {
+                    "at": "2026-10-24T01:51:20.000Z",
+                    "ts": 1792806680000,
+                    "price": 0.10676,
+                    "pnlPct": 7223.33
+                  }
+                ],
+                "taskCancelled": false
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_tp",
+                "outcome": "take_profit",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.02315,
+                "plannedEntry": 0.01993,
+                "entryPriceUsed": 0.02315,
+                "entryHitAt": "2026-10-23T01:51:20.000Z",
+                "takeProfits": [
+                  0.0247705,
+                  0.025465,
+                  0.02778
+                ],
+                "stopLoss": 0.021992499999999998,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.0247705,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 1,
+                    "price": 0.025465,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 2,
+                    "price": 0.02778,
+                    "hitAt": "2026-10-23T02:40:00.000Z",
+                    "sizePct": 0.4
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.02778,
+                "settlementAt": "2026-10-23T02:40:00.000Z",
+                "pnlPct": 400,
+                "pnlLabel": "+400.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-23T01:51:20.000Z",
+                  "entryPriceUsed": 0.02315,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.0247705,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 1,
+                      "price": 0.025465,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 2,
+                      "price": 0.02778,
+                      "hitAt": "2026-10-23T02:40:00.000Z",
+                      "sizePct": 0.4
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.021992499999999998,
+                  "status": "closed_tp",
+                  "lastCheckAt": "2026-10-24T01:54:14.595Z",
+                  "lastPrice": 0.02778,
+                  "pnlPct": 400,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806854127,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T05:51:20.000Z",
+                    "ts": 1792734680000,
+                    "price": 0.02752,
+                    "pnlPct": 377.54
+                  },
+                  {
+                    "at": "2026-10-23T09:51:20.000Z",
+                    "ts": 1792749080000,
+                    "price": 0.03656,
+                    "pnlPct": 1158.53
+                  },
+                  {
+                    "at": "2026-10-23T13:51:20.000Z",
+                    "ts": 1792763480000,
+                    "price": 0.04221,
+                    "pnlPct": 1646.65
+                  },
+                  {
+                    "at": "2026-10-23T17:51:20.000Z",
+                    "ts": 1792777880000,
+                    "price": 0.13109,
+                    "pnlPct": 9325.27
+                  },
+                  {
+                    "at": "2026-10-23T21:51:20.000Z",
+                    "ts": 1792792280000,
+                    "price": 0.0777,
+                    "pnlPct": 4712.74
+                  },
+                  {
+                    "at": "2026-10-24T01:51:20.000Z",
+                    "ts": 1792806680000,
+                    "price": 0.10676,
+                    "pnlPct": 7223.33
+                  }
+                ],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "take_profit",
+            "pnlPct": 240,
+            "pnlLabel": "+240.00% (@20x)",
+            "settledAt": "2026-10-24T01:54:14.595Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "closed_tp",
+            "isShort": false,
+            "leverage": 20,
+            "marketAtSignal": 0.02315,
+            "plannedEntry": 0.01993,
+            "entryPriceUsed": 0.02315,
+            "entryHitAt": "2026-10-23T01:51:20.000Z",
+            "takeProfits": [
+              0.024307500000000003,
+              0.025002000000000003,
+              0.025928000000000003
+            ],
+            "stopLoss": 0.021992499999999998,
+            "tpHits": [
+              {
+                "index": 0,
+                "price": 0.024307500000000003,
+                "hitAt": "2026-10-23T02:05:00.000Z",
+                "sizePct": 0.3
+              },
+              {
+                "index": 1,
+                "price": 0.025002000000000003,
+                "hitAt": "2026-10-23T02:05:00.000Z",
+                "sizePct": 0.3
+              },
+              {
+                "index": 2,
+                "price": 0.025928000000000003,
+                "hitAt": "2026-10-23T02:10:00.000Z",
+                "sizePct": 0.4
+              }
+            ],
+            "slHitAt": null,
+            "settlementPrice": 0.025928000000000003,
+            "settlementAt": "2026-10-23T02:10:00.000Z",
+            "note": "止盈结算",
+            "progress": {
+              "entryHitAt": "2026-10-23T01:51:20.000Z",
+              "entryPriceUsed": 0.02315,
+              "tpHits": [
+                {
+                  "index": 0,
+                  "price": 0.024307500000000003,
+                  "hitAt": "2026-10-23T02:05:00.000Z",
+                  "sizePct": 0.3
+                },
+                {
+                  "index": 1,
+                  "price": 0.025002000000000003,
+                  "hitAt": "2026-10-23T02:05:00.000Z",
+                  "sizePct": 0.3
+                },
+                {
+                  "index": 2,
+                  "price": 0.025928000000000003,
+                  "hitAt": "2026-10-23T02:10:00.000Z",
+                  "sizePct": 0.4
+                }
+              ],
+              "slHitAt": null,
+              "slPrice": 0.021992499999999998,
+              "status": "closed_tp",
+              "lastCheckAt": "2026-10-24T01:54:14.595Z",
+              "lastPrice": 0.025928000000000003,
+              "pnlPct": 240,
+              "outcome": "take_profit",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806854127,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T05:51:20.000Z",
+                "ts": 1792734680000,
+                "price": 0.02752,
+                "pnlPct": 377.54
+              },
+              {
+                "at": "2026-10-23T09:51:20.000Z",
+                "ts": 1792749080000,
+                "price": 0.03656,
+                "pnlPct": 1158.53
+              },
+              {
+                "at": "2026-10-23T13:51:20.000Z",
+                "ts": 1792763480000,
+                "price": 0.04221,
+                "pnlPct": 1646.65
+              },
+              {
+                "at": "2026-10-23T17:51:20.000Z",
+                "ts": 1792777880000,
+                "price": 0.13109,
+                "pnlPct": 9325.27
+              },
+              {
+                "at": "2026-10-23T21:51:20.000Z",
+                "ts": 1792792280000,
+                "price": 0.0777,
+                "pnlPct": 4712.74
+              },
+              {
+                "at": "2026-10-24T01:51:20.000Z",
+                "ts": 1792806680000,
+                "price": 0.10676,
+                "pnlPct": 7223.33
+              }
+            ],
+            "entry": 0.02315
+          },
+          "backtest": {
+            "mode": "batch_backtest",
+            "signalAt": "2026-10-23T01:51:20.000Z",
+            "symbol": "IRYS",
+            "profiles": {
+              "card": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_tp",
+                "outcome": "take_profit",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.02315,
+                "plannedEntry": 0.01993,
+                "entryPriceUsed": 0.02315,
+                "entryHitAt": "2026-10-23T01:51:20.000Z",
+                "takeProfits": [
+                  0.024307500000000003,
+                  0.025002000000000003,
+                  0.025928000000000003
+                ],
+                "stopLoss": 0.021992499999999998,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.024307500000000003,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 1,
+                    "price": 0.025002000000000003,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 2,
+                    "price": 0.025928000000000003,
+                    "hitAt": "2026-10-23T02:10:00.000Z",
+                    "sizePct": 0.4
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.025928000000000003,
+                "settlementAt": "2026-10-23T02:10:00.000Z",
+                "pnlPct": 240,
+                "pnlLabel": "+240.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-23T01:51:20.000Z",
+                  "entryPriceUsed": 0.02315,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.024307500000000003,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 1,
+                      "price": 0.025002000000000003,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 2,
+                      "price": 0.025928000000000003,
+                      "hitAt": "2026-10-23T02:10:00.000Z",
+                      "sizePct": 0.4
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.021992499999999998,
+                  "status": "closed_tp",
+                  "lastCheckAt": "2026-10-24T01:54:14.595Z",
+                  "lastPrice": 0.025928000000000003,
+                  "pnlPct": 240,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "card",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806854127,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T05:51:20.000Z",
+                    "ts": 1792734680000,
+                    "price": 0.02752,
+                    "pnlPct": 377.54
+                  },
+                  {
+                    "at": "2026-10-23T09:51:20.000Z",
+                    "ts": 1792749080000,
+                    "price": 0.03656,
+                    "pnlPct": 1158.53
+                  },
+                  {
+                    "at": "2026-10-23T13:51:20.000Z",
+                    "ts": 1792763480000,
+                    "price": 0.04221,
+                    "pnlPct": 1646.65
+                  },
+                  {
+                    "at": "2026-10-23T17:51:20.000Z",
+                    "ts": 1792777880000,
+                    "price": 0.13109,
+                    "pnlPct": 9325.27
+                  },
+                  {
+                    "at": "2026-10-23T21:51:20.000Z",
+                    "ts": 1792792280000,
+                    "price": 0.0777,
+                    "pnlPct": 4712.74
+                  },
+                  {
+                    "at": "2026-10-24T01:51:20.000Z",
+                    "ts": 1792806680000,
+                    "price": 0.10676,
+                    "pnlPct": 7223.33
+                  }
+                ],
+                "taskCancelled": false
+              },
+              "fixed_5_7_10_20": {
+                "mode": "liquidation",
+                "entered": true,
+                "status": "closed_tp",
+                "outcome": "take_profit",
+                "isShort": false,
+                "leverage": 20,
+                "marketAtSignal": 0.02315,
+                "plannedEntry": 0.01993,
+                "entryPriceUsed": 0.02315,
+                "entryHitAt": "2026-10-23T01:51:20.000Z",
+                "takeProfits": [
+                  0.0247705,
+                  0.025465,
+                  0.02778
+                ],
+                "stopLoss": 0.021992499999999998,
+                "tpHits": [
+                  {
+                    "index": 0,
+                    "price": 0.0247705,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 1,
+                    "price": 0.025465,
+                    "hitAt": "2026-10-23T02:05:00.000Z",
+                    "sizePct": 0.3
+                  },
+                  {
+                    "index": 2,
+                    "price": 0.02778,
+                    "hitAt": "2026-10-23T02:40:00.000Z",
+                    "sizePct": 0.4
+                  }
+                ],
+                "slHitAt": null,
+                "settlementPrice": 0.02778,
+                "settlementAt": "2026-10-23T02:40:00.000Z",
+                "pnlPct": 400,
+                "pnlLabel": "+400.00% (@20x)",
+                "note": "止盈结算",
+                "progress": {
+                  "entryHitAt": "2026-10-23T01:51:20.000Z",
+                  "entryPriceUsed": 0.02315,
+                  "tpHits": [
+                    {
+                      "index": 0,
+                      "price": 0.0247705,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 1,
+                      "price": 0.025465,
+                      "hitAt": "2026-10-23T02:05:00.000Z",
+                      "sizePct": 0.3
+                    },
+                    {
+                      "index": 2,
+                      "price": 0.02778,
+                      "hitAt": "2026-10-23T02:40:00.000Z",
+                      "sizePct": 0.4
+                    }
+                  ],
+                  "slHitAt": null,
+                  "slPrice": 0.021992499999999998,
+                  "status": "closed_tp",
+                  "lastCheckAt": "2026-10-24T01:54:14.595Z",
+                  "lastPrice": 0.02778,
+                  "pnlPct": 400,
+                  "outcome": "take_profit",
+                  "sizePct": 0.3333333333333333,
+                  "leverage": 20,
+                  "mode": "liquidation"
+                },
+                "profile": "fixed_5_7_10_20",
+                "entryMode": "market",
+                "sliceHours": 4,
+                "maxDays": 3,
+                "backtestEndMs": 1792806854127,
+                "periodicSettlements": [
+                  {
+                    "at": "2026-10-23T05:51:20.000Z",
+                    "ts": 1792734680000,
+                    "price": 0.02752,
+                    "pnlPct": 377.54
+                  },
+                  {
+                    "at": "2026-10-23T09:51:20.000Z",
+                    "ts": 1792749080000,
+                    "price": 0.03656,
+                    "pnlPct": 1158.53
+                  },
+                  {
+                    "at": "2026-10-23T13:51:20.000Z",
+                    "ts": 1792763480000,
+                    "price": 0.04221,
+                    "pnlPct": 1646.65
+                  },
+                  {
+                    "at": "2026-10-23T17:51:20.000Z",
+                    "ts": 1792777880000,
+                    "price": 0.13109,
+                    "pnlPct": 9325.27
+                  },
+                  {
+                    "at": "2026-10-23T21:51:20.000Z",
+                    "ts": 1792792280000,
+                    "price": 0.0777,
+                    "pnlPct": 4712.74
+                  },
+                  {
+                    "at": "2026-10-24T01:51:20.000Z",
+                    "ts": 1792806680000,
+                    "price": 0.10676,
+                    "pnlPct": 7223.33
+                  }
+                ],
+                "taskCancelled": false
+              }
+            },
+            "primaryProfile": "card",
+            "outcome": "take_profit",
+            "pnlPct": 240,
+            "pnlLabel": "+240.00% (@20x)",
+            "settledAt": "2026-10-24T01:54:14.595Z",
+            "sliceHours": 4,
+            "maxDays": 3,
+            "taskCancelled": false,
+            "entered": true,
+            "status": "closed_tp",
+            "isShort": false,
+            "leverage": 20,
+            "marketAtSignal": 0.02315,
+            "plannedEntry": 0.01993,
+            "entryPriceUsed": 0.02315,
+            "entryHitAt": "2026-10-23T01:51:20.000Z",
+            "takeProfits": [
+              0.024307500000000003,
+              0.025002000000000003,
+              0.025928000000000003
+            ],
+            "stopLoss": 0.021992499999999998,
+            "tpHits": [
+              {
+                "index": 0,
+                "price": 0.024307500000000003,
+                "hitAt": "2026-10-23T02:05:00.000Z",
+                "sizePct": 0.3
+              },
+              {
+                "index": 1,
+                "price": 0.025002000000000003,
+                "hitAt": "2026-10-23T02:05:00.000Z",
+                "sizePct": 0.3
+              },
+              {
+                "index": 2,
+                "price": 0.025928000000000003,
+                "hitAt": "2026-10-23T02:10:00.000Z",
+                "sizePct": 0.4
+              }
+            ],
+            "slHitAt": null,
+            "settlementPrice": 0.025928000000000003,
+            "settlementAt": "2026-10-23T02:10:00.000Z",
+            "note": "止盈结算",
+            "progress": {
+              "entryHitAt": "2026-10-23T01:51:20.000Z",
+              "entryPriceUsed": 0.02315,
+              "tpHits": [
+                {
+                  "index": 0,
+                  "price": 0.024307500000000003,
+                  "hitAt": "2026-10-23T02:05:00.000Z",
+                  "sizePct": 0.3
+                },
+                {
+                  "index": 1,
+                  "price": 0.025002000000000003,
+                  "hitAt": "2026-10-23T02:05:00.000Z",
+                  "sizePct": 0.3
+                },
+                {
+                  "index": 2,
+                  "price": 0.025928000000000003,
+                  "hitAt": "2026-10-23T02:10:00.000Z",
+                  "sizePct": 0.4
+                }
+              ],
+              "slHitAt": null,
+              "slPrice": 0.021992499999999998,
+              "status": "closed_tp",
+              "lastCheckAt": "2026-10-24T01:54:14.595Z",
+              "lastPrice": 0.025928000000000003,
+              "pnlPct": 240,
+              "outcome": "take_profit",
+              "sizePct": 0.3333333333333333,
+              "leverage": 20,
+              "mode": "liquidation"
+            },
+            "profile": "card",
+            "entryMode": "market",
+            "backtestEndMs": 1792806854127,
+            "periodicSettlements": [
+              {
+                "at": "2026-10-23T05:51:20.000Z",
+                "ts": 1792734680000,
+                "price": 0.02752,
+                "pnlPct": 377.54
+              },
+              {
+                "at": "2026-10-23T09:51:20.000Z",
+                "ts": 1792749080000,
+                "price": 0.03656,
+                "pnlPct": 1158.53
+              },
+              {
+                "at": "2026-10-23T13:51:20.000Z",
+                "ts": 1792763480000,
+                "price": 0.04221,
+                "pnlPct": 1646.65
+              },
+              {
+                "at": "2026-10-23T17:51:20.000Z",
+                "ts": 1792777880000,
+                "price": 0.13109,
+                "pnlPct": 9325.27
+              },
+              {
+                "at": "2026-10-23T21:51:20.000Z",
+                "ts": 1792792280000,
+                "price": 0.0777,
+                "pnlPct": 4712.74
+              },
+              {
+                "at": "2026-10-24T01:51:20.000Z",
+                "ts": 1792806680000,
+                "price": 0.10676,
+                "pnlPct": 7223.33
+              }
+            ],
+            "entry": 0.02315
+          },
+          "primaryProfile": "card",
+          "marketEntryOverride": true,
+          "marketAtSignal": 0.02315,
+          "entryPriceUsed": 0.02315,
+          "overrideAt": "2026-10-24T01:54:14.595Z"
+        },
+        "2026-10-23T01:57:37+00:00|CPO|initial": {
+          "phase": "initial",
+          "symbol": "CPO",
+          "direction": "多",
+          "signalAt": "2026-10-23T01:57:37+00:00",
+          "entry": "市价",
+          "preview": "CPO｜金秋王牌局 - 每日提供5-10单精准策略，助您轻鬆把握市场機會！ - 每天七位直播老師喊单，勝率高達85%以上，帶您穩操勝券！ 1. 一对一專属指導，隨时解答您的疑問，投資路上不再迷茫！ 2. 深度分析主流币、潛力币、山寨币行情，精准捕捉暴涨機會！ 3. 定期推薦“潛力币”、“翻倍币”，尤其擅长捕捉短线飆升…",
+          "digest": null,
+          "entered": false,
+          "outcome": "error",
+          "pnlPct": null,
+          "pnlLabel": null,
+          "error": "K线全部来源失败 CPOUSDT（已试 okx → bitget → gate → bybit → binance）：已配置代理 http://127.0.0.1:7890；若各所仍 403/451 请换出口节点或 CARD_KLINE_SOURCES=okx,bitget,gate,bybit",
+          "marketEntryOverride": true,
+          "overrideAt": "2026-10-24T01:54:22.027Z"
+        }
+      }
+    }
+  }
+}

@@ -97,7 +97,7 @@ def signal_to_card_payload(
     body = strip_promotional_lines(refined_raw or formatted)
     note_parts = []
     if defaulted:
-        note_parts.append("默认TP/SL(5/8/12%+5%止损·30/30/40)")
+        note_parts.append("默认TP/SL(10%止盈+5%止损)")
     if sig.is_prom:
         note_parts.append("#prom")
     if sig.note:
@@ -162,6 +162,33 @@ def signal_to_card_payload(
     if not payload["channelAvatar"]:
         payload.pop("channelAvatar", None)
     return payload
+
+
+def operate_capture_source(platform: str) -> str:
+    """
+    python-ai-operate 信号抓取 → discord-collector `POST /api/v1/cards` 的 source 字段。
+    与 card-archive-service 的 `python-ai-operate:平台` 约定一致（/cards 来源筛选用平台段 x / binance）。
+    """
+    raw = (platform or "").strip().lower()
+    if raw in ("twitter", "x", "tweet"):
+        return "python-ai-operate:x"
+    if raw in ("binance", "bn", "square", "币安"):
+        return "python-ai-operate:binance"
+    slug = re.sub(r"[^a-z0-9._-]", "", raw)[:12] or "api"
+    return f"python-ai-operate:{slug}"
+
+
+def merge_operate_capture_payload(payload: dict[str, Any], *, platform: str) -> dict[str, Any]:
+    """补全 source，供 python-ai-operate / 币安广场抓取等调用方使用。"""
+    out = dict(payload)
+    if not str(out.get("source") or "").strip():
+        out["source"] = operate_capture_source(platform)
+    return out
+
+
+def post_operate_capture_card(payload: dict[str, Any], *, platform: str) -> dict[str, Any]:
+    """python-ai-operate 抓取信号建卡（写入与 /cards 相同的归档表）。"""
+    return post_card(merge_operate_capture_payload(payload, platform=platform))
 
 
 def post_card(payload: dict[str, Any]) -> dict[str, Any]:
