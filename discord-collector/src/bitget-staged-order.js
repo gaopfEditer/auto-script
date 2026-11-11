@@ -15,6 +15,8 @@ import {
   enrichBitgetContractMeta,
   isValidStopLoss,
   isValidTakeProfit,
+  bitgetPriceRoundMode,
+  loadBitgetContractPriceMeta,
   placeBitgetOpenWithPresets,
   priceStr,
   resolveOpenTpslPrices,
@@ -106,7 +108,10 @@ async function withPriceMeta(client, meta, symbol, productType) {
   const base = enrichBitgetContractMeta(meta);
   if (base.priceTickKnown || typeof client?.getMixContract !== "function") return base;
   try {
-    return enrichBitgetContractMeta(await client.getMixContract({ symbol, productType }), base);
+    return enrichBitgetContractMeta(
+      await loadBitgetContractPriceMeta(client, { symbol, productType }),
+      base
+    );
   } catch {
     return base;
   }
@@ -217,6 +222,7 @@ export async function executeStagedMarketOpen(client, input) {
   }
 
   const contractMeta = input.dryRun ? parseBitgetContractMeta(null) : await fetchContractMeta(client, symbol, productType);
+  const priceMeta = input.dryRun ? enrichBitgetContractMeta(null) : await loadBitgetContractPriceMeta(client, { symbol, productType });
 
   const sizeResult = resolveBitgetOrderSize(Number(channelTrade.orderSizeUsdt ?? 50), refPrice, contractMeta, {
     dryRun: input.dryRun,
@@ -233,6 +239,7 @@ export async function executeStagedMarketOpen(client, input) {
     fillPrice,
     direction,
     initialSlPct,
+    contractMeta: priceMeta,
   });
   const initialSl = tpslResolved.stopLossPrice;
   const initialTp = tpslResolved.takeProfitPrice;
@@ -494,9 +501,11 @@ export async function executeStagedTpslUpdate(client, input) {
   const priceMeta = input.dryRun
     ? enrichBitgetContractMeta(contractMeta)
     : await withPriceMeta(client, contractMeta, symbol, productType);
-  stopLossRaw = sanitizeBitgetTriggerPrice(stopLossRaw, priceMeta) || stopLossRaw;
+  const slMode = bitgetPriceRoundMode(holdSide, "sl");
+  const tpMode = bitgetPriceRoundMode(holdSide, "tp");
+  stopLossRaw = sanitizeBitgetTriggerPrice(stopLossRaw, priceMeta, 0, { mode: slMode }) || stopLossRaw;
   takeProfits = takeProfits
-    .map((p) => sanitizeBitgetTriggerPrice(p, priceMeta) || p)
+    .map((p) => sanitizeBitgetTriggerPrice(p, priceMeta, 0, { mode: tpMode }) || p)
     .filter(Boolean);
   if (!stopLossRaw || !takeProfits.length) return { ok: false, reason: "missing_tpsl" };
   const size = formatOrderSize(rawSize, contractMeta, { mode: "floor" }) || rawSize;

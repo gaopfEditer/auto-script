@@ -10,6 +10,9 @@ import {
   isValidTakeProfit,
   isValidStopLoss,
   roundBitgetTriggerPrice,
+  sanitizeBitgetOpenPresetPrices,
+  sanitizeBitgetTriggerPrice,
+  enrichBitgetContractMeta,
   bitgetRequireTpslEnabled,
   bitgetNakedPositionAction,
   bitgetTpslVerifyWindowMs,
@@ -402,6 +405,57 @@ describe("roundBitgetTriggerPrice", () => {
   });
 });
 
+describe("live regression float tails (VVV/HOT/PYTH)", () => {
+  it("VVVUSDT 空单 5% 止损浮点尾数按 pricePlace=3 tick=0.001 对齐", () => {
+    const entry = 19.126;
+    const rawSl = entry * 1.05;
+    const meta = enrichBitgetContractMeta({ pricePlace: "3", priceEndStep: "1" });
+    const rounded = sanitizeBitgetOpenPresetPrices({
+      stopLossRaw: String(rawSl),
+      takeProfitRaw: "18",
+      meta,
+      holdSide: "short",
+    });
+    assert.equal(rounded.stopLossStr, "20.083");
+    assert.match(rounded.stopLossStr, /^\d+(\.\d+)?$/);
+    assert.equal(rounded.stopLossStr.includes("000000000"), false);
+  });
+
+  it("HOTUSDT 触发价须为 0.0000001 的倍数", () => {
+    const meta = enrichBitgetContractMeta({ pricePlace: "7", priceEndStep: "1" });
+    const rounded = sanitizeBitgetTriggerPrice(0.00040574499999999994, meta, 0, { mode: "ceil" });
+    assert.equal(rounded, "0.0004058");
+    const scaled = Number(rounded) / 0.0000001;
+    assert.equal(Number.isInteger(scaled), true);
+  });
+
+  it("PYTHUSDT 5% 空单止损 0.071862… 收到 0.00001 tick", () => {
+    const raw = 0.06844 * 1.05;
+    const meta = enrichBitgetContractMeta({ pricePlace: "5", priceEndStep: "1" });
+    const sl = sanitizeBitgetOpenPresetPrices({
+      stopLossRaw: String(raw),
+      takeProfitRaw: "0.06",
+      meta,
+      holdSide: "short",
+    }).stopLossStr;
+    assert.equal(sl, "0.07187");
+    assert.equal((Number(sl) / 0.00001) % 1, 0);
+  });
+
+  it("resolveOpenTpslPrices 结合合约 meta 产出已 tick 对齐字符串", () => {
+    const meta = enrichBitgetContractMeta({ pricePlace: "5", priceEndStep: "1" });
+    const r = resolveOpenTpslPrices({
+      parsed: { direction: "做空" },
+      fillPrice: 0.06844,
+      direction: "做空",
+      initialSlPct: 5,
+      contractMeta: meta,
+    });
+    assert.equal(r.stopLossStr, "0.07187");
+    assert.equal(r.takeProfitStr, "0.06501");
+  });
+});
+
 describe("placeBitgetOpenWithPresets tick", () => {
   it("开仓 preset 在送出前按合约 tick 取整", async () => {
     /** @type {string[]} */
@@ -428,7 +482,7 @@ describe("placeBitgetOpenWithPresets tick", () => {
     assert.equal(result.ok, true);
     assert.equal(bodies.length, 1);
     const body = JSON.parse(bodies[0]);
-    assert.equal(body.presetStopLossPrice, "0.4002");
-    assert.equal(body.presetStopSurplusPrice, "0.4512");
+    assert.equal(body.presetStopLossPrice, "0.4001");
+    assert.equal(body.presetStopSurplusPrice, "0.4513");
   });
 });
