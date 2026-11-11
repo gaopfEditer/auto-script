@@ -363,6 +363,7 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
         mtf_resonance_only = False
     conf_tier = str(q.get("confluenceTier") or q.get("confluenceMinTier") or "all").strip() or "all"
     mcap_tier = str(q.get("mcapTier") or q.get("mcapTierFilter") or "all").strip() or "all"
+    decision_group = str(q.get("decisionGroup") or q.get("agentDecisionGroup") or "all").strip() or "all"
     # 列表默认精确 A/B/C；回测仍走 min 档。confluenceExact=0 可退回「及以上」
     exact_raw = str(q.get("confluenceExact") or q.get("exactTier") or "1").strip().lower()
     confluence_exact = exact_raw not in ("0", "false", "no", "off", "min")
@@ -380,8 +381,55 @@ async def handle_pattern_alert_stats_get(request: web.Request) -> web.Response:
         confluence_min_tier=conf_tier,
         mcap_tier_filter=mcap_tier,
         confluence_exact=confluence_exact,
+        decision_group=decision_group,
     )
     return _json_response({"ok": True, **payload})
+
+
+async def handle_agent_decision_screen(request: web.Request) -> web.Response:
+    """Read-only PA screener (no orders). Body: { symbol, interval, filter, klines? }."""
+    from oi_mornitor.agent_decision import resolve_pa_candles
+    from oi_mornitor.pa.analysis import compute_pa_snapshot
+    from oi_mornitor.pa.candles import klines_rows_to_candles
+    from oi_mornitor.pa.screener import build_screener_context, evaluate_filter_ast, parse_filter_json
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid_json"}, status=400)
+    symbol = str(body.get("symbol") or "").strip()
+    interval = str(body.get("interval") or "15m").strip()
+    raw_filter = body.get("filter")
+    if not symbol or raw_filter is None:
+        return _json_response({"ok": False, "error": "symbol_and_filter_required"}, status=400)
+    try:
+        f_ast = parse_filter_json(raw_filter)
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, status=400)
+    kl = body.get("klines")
+    if kl:
+        candles = klines_rows_to_candles(kl)
+    else:
+        stub = {"symbol": symbol, "interval": interval, "pa_klines": kl}
+        candles = resolve_pa_candles(stub, klines=kl)
+    if not candles:
+        return _json_response({"ok": False, "error": "klines_required"}, status=400)
+    pa = compute_pa_snapshot(candles, futures=body.get("futures"))
+    ctx = build_screener_context(pa, candles, extras=body.get("extras") or {})
+    matched = evaluate_filter_ast(f_ast, ctx)
+    return _json_response(
+        {
+            "ok": True,
+            "symbol": symbol,
+            "interval": interval,
+            "matched": matched,
+            "readOnly": True,
+            "paSummary": {
+                "trend": (pa.get("structure") or {}).get("trend"),
+                "vwapPosition": (pa.get("vwap") or {}).get("position"),
+            },
+        }
+    )
 
 
 async def handle_pattern_alert_stats_record_card(request: web.Request) -> web.Response:
@@ -1779,6 +1827,8 @@ def create_app() -> web.Application:
     app.router.add_put("/api/focus-symbols", handle_focus_symbols_put)
 
     app.router.add_post("/api/focus-symbols", handle_focus_symbols_put)
+
+    app.router.add_post("/api/agent-decision/screen", handle_agent_decision_screen)
 
     app.router.add_get("/api/pattern-alert-stats", handle_pattern_alert_stats_get)
     app.router.add_post("/api/pattern-alert-stats/record-card", handle_pattern_alert_stats_record_card)

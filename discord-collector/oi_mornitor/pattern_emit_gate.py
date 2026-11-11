@@ -46,6 +46,12 @@ def attach_confluence_on_alert(
 
     conf = confluence_for_alert(alert, peers)
     alert["confluence"] = conf
+    try:
+        from oi_mornitor.agent_decision_bridge import attach_agent_decision_on_alert
+
+        attach_agent_decision_on_alert(alert)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("agent decision attach skipped: %s", exc)
     return conf
 
 

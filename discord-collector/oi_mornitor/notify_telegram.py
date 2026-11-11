@@ -396,6 +396,7 @@ def _confluence_gate_or_observation(alert: dict[str, Any]) -> bool:
 
 
 def _message_with_confluence(alert: dict[str, Any], body: str) -> str:
+    from oi_mornitor.agent_decision_bridge import append_agent_decision_to_message
     from oi_mornitor.pattern_emit_gate import attach_confluence_on_alert
     from oi_mornitor.signal_confluence import append_confluence_to_message
 
@@ -403,7 +404,16 @@ def _message_with_confluence(alert: dict[str, Any], body: str) -> str:
     if not isinstance(conf, dict):
         conf = attach_confluence_on_alert(alert)
     cf = alert.get("capitalFlow") if isinstance(alert.get("capitalFlow"), dict) else None
-    return append_confluence_to_message(body, conf, capital_flow=cf)
+    text = append_confluence_to_message(body, conf, capital_flow=cf)
+    dec = alert.get("agentDecision")
+    if not isinstance(dec, dict):
+        try:
+            from oi_mornitor.agent_decision_bridge import attach_agent_decision_on_alert
+
+            dec = attach_agent_decision_on_alert(alert)
+        except Exception:  # noqa: BLE001
+            dec = None
+    return append_agent_decision_to_message(text, dec if isinstance(dec, dict) else None)
 
 
 def format_ma144_candle_message(alert: dict[str, Any]) -> str:

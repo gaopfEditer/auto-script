@@ -58,6 +58,8 @@ export type AlertStatsRecord = {
   mtfResonance?: AlertMtfResonance;
   /** 综合共振分（服务端 signal_confluence） */
   confluence?: AlertConfluence;
+  /** 只读 Agent 决策 A/B/C（PA 层，非下单） */
+  agentDecision?: AgentDecision;
   invalid_level?: number;
   observation_only?: boolean;
   settleProfileId?: string;
@@ -76,9 +78,30 @@ export type AlertConfluence = {
   reasons?: string[];
 };
 
+/** 并行决策组 A/B/C（与综合共振分 tier 无关） */
+export type AgentDecision = {
+  version?: string;
+  readOnly?: boolean;
+  primaryGroup?: "A" | "B" | "C" | null;
+  groups?: {
+    A?: { active?: boolean; tags?: string[] };
+    B?: { active?: boolean; tags?: string[]; paSummary?: Record<string, unknown> };
+    C?: { active?: boolean; resonance?: boolean };
+  };
+  shadowVeto?: { active?: boolean; shadow?: boolean; reasons?: string[] };
+  expectancyKey?: string;
+  evidenceSufficient?: boolean;
+};
+
 export function formatConfluenceBadge(c?: AlertConfluence | null): string {
   if (!c || !Number.isFinite(c.score)) return "—";
   return `${c.tier}·${c.score}`;
+}
+
+export function formatAgentDecisionBadge(d?: AgentDecision | null): string {
+  if (!d?.primaryGroup) return "";
+  const v = d.shadowVeto?.active ? "·影否决" : "";
+  return `${d.primaryGroup}${v}`;
 }
 
 export function confluenceTitle(c?: AlertConfluence | null): string {

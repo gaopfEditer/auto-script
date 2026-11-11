@@ -1795,6 +1795,12 @@ class PatternMonitorEngine:
                     attach_range_extreme_volume(alert, df=df)
                 except Exception:  # noqa: BLE001
                     pass
+                try:
+                    from oi_mornitor.agent_decision_bridge import stash_pa_klines_on_alert
+
+                    stash_pa_klines_on_alert(alert, df)
+                except Exception:  # noqa: BLE001
+                    pass
                 from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
 
                 if not passes_push_mtf_gate(alert):
@@ -1923,6 +1929,12 @@ class PatternMonitorEngine:
                     from oi_mornitor.range_extreme_volume import attach_range_extreme_volume
 
                     attach_range_extreme_volume(alert, df=work)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    from oi_mornitor.agent_decision_bridge import stash_pa_klines_on_alert
+
+                    stash_pa_klines_on_alert(alert, work)
                 except Exception:  # noqa: BLE001
                     pass
                 from oi_mornitor.pattern_push_gate import passes_push_mtf_gate
