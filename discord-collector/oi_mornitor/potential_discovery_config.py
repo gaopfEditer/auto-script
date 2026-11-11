@@ -17,5 +17,5 @@ POTENTIAL_DISCOVERY_MAX_SCAN = int(os.environ.get("OI_POTENTIAL_DISCOVERY_MAX_SC
 POTENTIAL_DISCOVERY_KLINE_LIMIT = int(os.environ.get("OI_POTENTIAL_DISCOVERY_KLINE_LIMIT") or "720")
 POTENTIAL_DISCOVERY_INTERVAL = str(os.environ.get("OI_POTENTIAL_DISCOVERY_TF") or "1h").strip() or "1h"
 POTENTIAL_DISCOVERY_MIN_SCORE = int(os.environ.get("OI_POTENTIAL_DISCOVERY_MIN_SCORE") or "35")
-# 未达 hit 但单模型 score ≥ 此值仍参与合并（0=仅 spec 命中）；默认 22 避免看板长期为空
-POTENTIAL_SOFT_EXPORT_MIN = int(os.environ.get("OI_POTENTIAL_SOFT_EXPORT_MIN") or "22")
+# 未达 hit 但单模型 score ≥ 此值仍参与合并（0=仅真实命中，推荐）
+POTENTIAL_SOFT_EXPORT_MIN = int(os.environ.get("OI_POTENTIAL_SOFT_EXPORT_MIN") or "0")

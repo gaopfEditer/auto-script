@@ -23,7 +23,10 @@ from oi_mornitor.potential_features import (
     oi_chg_pct,
     oi_quiet_ratio,
     range_width,
+    recent_volume_spike_offset,
     ret_pct,
+    volume_quiet_ratio_pre_spike,
+    volume_sustain_after_spike,
     swing_points,
     vol_z,
     volume_ratio,
@@ -33,8 +36,8 @@ from oi_mornitor.potential_features import (
 from oi_mornitor.potential_models_config import load_potential_config
 
 MODEL_LABELS: dict[str, str] = {
-    "quiet_oi_breakout": "OI 沉寂 → 建仓爆发",
-    "short_squeeze": "负费率轧空",
+    "quiet_oi_breakout": "量沉寂 → 放量突破 → 延续",
+    "short_squeeze": "OI 抗跌突破（费率仅参考）",
     "relative_strength": "强弱背离 · 首冲",
     "wyckoff_spring": "威科夫 Spring",
     "liquidity_sweep": "流动性打靶 (SFP)",
@@ -180,31 +183,54 @@ def eval_m1_quiet_oi(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelResult:
     c = cfg_root[mid]
     tf = str(c["tf_primary"])
     df = feed.df(tf)
+    vol_ma = int(c.get("volume_ratio_ma") or 20)
     if df.empty or len(df) < 100:
         return _miss(mid, tf)
-    if oi_quiet_ratio(df, _bars_for_days(tf, 14), _bars_for_days(tf, 60)) is None:
-        return _miss(mid, tf)
 
+    vq_short = _bars_for_days(tf, float(c.get("volume_quiet_short_days") or 7))
+    vq_long = _bars_for_days(tf, float(c.get("volume_quiet_long_days") or 30))
+    spike_lb = int(c.get("spike_lookback_bars") or 10)
+    vq = volume_quiet_ratio_pre_spike(df, vq_short, vq_long, spike_lb + 2)
     oq = oi_quiet_ratio(df, _bars_for_days(tf, 14), _bars_for_days(tf, 60))
     oi7 = oi_chg_pct(df, _bars_for_days(tf, 7))
     oi14 = oi_chg_pct(df, _bars_for_days(tf, 14))
     accel = oi_accel(df)
     atr_p = atr_pctile(df, 90)
     rw60 = range_width(df, int(c["lookback_range_bars"]))
-    vr = volume_ratio(df, 20)
+    vr = volume_ratio(df, vol_ma)
+    spike_off = recent_volume_spike_offset(
+        df,
+        int(c.get("spike_lookback_bars") or 10),
+        vol_ma,
+        float(c.get("spike_volume_ratio_min") or 2.8),
+    )
+    sustain_ok = False
+    sustain_bars = 0
+    sustain_ret: float | None = None
+    if spike_off is not None:
+        sustain_ok, sustain_bars, sustain_ret = volume_sustain_after_spike(
+            df,
+            spike_off,
+            int(c.get("sustain_bars_min") or 2),
+            float(c.get("sustain_volume_ratio_min") or 1.25),
+            vol_ma,
+        )
     reclaim = int(c["reclaim_ma"])
     e_ma = ema(df["close"].astype(float), reclaim)
     c_hold = float(df["low"].iloc[-1]) >= float(e_ma.iloc[-1]) * 0.995
     hi20 = float(df["high"].iloc[-21:-1].max()) if len(df) > 21 else 0.0
     c_break = float(df["close"].iloc[-1]) > hi20 if hi20 > 0 else False
 
-    C_quiet = oq is not None and oq <= float(c["oi_quiet_max"])
+    C_vol_quiet = vq is not None and vq <= float(c.get("volume_quiet_max") or 0.72)
+    C_oi_quiet = oq is not None and oq <= float(c["oi_quiet_max"])
     C_oi7 = oi7 is not None and oi7 >= float(c["oi_chg_7d_min"])
     C_oi14 = oi14 is not None and oi14 >= float(c["oi_chg_14d_min"])
     C_accel = accel is not None and accel >= float(c["oi_accel_min"])
     C_calm = (atr_p is not None and atr_p <= float(c["atr_pctile_max"])) or (
         rw60 is not None and rw60 < 0.25
     )
+    C_spike = spike_off is not None
+    C_sustain = sustain_ok
     C_vol_mild = (
         vr is not None
         and float(c["volume_ratio_mild_min"]) <= vr <= float(c["volume_ratio_mild_max"])
@@ -213,19 +239,18 @@ def eval_m1_quiet_oi(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelResult:
     C_hold = c_hold
     C_break = c_break
 
-    watch = C_quiet and C_calm and (C_oi7 or C_oi14)
-    primed = watch and C_accel and C_vol_mild and C_hold
-    triggered = primed and (C_break or C_vol_spk)
+    watch = C_vol_quiet and C_calm
+    primed = watch and C_spike
+    triggered = primed and C_sustain and (C_hold or c_break)
     oi1d = oi_chg_pct(df, _bars_for_days(tf, 1))
     r1d = ret_pct(df, _bars_for_days(tf, 1))
-    exiting = (primed or triggered) and (
+    exiting = triggered and (
         (oi1d is not None and oi1d < -0.08 and r1d is not None and r1d < 0.02)
-        or (C_break and vr is not None and vr < 1.0)
+        or (sustain_ret is not None and sustain_ret < -0.05)
+        or (vr is not None and vr < 0.85 and not C_sustain)
     )
 
     stage = "watch"
-    if watch:
-        stage = "watch"
     if primed:
         stage = "primed"
     if triggered:
@@ -234,36 +259,39 @@ def eval_m1_quiet_oi(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelResult:
         stage = "exiting"
 
     score = 0.0
-    if C_quiet:
-        score += 25
-    if C_oi7 or C_oi14:
-        score += 20
-    if C_accel:
-        score += 15
+    if C_vol_quiet:
+        score += 28
     if C_calm:
-        score += 15
-    if C_vol_mild:
-        score += 10
+        score += 18
+    if C_spike:
+        score += 22
+    if C_sustain:
+        score += 22
     if C_hold:
-        score += 10
-    if C_break or C_vol_spk:
-        score += 15
+        score += 5
+    if C_break:
+        score += 5
+    if C_oi_quiet and (C_oi7 or C_oi14):
+        score += 5
+    if C_accel and C_vol_mild:
+        score += 5
     if exiting:
-        score -= 20
+        score -= 25
     score = max(0.0, min(100.0, score))
 
-    hit = score >= float(c["score_hit_min"]) and stage in {
-        "watch",
-        "primed",
-        "triggered",
-        "exiting",
-    }
-    oi7s = f"{oi7:.0%}" if oi7 is not None else "—"
+    require_sustain = bool(c.get("require_sustain_for_hit", True))
+    hit = (
+        score >= float(c["score_hit_min"])
+        and stage == "triggered"
+        and (C_sustain if require_sustain else True)
+        and not exiting
+    )
+    vq_s = f"{vq:.2f}" if vq is not None else "—"
     vr_s = f"{vr:.1f}" if vr is not None else "—"
-    entry = f"OI低位抬升+7d{oi7s}，波动收敛，量比{vr_s}，回踩EMA{reclaim}未破"
+    entry = f"量沉寂比{vq_s}，近{spike_off or '—'}根前放量，延续{sustain_bars}根，量比{vr_s}"
     exit = ""
-    if exiting and oi1d is not None and r1d is not None:
-        exit = f"OI日降{oi1d:.0%}且价格滞涨，疑脉冲结束"
+    if exiting and r1d is not None:
+        exit = f"放量后量能衰竭/回撤，疑单根脉冲结束"
 
     return ModelResult(
         model_id=mid,
@@ -273,6 +301,10 @@ def eval_m1_quiet_oi(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelResult:
         entry=entry[:120],
         exit=exit[:120],
         metrics={
+            "volume_quiet_ratio": round(vq, 4) if vq is not None else None,
+            "volume_spike_bars_ago": spike_off,
+            "volume_sustain_bars": sustain_bars,
+            "volume_sustain_ret": round(sustain_ret, 4) if sustain_ret is not None else None,
             "oi_quiet_ratio": round(oq, 4) if oq is not None else None,
             "oi_change_7d_pct": round(oi7, 4) if oi7 is not None else None,
             "oi_change_14d_pct": round(oi14, 4) if oi14 is not None else None,
@@ -321,15 +353,13 @@ def eval_m2_short_squeeze(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelRe
         c["basis_spot_premium_min"]
     )
     hi3 = float(df["high"].iloc[-4:-1].max()) if len(df) > 4 else 0.0
-    triggered = (
-        C_fund
-        and C_streak
-        and C_oi
-        and C_hold
-        and C_support
-        and hi3 > 0
-        and float(df["close"].iloc[-1]) > hi3
-    )
+    price_break = hi3 > 0 and float(df["close"].iloc[-1]) > hi3
+    fund_scores = bool(c.get("funding_scores_enabled", False))
+    core = C_oi and C_hold and C_support and price_break
+    if fund_scores:
+        triggered = core and C_fund and C_streak
+    else:
+        triggered = core
     exiting = (
         fm is not None
         and fm >= float(c["exit_fund_recover"])
@@ -337,8 +367,8 @@ def eval_m2_short_squeeze(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelRe
         and oi1 <= float(c["exit_oi_cliff_1d"])
     ) or (fl is not None and fl >= 0 and oi1 is not None and oi1 <= float(c["exit_oi_cliff_1d"]))
 
-    watch = C_fund and C_streak
-    primed = watch and C_oi and C_hold
+    watch = C_oi and C_hold
+    primed = watch and C_support
     stage = "watch"
     if primed:
         stage = "primed"
@@ -348,27 +378,30 @@ def eval_m2_short_squeeze(feed: SymbolFeed, cfg_root: dict[str, Any]) -> ModelRe
         stage = "exiting"
 
     score = 0.0
-    if C_fund:
-        score += 30
-    if C_streak:
-        score += 15
+    if fund_scores:
+        if C_fund:
+            score += 10
+        if C_streak:
+            score += 5
     if C_oi:
-        score += 25
+        score += 30
     if C_hold:
-        score += 15
+        score += 20
     if C_support:
-        score += 10
+        score += 15
     if C_basis:
-        score += 10
+        score += 5
     if triggered:
-        score += 10
+        score += 15
     if exiting:
         score -= 25
     score = max(0.0, min(100.0, score))
-    hit = score >= 45 and (watch or primed or triggered or exiting)
+    hit_min = float(c.get("score_hit_min") or 52)
+    hit = score >= hit_min and stage == "triggered" and not exiting
 
     f_disp = fm if fm is not None else (fl or 0.0)
-    entry = f"费率{f_disp:.2%}连续{streak}档为负，OI{(oi1 or 0):+.0%}/1d，价格抗跌"
+    fund_note = f"费率{f_disp:.2%}（仅诊断）" if not fund_scores else f"费率{f_disp:.2%}"
+    entry = f"{fund_note}，OI{(oi1 or 0):+.0%}/1d，价格抗跌突破"
     exit = ""
     if exiting:
         exit = f"费率收至{f_disp:.2%}且OI日降{(oi1 or 0):.0%}，轧空动能衰竭"

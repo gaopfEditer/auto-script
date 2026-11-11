@@ -76,6 +76,97 @@ def volume_ratio(df: pd.DataFrame, ma: int = 20) -> float | None:
     return float(v.iloc[-1]) / ma_v
 
 
+def volume_ratio_at(df: pd.DataFrame, bar_off: int, ma: int = 20) -> float | None:
+    """bar_off=0 为最后一根；量比相对其前 ma 根均量。"""
+    v = _col(df, "volume")
+    i = len(v) - 1 - int(bar_off)
+    if i < ma or i < 0:
+        return None
+    ma_v = float(v.iloc[i - ma : i].mean())
+    if ma_v <= 0:
+        return None
+    return float(v.iloc[i]) / ma_v
+
+
+def volume_quiet_ratio(df: pd.DataFrame, short_bars: int, long_bars: int) -> float | None:
+    """近期成交量中位数 / 长期中位数（越低表示量越沉寂）。"""
+    v = _col(df, "volume")
+    if len(v) < long_bars:
+        return None
+    short = float(np.median(v.iloc[-short_bars:]))
+    long = float(np.median(v.iloc[-long_bars:]))
+    if long <= 0:
+        return None
+    return short / long
+
+
+def volume_quiet_ratio_pre_spike(
+    df: pd.DataFrame,
+    short_bars: int,
+    long_bars: int,
+    exclude_tail: int,
+) -> float | None:
+    """放量前：紧邻事件窗的短期量 / 再往前长期基线（越低越沉寂）。"""
+    v = _col(df, "volume")
+    tail = max(0, int(exclude_tail))
+    end = len(v) - tail
+    need = short_bars + long_bars
+    if end < need:
+        return None
+    seg = v.iloc[:end]
+    short = float(np.median(seg.iloc[-short_bars:]))
+    long = float(np.median(seg.iloc[-need:-short_bars]))
+    if long <= 0:
+        return None
+    return short / long
+
+
+def recent_volume_spike_offset(
+    df: pd.DataFrame,
+    lookback: int,
+    ma: int,
+    spike_min: float,
+) -> int | None:
+    """最近 lookback 根内（不含当前）最近一次量比 >= spike_min 的 bar_off；无则 None。"""
+    for off in range(1, int(lookback) + 1):
+        vr = volume_ratio_at(df, off, ma)
+        if vr is not None and vr >= float(spike_min):
+            return off
+    return None
+
+
+def volume_sustain_after_spike(
+    df: pd.DataFrame,
+    spike_off: int,
+    sustain_bars: int,
+    mild_min: float,
+    ma: int = 20,
+) -> tuple[bool, int, float | None]:
+    """
+    放量柱之后 sustain_bars 根（含当前）量能均 >= mild_min×均量，且收盘未跌破 spike 收盘过多。
+    返回 (ok, bars_ok, price_ret_since_spike)。
+    """
+    v = _col(df, "volume")
+    c = _col(df, "close")
+    spike_i = len(v) - 1 - int(spike_off)
+    if spike_i < ma or spike_i >= len(v) - 1:
+        return False, 0, None
+    spike_close = float(c.iloc[spike_i])
+    if spike_close <= 0:
+        return False, 0, None
+    need = int(sustain_bars)
+    ok_bars = 0
+    for j in range(spike_i + 1, len(v)):
+        ma_v = float(v.iloc[j - ma : j].mean()) if j >= ma else float(v.iloc[:j].mean())
+        if ma_v <= 0:
+            continue
+        if float(v.iloc[j]) / ma_v >= float(mild_min):
+            ok_bars += 1
+    price_ret = float(c.iloc[-1]) / spike_close - 1.0
+    sustained = ok_bars >= need and price_ret >= -0.02
+    return sustained, ok_bars, price_ret
+
+
 def vol_z(df: pd.DataFrame, idx: int = -1, n: int = 20) -> float | None:
     v = _col(df, "volume")
     if len(v) < n + 1:

@@ -10,6 +10,7 @@ from oi_mornitor.potential_aggregate import aggregate_candidate, should_export
 from oi_mornitor.potential_features import SymbolFeed, closed_df
 from oi_mornitor.potential_model_eval import (
     ModelResult,
+    eval_m1_quiet_oi,
     eval_m2_short_squeeze,
     eval_m4_wyckoff_spring,
     eval_m5_liquidity_sweep,
@@ -43,6 +44,65 @@ class PotentialDiscoverySpecTests(unittest.TestCase):
             )
         self.assertFalse(ok)
         self.assertEqual(reason, "mcap_out_of_range")
+
+    def _quiet_vol_breakout_df(self, n: int = 260) -> pd.DataFrame:
+        """沉寂 → 数根前放量 → 后续量能延续、价格抬升。"""
+        vol = np.full(n, 900.0)
+        vol[-140:-12] = 340.0
+        vol[-12] = 2800.0
+        vol[-11:-8] = 900.0
+        vol[-8:] = 750.0
+        t = np.arange(n)
+        c = 10.0 + np.zeros(n)
+        c[-12:] = np.linspace(10.0, 10.35, 12)
+        return pd.DataFrame(
+            {
+                "open": c - 0.01,
+                "high": c + 0.04,
+                "low": c - 0.04,
+                "close": c,
+                "volume": vol,
+                "open_interest": np.linspace(80, 95, n),
+                "open_time": (t * 4 * 3600_000).astype(np.int64),
+            }
+        )
+
+    def test_quiet_volume_sustain_hit(self) -> None:
+        cfg = load_potential_config()
+        df = self._quiet_vol_breakout_df()
+        feed = SymbolFeed(symbol="TESTUSDT", candles={"4h": df})
+        r = eval_m1_quiet_oi(feed, cfg)
+        self.assertEqual(r.stage, "triggered")
+        self.assertTrue(r.hit)
+        self.assertGreaterEqual(r.score, cfg["quiet_oi_breakout"]["score_hit_min"])
+        m = r.metrics
+        self.assertIsNotNone(m.get("volume_quiet_ratio"))
+        self.assertLess(float(m["volume_quiet_ratio"]), 0.72)
+        self.assertIsNotNone(m.get("volume_spike_bars_ago"))
+        self.assertGreaterEqual(int(m.get("volume_sustain_bars") or 0), 2)
+
+    def test_funding_does_not_boost_short_squeeze_score(self) -> None:
+        cfg = load_potential_config()
+        n = 120
+        df = _ohlcv(n, vol=1200.0)
+        df["open_interest"] = np.linspace(100, 115, n)
+        df.loc[df.index[-1], "close"] = float(df["high"].iloc[-4:-1].max()) + 0.1
+        feed_fund = SymbolFeed(
+            symbol="X",
+            funding_rates=[-0.02] * 10,
+            candles={"1h": df},
+        )
+        feed_no = SymbolFeed(symbol="X", funding_rates=[], candles={"1h": df})
+        r_fund = eval_m2_short_squeeze(feed_fund, cfg)
+        r_no = eval_m2_short_squeeze(feed_no, cfg)
+        self.assertFalse(cfg["short_squeeze"].get("funding_scores_enabled"))
+        self.assertEqual(r_fund.score, r_no.score)
+        self.assertLessEqual(r_fund.score, 45)
+
+    def test_default_models_exclude_short_squeeze(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            cfg = load_potential_config()
+        self.assertNotIn("short_squeeze", cfg["models_enabled"])
 
     def test_t3_funding_exiting(self) -> None:
         cfg = load_potential_config()
@@ -95,8 +155,8 @@ class PotentialDiscoverySpecTests(unittest.TestCase):
                 "short_squeeze",
                 True,
                 72,
-                "primed",
-                "负费率轧空",
+                "triggered",
+                "OI突破",
                 "",
                 {"funding_mean_3": -0.02, "oi_change_1d_pct": 0.05},
                 "1h",
@@ -104,7 +164,7 @@ class PotentialDiscoverySpecTests(unittest.TestCase):
         )
         self.assertEqual(infer_direction(r), "long")
         self.assertEqual(r.direction, "long")
-        self.assertTrue(any("费率" in x for x in r.score_reasons))
+        self.assertTrue(any("仅诊断" in x for x in r.score_reasons))
 
     def test_aggregate_score_explain(self) -> None:
         from oi_mornitor.potential_score_explain import finalize_model_result

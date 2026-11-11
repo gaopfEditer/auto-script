@@ -1,6 +1,7 @@
 """潜力扫描 · 合并多模型 + 导出过滤。"""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -26,9 +27,13 @@ def aggregate_candidate(
     notes: str = "",
 ) -> dict[str, Any] | None:
     cfg = load_potential_config()
-    from oi_mornitor.potential_discovery_config import POTENTIAL_SOFT_EXPORT_MIN
+    raw_soft = os.environ.get("OI_POTENTIAL_SOFT_EXPORT_MIN", "").strip()
+    if raw_soft:
+        soft_min = float(raw_soft)
+    else:
+        from oi_mornitor.potential_discovery_config import POTENTIAL_SOFT_EXPORT_MIN
 
-    soft_min = float(POTENTIAL_SOFT_EXPORT_MIN or 0)
+        soft_min = float(POTENTIAL_SOFT_EXPORT_MIN or 0)
     valid = [
         r
         for r in results
