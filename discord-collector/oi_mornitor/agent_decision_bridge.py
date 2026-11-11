@@ -33,7 +33,13 @@ def format_agent_decision_badge(decision: dict[str, Any] | None) -> str:
     if not pg:
         return "决策·—"
     veto = decision.get("shadowVeto") or {}
-    v = "·影否决" if veto.get("active") else ""
+    status = str(veto.get("status") or "").lower()
+    if status == "veto" or (veto.get("active") and status != "warning"):
+        v = "·影否决"
+    elif status == "warning":
+        v = "·影警告"
+    else:
+        v = ""
     return f"决策·{pg}{v}"
 
 

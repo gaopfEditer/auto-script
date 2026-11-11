@@ -1,4 +1,4 @@
-"""Agent decision PA layer: swings, sweep+reclaim, OB/FVG, VWAP, A/B/C tagging."""
+"""Agent decision PA layer: swings, sweep+reclaim, OB/FVG, VWAP, A/B/C tagging, research strategies."""
 
 from __future__ import annotations
 
@@ -10,10 +10,18 @@ from oi_mornitor.agent_decision import (
     classify_group_a,
     classify_group_b,
     classify_group_c,
+    compute_shadow_veto,
 )
 from oi_mornitor.pa.analysis import compute_pa_snapshot
+from oi_mornitor.pa.b_tags import categorize_tags, liquidity_zone_phase
 from oi_mornitor.pa.liquidity import compute_liquidity_zones
 from oi_mornitor.pa.obfvg import compute_order_blocks
+from oi_mornitor.pa.research_strategies import (
+    STRATEGY_LIQUIDITY_REVERSAL,
+    STRATEGY_RANGE,
+    STRATEGY_TREND_PULLBACK,
+    evaluate_research_strategies,
+)
 from oi_mornitor.pa.swings import detect_structure
 from oi_mornitor.pa.vwap_sessions import compute_vwap, vwap_position
 
@@ -74,6 +82,19 @@ class LiquidityReclaimTests(unittest.TestCase):
         self.assertTrue(mitigated)
         self.assertTrue(reclaimed)
 
+    def test_liquidity_phases_progression(self) -> None:
+        zone = {
+            "zone_id": "equal_lows:1:2",
+            "kind": "equal_lows",
+            "tested": True,
+            "mitigated": True,
+            "reclaimed": True,
+        }
+        events = [{"type": "choch_bullish", "index": 99}]
+        phase, name, _ = liquidity_zone_phase(zone, events)
+        self.assertGreaterEqual(phase, 4)
+        self.assertIn(name, ("reclaimed", "reversal_confirmed"))
+
 
 class ObFvgVwapTests(unittest.TestCase):
     def test_fvg_detection(self) -> None:
@@ -93,6 +114,64 @@ class ObFvgVwapTests(unittest.TestCase):
         self.assertIn(pos, ("above", "below", "at", None))
 
 
+class BTagTaxonomyTests(unittest.TestCase):
+    def test_position_only_does_not_activate_b(self) -> None:
+        pa = {
+            "close": 100.0,
+            "structure": {"trend": "down", "events": []},
+            "liquidity": {"zones": []},
+            "obfvg": {"order_blocks": [], "fvgs": []},
+            "vwap": {"position": "above"},
+        }
+        gb = classify_group_b(pa, "long")
+        self.assertIn("vwap_above", gb["tags"])
+        self.assertFalse(gb["active"])
+        self.assertTrue(gb.get("positionOnly"))
+
+
+class DirectionConfluenceTests(unittest.TestCase):
+    def test_conflict_not_resonance(self) -> None:
+        ga = {"active": True, "direction": "short"}
+        gb = {"active": True, "direction": "long", "activationSource": "structure"}
+        gc = classify_group_c(ga, gb)
+        self.assertEqual(gc["classification"], "Conflict")
+        self.assertFalse(gc["active"])
+        self.assertTrue(gc["directionConflict"])
+
+
+class ShadowVetoTests(unittest.TestCase):
+    def test_veto_status_triple(self) -> None:
+        pa = {"structure": {"trend": "down", "events": []}}
+        veto = compute_shadow_veto({"side": "long"}, pa, "long", {"direction": "neutral"})
+        self.assertIn(veto["status"], ("pass", "warning", "veto"))
+        self.assertTrue(veto.get("shadow"))
+        self.assertEqual(veto["status"], "veto")
+
+
+class ResearchStrategyTests(unittest.TestCase):
+    def test_strategies_schema(self) -> None:
+        alert = {"side": "long", "interval": "15m"}
+        pa = compute_pa_snapshot(
+            [_candle(i, 100 + i * 0.05, 100.6 + i * 0.05, 99.5 + i * 0.05, 100.2 + i * 0.05, 500) for i in range(60)]
+        )
+        gb = classify_group_b(pa, "long")
+        payload = evaluate_research_strategies(
+            alert,
+            pa,
+            "long",
+            b_tags=gb["tags"],
+            categories=gb.get("tagCategories") or categorize_tags(gb["tags"]),
+            liquidity_states=gb.get("liquidityStates") or [],
+        )
+        self.assertTrue(payload.get("readOnly"))
+        self.assertEqual(payload.get("backtestStatus"), "planned_p1")
+        ids = {m["id"] for m in payload.get("matches") or []}
+        self.assertEqual(
+            ids,
+            {STRATEGY_LIQUIDITY_REVERSAL, STRATEGY_TREND_PULLBACK, STRATEGY_RANGE},
+        )
+
+
 class AgentDecisionTaggingTests(unittest.TestCase):
     def setUp(self) -> None:
         self._prev = os.environ.get("OI_AGENT_DECISION_ENABLED")
@@ -104,7 +183,7 @@ class AgentDecisionTaggingTests(unittest.TestCase):
         else:
             os.environ["OI_AGENT_DECISION_ENABLED"] = self._prev
 
-    def test_abc_resonance(self) -> None:
+    def test_attach_decision_fields(self) -> None:
         alert = {
             "symbol": "BTCUSDT",
             "interval": "15m",
@@ -114,18 +193,14 @@ class AgentDecisionTaggingTests(unittest.TestCase):
             "kind": "inverted_hammer",
         }
         candles = [_candle(i, 100 + i * 0.05, 100.6 + i * 0.05, 99.5 + i * 0.05, 100.2 + i * 0.05, 500) for i in range(60)]
-        alert["pa_klines"] = candles
-        ga = classify_group_a(alert)
-        self.assertTrue(ga["active"])
-        pa = compute_pa_snapshot(candles)
-        gb = classify_group_b(pa, "long")
-        gc = classify_group_c(ga, gb)
-        self.assertIsInstance(gc["active"], bool)
         dec = attach_agent_decision(alert, klines=candles)
         self.assertIsNotNone(dec)
-        self.assertIn(dec.get("primaryGroup"), ("A", "B", "C", None))
         self.assertTrue(dec.get("readOnly"))
+        self.assertIn(dec.get("primaryGroup"), ("A", "B", "C", None))
+        self.assertIn("researchStrategies", dec)
+        self.assertIsInstance(dec.get("matchedIds") if "matchedIds" in dec else dec["researchStrategies"].get("matchedIds"), list)
         self.assertTrue((dec.get("shadowVeto") or {}).get("shadow"))
+        self.assertIn("status", dec.get("shadowVeto") or {})
 
 
 if __name__ == "__main__":
