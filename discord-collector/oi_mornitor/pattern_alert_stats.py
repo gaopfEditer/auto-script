@@ -695,6 +695,24 @@ def _apply_tier_filters(
     return out
 
 
+def _filter_decision_group(rows: list[dict[str, Any]], decision_group: str | None) -> list[dict[str, Any]]:
+    dg = str(decision_group or "").strip().upper()
+    if not dg or dg in ("ALL", "ANY"):
+        return rows
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        dec = r.get("agentDecision")
+        if not isinstance(dec, dict):
+            continue
+        if dg == "C" and dec.get("primaryGroup") == "C":
+            out.append(r)
+        elif dg in ("A", "B"):
+            grp = (dec.get("groups") or {}).get(dg) or {}
+            if grp.get("active"):
+                out.append(r)
+    return out
+
+
 def list_alert_stats_page(
     *,
     page: int = 1,
@@ -710,6 +728,7 @@ def list_alert_stats_page(
     confluence_min_tier: str | None = None,
     mcap_tier_filter: str | None = None,
     confluence_exact: bool = True,
+    decision_group: str | None = None,
 ) -> dict[str, Any]:
     """分页列表；各筛选项独立 AND；type/interval/session/daytype Options 联动。
 
@@ -823,6 +842,7 @@ def list_alert_stats_page(
             interval=iv or None,
         )
     )
+    filtered = _filter_decision_group(filtered, decision_group)
     if not tier_active:
         from oi_mornitor.signal_confluence import attach_signal_confluence
 
@@ -1133,6 +1153,15 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
         conf = alert.get("confluence")
         if isinstance(conf, dict):
             rec["confluence"] = conf
+        dec = alert.get("agentDecision")
+        if isinstance(dec, dict):
+            rec["agentDecision"] = dec
+        try:
+            from oi_mornitor.agent_decision_bridge import strip_pa_klines_from_alert
+
+            strip_pa_klines_from_alert(alert)
+        except Exception:  # noqa: BLE001
+            pass
         if isinstance(alert.get("capitalFlow"), dict):
             rec["capitalFlow"] = alert.get("capitalFlow")
         if alert.get("tdSetup") is not None:

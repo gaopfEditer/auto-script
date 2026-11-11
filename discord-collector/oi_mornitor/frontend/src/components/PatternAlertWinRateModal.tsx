@@ -16,6 +16,7 @@ import {
   formatAlertTypeOptionLabel,
   formatMtfResonanceBadge,
   formatConfluenceBadge,
+  formatAgentDecisionBadge,
   confluenceTitle,
   hasMtfResonance,
   formatIntervalOptionLabel,
@@ -872,6 +873,15 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
                         ) : (
                           <span className="muted">—</span>
                         )}
+                        {formatAgentDecisionBadge(r.agentDecision) ? (
+                          <span
+                            className="pattern-wr-mtf-badge"
+                            title="只读决策组 A/B/C（PA 层）"
+                            style={{ marginLeft: 6 }}
+                          >
+                            决策·{formatAgentDecisionBadge(r.agentDecision)}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="mono" onClick={openChart}>
                         {fmtPrice(r.entry)}
