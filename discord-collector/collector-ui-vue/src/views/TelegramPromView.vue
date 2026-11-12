@@ -17,6 +17,8 @@ import {
   formatWinRateLabel,
 } from "../lib/telegramGroupEvalApi.js";
 import { directionLabel, outcomeLabel } from "../lib/signalExecution.js";
+import { isLocalClient } from "../lib/localClient.js";
+import TelegramCopySizingModal from "../components/TelegramCopySizingModal.vue";
 
 defineOptions({ name: "TelegramPromView" });
 
@@ -74,6 +76,8 @@ const error = ref("");
 const status = ref("连接中…");
 const showRealIdentity = ref(getTelegramShowRealIdentity());
 const canToggleIdentity = canToggleTelegramRealIdentity();
+const showCopySizingTools = isLocalClient();
+const copySizingOpen = ref(false);
 
 const groupEvalNote = ref("");
 const groupEvalRows = ref(/** @type {import("../lib/telegramGroupEvalApi.js").TgGroupEvalRow[]} */ ([]));
@@ -570,11 +574,22 @@ onUnmounted(() => {
         >
           {{ showRealIdentity ? "显示别名" : "显示真实" }}
         </button>
+        <button
+          v-if="showCopySizingTools"
+          type="button"
+          class="ghost"
+          title="本机专用：按历史赢亏递推仓位"
+          @click="copySizingOpen = true"
+        >
+          历史加成
+        </button>
         <button type="button" :disabled="loading" @click="loadMessages">
           {{ loading ? "刷新中…" : "刷新" }}
         </button>
       </div>
     </header>
+
+    <TelegramCopySizingModal v-model:open="copySizingOpen" :channels="channels" />
 
     <p v-if="error" class="err">{{ error }}</p>
     <p v-if="groupEvalError" class="err subtle">{{ groupEvalError }}</p>
