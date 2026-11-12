@@ -705,6 +705,17 @@ def _scan_symbol_interval(
             row.update(extra)
         hits.append(row)
 
+    # 大周期（4h）供情境闸：方向未破 OR 大周期已反转
+    df_htf_4h = None
+    if interval != "4h":
+        try:
+            lo4, hi4 = kline_window_ms("4h", start_ms, end_ms)
+            rows4 = store.load_rows(symbol, "4h", lo4, hi4)
+            if len(rows4) >= _WARMUP_BARS:
+                df_htf_4h = enrich_indicators(klines_to_df(rows4))
+        except Exception:
+            df_htf_4h = None
+
     if structure_kinds:
         struct_df = _attach_oi_column(df, oi_map if live_funnel else None)
         events = detect_structure_events(struct_df)
@@ -723,16 +734,38 @@ def _scan_symbol_interval(
                 kind = str(ev.get("kind") or "")
                 if kind not in structure_kinds or kind == "spring_2b":
                     continue
-                if kind == "bottom_secondary_test" and interval == "4h":
-                    from oi_mornitor.market_regime import classify_trend_regime
-                    from oi_mornitor.pattern_pause import bottom_long_forbidden_by_4h_downtrend
-
-                    r4 = classify_trend_regime(struct_df, end_idx=bar_index, tf="4h")
-                    if bottom_long_forbidden_by_4h_downtrend(r4.label):
-                        continue
                 side = str(ev.get("side") or "")
                 if side not in ("bull", "bear"):
                     continue
+                if kind == "bottom_secondary_test":
+                    from oi_mornitor.market_regime import classify_trend_regime
+                    from oi_mornitor.pattern_pause import (
+                        align_htf_index,
+                        bottom_long_forbidden_by_4h_downtrend,
+                        needs_direction_or_htf_gate,
+                        passes_direction_or_htf_reversal,
+                    )
+
+                    htf_df = struct_df if interval == "4h" else df_htf_4h
+                    htf_idx = (
+                        bar_index
+                        if interval == "4h"
+                        else align_htf_index(htf_df, open_ms)
+                    )
+                    if htf_df is not None and htf_idx is not None:
+                        r4 = classify_trend_regime(htf_df, end_idx=htf_idx, tf="4h")
+                        if bottom_long_forbidden_by_4h_downtrend(r4.label):
+                            continue
+                    if needs_direction_or_htf_gate(kind):
+                        ok, _reason = passes_direction_or_htf_reversal(
+                            side=side,
+                            df_signal=struct_df,
+                            bar_idx=bar_index,
+                            df_htf=htf_df,
+                            htf_idx=htf_idx,
+                        )
+                        if not ok:
+                            continue
                 bar_close_sec = int(open_ms // 1000)
                 signal_at_ms = _align_signal_at_ms(close_ms)
                 hit = {
@@ -789,6 +822,28 @@ def _scan_symbol_interval(
                 continue
             bar_close_sec = int(bar_row["open_time"] // 1000)
             side = str(ch.get("side") or "bear")
+            from oi_mornitor.pattern_pause import (
+                align_htf_index,
+                needs_direction_or_htf_gate,
+                passes_direction_or_htf_reversal,
+            )
+
+            if needs_direction_or_htf_gate(kind):
+                htf_df = df if interval == "4h" else df_htf_4h
+                htf_idx = (
+                    int(ch["bar_index"])
+                    if interval == "4h"
+                    else align_htf_index(htf_df, int(bar_row["open_time"]))
+                )
+                ok, _reason = passes_direction_or_htf_reversal(
+                    side=side,
+                    df_signal=df,
+                    bar_idx=int(ch["bar_index"]),
+                    df_htf=htf_df,
+                    htf_idx=htf_idx,
+                )
+                if not ok:
+                    continue
             _append_settled(
                 kind=kind,
                 type_label=str(ch.get("type_label") or kind),

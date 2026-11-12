@@ -54,53 +54,77 @@ def _alert(kind: str, label: str, side: str = "bear") -> dict:
 
 
 class PauseFlagTests(unittest.TestCase):
-    def test_defaults_pause_bottom_and_shooting_star(self) -> None:
-        self.assertTrue(is_paused_kind("bottom_secondary_test"))
-        self.assertTrue(is_paused_kind("shooting_star"))
-        self.assertTrue(is_paused_kind("consecutive_flat_shooting_star"))
-        self.assertTrue(is_paused_alert(_alert("bottom_secondary_test", "底部二次探底确认", "bull")))
-        self.assertTrue(is_paused_alert(_alert("shooting_star", "射击之星", "bear")))
+    def test_defaults_do_not_pause_bottom_and_shooting_star(self) -> None:
+        self.assertFalse(is_paused_kind("bottom_secondary_test"))
+        self.assertFalse(is_paused_kind("shooting_star"))
+        self.assertFalse(is_paused_kind("consecutive_flat_shooting_star"))
+        self.assertFalse(is_paused_alert(_alert("bottom_secondary_test", "底部二次探底确认", "bull")))
+        self.assertFalse(is_paused_alert(_alert("shooting_star", "射击之星", "bear")))
         self.assertFalse(is_paused_kind("liquidity_sweep"))
         self.assertFalse(is_paused_kind("hs_vegas_break"))
 
-    def test_default_kinds_exclude_paused(self) -> None:
+    def test_default_kinds_include_context_gated(self) -> None:
         ids = [k["id"] for k in KIND_OPTIONS]
         self.assertIn("bottom_secondary_test", ids)
-        self.assertNotIn("bottom_secondary_test", DEFAULT_KINDS)
-        self.assertNotIn("shooting_star", DEFAULT_KINDS)
-        self.assertNotIn("consecutive_flat_shooting_star", DEFAULT_KINDS)
+        self.assertIn("bottom_secondary_test", DEFAULT_KINDS)
+        self.assertIn("shooting_star", DEFAULT_KINDS)
         self.assertIn("liquidity_sweep", DEFAULT_KINDS)
         opts = list_kind_options()
+        gated = {o["id"] for o in opts if o.get("grade") == "context_gated"}
+        self.assertIn("bottom_secondary_test", gated)
+        self.assertIn("shooting_star", gated)
         paused = {o["id"] for o in opts if o.get("paused")}
-        self.assertIn("bottom_secondary_test", paused)
-        self.assertIn("shooting_star", paused)
+        self.assertNotIn("bottom_secondary_test", paused)
+        self.assertNotIn("shooting_star", paused)
 
-    def test_emit_gate_blocks_paused(self) -> None:
+    def test_emit_gate_allows_when_not_paused(self) -> None:
         a = _alert("shooting_star", "射击之星")
-        # 即使 MTF 放行，暂停仍挡
         with mock.patch("oi_mornitor.pattern_emit_gate.passes_push_mtf_gate", return_value=True):
             with mock.patch("oi_mornitor.pattern_emit_gate.is_blocked_stats_record", return_value=False):
-                self.assertFalse(passes_pattern_card_emit_gate(a))
+                self.assertTrue(passes_pattern_card_emit_gate(a))
 
-    def test_reenable_via_env(self) -> None:
+    def test_pause_via_env(self) -> None:
         import oi_mornitor.pattern_pause as pp
 
-        with mock.patch.object(pp, "OI_PAUSE_SHOOTING_STAR", False):
-            with mock.patch.object(pp, "OI_PAUSE_BOTTOM_SECONDARY", False):
-                self.assertFalse(pp.is_paused_kind("shooting_star"))
-                self.assertFalse(pp.is_paused_kind("bottom_secondary_test"))
+        with mock.patch.object(pp, "OI_PAUSE_SHOOTING_STAR", True):
+            with mock.patch.object(pp, "OI_PAUSE_BOTTOM_SECONDARY", True):
+                self.assertTrue(pp.is_paused_kind("shooting_star"))
+                self.assertTrue(pp.is_paused_kind("bottom_secondary_test"))
                 all_ids = [k["id"] for k in KIND_OPTIONS]
                 enabled = pp.default_trade_kinds(all_ids)
-                self.assertIn("shooting_star", enabled)
-                self.assertIn("bottom_secondary_test", enabled)
+                self.assertNotIn("shooting_star", enabled)
+                self.assertNotIn("bottom_secondary_test", enabled)
 
-    def test_4h_downtrend_forbid_long_toggle(self) -> None:
+    def test_4h_downtrend_forbid_long_default_off(self) -> None:
         import oi_mornitor.pattern_pause as pp
 
-        self.assertTrue(bottom_long_forbidden_by_4h_downtrend("trend_down"))
-        self.assertFalse(bottom_long_forbidden_by_4h_downtrend("trend_up"))
-        with mock.patch.object(pp, "OI_BOTTOM_4H_DOWNTREND_FORBID_LONG", False):
-            self.assertFalse(pp.bottom_long_forbidden_by_4h_downtrend("trend_down"))
+        self.assertFalse(bottom_long_forbidden_by_4h_downtrend("trend_down"))
+        with mock.patch.object(pp, "OI_BOTTOM_4H_DOWNTREND_FORBID_LONG", True):
+            self.assertTrue(pp.bottom_long_forbidden_by_4h_downtrend("trend_down"))
+            self.assertFalse(pp.bottom_long_forbidden_by_4h_downtrend("trend_up"))
+
+    def test_direction_or_htf_reversal_gate(self) -> None:
+        import oi_mornitor.pattern_pause as pp
+
+        # 构造简单下跌后再抬：多头方向未破应放行
+        n = 80
+        closes = list(range(100, 100 - n, -1))  # 单调下跌
+        df = pd.DataFrame(
+            {
+                "open": closes,
+                "high": [c + 1 for c in closes],
+                "low": [c - 1 for c in closes],
+                "close": closes,
+                "volume": [100.0] * n,
+                "open_time": [i * 3_600_000 for i in range(n)],
+            }
+        )
+        # 末根未形成对多头的跌破 BOS 时，gate 依赖 bos；无摆动确认时 adverse=False → 放行
+        ok, reason = pp.passes_direction_or_htf_reversal(
+            side="bull", df_signal=df, bar_idx=n - 1, df_htf=None, htf_idx=None
+        )
+        self.assertTrue(ok)
+        self.assertIn("direction_intact", reason)
 
 
 class LiquidationCapTests(unittest.TestCase):
