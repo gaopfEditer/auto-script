@@ -1,0 +1,667 @@
+{
+  "ok": true,
+  "symbol": "BTCUSDT",
+  "data_source": "binance_spot:data-api.binance.vision",
+  "window": {
+    "start_hkt": "2026-05-14 10:55",
+    "end_hkt": "2026-11-12 10:55",
+    "months": 6.0,
+    "intervals": [
+      "1h",
+      "4h"
+    ]
+  },
+  "fetched": {
+    "1h": {
+      "bars": 4368,
+      "upserted": 4368
+    },
+    "4h": {
+      "bars": 1092,
+      "upserted": 1092
+    },
+    "5m": {
+      "bars": 52416,
+      "upserted": 52416
+    }
+  },
+  "scope": {
+    "structure_kinds": [
+      "bottom_secondary_test",
+      "shooting_star",
+      "consecutive_flat_shooting_star",
+      "hs_vegas_break",
+      "m_top_vegas_break",
+      "liquidity_sweep"
+    ],
+    "candle_kinds": [
+      "consecutive_flat_shooting_star",
+      "shooting_star"
+    ],
+    "pullback": [
+      "long_pullback",
+      "short_shooting_star"
+    ],
+    "research": [
+      "liquidity_reversal",
+      "trend_pullback_continuation",
+      "range_mean_reversion"
+    ],
+    "excluded_note": "量价确认/推进、Vegas回踩 依赖实时形态管线共振，不在本离线结构回测 kinds 内；未跑三路OI/沙盒S·T。"
+  },
+  "structure_candle": {
+    "signals": 198,
+    "settled": 198,
+    "win_rate_pct": 49.49,
+    "avg_pnl_pct": -21.982,
+    "total_pnl_pct": -4352.46,
+    "by_kind": [
+      {
+        "kind": "bottom_secondary_test",
+        "label": "底部二次探底确认",
+        "signals": 145,
+        "settled": 145,
+        "wins": 72,
+        "losses": 73,
+        "win_rate_pct": 49.66,
+        "avg_pnl_pct": -25.904,
+        "total_pnl_pct": -3756.11
+      },
+      {
+        "kind": "hs_vegas_break",
+        "label": "顶部 · 头肩顶",
+        "signals": 24,
+        "settled": 24,
+        "wins": 10,
+        "losses": 14,
+        "win_rate_pct": 41.67,
+        "avg_pnl_pct": -38.338,
+        "total_pnl_pct": -920.12
+      },
+      {
+        "kind": "liquidity_sweep",
+        "label": "顶部 · 流动性掠夺",
+        "signals": 18,
+        "settled": 18,
+        "wins": 11,
+        "losses": 7,
+        "win_rate_pct": 61.11,
+        "avg_pnl_pct": 6.618,
+        "total_pnl_pct": 119.13
+      },
+      {
+        "kind": "m_top_vegas_break",
+        "label": "顶部 · M顶",
+        "signals": 7,
+        "settled": 7,
+        "wins": 4,
+        "losses": 3,
+        "win_rate_pct": 57.14,
+        "avg_pnl_pct": 54.084,
+        "total_pnl_pct": 378.59
+      },
+      {
+        "kind": "shooting_star",
+        "label": "射击之星",
+        "signals": 4,
+        "settled": 4,
+        "wins": 1,
+        "losses": 3,
+        "win_rate_pct": 25.0,
+        "avg_pnl_pct": -43.487,
+        "total_pnl_pct": -173.95
+      }
+    ]
+  },
+  "inverted_hammer_signals": 9,
+  "pullback": {
+    "symbol": "BTCUSDT",
+    "interval": "1h",
+    "bars": 4368,
+    "signals": 49,
+    "trade_count": 49,
+    "win_rate": 22.45,
+    "avg_pnl_pct": -0.328,
+    "total_pnl_pct": -16.071,
+    "max_drawdown_pct": 18.273,
+    "trades": [
+      {
+        "side": "short",
+        "entry_bar": 152,
+        "exit_bar": 182,
+        "entry_price": 77501.956508,
+        "exit_price": 77455.442934,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 375,
+        "exit_bar": 395,
+        "entry_price": 73966.143812,
+        "exit_price": 73921.752291,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 396,
+        "exit_bar": 444,
+        "entry_price": 73914.324178,
+        "exit_price": 71143.845924,
+        "pnl_pct": 3.668,
+        "reason": "timeout",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 579,
+        "exit_bar": 595,
+        "entry_price": 61735.760378,
+        "exit_price": 62983.069681,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 689,
+        "exit_bar": 701,
+        "entry_price": 63592.968862,
+        "exit_price": 63554.802906,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 731,
+        "exit_bar": 762,
+        "entry_price": 64089.789478,
+        "exit_price": 65384.659585,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 886,
+        "exit_bar": 934,
+        "entry_price": 63517.303998,
+        "exit_price": 64618.9212,
+        "pnl_pct": -1.814,
+        "reason": "timeout",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1164,
+        "exit_bar": 1170,
+        "entry_price": 59530.081602,
+        "exit_price": 60732.827371,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1172,
+        "exit_bar": 1175,
+        "entry_price": 60465.9044,
+        "exit_price": 60429.615183,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1243,
+        "exit_bar": 1267,
+        "entry_price": 63285.170434,
+        "exit_price": 63247.189206,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1269,
+        "exit_bar": 1281,
+        "entry_price": 63637.279998,
+        "exit_price": 62420.700044,
+        "pnl_pct": 1.832,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1408,
+        "exit_bar": 1427,
+        "entry_price": 64315.124402,
+        "exit_price": 64276.525037,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1555,
+        "exit_bar": 1603,
+        "entry_price": 64097.187998,
+        "exit_price": 64687.604934,
+        "pnl_pct": -1.001,
+        "reason": "timeout",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1638,
+        "exit_bar": 1686,
+        "entry_price": 66213.184714,
+        "exit_price": 65652.047784,
+        "pnl_pct": 0.767,
+        "reason": "timeout",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1709,
+        "exit_bar": 1749,
+        "entry_price": 65486.840012,
+        "exit_price": 64517.527925,
+        "pnl_pct": 1.4,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1766,
+        "exit_bar": 1795,
+        "entry_price": 64721.223166,
+        "exit_price": 64682.380077,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "long",
+        "entry_bar": 1816,
+        "exit_bar": 1837,
+        "entry_price": 63747.236898,
+        "exit_price": 63785.475041,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "long_pullback"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1856,
+        "exit_bar": 1883,
+        "entry_price": 64557.805856,
+        "exit_price": 63228.235118,
+        "pnl_pct": 1.98,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1939,
+        "exit_bar": 1955,
+        "entry_price": 63565.294398,
+        "exit_price": 63527.145051,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 1958,
+        "exit_bar": 2006,
+        "entry_price": 63763.704708,
+        "exit_price": 64782.954,
+        "pnl_pct": -1.678,
+        "reason": "timeout",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2009,
+        "exit_bar": 2027,
+        "entry_price": 64827.301946,
+        "exit_price": 64788.395192,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2146,
+        "exit_bar": 2169,
+        "entry_price": 64317.134,
+        "exit_price": 64278.533429,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2296,
+        "exit_bar": 2339,
+        "entry_price": 64415.994224,
+        "exit_price": 65717.454971,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2342,
+        "exit_bar": 2346,
+        "entry_price": 68451.566948,
+        "exit_price": 69834.562407,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2360,
+        "exit_bar": 2362,
+        "entry_price": 71981.590802,
+        "exit_price": 71938.39033,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "long",
+        "entry_bar": 2391,
+        "exit_bar": 2394,
+        "entry_price": 77408.168538,
+        "exit_price": 77454.601054,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "long_pullback"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2462,
+        "exit_bar": 2471,
+        "entry_price": 79031.800478,
+        "exit_price": 80628.558975,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2527,
+        "exit_bar": 2531,
+        "entry_price": 79970.0028,
+        "exit_price": 79922.008003,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2585,
+        "exit_bar": 2612,
+        "entry_price": 78166.353602,
+        "exit_price": 78119.441283,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2707,
+        "exit_bar": 2721,
+        "entry_price": 81573.682,
+        "exit_price": 80143.928821,
+        "pnl_pct": 1.673,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 2970,
+        "exit_bar": 2986,
+        "entry_price": 79084.18,
+        "exit_price": 77052.30842,
+        "pnl_pct": 2.489,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3018,
+        "exit_bar": 3050,
+        "entry_price": 76163.11433,
+        "exit_price": 77701.913892,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3051,
+        "exit_bar": 3058,
+        "entry_price": 77478.30124,
+        "exit_price": 79043.672838,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3062,
+        "exit_bar": 3110,
+        "entry_price": 80830.58065,
+        "exit_price": 81164.169588,
+        "pnl_pct": -0.493,
+        "reason": "timeout",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "long",
+        "entry_bar": 3143,
+        "exit_bar": 3173,
+        "entry_price": 85633.353246,
+        "exit_price": 85684.719557,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "long_pullback"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3268,
+        "exit_bar": 3316,
+        "entry_price": 84494.787662,
+        "exit_price": 83997.766194,
+        "pnl_pct": 0.508,
+        "reason": "timeout",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3373,
+        "exit_bar": 3385,
+        "entry_price": 84145.827468,
+        "exit_price": 85845.909766,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3390,
+        "exit_bar": 3399,
+        "entry_price": 86218.762798,
+        "exit_price": 84911.634931,
+        "pnl_pct": 1.436,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3440,
+        "exit_bar": 3454,
+        "entry_price": 85246.957198,
+        "exit_price": 86969.286721,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "long",
+        "entry_bar": 3466,
+        "exit_bar": 3503,
+        "entry_price": 85921.1808,
+        "exit_price": 84185.916633,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "long_pullback"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3615,
+        "exit_bar": 3646,
+        "entry_price": 83807.2352,
+        "exit_price": 82022.465133,
+        "pnl_pct": 2.05,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3673,
+        "exit_bar": 3681,
+        "entry_price": 83683.269998,
+        "exit_price": 83633.046647,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3776,
+        "exit_bar": 3788,
+        "entry_price": 82077.341248,
+        "exit_price": 82028.081711,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 3846,
+        "exit_bar": 3853,
+        "entry_price": 83231.070456,
+        "exit_price": 84912.671003,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "long",
+        "entry_bar": 3885,
+        "exit_bar": 3924,
+        "entry_price": 81432.373218,
+        "exit_price": 79787.765008,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "long_pullback"
+      },
+      {
+        "side": "short",
+        "entry_bar": 4003,
+        "exit_bar": 4030,
+        "entry_price": 80897.187326,
+        "exit_price": 80848.63607,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 4104,
+        "exit_bar": 4152,
+        "entry_price": 77726.471596,
+        "exit_price": 76952.43741,
+        "pnl_pct": 0.916,
+        "reason": "timeout",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "short",
+        "entry_bar": 4163,
+        "exit_bar": 4177,
+        "entry_price": 77384.52,
+        "exit_price": 77338.076906,
+        "pnl_pct": -0.02,
+        "reason": "stop",
+        "signal_type": "short_shooting_star"
+      },
+      {
+        "side": "long",
+        "entry_bar": 4204,
+        "exit_bar": 4211,
+        "entry_price": 80665.489872,
+        "exit_price": 79036.369639,
+        "pnl_pct": -2.1,
+        "reason": "stop",
+        "signal_type": "long_pullback"
+      }
+    ]
+  },
+  "research_strategies": {
+    "note": "研究策略在「已结算结构/K线信号」上二次匹配；非独立信号源。引擎仍为 P1，本结果为 Playbook 口径离线近似。",
+    "by_strategy": [
+      {
+        "id": "liquidity_reversal",
+        "title": "流动性反转",
+        "signals": 197,
+        "wins": 98,
+        "losses": 99,
+        "win_rate_pct": 49.75,
+        "avg_pnl_pct": -21.452,
+        "total_pnl_pct": -4226.07,
+        "confidence_counts": {
+          "partial": 197
+        }
+      },
+      {
+        "id": "range_mean_reversion",
+        "title": "震荡区间",
+        "signals": 183,
+        "wins": 90,
+        "losses": 93,
+        "win_rate_pct": 49.18,
+        "avg_pnl_pct": -22.735,
+        "total_pnl_pct": -4160.53,
+        "confidence_counts": {
+          "partial": 108,
+          "insufficient": 75
+        }
+      },
+      {
+        "id": "trend_pullback_continuation",
+        "title": "趋势回调延续",
+        "signals": 85,
+        "wins": 42,
+        "losses": 43,
+        "win_rate_pct": 49.41,
+        "avg_pnl_pct": -5.598,
+        "total_pnl_pct": -475.83,
+        "confidence_counts": {
+          "insufficient": 85
+        }
+      }
+    ]
+  },
+  "generated_at_hkt": "2026-11-12 10:57:54",
+  "elapsed_sec": 159.9
+}
