@@ -12,6 +12,7 @@ from typing import Any
 import pandas as pd
 
 from oi_mornitor.breakout_detector import is_valid_breakout, klines_to_df
+from oi_mornitor.market_regime import close_confirms_break, wick_only_break
 from oi_mornitor.config import (
     PATTERN_BB_LENGTH,
     PATTERN_PIVOT_WINDOW,
@@ -44,6 +45,31 @@ STATUS_LABELS: dict[str, str] = {
 
 SIGNAL_LONG_PULLBACK = "long_pullback"
 SIGNAL_SHORT_SHOOTING_STAR = "short_shooting_star"
+
+
+def close_confirms_breakout(row: pd.Series, level: float, *, side: str = "long") -> bool:
+    """收盘确认突破，仅影线刺破不算。"""
+    return close_confirms_break(row, level, side=side)
+
+
+def breakout_fell_back(df: pd.DataFrame, supply_wall: float, *, side: str = "long") -> bool:
+    """突破后收盘立即跌回原区间（禁止入场）。"""
+    if df is None or len(df) < 1 or supply_wall <= 0:
+        return False
+    last = df.iloc[-1]
+    if side == "long":
+        return float(last["close"]) < supply_wall
+    return float(last["close"]) > supply_wall
+
+
+def directional_confirmation(row: pd.Series, *, side: str = "long") -> bool:
+    o, c = float(row["open"]), float(row["close"])
+    h, l = float(row["high"]), float(row["low"])
+    rng = max(h - l, 1e-12)
+    if abs(c - o) / rng < 0.35:
+        return False
+    return (c > o) if side == "long" else (c < o)
+
 
 
 @dataclass
@@ -145,6 +171,13 @@ def evaluate_pullback_strategy(
 
     if current_status in (STATUS_BREAKOUT, STATUS_WAIT_PULLBACK):
         wall = supply_wall or float(state.get("supply_wall") or 0.0)
+        # 突破后收盘跌回墙下：结构已破坏，过期（收盘确认，非影线）
+        if wall > 0 and breakout_fell_back(df, wall, side="long"):
+            return PullbackSnapshot(
+                status=STATUS_EXPIRED,
+                supply_wall=wall,
+                message=f"突破后收盘收回 supply_wall {wall:.4g}，放弃回踩",
+            ), False
         anchor = _pick_pullback_anchor(last, wall)
         if not anchor:
             return PullbackSnapshot(
@@ -169,13 +202,21 @@ def evaluate_pullback_strategy(
                 anchor_kind=kind,
                 message=f"回踩成立但 OI 流出 {oi_change_pct:.2f}%",
             ), False
+        if not directional_confirmation(last, side="long"):
+            return PullbackSnapshot(
+                status=STATUS_WAIT_PULLBACK,
+                supply_wall=wall,
+                anchor_level=level,
+                anchor_kind=kind,
+                message=f"触及 {kind} {level:.4g}，等待方向性确认 K 线",
+            ), False
         return PullbackSnapshot(
             status=STATUS_TRIGGER,
             signal_type=SIGNAL_LONG_PULLBACK,
             supply_wall=wall,
             anchor_level=level,
             anchor_kind=kind,
-            message=f"缩量回踩 {kind} {level:.4g} · 做多扳机",
+            message=f"缩量回踩 {kind} {level:.4g} · 方向确认 · 做多扳机（下一根开盘）",
         ), True
 
     if current_status == STATUS_REVERSAL_WATCH:

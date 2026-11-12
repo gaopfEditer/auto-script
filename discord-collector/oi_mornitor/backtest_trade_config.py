@@ -1,4 +1,8 @@
-"""回测交易成本与入场口径（与 Live 对齐，经 env_parse 安全默认）。"""
+"""回测交易成本与入场口径（与 Live 对齐，经 env_parse 安全默认）。
+
+默认手续费 0.06%/边（Bitget 合约 taker 约数）、滑点 0.03%/边；经 OI_BT_FEE_PCT / OI_BT_SLIPPAGE_PCT 覆盖。
+须与账户真实费率核对。杠杆/强平见 trade_leverage（形态结算主流 100x / 山寨 20x，与沙盒 30x 山寨是两套系统）。
+"""
 from __future__ import annotations
 
 from oi_mornitor.env_parse import env_bool, env_float, env_str

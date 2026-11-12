@@ -17,16 +17,24 @@ logger = logging.getLogger(__name__)
 def passes_pattern_card_emit_gate(
     alert: dict[str, Any],
     peers: list[dict[str, Any]] | None = None,
+    *,
+    apply_pause: bool = True,
 ) -> bool:
     """
     基础门控（与 record_alert_from_push 前置条件对齐）：
     - signal_policy 停推类型与周期
     - OI_PATTERN_PUSH_MTF_MIN 多周期共振
+    - 默认暂停的原版二次探底 / 射击之星（仅实盘；回测用 apply_pause=False，由默认 kinds 排除）
     """
     if not isinstance(alert, dict):
         return False
     if is_blocked_stats_record(alert):
         return False
+    if apply_pause:
+        from oi_mornitor.pattern_pause import is_paused_alert
+
+        if is_paused_alert(alert):
+            return False
     iv = str(alert.get("interval") or "").strip()
     if is_disabled_pattern_interval(iv):
         return False
@@ -109,10 +117,13 @@ def passes_backtest_emit_gate(
     alert: dict[str, Any],
     peers: list[dict[str, Any]] | None = None,
 ) -> bool:
-    """回测扫描：基础门控 + 排除量价/标签观察档（不含共振 C 档——留作分组统计）。"""
+    """回测扫描：基础门控 + 排除量价/标签观察档（不含共振 C 档——留作分组统计）。
+
+    不应用形态暂停：默认交易集合已在 DEFAULT_KINDS 剔除；研究勾选须能进入回测。
+    """
     if is_observation_record(alert):
         return False
-    return passes_pattern_card_emit_gate(alert, peers)
+    return passes_pattern_card_emit_gate(alert, peers, apply_pause=False)
 
 
 def alert_from_candle_hit(

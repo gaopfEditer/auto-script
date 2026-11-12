@@ -509,6 +509,13 @@ async def handle_backtest_structure_options(_request: web.Request) -> web.Respon
             "regimeTip": tip_for("structure"),
             "kindOptions": list_kind_options(),
             "defaultKinds": DEFAULT_KINDS,
+            "pausedNote": "底部二次探底确认、射击之星默认暂停交易（研究可勾选）。过滤为假设，须样本外验证。",
+            "diagnosticExport": (
+                "python -m oi_mornitor.scripts.export_trade_diagnostics <job.json> -o ./diag_out"
+            ),
+            "ablationExport": (
+                "python -m oi_mornitor.scripts.run_strategy_ablation <trades.json> -o ablation_report.json"
+            ),
             "intervals": sorted(STRUCTURE_CARD_INTERVALS),
             "symbolScopes": [
                 {"id": "top200", "label": "Top200 流动性（推荐）"},

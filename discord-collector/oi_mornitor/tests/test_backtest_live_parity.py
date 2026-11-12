@@ -108,9 +108,9 @@ class MtfChronologicalGateTests(unittest.TestCase):
             "type": "candle_pattern_card",
             "symbol": "BTCUSDT",
             "interval": "15m",
-            "kind": "shooting_star",
-            "side": "bear",
-            "type_label": "射击之星",
+            "kind": "inverted_hammer",
+            "side": "bull",
+            "type_label": "倒锤子",
             "kline_close_time": 1_700_000_000_000,
             "price": 50000.0,
         }

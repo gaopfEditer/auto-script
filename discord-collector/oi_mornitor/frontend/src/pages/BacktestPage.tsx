@@ -24,7 +24,27 @@ import {
   mcapTierTitle,
 } from "../utils/mcapTier";
 
-type KindOption = { id: string; label: string; side: string };
+type KindOption = { id: string; label: string; side: string; paused?: boolean; pausedReason?: string; grade?: string; gradeLabel?: string };
+
+type DiagnosticSummary = {
+  n?: number;
+  tp1HitRate?: number | null;
+  tp2HitRate?: number | null;
+  runnerActivationRate?: number | null;
+  tp1ThenBreakevenRate?: number | null;
+  initialSlHitRate?: number | null;
+  liquidationRate?: number | null;
+  liquidationCount?: number;
+  lossExceededMarginCount?: number;
+  expectancy?: number | null;
+  profitFactor?: number | null;
+  payoffRatio?: number | null;
+  avgMfePct?: number | null;
+  avgMaePct?: number | null;
+  avgWin?: number | null;
+  avgLoss?: number | null;
+  exitReasons?: Record<string, number>;
+};
 
 type BacktestSummary = {
   total: number;
@@ -77,6 +97,18 @@ type BacktestItem = {
   mtfResonance?: AlertMtfResonance;
   confluence?: AlertConfluence;
   mcapTier?: string;
+  exitReason?: string;
+  mfePct?: number | null;
+  maePct?: number | null;
+  mfeR?: number | null;
+  maeR?: number | null;
+  tp1Hit?: boolean;
+  tp2Hit?: boolean;
+  runnerActivated?: boolean;
+  liquidated?: boolean;
+  regime4h?: { label?: string } | string;
+  regime1h?: { label?: string } | string;
+  opportunity?: { decision?: string; reasons?: string[]; regime_4h?: string; scoreNote?: string };
 };
 
 type BacktestJob = {
@@ -125,6 +157,8 @@ type BacktestJob = {
   page?: number;
   pages?: number;
   settleRules?: string;
+  diagnosticSummary?: DiagnosticSummary;
+  pausedNote?: string;
 };
 
 type CoverageInfo = {
@@ -1566,9 +1600,12 @@ export function BacktestPage() {
               <span>信号类型</span>
               <div className="bt-checks">
                 {kindOptions.map((k) => (
-                  <label key={k.id} className="bt-check">
+                  <label key={k.id} className="bt-check" title={k.pausedReason || k.gradeLabel || k.label}>
                     <input type="checkbox" checked={selectedKinds.has(k.id)} onChange={() => toggleKind(k.id)} />
-                    <span>{k.label}</span>
+                    <span>
+                      {k.label}
+                      {k.paused ? <em className="muted"> · 已暂停</em> : k.gradeLabel ? <em className="muted"> · {k.gradeLabel}</em> : null}
+                    </span>
                   </label>
                 ))}
               </div>
@@ -2235,6 +2272,26 @@ export function BacktestPage() {
                   </p>
                 ) : null}
                 {job.settleRules ? <p className="bt-rules">{job.settleRules}</p> : null}
+                {job.diagnosticSummary && (job.diagnosticSummary.n || 0) > 0 ? (
+                  <div className="bt-rules" style={{ marginTop: 8 }}>
+                    <strong>出场诊断</strong>
+                    {` · n=${job.diagnosticSummary.n}`}
+                    {` · TP1 ${job.diagnosticSummary.tp1HitRate ?? "—"}`}
+                    {` · TP2 ${job.diagnosticSummary.tp2HitRate ?? "—"}`}
+                    {` · Runner ${job.diagnosticSummary.runnerActivationRate ?? "—"}`}
+                    {` · TP1后保本 ${job.diagnosticSummary.tp1ThenBreakevenRate ?? "—"}`}
+                    {` · 初始SL ${job.diagnosticSummary.initialSlHitRate ?? "—"}`}
+                    {` · 强平 ${job.diagnosticSummary.liquidationCount ?? 0}`}
+                    {` · 期望值 ${job.diagnosticSummary.expectancy ?? "—"}`}
+                    {` · PF ${job.diagnosticSummary.profitFactor ?? "—"}`}
+                    {` · 盈亏比 ${job.diagnosticSummary.payoffRatio ?? "—"}`}
+                    {` · MFE ${job.diagnosticSummary.avgMfePct ?? "—"}% / MAE ${job.diagnosticSummary.avgMaePct ?? "—"}%`}
+                    <div className="muted" style={{ marginTop: 4 }}>
+                      导出诊断：python -m oi_mornitor.scripts.export_trade_diagnostics &lt;job.json&gt; -o ./diag_out
+                      ；消融：python -m oi_mornitor.scripts.run_strategy_ablation &lt;trades.json&gt; -o ablation_report.json
+                    </div>
+                  </div>
+                ) : null}
                 {job.params?.funnelNote ? (
                   <p className="bt-warn-banner">{job.params.funnelNote}</p>
                 ) : null}
@@ -2542,7 +2599,10 @@ export function BacktestPage() {
                               <th>共振</th>
                               <th>综合</th>
                               <th>入场</th>
+                              <th>环境</th>
                               <th>结果</th>
+                              <th>出场</th>
+                              <th>MFE/MAE</th>
                               <th>回溯盈亏</th>
                             </tr>
                           </thead>
@@ -2606,10 +2666,25 @@ export function BacktestPage() {
                                     )}
                                   </td>
                                   <td className="mono">{fmtPrice(row.entry)}</td>
+                                  <td className="muted" title={row.opportunity?.reasons?.join("；") || ""}>
+                                    {typeof row.regime4h === "object" && row.regime4h?.label
+                                      ? row.regime4h.label
+                                      : typeof row.regime4h === "string"
+                                        ? row.regime4h
+                                        : row.opportunity?.regime_4h || "—"}
+                                    {row.opportunity?.decision ? ` · ${row.opportunity.decision}` : ""}
+                                    {row.liquidated ? " · 强平" : ""}
+                                  </td>
                                   <td>
                                     <span className={`pattern-wr-out oc-${row.outcome || "pending"}`}>
                                       {outcomeLabel(rec.outcome)}
                                     </span>
+                                  </td>
+                                  <td className="muted">{row.exitReason || "—"}</td>
+                                  <td className="mono muted" title={`MFE ${row.mfePct ?? "—"}% / ${row.mfeR ?? "—"}R  MAE ${row.maePct ?? "—"}% / ${row.maeR ?? "—"}R`}>
+                                    {row.mfePct != null || row.maePct != null
+                                      ? `${row.mfePct != null ? row.mfePct.toFixed(2) : "—"} / ${row.maePct != null ? row.maePct.toFixed(2) : "—"}`
+                                      : "—"}
                                   </td>
                                   <td className={`mono ${pnl.cls}`} title={pnl.title}>
                                     {pnl.text}

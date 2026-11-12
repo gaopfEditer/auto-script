@@ -19,6 +19,7 @@ export type PatternEntryRule = {
 export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   {
     label: "底部二次探底确认",
+    paused: true,
     side: "多",
     summary: "恐慌抛售插针后，二次回踩同一低点并用阳线确认支撑（Double Bottom）。",
     impl: "structure_signals._detect_bottom_reversal",
@@ -43,6 +44,7 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   },
   {
     label: "射击之星",
+    paused: true,
     side: "空",
     summary: "上影长、实体小的看跌蜡烛；形态 + 放量 ≥ MA20×倍数 即进形态信号列表。",
     impl: "candle_signals + indicators.detect_shooting_star",

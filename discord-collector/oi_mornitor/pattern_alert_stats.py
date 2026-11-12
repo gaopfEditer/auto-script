@@ -205,12 +205,9 @@ def _detect_tier(symbol: str) -> str:
 
 
 def _leverage(symbol: str, asset_class: str = "crypto") -> float:
-    if str(asset_class or "").lower() == "equity":
-        from oi_mornitor.config import OI_EQUITY_STATS_LEVERAGE
+    from oi_mornitor.trade_leverage import leverage_for_symbol
 
-        lev = float(OI_EQUITY_STATS_LEVERAGE or 5)
-        return lev if lev > 0 else 0.0
-    return 100 if human_base_asset(symbol) in _LEV_100 else 20
+    return leverage_for_symbol(symbol, asset_class)
 
 
 def _side_from_alert(alert: dict[str, Any]) -> str | None:

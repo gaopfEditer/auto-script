@@ -84,7 +84,18 @@ KIND_OPTIONS: list[dict[str, str]] = [
 if ENABLE_CURVATURE_DECAY:
     KIND_OPTIONS.append({"id": "curvature_decay", "label": "顶部 · 圆弧顶", "side": "bear"})
 
-DEFAULT_KINDS = [k["id"] for k in KIND_OPTIONS]
+def _all_kind_ids() -> list[str]:
+    return [k["id"] for k in KIND_OPTIONS]
+
+
+def default_trade_kind_ids() -> list[str]:
+    from oi_mornitor.pattern_pause import default_trade_kinds
+
+    return default_trade_kinds(_all_kind_ids())
+
+
+# 默认交易集合：暂停原版二次探底 / 射击之星（研究可在请求中显式勾选）
+DEFAULT_KINDS = default_trade_kind_ids()
 
 
 @dataclass
@@ -107,6 +118,7 @@ class BacktestJob:
     items: list[dict[str, Any]] = field(default_factory=list)
     started_at: float = 0.0
     finished_at: float = 0.0
+    diagnostic_summary: dict[str, Any] | None = None
 
 
 _jobs: dict[str, BacktestJob] = {}
@@ -118,8 +130,10 @@ _INDEX_FILE = _JOB_DIR / "index.json"
 _MAX_LIST = 40
 
 
-def list_kind_options() -> list[dict[str, str]]:
-    return list(KIND_OPTIONS)
+def list_kind_options() -> list[dict[str, Any]]:
+    from oi_mornitor.pattern_pause import kind_option_meta
+
+    return [kind_option_meta(k["id"], k["label"], k["side"]) for k in KIND_OPTIONS]
 
 
 def _ensure_job_dir() -> None:
@@ -224,6 +238,9 @@ def _job_snapshot(job: BacktestJob) -> dict[str, Any]:
         "items": list(job.items),
         "startedAt": job.started_at,
         "finishedAt": job.finished_at,
+        "diagnosticSummary": (
+            dict(job.diagnostic_summary) if isinstance(job.diagnostic_summary, dict) else job.diagnostic_summary
+        ),
     }
 
 
@@ -240,6 +257,7 @@ def _dict_to_job(data: dict[str, Any]) -> BacktestJob:
         items=list(data.get("items") or []),
         started_at=float(data.get("startedAt") or 0),
         finished_at=float(data.get("finishedAt") or 0),
+        diagnostic_summary=data.get("diagnosticSummary") if isinstance(data.get("diagnosticSummary"), dict) else None,
     )
 
 
@@ -378,8 +396,12 @@ def _refresh_live_stats(job: BacktestJob) -> None:
         job.confluence_summary = (
             summarize(_pseudo_alerts(conf_items)) if conf_items else None
         )
+        from oi_mornitor.trade_diagnostics import summarize_diagnostics
+
+        job.diagnostic_summary = summarize_diagnostics(items)
     else:
         job.summary = None
+        job.diagnostic_summary = None
         job.confluence_summary = None
         job.by_kind = []
         job.by_interval = []
@@ -658,8 +680,19 @@ def _scan_symbol_interval(
             "exitPrice": settled.get("exitPrice"),
             "slPrice": settled.get("slPrice") or (plan.sl_price if plan else None),
             "tp1Price": settled.get("tp1Price") or (plan.tp1_price if plan else None),
+            "tp2Price": settled.get("tp2Price") or (plan.tp2_price if plan else None),
             "error": settled.get("error"),
         }
+        for dk in (
+            "exitReason", "mfePct", "maePct", "mfeR", "maeR",
+            "tp1Hit", "tp2Hit", "runnerActivated", "tp1ThenBreakeven", "initialSlHit",
+            "holdMs", "feePctPerSide", "slippagePctPerSide",
+            "fundingModeled", "fundingNote",
+            "liquidated", "lossExceededMargin", "liquidationPrice", "leverage", "pnlPctRaw",
+            "initialSl",
+        ):
+            if dk in settled:
+                row[dk] = settled[dk]
         if alert.get("tdSetup") is not None:
             row["tdSetup"] = alert.get("tdSetup")
             if alert.get("tdLabel"):
@@ -690,6 +723,13 @@ def _scan_symbol_interval(
                 kind = str(ev.get("kind") or "")
                 if kind not in structure_kinds or kind == "spring_2b":
                     continue
+                if kind == "bottom_secondary_test" and interval == "4h":
+                    from oi_mornitor.market_regime import classify_trend_regime
+                    from oi_mornitor.pattern_pause import bottom_long_forbidden_by_4h_downtrend
+
+                    r4 = classify_trend_regime(struct_df, end_idx=bar_index, tf="4h")
+                    if bottom_long_forbidden_by_4h_downtrend(r4.label):
+                        continue
                 side = str(ev.get("side") or "")
                 if side not in ("bull", "bear"):
                     continue
@@ -1314,5 +1354,7 @@ def job_to_dict(
         "settleRules": _settle_rules_text(job),
         "klineSource": "bybit_v5_parquet",
         "storageStats": storage_stats(),
-        "kindOptions": KIND_OPTIONS,
+        "kindOptions": list_kind_options(),
+        "diagnosticSummary": job.diagnostic_summary,
+        "pausedKindsDefault": True,
     }

@@ -3,6 +3,8 @@
 > **全量信号 ID、A/B/C 决策组、实盘边界** → [**signals-and-decision-logic.md**](./signals-and-decision-logic.md)  
 > 币种如何进池、进 watchlist、进 TG 扫描 → [**coin-capture.md**](./coin-capture.md)
 
+> **策略重构（环境识别 / 独立策略 / 诊断与消融）** → [**strategy-refactor.md**](./strategy-refactor.md)
+
 本文档整理 `oi_mornitor` 内全部业务信号、图表标注（次高点 / 扳机线 / Vegas / 射击之星等）、**交易卡片生命周期** 与通知通道，方便对照 Pine（`tradingview-bollinger-wicks.pine` / Vegas 双通道）与前端图表。
 
 ---
