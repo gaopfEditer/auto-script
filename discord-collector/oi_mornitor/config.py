@@ -677,7 +677,7 @@ except Exception:  # noqa: BLE001 — 包未落地时不阻断主雷达
 
 
 # —— 策略重构（假设闸，默认开；详见 docs/strategy-refactor.md）——
-# 原版二次探底 / 射击之星默认暂停实盘推送与默认结构回测；设 0 可研究重开。
+# 原版二次探底默认暂停实盘推送与默认结构回测；射击之星默认启用（OI_PAUSE_SHOOTING_STAR=1 可整类暂停）。
 try:
     from oi_mornitor.pattern_pause import (  # noqa: E402
         OI_BOTTOM_4H_DOWNTREND_FORBID_LONG,
@@ -692,7 +692,7 @@ try:
     )
 except Exception:  # noqa: BLE001
     OI_PAUSE_BOTTOM_SECONDARY = True
-    OI_PAUSE_SHOOTING_STAR = True
+    OI_PAUSE_SHOOTING_STAR = False
     OI_BOTTOM_4H_DOWNTREND_FORBID_LONG = True
     OI_SETTLE_LIQUIDATION = True
     OI_SETTLE_CAP_LOSS_AT_MARGIN = True

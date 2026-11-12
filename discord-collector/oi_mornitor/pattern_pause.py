@@ -1,4 +1,4 @@
-"""形态暂停与环境闸：默认停用原版二次探底 / 射击之星的实盘推送与默认回测交易。
+"""形态暂停与环境闸：默认停用原版二次探底的实盘推送与默认回测交易；射击之星（含连续走平）默认启用，仍可走情境闸。
 
 可通过 env 重新打开供研究。打开后仍可走情境闸（可 env 开关）：
   放行 ⟺ 方向尚未被反向收盘突破  OR  大周期已出现同向反转
@@ -14,9 +14,9 @@ import pandas as pd
 
 from oi_mornitor.env_parse import env_bool
 
-# 默认暂停：原版底部二次探底、原版射击之星（含连续走平）。
+# 默认暂停原版底部二次探底；射击之星（含连续走平）默认启用。
 OI_PAUSE_BOTTOM_SECONDARY = env_bool("OI_PAUSE_BOTTOM_SECONDARY", True)
-OI_PAUSE_SHOOTING_STAR = env_bool("OI_PAUSE_SHOOTING_STAR", True)
+OI_PAUSE_SHOOTING_STAR = env_bool("OI_PAUSE_SHOOTING_STAR", False)
 # 假设闸：4h 明显下降趋势时禁止底部形态直接做多（仅在二次探底被研究重开时生效；默认 ON）。
 OI_BOTTOM_4H_DOWNTREND_FORBID_LONG = env_bool("OI_BOTTOM_4H_DOWNTREND_FORBID_LONG", True)
 # 情境闸：方向未破 OR 大周期已反转（默认开）。

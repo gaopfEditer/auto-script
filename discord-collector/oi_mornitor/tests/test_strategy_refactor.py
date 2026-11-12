@@ -54,12 +54,12 @@ def _alert(kind: str, label: str, side: str = "bear") -> dict:
 
 
 class PauseFlagTests(unittest.TestCase):
-    def test_defaults_pause_bottom_and_shooting_star(self) -> None:
+    def test_defaults_pause_bottom_but_not_shooting_star(self) -> None:
         self.assertTrue(is_paused_kind("bottom_secondary_test"))
-        self.assertTrue(is_paused_kind("shooting_star"))
-        self.assertTrue(is_paused_kind("consecutive_flat_shooting_star"))
+        self.assertFalse(is_paused_kind("shooting_star"))
+        self.assertFalse(is_paused_kind("consecutive_flat_shooting_star"))
         self.assertTrue(is_paused_alert(_alert("bottom_secondary_test", "底部二次探底确认", "bull")))
-        self.assertTrue(is_paused_alert(_alert("shooting_star", "射击之星", "bear")))
+        self.assertFalse(is_paused_alert(_alert("shooting_star", "射击之星", "bear")))
         self.assertFalse(is_paused_kind("liquidity_sweep"))
         self.assertFalse(is_paused_kind("hs_vegas_break"))
 
@@ -67,32 +67,41 @@ class PauseFlagTests(unittest.TestCase):
         ids = [k["id"] for k in KIND_OPTIONS]
         self.assertIn("bottom_secondary_test", ids)
         self.assertNotIn("bottom_secondary_test", DEFAULT_KINDS)
-        self.assertNotIn("shooting_star", DEFAULT_KINDS)
-        self.assertNotIn("consecutive_flat_shooting_star", DEFAULT_KINDS)
+        self.assertIn("shooting_star", DEFAULT_KINDS)
+        self.assertIn("consecutive_flat_shooting_star", DEFAULT_KINDS)
         self.assertIn("liquidity_sweep", DEFAULT_KINDS)
         opts = list_kind_options()
         paused = {o["id"] for o in opts if o.get("paused")}
         self.assertIn("bottom_secondary_test", paused)
-        self.assertIn("shooting_star", paused)
+        self.assertNotIn("shooting_star", paused)
+        self.assertNotIn("consecutive_flat_shooting_star", paused)
 
     def test_emit_gate_blocks_paused(self) -> None:
-        a = _alert("shooting_star", "射击之星")
+        a = _alert("bottom_secondary_test", "底部二次探底确认", "bull")
         # 即使 MTF 放行，暂停仍挡
         with mock.patch("oi_mornitor.pattern_emit_gate.passes_push_mtf_gate", return_value=True):
             with mock.patch("oi_mornitor.pattern_emit_gate.is_blocked_stats_record", return_value=False):
                 self.assertFalse(passes_pattern_card_emit_gate(a))
 
+    def test_emit_gate_allows_shooting_star_when_not_paused(self) -> None:
+        a = _alert("shooting_star", "射击之星")
+        with mock.patch("oi_mornitor.pattern_emit_gate.passes_push_mtf_gate", return_value=True):
+            with mock.patch("oi_mornitor.pattern_emit_gate.is_blocked_stats_record", return_value=False):
+                self.assertTrue(passes_pattern_card_emit_gate(a))
+
     def test_reenable_via_env(self) -> None:
         import oi_mornitor.pattern_pause as pp
 
-        with mock.patch.object(pp, "OI_PAUSE_SHOOTING_STAR", False):
-            with mock.patch.object(pp, "OI_PAUSE_BOTTOM_SECONDARY", False):
-                self.assertFalse(pp.is_paused_kind("shooting_star"))
-                self.assertFalse(pp.is_paused_kind("bottom_secondary_test"))
-                all_ids = [k["id"] for k in KIND_OPTIONS]
-                enabled = pp.default_trade_kinds(all_ids)
-                self.assertIn("shooting_star", enabled)
-                self.assertIn("bottom_secondary_test", enabled)
+        # env 可整类暂停射击之星，或重开二次探底
+        with mock.patch.object(pp, "OI_PAUSE_SHOOTING_STAR", True):
+            self.assertTrue(pp.is_paused_kind("shooting_star"))
+            self.assertTrue(pp.is_paused_kind("consecutive_flat_shooting_star"))
+        with mock.patch.object(pp, "OI_PAUSE_BOTTOM_SECONDARY", False):
+            self.assertFalse(pp.is_paused_kind("bottom_secondary_test"))
+            all_ids = [k["id"] for k in KIND_OPTIONS]
+            enabled = pp.default_trade_kinds(all_ids)
+            self.assertIn("bottom_secondary_test", enabled)
+            self.assertIn("shooting_star", enabled)
 
     def test_4h_downtrend_forbid_long_toggle(self) -> None:
         import oi_mornitor.pattern_pause as pp

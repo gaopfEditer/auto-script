@@ -47,9 +47,8 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   },
   {
     label: "射击之星",
-    paused: true,
     side: "空",
-    summary: "上影长、实体小的看跌蜡烛；形态 + 放量。默认已暂停；若研究重开，须过情境闸（方向未破或 4h 已反转）。",
+    summary: "上影长、实体小的看跌蜡烛；形态 + 放量。默认启用；须过情境闸（方向未破或 4h 已反转）。",
     impl: "candle_signals + indicators.detect_shooting_star + pattern_pause.passes_direction_or_htf_reversal",
     conditions: [
       "① 形态：上影 ∈ [1.5×实体, max]；下影很短或下影×2 < 上影；近下轨时必须收阴",
@@ -61,7 +60,6 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   },
   {
     label: "连续走平射击之星",
-    paused: true,
     side: "空",
     summary: "短窗内再次出现射击之星（「射击之星（2）」），强化顶部钝化。",
     impl: "candle_signals consecutive shoot",
