@@ -80,6 +80,20 @@ function wrapBitgetNetworkError(err, proxyUrl) {
 }
 
 /**
+ * place-pos-tpsl / preset TP/SL：执行价须 > 0（勿传 "0"，否则会触发 presetSLExcutePrice must than 0）。
+ * 未指定执行价时默认与触发价相同（已 tick 对齐的 trigger 字符串）。
+ * @param {string | undefined} triggerPrice
+ * @param {string | undefined} [executePrice]
+ * @returns {string | undefined}
+ */
+export function resolveBitgetTpslExecutePrice(triggerPrice, executePrice) {
+  const raw = String(executePrice ?? triggerPrice ?? "").trim();
+  const n = Number(raw.replace(/[^\d.]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return raw.replace(/[^\d.]/g, "") || undefined;
+}
+
+/**
  * @param {BitgetCredentials} creds
  */
 
@@ -356,6 +370,10 @@ export function createBitgetClient(creds) {
 
      *   presetStopLossPrice?: string;
 
+     *   presetStopSurplusExecutePrice?: string;
+
+     *   presetStopLossExecutePrice?: string;
+
      * }} p
 
      */
@@ -390,9 +408,20 @@ export function createBitgetClient(creds) {
 
       if (p.orderType === "limit" && p.price) body.price = p.price;
 
-      if (p.presetStopSurplusPrice) body.presetStopSurplusPrice = p.presetStopSurplusPrice;
+      if (p.presetStopSurplusPrice) {
+        body.presetStopSurplusPrice = p.presetStopSurplusPrice;
+        const tpExec = resolveBitgetTpslExecutePrice(
+          p.presetStopSurplusPrice,
+          p.presetStopSurplusExecutePrice
+        );
+        if (tpExec) body.presetStopSurplusExecutePrice = tpExec;
+      }
 
-      if (p.presetStopLossPrice) body.presetStopLossPrice = p.presetStopLossPrice;
+      if (p.presetStopLossPrice) {
+        body.presetStopLossPrice = p.presetStopLossPrice;
+        const slExec = resolveBitgetTpslExecutePrice(p.presetStopLossPrice, p.presetStopLossExecutePrice);
+        if (slExec) body.presetStopLossExecutePrice = slExec;
+      }
 
       return signedRequest("POST", "/api/v2/mix/order/place-order", null, body);
 
@@ -516,8 +545,10 @@ export function createBitgetClient(creds) {
      *   marginCoin: string;
      *   holdSide: string;
      *   stopSurplusTriggerPrice?: string;
+     *   stopSurplusExecutePrice?: string;
      *   stopSurplusSize?: string;
      *   stopLossTriggerPrice?: string;
+     *   stopLossExecutePrice?: string;
      *   stopLossSize?: string;
      *   stopSurplusClientOid?: string;
      *   stopLossClientOid?: string;
@@ -534,13 +565,15 @@ export function createBitgetClient(creds) {
       if (p.stopSurplusTriggerPrice) {
         body.stopSurplusTriggerPrice = p.stopSurplusTriggerPrice;
         body.stopSurplusTriggerType = "mark_price";
-        body.stopSurplusExecutePrice = "0";
+        const tpExec = resolveBitgetTpslExecutePrice(p.stopSurplusTriggerPrice, p.stopSurplusExecutePrice);
+        if (tpExec) body.stopSurplusExecutePrice = tpExec;
         if (p.stopSurplusSize) body.stopSurplusSize = p.stopSurplusSize;
       }
       if (p.stopLossTriggerPrice) {
         body.stopLossTriggerPrice = p.stopLossTriggerPrice;
         body.stopLossTriggerType = "mark_price";
-        body.stopLossExecutePrice = "0";
+        const slExec = resolveBitgetTpslExecutePrice(p.stopLossTriggerPrice, p.stopLossExecutePrice);
+        if (slExec) body.stopLossExecutePrice = slExec;
         if (p.stopLossSize) body.stopLossSize = p.stopLossSize;
       }
       if (p.stopSurplusClientOid) body.stopSurplusClientOid = p.stopSurplusClientOid;

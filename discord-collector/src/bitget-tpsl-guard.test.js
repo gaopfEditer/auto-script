@@ -6,6 +6,7 @@ import {
   ensureBitgetPositionTpslAfterOpen,
   repairBitgetPositionTpsl,
   classifyBitgetTpslRepairError,
+  sendBitgetTradeTelegramAlert,
   resolveRepairTpslLevels,
   isValidTakeProfit,
   isValidStopLoss,
@@ -60,6 +61,12 @@ describe("classifyBitgetTpslRepairError", () => {
 
   it("识别 holdSide 不匹配", () => {
     assert.equal(classifyBitgetTpslRepairError("holdSide position mode mismatch", "long"), "hold_side");
+  });
+
+  it("识别 preset/execute 参数错误", () => {
+    const err =
+      "Bitget HTTP 400: The parameter does not meet the specification presetSLExcutePrice must than 0";
+    assert.equal(classifyBitgetTpslRepairError(err, "long"), "request_param");
   });
 });
 
@@ -249,6 +256,68 @@ describe("repairBitgetPositionTpsl", () => {
     const result = await repairBitgetPositionTpsl(client, baseCtx, record);
     assert.equal(result.ok, true);
     assert.equal(record.tpslRepair.attempts[0].category, "hold_side");
+  });
+
+  it("补挂 placePosTpsl 携带与触发价一致且 >0 的执行价", async () => {
+    process.env.BITGET_TPSL_REPAIR_RETRIES = "1";
+    /** @type {Record<string, unknown>[]} */
+    const payloads = [];
+    let placed = false;
+    const client = {
+      getSinglePosition: async () => ({ data: [{ symbol: "ETHUSDT", holdSide: "long", total: "1" }] }),
+      getOrdersPlanPending: async () =>
+        placed
+          ? {
+              data: [
+                { planType: "profit_plan", holdSide: "long" },
+                { planType: "loss_plan", holdSide: "long" },
+              ],
+            }
+          : { data: [] },
+      withHoldSideFallback: async (fn) => fn("long"),
+      placePosTpsl: async (p) => {
+        payloads.push(p);
+        placed = true;
+        return { data: { ok: true } };
+      },
+    };
+    const record = {};
+    const result = await repairBitgetPositionTpsl(client, baseCtx, record);
+    assert.equal(result.ok, true);
+    assert.equal(payloads.length, 1);
+    const p = payloads[0];
+    assert.equal(p.stopLossExecutePrice, p.stopLossTriggerPrice);
+    assert.equal(p.stopSurplusExecutePrice, p.stopSurplusTriggerPrice);
+    assert.ok(Number(p.stopLossExecutePrice) > 0);
+    assert.ok(Number(p.stopSurplusExecutePrice) > 0);
+  });
+
+  it("request_param 用尽时不触发裸仓平仓", async () => {
+    process.env.BITGET_REQUIRE_TPSL = "1";
+    process.env.BITGET_NAKED_POSITION_ACTION = "close";
+    process.env.BITGET_TPSL_VERIFY_SEC = "2";
+    process.env.BITGET_TPSL_REPAIR_RETRIES = "2";
+
+    let closed = false;
+    const client = {
+      getSinglePosition: async () => ({ data: [{ symbol: "ETHUSDT", holdSide: "long", total: "1" }] }),
+      getOrdersPlanPending: async () => ({ data: [] }),
+      withHoldSideFallback: async (fn) => fn("long"),
+      placePosTpsl: async () => {
+        throw new Error("presetSLExcutePrice must than 0");
+      },
+      closePositions: async () => {
+        closed = true;
+        return { data: { ok: true } };
+      },
+    };
+    const log = { warn: () => {} };
+    const record = {};
+    const result = await ensureBitgetPositionTpslAfterOpen(client, log, baseCtx, record);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "naked_alert_only");
+    assert.equal(closed, false);
+    assert.equal(record.tpslRepair?.closeReason, "request_param_exhausted");
   });
 
   it("sl_breached：立即标记平仓原因", async () => {
@@ -484,5 +553,19 @@ describe("placeBitgetOpenWithPresets tick", () => {
     const body = JSON.parse(bodies[0]);
     assert.equal(body.presetStopLossPrice, "0.4001");
     assert.equal(body.presetStopSurplusPrice, "0.4513");
+    assert.equal(body.presetStopLossExecutePrice, "0.4001");
+    assert.equal(body.presetStopSurplusExecutePrice, "0.4513");
+    assert.ok(Number(body.presetStopLossExecutePrice) > 0);
+  });
+});
+
+describe("sendBitgetTradeTelegramAlert", () => {
+  it("不向 Telegram 群发送 Bitget 操作结果", async () => {
+    let warnCount = 0;
+    await sendBitgetTradeTelegramAlert(
+      { warn: () => warnCount++ },
+      "Bitget 裸仓已平 / KGENUSDT long card=#2603"
+    );
+    assert.equal(warnCount, 0);
   });
 });
