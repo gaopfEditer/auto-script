@@ -8,5 +8,6 @@
 | [backtest-vs-live.md](./backtest-vs-live.md) | 纸面结算 vs Live / Bitget 差异 |
 | [coin-capture.md](./coin-capture.md) | 币种捕获与榜单 |
 | [sequoia-strategies.md](./sequoia-strategies.md) | Sequoia 策略沙盒 |
+| [short_term_strategy_v1.md](./short_term_strategy_v1.md) | 短线策略 V1 决策层：分层、五类机会、放弃规则、消融 A–E、CLI 与回测页 |
 
 **研究回测（按文档自助执行）**：打开 [signals-and-decision-logic.md §10](./signals-and-decision-logic.md#10-研究回测操作手册-playbook)。

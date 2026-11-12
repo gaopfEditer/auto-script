@@ -24,3 +24,8 @@
 ## 行情环境 tip
 
 文案在 `backtest/regime_tips.py`，经 options API 下发；前端 `RegimeTip` 图标悬停/点击查看。
+
+## 短线策略 V1
+
+研究决策层（非已验证优势）：`docs/short_term_strategy_v1.md`。
+CLI：`python -m oi_mornitor.scripts.run_short_term_strategy_v1`；API：`/api/backtest/short-term-v1/...`；UI：`/backtest` 第 5 节。

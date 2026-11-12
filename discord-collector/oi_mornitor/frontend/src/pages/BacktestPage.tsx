@@ -329,6 +329,7 @@ type NlvSummary = {
   avgRiskPct?: number | null;
   medianRiskPct?: number | null;
   profitFactor?: number | null;
+  expectancy?: number | null;
   expectancyR?: number | null;
   sumR?: number | null;
   maxDrawdownPct?: number | null;
@@ -391,6 +392,34 @@ type DcaJob = {
     modeLabel?: string;
     exit_plan?: string;
     confluenceStats?: Record<string, number>;
+  };
+};
+
+
+type Stv1ExperimentOption = { id: string; label: string };
+type Stv1Job = {
+  id: string;
+  status: string;
+  error?: string | null;
+  params?: Record<string, unknown>;
+  progress?: { current?: string; total?: number };
+  summary?: NlvSummary | null;
+  bySetup?: Record<string, { n?: number; profitFactor?: number | null; expectancy?: number | null }>;
+  byTier?: Record<string, { n?: number; profitFactor?: number | null; expectancy?: number | null }>;
+  byRegime?: Record<string, { n?: number; profitFactor?: number | null; expectancy?: number | null }>;
+  itemCount?: number;
+  categoryLabel?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  disclaimer?: string;
+  priceProxyNote?: string;
+  fillRules?: string;
+  result?: {
+    symbols?: string[];
+    elapsed_sec?: number;
+    universe?: string;
+    experiment?: { id?: string; label?: string } | string;
+    skippedCount?: number;
   };
 };
 
@@ -714,6 +743,32 @@ export function BacktestPage() {
   const [dcaLoading, setDcaLoading] = useState(false);
   const [dcaJob, setDcaJob] = useState<DcaJob | null>(null);
   const [dcaErr, setDcaErr] = useState("");
+
+  const [stv1Universes, setStv1Universes] = useState<NlvUniverseOption[]>([
+    { id: "crypto_no_equity", label: "加密货币（不含美股代币）" },
+    { id: "majors", label: "BTC / ETH" },
+    { id: "majors_sol", label: "BTC / ETH / SOL" },
+  ]);
+  const [stv1Universe, setStv1Universe] = useState("crypto_no_equity");
+  const [stv1Experiments, setStv1Experiments] = useState<Stv1ExperimentOption[]>([
+    { id: "A", label: "A · 现有形态 + 均线 + Vegas" },
+    { id: "B", label: "B · A + BTC 市场状态" },
+    { id: "C", label: "C · B + OI / 资金费 / 清算" },
+    { id: "D", label: "D · C + 扫单收回 / CVD / 吸收" },
+    { id: "E", label: "E · 完整 V1 分档参数" },
+  ]);
+  const [stv1Experiment, setStv1Experiment] = useState("E");
+  const [stv1SettleRules, setStv1SettleRules] = useState(
+    "下一根开盘+滑点 · 分档止损止盈 · 二次探底默认暂停 · 射击之星默认启用",
+  );
+  const [stv1PausedNote, setStv1PausedNote] = useState(
+    "底部二次探底确认默认暂停（研究可勾选）；射击之星（含连续走平）默认启用，须过情境闸。",
+  );
+  const [stv1RegimeTip, setStv1RegimeTip] = useState<RegimeTipData | null>(null);
+  const [stv1Loading, setStv1Loading] = useState(false);
+  const [stv1Job, setStv1Job] = useState<Stv1Job | null>(null);
+  const [stv1Err, setStv1Err] = useState("");
+
 
   useEffect(() => {
     fetch("/api/backtest/nlv/options")
@@ -1287,6 +1342,49 @@ export function BacktestPage() {
     }
   };
 
+
+  const pollStv1Job = async (jobId: string) => {
+    for (let i = 0; i < 180; i++) {
+      const r = await fetch(`/api/backtest/short-term-v1/${encodeURIComponent(jobId)}`);
+      const body = await r.json();
+      if (!body?.ok) throw new Error(body?.error || "短线策略 V1 任务查询失败");
+      const next = body as Stv1Job;
+      setStv1Job(next);
+      if (next.status === "done" || next.status === "failed") return next;
+      await new Promise((res) => setTimeout(res, 800));
+    }
+    throw new Error("短线策略 V1 回测超时");
+  };
+
+  const onRunStv1Backtest = async () => {
+    setStv1Loading(true);
+    setStv1Err("");
+    try {
+      const startMs = parseLocalInputMs(btStartLocal);
+      const endMs = parseLocalInputMs(btEndLocal);
+      const r = await fetch("/api/backtest/short-term-v1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          universe: stv1Universe,
+          experiment: stv1Experiment,
+          startMs: Number.isFinite(startMs) ? startMs : undefined,
+          endMs: Number.isFinite(endMs) ? endMs : undefined,
+        }),
+      });
+      const body = await r.json();
+      if (!body?.ok) throw new Error(body?.error || "短线策略 V1 回测启动失败");
+      const started = body as Stv1Job;
+      setStv1Job(started);
+      if (started.status === "done" || started.status === "failed") return;
+      await pollStv1Job(started.id);
+    } catch (e) {
+      setStv1Err(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStv1Loading(false);
+    }
+  };
+
   const onRunBacktest = async () => {
     setBtLoading(true);
     setBootErr("");
@@ -1791,6 +1889,52 @@ export function BacktestPage() {
             </button>
           </section>
 
+
+          <section className="bt-section">
+            <div className="bt-section-title-row">
+              <h2 className="bt-section-title">5. 短线策略 V1</h2>
+              <RegimeTip tip={stv1RegimeTip} title="短线策略 V1" />
+            </div>
+            <p className="bt-rules">
+              研究框架，参数是起点，不是已验证盈利。合约优先、灵活短线 5 分钟–4 小时；默认加密宇宙、不含美股代币。
+              时间范围沿用上方「2. 回测扫描」的开始/结束。
+            </p>
+            <p className="bt-rules">{stv1PausedNote}</p>
+            <label className="bt-field">
+              <span>消融实验</span>
+              <select value={stv1Experiment} onChange={(e) => setStv1Experiment(e.target.value)}>
+                {stv1Experiments.map((ex) => (
+                  <option key={ex.id} value={ex.id}>
+                    {ex.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="bt-field">
+              <span>币种宇宙</span>
+              <select value={stv1Universe} onChange={(e) => setStv1Universe(e.target.value)}>
+                {stv1Universes.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {stv1SettleRules ? <p className="bt-rules">{stv1SettleRules}</p> : null}
+            {stv1Err ? <p className="bt-error">{stv1Err}</p> : null}
+            {stv1Job?.status === "running" || stv1Job?.status === "pending" ? (
+              <p className="bt-rules">{stv1Job.progress?.current || "短线策略 V1 回测中…"}</p>
+            ) : null}
+            <button
+              type="button"
+              className="bt-run"
+              disabled={stv1Loading}
+              onClick={() => void onRunStv1Backtest()}
+            >
+              {stv1Loading ? "短线策略 V1 回测中…" : "开始短线策略 V1 回测"}
+            </button>
+          </section>
+
         </aside>
 
         <main className="bt-main">
@@ -2174,6 +2318,90 @@ export function BacktestPage() {
                     ))}
                   </div>
                 ) : null}
+              </>
+            )}
+          </section>
+
+
+          <section className="bt-panel">
+            <div className="bt-section-title-row">
+              <h2 className="bt-panel-title">短线策略 V1 · 回测摘要</h2>
+              <RegimeTip tip={stv1RegimeTip} title="短线策略 V1" />
+            </div>
+            {!stv1Job ? (
+              <p className="bt-empty-inline">在左侧「5. 短线策略 V1」选择实验后点「开始短线策略 V1 回测」。</p>
+            ) : (
+              <>
+                <div className="bt-status-bar">
+                  <span className={`bt-status ${stv1Job.status}`}>
+                    {stv1Job.status === "done"
+                      ? "完成"
+                      : stv1Job.status === "failed"
+                        ? "失败"
+                        : stv1Job.status === "running"
+                          ? "运行中"
+                          : "排队"}
+                  </span>
+                  <span className="bt-muted">
+                    {stv1Job.categoryLabel || "短线策略 V1"}
+                    {stv1Job.result?.experiment
+                      ? ` · ${typeof stv1Job.result.experiment === "string" ? stv1Job.result.experiment : (stv1Job.result.experiment.label || stv1Job.result.experiment.id || "")}`
+                      : stv1Job.params?.experiment
+                        ? ` · ${String(stv1Job.params.experiment)}`
+                        : ""}
+                    {stv1Job.result?.universe
+                      ? ` · ${stv1Job.result.universe}`
+                      : stv1Job.params?.universe
+                        ? ` · ${String(stv1Job.params.universe)}`
+                        : ""}
+                    {stv1Job.itemCount != null ? ` · ${stv1Job.itemCount} 笔` : ""}
+                    {stv1Job.result?.skippedCount != null ? ` · 跳过 ${stv1Job.result.skippedCount}` : ""}
+                    {stv1Job.result?.elapsed_sec != null ? ` · ${stv1Job.result.elapsed_sec}s` : ""}
+                  </span>
+                  {stv1Job.error ? <span className="bt-error">{stv1Job.error}</span> : null}
+                </div>
+                {stv1Job.summary ? (
+                  <div className="bt-summary-grid">
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {stv1Job.summary.profitFactor == null ? "—" : stv1Job.summary.profitFactor.toFixed(2)}
+                      </span>
+                      <span className="bt-stat-lab">利润因子</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className={`bt-stat-val ${(stv1Job.summary.expectancyR ?? stv1Job.summary.expectancy ?? 0) >= 0 ? "up" : "down"}`}>
+                        {(stv1Job.summary.expectancyR ?? stv1Job.summary.expectancy) == null
+                          ? "—"
+                          : Number(stv1Job.summary.expectancyR ?? stv1Job.summary.expectancy).toFixed(4)}
+                      </span>
+                      <span className="bt-stat-lab">单笔期望</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className={`bt-stat-val ${(stv1Job.summary.maxDrawdownPct ?? 0) <= 0 ? "up" : "down"}`}>
+                        {stv1Job.summary.maxDrawdownPct == null ? "—" : stv1Job.summary.maxDrawdownPct.toFixed(2)}
+                      </span>
+                      <span className="bt-stat-lab">最大回撤</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className={`bt-stat-val ${(stv1Job.summary.totalPnlPct ?? 0) >= 0 ? "up" : "down"}`}>
+                        {stv1Job.summary.totalPnlPct == null ? "—" : `${stv1Job.summary.totalPnlPct.toFixed(2)}%`}
+                      </span>
+                      <span className="bt-stat-lab">净收益(价格%)</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">{stv1Job.summary.total ?? stv1Job.itemCount ?? "—"}</span>
+                      <span className="bt-stat-lab">已结算笔数</span>
+                    </div>
+                    <div className="bt-stat">
+                      <span className="bt-stat-val">
+                        {stv1Job.summary.winRate == null ? "—" : `${(stv1Job.summary.winRate * 100).toFixed(1)}%`}
+                      </span>
+                      <span className="bt-stat-lab">胜率(仅参考)</span>
+                    </div>
+                  </div>
+                ) : null}
+                {stv1Job.priceProxyNote ? <p className="bt-rules">{stv1Job.priceProxyNote}</p> : null}
+                {stv1Job.disclaimer ? <p className="bt-rules">{stv1Job.disclaimer}</p> : null}
               </>
             )}
           </section>

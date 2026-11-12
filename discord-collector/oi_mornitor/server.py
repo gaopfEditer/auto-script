@@ -761,6 +761,63 @@ async def handle_backtest_dca_jobs(request: web.Request) -> web.Response:
     return _json_response({"ok": True, "jobs": list_dca_jobs(limit)})
 
 
+
+async def handle_backtest_stv1_options(_request: web.Request) -> web.Response:
+    """短线策略 V1 回测选项。"""
+    from oi_mornitor.backtest.stv1_pipeline import stv1_options
+
+    return _json_response({"ok": True, **stv1_options()})
+
+
+async def handle_backtest_stv1_start(request: web.Request) -> web.Response:
+    """启动短线策略 V1 回测（异步；落盘 data/short_term_v1）。"""
+    from oi_mornitor.backtest.stv1_pipeline import job_to_dict, start_stv1_backtest
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _json_response({"ok": False, "error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        job = await start_stv1_backtest(body)
+    except ValueError as exc:
+        return _json_response({"ok": False, "error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("短线策略 V1 回测启动失败")
+        return _json_response({"ok": False, "error": str(exc)}, status=500)
+    return _json_response({"ok": True, **job_to_dict(job)})
+
+
+async def handle_backtest_stv1_get(request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.stv1_pipeline import get_stv1_job, job_to_dict
+
+    job_id = str(request.match_info.get("job_id") or "").strip()
+    if not job_id:
+        return _json_response({"ok": False, "error": "missing job_id"}, status=400)
+    job = get_stv1_job(job_id)
+    if job is None:
+        return _json_response({"ok": False, "error": "job not found"}, status=404)
+    return _json_response({"ok": True, **job_to_dict(job)})
+
+
+async def handle_backtest_stv1_latest(_request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.stv1_pipeline import get_latest_stv1_job, job_to_dict
+
+    job = get_latest_stv1_job()
+    if job is None:
+        return _json_response({"ok": True, "job": None})
+    return _json_response({"ok": True, "job": job_to_dict(job)})
+
+
+async def handle_backtest_stv1_jobs(request: web.Request) -> web.Response:
+    from oi_mornitor.backtest.stv1_pipeline import list_stv1_jobs
+
+    q = request.query
+    limit = int(q.get("limit") or "40") if str(q.get("limit") or "40").isdigit() else 40
+    return _json_response({"ok": True, "jobs": list_stv1_jobs(limit)})
+
+
 async def handle_backtest_kline_prefetch_start(request: web.Request) -> web.Response:
     """分段拉取 K 线到本地 Parquet。"""
     from oi_mornitor.backtest_prefetch import prefetch_job_to_dict, start_kline_prefetch
@@ -1862,6 +1919,18 @@ def create_app() -> web.Application:
     app.router.add_get("/api/backtest/dca/jobs", handle_backtest_dca_jobs)
     app.router.add_post("/api/backtest/dca", handle_backtest_dca_start)
     app.router.add_get("/api/backtest/dca/{job_id}", handle_backtest_dca_get)
+
+    app.router.add_get("/api/backtest/short-term-v1/options", handle_backtest_stv1_options)
+    app.router.add_get("/api/backtest/short-term-v1/latest", handle_backtest_stv1_latest)
+    app.router.add_get("/api/backtest/short-term-v1/jobs", handle_backtest_stv1_jobs)
+    app.router.add_post("/api/backtest/short-term-v1", handle_backtest_stv1_start)
+    app.router.add_get("/api/backtest/short-term-v1/{job_id}", handle_backtest_stv1_get)
+    app.router.add_get("/api/backtest/stv1/options", handle_backtest_stv1_options)
+    app.router.add_get("/api/backtest/stv1/latest", handle_backtest_stv1_latest)
+    app.router.add_get("/api/backtest/stv1/jobs", handle_backtest_stv1_jobs)
+    app.router.add_post("/api/backtest/stv1", handle_backtest_stv1_start)
+    app.router.add_get("/api/backtest/stv1/{job_id}", handle_backtest_stv1_get)
+
 
     app.router.add_get("/api/pattern-alert-ticker", handle_pattern_alert_ticker_get)
     app.router.add_post("/api/pattern-alert-ticker", handle_pattern_alert_ticker_post)
