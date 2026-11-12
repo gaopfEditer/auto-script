@@ -87,7 +87,8 @@ function wrapBitgetNetworkError(err, proxyUrl) {
  * @returns {string | undefined}
  */
 export function resolveBitgetTpslExecutePrice(triggerPrice, executePrice) {
-  const raw = String(executePrice ?? triggerPrice ?? "").trim();
+  const execProvided = executePrice != null && String(executePrice).trim() !== "";
+  const raw = String(execProvided ? executePrice : triggerPrice ?? "").trim();
   const n = Number(raw.replace(/[^\d.]/g, ""));
   if (!Number.isFinite(n) || n <= 0) return undefined;
   return raw.replace(/[^\d.]/g, "") || undefined;
