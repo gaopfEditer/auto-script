@@ -83,12 +83,38 @@ export type AgentDecision = {
   version?: string;
   readOnly?: boolean;
   primaryGroup?: "A" | "B" | "C" | null;
+  confluenceClassification?: string;
+  directionAgreement?: boolean;
+  directionConflict?: boolean;
+  confidenceLevel?: string;
   groups?: {
-    A?: { active?: boolean; tags?: string[] };
-    B?: { active?: boolean; tags?: string[]; paSummary?: Record<string, unknown> };
-    C?: { active?: boolean; resonance?: boolean };
+    A?: { active?: boolean; tags?: string[]; direction?: string };
+    B?: {
+      active?: boolean;
+      tags?: string[];
+      paSummary?: Record<string, unknown>;
+      tagCategories?: Record<string, string[]>;
+      liquidityStates?: Record<string, unknown>[];
+      direction?: string;
+    };
+    C?: {
+      active?: boolean;
+      resonance?: boolean;
+      classification?: string;
+      legacyIntersection?: boolean;
+    };
   };
-  shadowVeto?: { active?: boolean; shadow?: boolean; reasons?: string[] };
+  shadowVeto?: {
+    active?: boolean;
+    shadow?: boolean;
+    status?: "pass" | "warning" | "veto";
+    reasons?: string[];
+  };
+  researchStrategies?: {
+    matchedIds?: string[];
+    backtestStatus?: string;
+    matches?: { id: string; matched?: boolean; confidence?: string }[];
+  };
   expectancyKey?: string;
   evidenceSufficient?: boolean;
 };
@@ -100,7 +126,13 @@ export function formatConfluenceBadge(c?: AlertConfluence | null): string {
 
 export function formatAgentDecisionBadge(d?: AgentDecision | null): string {
   if (!d?.primaryGroup) return "";
-  const v = d.shadowVeto?.active ? "·影否决" : "";
+  const st = d.shadowVeto?.status;
+  const v =
+    st === "veto" || (d.shadowVeto?.active && st !== "warning")
+      ? "·影否决"
+      : st === "warning"
+        ? "·影警告"
+        : "";
   return `${d.primaryGroup}${v}`;
 }
 
