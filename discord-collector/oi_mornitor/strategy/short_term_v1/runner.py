@@ -132,7 +132,12 @@ def run_short_term_v1(
     df_btc_4h = _slice(_load_df(store, "BTCUSDT", "4h"), start_ms, end_ms)
     results: list[dict[str, Any]] = []
     missing: list[str] = []
-    for sym in syms:
+    print(
+        f"[stv1] symbols={syms} experiment={flags.id} fee={fee} slip={slip} "
+        f"klines={store.parquet_root}",
+        flush=True,
+    )
+    for i, sym in enumerate(syms, 1):
         df15 = _slice(_load_df(store, sym, "15m"), start_ms, end_ms)
         if limit_bars and len(df15) > limit_bars:
             df15 = df15.iloc[-int(limit_bars):].reset_index(drop=True)
@@ -141,8 +146,14 @@ def run_short_term_v1(
         df4 = _slice(_load_df(store, sym, "4h"), start_ms, end_ms)
         if df15 is None or len(df15) < 80:
             missing.append(sym)
+            print(f"[stv1] {i}/{len(syms)} {sym}: 15m 不足，跳过", flush=True)
             continue
-        results.append(run_on_frames(
+        print(
+            f"[stv1] {i}/{len(syms)} {sym}: 15m={len(df15)} 5m={len(df5) if df5 is not None else 0} 开始",
+            flush=True,
+        )
+        t1 = time.time()
+        rec = run_on_frames(
             symbol=sym,
             df_15m=df15,
             df_5m=df5 if len(df5) else None,
@@ -154,7 +165,13 @@ def run_short_term_v1(
             equity=equity,
             fee_pct=fee,
             slippage_pct=slip,
-        ))
+        )
+        results.append(rec)
+        print(
+            f"[stv1] {sym}: 完成 {round(time.time() - t1, 1)}s "
+            f"入场={len(rec.get('accepted') or [])} 跳过={len(rec.get('skipped') or [])}",
+            flush=True,
+        )
     merged = merge_symbol_results(results, experiment=flags.id)
     merged.update({
         "symbols": syms,

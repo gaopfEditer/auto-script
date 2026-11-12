@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Iterable
 
+import numpy as np
 import pandas as pd
 
 from oi_mornitor.market_regime import classify_trend_regime
@@ -55,17 +56,13 @@ from oi_mornitor.trade_leverage import audit_assumptions, leverage_for_symbol
 def _align_idx(df: pd.DataFrame | None, ts: int, ts_col: str = "open_time") -> int | None:
     if df is None or len(df) == 0 or ts_col not in df.columns:
         return None
-    times = df[ts_col].astype("int64")
-    if times.max() < 1e12 and ts > 1e12:
+    times = df[ts_col].to_numpy(dtype="int64", copy=False)
+    if times.size == 0:
+        return None
+    if int(times[-1]) < 1e12 and ts > 1e12:
         times = times * 1000
-    best = None
-    tsv = int(ts)
-    for i, t in enumerate(times.tolist()):
-        if int(t) <= tsv:
-            best = i
-        else:
-            break
-    return best
+    j = int(np.searchsorted(times, int(ts), side="right") - 1)
+    return j if j >= 0 else None
 
 
 def _bar_ts(df: pd.DataFrame, idx: int, ts_col: str = "open_time") -> int | None:
@@ -96,22 +93,26 @@ def _next_open(df: pd.DataFrame, idx: int) -> tuple[float | None, int | None]:
     return float(df.iloc[idx + 1]["open"]), idx + 1
 
 
-def _bars_from(df: pd.DataFrame, start_idx: int) -> list[dict[str, float]]:
-    out: list[dict[str, float]] = []
-    ts_col = "open_time" if df is not None and "open_time" in df.columns else None
-    if df is None:
-        return out
-    for i in range(max(0, start_idx), len(df)):
-        row = df.iloc[i]
-        ts = int(row[ts_col]) if ts_col else i
-        out.append({
-            "ts": ts,
-            "open": float(row["open"]),
-            "high": float(row["high"]),
-            "low": float(row["low"]),
-            "close": float(row["close"]),
-        })
-    return out
+def _bars_from(df: pd.DataFrame, start_idx: int, limit: int | None = None) -> list[dict[str, float]]:
+    if df is None or len(df) == 0:
+        return []
+    start = max(0, int(start_idx))
+    end = len(df) if limit is None else min(len(df), start + max(0, int(limit)))
+    if start >= end:
+        return []
+    sl = df.iloc[start:end]
+    opens = sl["open"].to_numpy(dtype=float, copy=False)
+    highs = sl["high"].to_numpy(dtype=float, copy=False)
+    lows = sl["low"].to_numpy(dtype=float, copy=False)
+    closes = sl["close"].to_numpy(dtype=float, copy=False)
+    if "open_time" in sl.columns:
+        tss = sl["open_time"].to_numpy(dtype="int64", copy=False)
+    else:
+        tss = np.arange(start, end, dtype="int64")
+    return [
+        {"ts": int(ts), "open": float(o), "high": float(h), "low": float(l), "close": float(c)}
+        for ts, o, h, l, c in zip(tss, opens, highs, lows, closes)
+    ]
 
 
 def collect_setup_candidates(
@@ -617,7 +618,7 @@ def run_on_frames(
             start_exec = entry_bar
         row = settle_decision(
             dec,
-            _bars_from(exec_df, start_exec) if not dec.skipped else [],
+            _bars_from(exec_df, start_exec, limit=TIMEOUT_BARS_5M + 8) if not dec.skipped else [],
             fee_pct=fee_pct,
             slippage_pct=slippage_pct,
             per_tier=flags.per_tier_params,

@@ -5,10 +5,17 @@
 """
 from __future__ import annotations
 
+import bisect
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
+import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
+
+# DataFrame 不能稳定作为弱引用键（pandas 3 / CoW 下 len(cache) 会变成 0），
+# 改用 id(df)+指纹。条目很少，回测和实盘都够用。
+_SWING_CACHE: dict[int, tuple[tuple, dict]] = {}
 
 SWING_ORDER = 5
 # 震荡区间：两高/两低相对水平的最大偏离（占区间高度或价格）。
@@ -42,6 +49,50 @@ def _ema(series: pd.Series, span: int) -> pd.Series:
     return series.astype(float).ewm(span=span, adjust=False).mean()
 
 
+def _compute_all_swings(vals: np.ndarray, order: int, which: str) -> tuple[list[tuple[int, float]], list[int]]:
+    """一次性算出全序列已确认摆动（每个点用左右各 order 根，无前瞻）。"""
+    n = int(vals.shape[0])
+    wsize = int(order) * 2 + 1
+    if n < wsize:
+        return [], []
+    windows = sliding_window_view(np.asarray(vals, dtype=float), wsize)
+    centers = windows[:, order]
+    if which == "high":
+        extrema = windows.max(axis=1)
+        arg = windows.argmax(axis=1)
+    else:
+        extrema = windows.min(axis=1)
+        arg = windows.argmin(axis=1)
+    mask = (arg == order) & (centers == extrema)
+    idxs = (np.nonzero(mask)[0] + order).astype(int)
+    swings = [(int(i), float(vals[i])) for i in idxs]
+    return swings, [int(i) for i in idxs]
+
+
+def _all_confirmed_swings(df: pd.DataFrame, order: int, which: str) -> tuple[list[tuple[int, float]], list[int]]:
+    col = "high" if which == "high" else "low"
+    series = df[col]
+    n = len(series)
+    first = float(series.iloc[0]) if n else 0.0
+    last = float(series.iloc[-1]) if n else 0.0
+    key = (which, int(order), n, first, last)
+    ident = id(df)
+    entry = _SWING_CACHE.get(ident)
+    bucket = entry[1] if entry is not None else None
+    if bucket is None:
+        if len(_SWING_CACHE) >= 64:
+            _SWING_CACHE.clear()
+        bucket = {}
+        _SWING_CACHE[ident] = (key, bucket)
+    hit = bucket.get(key)
+    if hit is not None:
+        return hit
+    vals = series.to_numpy(dtype=float, copy=False)
+    computed = _compute_all_swings(vals, int(order), which)
+    bucket[key] = computed
+    return computed
+
+
 def confirmed_swings(
     df: pd.DataFrame,
     *,
@@ -49,26 +100,18 @@ def confirmed_swings(
     order: int = SWING_ORDER,
     which: str = "high",
 ) -> list[tuple[int, float]]:
-    """无前瞻摆动：摆动点 i 需满足 i+order <= end_idx，且 i 为 [i-order, i+order] 极值。"""
+    """无前瞻摆动：摆动点 i 需满足 i+order <= end_idx，且 i 为 [i-order, i+order] 极值。
+
+    全序列只计算一次，再按 end_idx 截取；结果与逐根重算一致，避免回测里对数万根
+    重复做 window.max()。
+    """
     if df is None or df.empty or end_idx < order * 2:
         return []
     end_idx = min(int(end_idx), len(df) - 1)
-    col = "high" if which == "high" else "low"
-    vals = df[col].astype(float).values
-    out: list[tuple[int, float]] = []
     last_ok = end_idx - order
-    for i in range(order, last_ok + 1):
-        window = vals[i - order : i + order + 1]
-        v = vals[i]
-        if which == "high":
-            if v >= float(window.max()) and (window.argmax() == order or v == float(window.max())):
-                # 若并列，取窗口内最左的高点；仅当本 i 是该最大值的代表
-                if float(window.max()) == v and int(window.argmax()) == order:
-                    out.append((i, float(v)))
-        else:
-            if v <= float(window.min()) and int(window.argmin()) == order:
-                out.append((i, float(v)))
-    return out
+    swings, idxs = _all_confirmed_swings(df, int(order), which)
+    j = bisect.bisect_right(idxs, last_ok)
+    return swings[:j]
 
 
 def last_confirmed_swing(
@@ -78,8 +121,12 @@ def last_confirmed_swing(
     which: str,
     order: int = SWING_ORDER,
 ) -> tuple[int, float] | None:
-    swings = confirmed_swings(df, end_idx=end_idx, order=order, which=which)
-    return swings[-1] if swings else None
+    if df is None or df.empty or end_idx < order * 2:
+        return None
+    end_idx = min(int(end_idx), len(df) - 1)
+    swings, idxs = _all_confirmed_swings(df, int(order), which)
+    j = bisect.bisect_right(idxs, end_idx - order)
+    return swings[j - 1] if j else None
 
 
 def bos_by_close(

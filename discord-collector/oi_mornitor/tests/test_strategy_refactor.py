@@ -316,6 +316,47 @@ class RangeVsTrendTests(unittest.TestCase):
         for idx, _ in swings:
             self.assertLessEqual(idx + 5, end, "摆动确认不得使用 end_idx 之后的 K 线")
 
+    def test_confirmed_swings_match_bruteforce_and_prefix(self) -> None:
+        """向量化+缓存必须与原来的逐窗扫描一致，包括并列极值和不同 end_idx。"""
+        import numpy as np
+        from oi_mornitor.market_regime import _compute_all_swings
+
+        def brute(vals, end_idx, order, which):
+            out = []
+            last_ok = end_idx - order
+            for i in range(order, last_ok + 1):
+                window = vals[i - order : i + order + 1]
+                v = vals[i]
+                if which == "high":
+                    if float(window.max()) == v and int(window.argmax()) == order:
+                        out.append((i, float(v)))
+                else:
+                    if v <= float(window.min()) and int(window.argmin()) == order:
+                        out.append((i, float(v)))
+            return out
+
+        rng = np.random.default_rng(42)
+        series = [
+            rng.normal(0, 1, size=180).cumsum() + 100,
+            np.full(80, 50.0),  # 全平，并列极值
+            np.array([1, 3, 2, 5, 4, 7, 6, 9, 8, 4, 3, 2, 8, 1, 0, 4] * 6, dtype=float),
+        ]
+        for arr in series:
+            df = pd.DataFrame({
+                "open": arr,
+                "high": arr + 0.4,
+                "low": arr - 0.4,
+                "close": arr,
+            })
+            for which, col in (("high", "high"), ("low", "low")):
+                vals = df[col].to_numpy(dtype=float)
+                for end in (10, 25, 40, len(df) - 1):
+                    got = confirmed_swings(df, end_idx=end, which=which, order=5)
+                    self.assertEqual(got, brute(vals, end, 5, which), msg=f"{which} end={end}")
+                # 全序列计算再截取，应与 prefix 查询相同
+                all_sw, idxs = _compute_all_swings(vals, 5, which)
+                self.assertEqual([s[0] for s in all_sw], idxs)
+
 
 class PullbackCloseConfirmTests(unittest.TestCase):
     def test_wick_only_is_not_close_confirm(self) -> None:
