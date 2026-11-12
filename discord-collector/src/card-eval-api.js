@@ -236,19 +236,37 @@ export function buildEvalCardListItems(cards) {
   });
 }
 
-/** 三窗口：近 30 天滚动 / 近 7 天滚动 / 上一自然周（与 channel-strip 一致，本地时区周一界）。 */
+/** Telegram 群组评估窗口标注时区（滚动窗口以当前时刻为右界）。 */
+export const TELEGRAM_GROUP_EVAL_TZ = "Asia/Shanghai";
+
+/** 三窗口：近 30 天滚动 / 近 7 天滚动 / 全量历史（评估口径与 /eval 一致）。 */
 export function resolveTelegramGroupEvalWindows() {
+  const now = Date.now();
   const month = resolveEvalRangeMs("30d");
   const week = resolveEvalRangeMs("7d");
-  const lastWeek = resolveLastWeekMs();
+  const toMs = Math.max(now, month.toMs, week.toMs);
   return {
-    month: { key: "month", label: "近一个月", fromMs: month.fromMs, toMs: month.toMs },
-    week: { key: "week", label: "近一周", fromMs: week.fromMs, toMs: week.toMs },
-    lastWeek: {
-      key: "lastWeek",
-      label: "上一周",
-      fromMs: lastWeek.fromMs,
-      toMs: lastWeek.toMs,
+    month: {
+      key: "month",
+      label: "近一个月",
+      fromMs: month.fromMs,
+      toMs,
+      timezone: TELEGRAM_GROUP_EVAL_TZ,
+    },
+    week: {
+      key: "week",
+      label: "七天",
+      fromMs: week.fromMs,
+      toMs,
+      timezone: TELEGRAM_GROUP_EVAL_TZ,
+    },
+    all: {
+      key: "all",
+      label: "总计",
+      fromMs: 0,
+      toMs,
+      timezone: TELEGRAM_GROUP_EVAL_TZ,
+      allTime: true,
     },
   };
 }
