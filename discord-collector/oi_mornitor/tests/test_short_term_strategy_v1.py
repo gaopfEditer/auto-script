@@ -393,6 +393,41 @@ class FillModelTests(unittest.TestCase):
         self.assertGreater(ok.filled, 100.0)  # 多头不利滑点更高
 
 
+class ConcurrentRiskBookTests(unittest.TestCase):
+    def test_sort_candidates_by_time_mixes_patterns_and_setups(self) -> None:
+        from oi_mornitor.strategy.short_term_v1.engine import sort_candidates_by_time
+
+        df = _df(_flat(10, 100.0))
+        cands = [
+            {"setup": "hs_vegas_break", "confirm_idx": 8, "direction": "short"},
+            {"setup": "liquidity_sweep_reclaim", "confirm_idx": 3, "direction": "long"},
+            {"setup": "shooting_star", "bar_index": 3, "direction": "short"},
+        ]
+        ordered = sort_candidates_by_time(cands, df)
+        self.assertEqual(
+            [c["setup"] for c in ordered],
+            ["liquidity_sweep_reclaim", "shooting_star", "hs_vegas_break"],
+        )
+
+    def test_release_expired_risks_frees_cap(self) -> None:
+        from oi_mornitor.strategy.short_term_v1.engine import release_expired_risks
+        from oi_mornitor.strategy.short_term_v1.params import CONCURRENT_RISK_CAP_PERCENT
+        from oi_mornitor.strategy.short_term_v1.sizing import size_trade
+
+        leftover = release_expired_risks([(100, 0.40), (200, 0.40), (300, 0.40)], 200)
+        self.assertEqual(leftover, [(300, 0.40)])
+        open_risks = [r for _, r in leftover]
+        ok = size_trade(entry=100.0, stop=99.5, tier="A", open_risk_percents=open_risks)
+        self.assertFalse(ok.skipped)
+        self.assertLessEqual(ok.concurrent_risk_percent, CONCURRENT_RISK_CAP_PERCENT + 1e-12)
+        still_full = size_trade(
+            entry=100.0, stop=99.5, tier="A",
+            open_risk_percents=[r for _, r in release_expired_risks([(300, 0.40), (400, 0.40), (500, 0.40)], 200)],
+        )
+        self.assertTrue(still_full.skipped)
+        self.assertEqual(still_full.skip_reason, "concurrent_risk_cap")
+
+
 class DryRunBootTests(unittest.TestCase):
     def test_cli_dry_run_boots(self) -> None:
         from oi_mornitor.strategy.short_term_v1.synthetic import tiny_fixture_result

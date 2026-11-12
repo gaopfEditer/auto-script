@@ -72,6 +72,29 @@ def _bar_ts(df: pd.DataFrame, idx: int, ts_col: str = "open_time") -> int | None
     return t * 1000 if t < 1e12 else t
 
 
+def candidate_event_ts(df_15m: pd.DataFrame | None, cand: dict[str, Any]) -> int:
+    idx = int(cand.get("confirm_idx") or cand.get("bar_index") or cand.get("barIndex") or 0)
+    return int(_bar_ts(df_15m, idx) or 0) if df_15m is not None else 0
+
+
+def sort_candidates_by_time(candidates: list[dict[str, Any]], df_15m: pd.DataFrame | None) -> list[dict[str, Any]]:
+    """形态与 setup 按信号时间混排，避免先处理完全部旧形态再占满风险额度。"""
+    return sorted(
+        candidates,
+        key=lambda c: (
+            candidate_event_ts(df_15m, c),
+            int(c.get("confirm_idx") or c.get("bar_index") or c.get("barIndex") or 0),
+            str(c.get("setup") or c.get("kind") or ""),
+            str(c.get("direction") or ""),
+        ),
+    )
+
+
+def release_expired_risks(open_positions: list[tuple[int, float]], now_ts: int) -> list[tuple[int, float]]:
+    """exit_ts <= now_ts 的仓位已结束，释放其风险占用。"""
+    return [pos for pos in open_positions if pos[0] > now_ts]
+
+
 def _oi_status(df: pd.DataFrame, idx: int) -> tuple[str, bool, float | None]:
     if df is None or "oi" not in df.columns or idx < 1:
         return "oi_unavailable", False, None
@@ -441,6 +464,11 @@ def settle_decision(
     )
     row["exit_reason"] = state.exit_reason
     row["exit_price"] = state.exit_price
+    if bars_5m:
+        row["entryAt"] = int(bars_5m[0]["ts"])
+        held = int(state.bars_held or 0)
+        exit_i = min(max(held - 1, 0), len(bars_5m) - 1)
+        row["exitAt"] = int(bars_5m[exit_i]["ts"])
     row["realized_r"] = state.realized_r
     row["remaining"] = state.remaining
     row["tp_hits"] = state.tp_hits
@@ -531,8 +559,9 @@ def run_on_frames(
     if flags.exclude_paused_kinds:
         candidates = filter_paused_candidates(candidates, exclude_paused=True)
 
+    candidates = sort_candidates_by_time(candidates, df_15m)
     decisions: list[dict[str, Any]] = []
-    open_risks: list[float] = []
+    open_positions: list[tuple[int, float]] = []  # (exit_ts, risk_percent)
     n = len(df_15m) if df_15m is not None else 0
 
     for cand in candidates:
@@ -552,6 +581,8 @@ def run_on_frames(
                 decisions.append(dec.to_dict())
             continue
         ts = _bar_ts(df_15m, idx) or 0
+        open_positions = release_expired_risks(open_positions, ts)
+        open_risks = [risk for _, risk in open_positions]
         idx4 = _align_idx(df_4h, ts)
         r4 = None
         if df_4h is not None and idx4 is not None:
@@ -626,11 +657,12 @@ def run_on_frames(
         row["signalAt"] = ts
         row["leverage"] = leverage_for_symbol(sym)
         decisions.append(row)
-        if not dec.skipped and dec.risk_percent:
-            open_risks.append(dec.risk_percent)
-            # 简单：累计到超时后不再释放（保守并发上限）
-            if len(open_risks) > 8:
-                open_risks.pop(0)
+        if (not dec.skipped) and dec.risk_percent and (not row.get("skipped")):
+            if row.get("exitAt") is not None:
+                exit_ts = int(row["exitAt"])
+            else:
+                exit_ts = int(ts) + int(TIMEOUT_BARS_5M) * 5 * 60 * 1000
+            open_positions.append((exit_ts, float(dec.risk_percent)))
 
     accepted = [d for d in decisions if not d.get("skipped")]
     skipped = [d for d in decisions if d.get("skipped")]
