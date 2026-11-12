@@ -135,7 +135,7 @@ export function bitgetTpslRepairRetries() {
   return envInt("BITGET_TPSL_REPAIR_RETRIES", 3, { min: 1, max: 10 });
 }
 
-/** @typedef {"sl_breached"|"precision"|"transient"|"hold_side"|"unknown"} TpslRepairErrorCategory */
+/** @typedef {"sl_breached"|"precision"|"transient"|"hold_side"|"request_param"|"unknown"} TpslRepairErrorCategory */
 
 /**
  * @param {string} message
@@ -180,6 +180,14 @@ export function classifyBitgetTpslRepairError(message, holdSide) {
     )
   ) {
     return "precision";
+  }
+
+  if (
+    /preset(?:sl|stoploss)excuteprice|presetstop(?:surplus|loss)executeprice|stopsurplusexecuteprice|stoplossexecuteprice|execute\s*price.*must|executeprice.*greater than\s*0|does not meet the specification/i.test(
+      m
+    )
+  ) {
+    return "request_param";
   }
 
   return "unknown";
@@ -543,7 +551,9 @@ export async function repairBitgetPositionTpsl(client, ctx, record) {
             marginCoin: ctx.marginCoin,
             holdSide: hs,
             stopLossTriggerPrice: levels.stopLossStr,
+            stopLossExecutePrice: levels.stopLossStr,
             stopSurplusTriggerPrice: levels.takeProfitStr,
+            stopSurplusExecutePrice: levels.takeProfitStr,
             stopSurplusSize: sizeStr,
             stopLossClientOid: `dc-sl-verify-${ctx.cardId}-${Date.now()}-a${attempt}`,
             stopSurplusClientOid: `dc-tp-verify-${ctx.cardId}-${Date.now()}-a${attempt}`,
@@ -590,7 +600,13 @@ export async function repairBitgetPositionTpsl(client, ctx, record) {
   }
 
   if (!repair.closeReason) {
-    repair.closeReason = closeImmediately ? "sl_breached" : "retries_exhausted";
+    const allRequestParam =
+      repair.attempts.length > 0 && repair.attempts.every((a) => a.category === "request_param");
+    repair.closeReason = closeImmediately
+      ? "sl_breached"
+      : allRequestParam
+        ? "request_param_exhausted"
+        : "retries_exhausted";
   }
 
   return {
@@ -868,6 +884,8 @@ export async function placeBitgetOpenWithPresets(client, p) {
         ...p.openBase,
         presetStopLossPrice: slStr,
         presetStopSurplusPrice: tpStr,
+        presetStopLossExecutePrice: slStr,
+        presetStopSurplusExecutePrice: tpStr,
       });
       return {
         ok: true,
@@ -990,15 +1008,9 @@ export async function placeBitgetPartialTakeProfits(client, p) {
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {string} text
  */
-export async function sendBitgetTradeTelegramAlert(log, text) {
-  if (process.env.BITGET_SKIP_TELEGRAM_ALERT === "1") return;
-  try {
-    const { createSystemTelegramAlert } = await import("./discord-system-telegram.js");
-    const tg = createSystemTelegramAlert(log);
-    await tg.notify(text, { kind: "bitget_naked_position" });
-  } catch (e) {
-    log.warn(`Bitget Telegram 告警发送失败: ${String(/** @type {Error} */ (e).message ?? e)}`);
-  }
+/** Bitget 下单/补挂/裸仓处置结果仅写本地日志，不推送到 Telegram 交易群。 */
+export async function sendBitgetTradeTelegramAlert(_log, _text) {
+  /* intentionally no-op — callers use log.warn for local retention */
 }
 
 /**
