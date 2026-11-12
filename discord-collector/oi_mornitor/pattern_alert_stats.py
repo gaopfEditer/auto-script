@@ -229,6 +229,146 @@ def _side_from_alert(alert: dict[str, Any]) -> str | None:
     return None
 
 
+_INTERVAL_SUFFIX_RE = re.compile(r"^[0-9]+[mhdwMHDW]$")
+
+
+def _strip_label_interval(text: str) -> str:
+    s = str(text or "").strip()
+    for sep in (" · ", "·", "|", "｜"):
+        if sep not in s:
+            continue
+        head, tail = s.rsplit(sep, 1)
+        if _INTERVAL_SUFFIX_RE.match(tail.strip()):
+            return head.strip()
+    return s
+
+
+def normalize_stats_kind(raw_kind: str = "", type_label: str = "") -> str:
+    """形态胜率库 canonical kind：中英标签与 signal_kind 对齐同一 key。"""
+    k = _strip_label_interval(str(raw_kind or "").strip())
+    lab = _strip_label_interval(str(type_label or "").strip())
+    blob = f"{k} {lab}"
+    if "bottom_secondary_test" in k or "二次探底" in blob:
+        return "bottom_secondary_test"
+    if "shooting_star" in k or "射击之星" in blob:
+        return "shooting_star"
+    if "inverted_hammer" in k or "倒锤子" in blob:
+        return "inverted_hammer"
+    if "spring_2b" in k or "破底翻" in blob:
+        return "spring_2b"
+    if k in ("hs_top", "m_top", "sweep_top", "curvature_top") or any(
+        x in blob for x in ("头肩", "M顶", "顶部结构", "流动性掠夺", "圆弧")
+    ):
+        if "m_top" in k:
+            return "m_top"
+        if "sweep" in k or "掠夺" in blob:
+            return "sweep_top"
+        if "curvature" in k or "圆弧" in blob:
+            return "curvature_top"
+        return "hs_top"
+    if k and re.match(r"^[a-z][a-z0-9_]*$", k):
+        return k
+    if lab:
+        return re.sub(r"\s+", "_", lab)[:64]
+    return k or "unknown"
+
+
+def _kind_from_stats_key(key: str) -> str:
+    parts = str(key or "").split(":")
+    if len(parts) >= 4:
+        return str(parts[3] or "").strip()
+    return ""
+
+
+def stats_dedupe_id(rec: dict[str, Any]) -> tuple[str, int, str, str, str]:
+    sym = normalize_usdt_symbol(str(rec.get("tradeSymbol") or rec.get("symbol") or "")).upper()
+    sat = int(rec.get("signalAt") or 0)
+    side = str(rec.get("side") or "").lower()
+    if side == "bull":
+        side = "long"
+    elif side == "bear":
+        side = "short"
+    iv = str(rec.get("interval") or "").strip().lower()
+    kind = normalize_stats_kind(
+        _kind_from_stats_key(str(rec.get("key") or "")),
+        str(rec.get("typeLabel") or rec.get("type_label") or ""),
+    )
+    return (sym, sat, side, iv, kind)
+
+
+def _merge_stats_duplicate_group(group: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(group) == 1:
+        return dict(group[0])
+
+    def score(r: dict[str, Any]) -> tuple[int, int, int]:
+        oc = str(r.get("outcome") or "pending")
+        settled = 2 if oc in ("take_profit", "stop_loss") else (1 if oc == "pending" else 0)
+        key = str(r.get("key") or "")
+        canonical = 1 if normalize_stats_kind(_kind_from_stats_key(key), "") == _kind_from_stats_key(key) else 0
+        if re.match(r"^[a-z][a-z0-9_]*$", _kind_from_stats_key(key) or ""):
+            canonical = 2
+        fields = sum(1 for k in ("pnlPct", "exitPrice", "confluence", "mtfResonance") if r.get(k) is not None)
+        return (settled, canonical, fields)
+
+    ordered = sorted(group, key=score, reverse=True)
+    base = dict(ordered[0])
+    for other in ordered[1:]:
+        for k, v in other.items():
+            if v is None:
+                continue
+            if base.get(k) in (None, "", 0) and v not in (None, "", 0):
+                base[k] = v
+        oc = str(base.get("outcome") or "pending")
+        ooc = str(other.get("outcome") or "pending")
+        if oc == "pending" and ooc in ("take_profit", "stop_loss"):
+            base["outcome"] = other["outcome"]
+            for fk in ("exitPrice", "movePct", "pnlPct", "hitAt", "verifiedAt"):
+                if other.get(fk) is not None:
+                    base[fk] = other.get(fk)
+    typ = str(base.get("key") or "").split(":")[0] or "structure_pattern_card"
+    kind = normalize_stats_kind(
+        _kind_from_stats_key(str(base.get("key") or "")),
+        str(base.get("typeLabel") or ""),
+    )
+    sym = str(base.get("tradeSymbol") or base.get("symbol") or "")
+    base["key"] = alert_stats_key(
+        {
+            "type": typ,
+            "symbol": sym,
+            "kline_close_time": base.get("signalAt"),
+            "kind": kind,
+            "side": base.get("side"),
+        }
+    )
+    return base
+
+
+def _dedupe_stats_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, int, str, str, str], list[dict[str, Any]]] = {}
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        groups.setdefault(stats_dedupe_id(r), []).append(r)
+    out: list[dict[str, Any]] = []
+    removed = 0
+    for bucket in groups.values():
+        if len(bucket) > 1:
+            removed += len(bucket) - 1
+        out.append(_merge_stats_duplicate_group(bucket))
+    if removed:
+        logger.info("形态胜率库去重 %d 条（保留 %d）", removed, len(out))
+    out.sort(key=lambda r: int(r.get("signalAt") or 0), reverse=True)
+    return out
+
+
+def _find_existing_stats_record(items: list[dict[str, Any]], probe: dict[str, Any]) -> dict[str, Any] | None:
+    did = stats_dedupe_id(probe)
+    for r in items:
+        if stats_dedupe_id(r) == did:
+            return r
+    return None
+
+
 def _entry_from_alert(alert: dict[str, Any]) -> float | None:
     for k in ("price", "close", "entry_hint", "last_price", "entry_price"):
         try:
@@ -245,7 +385,10 @@ def alert_stats_key(alert: dict[str, Any]) -> str:
     typ = str(alert.get("type") or "")
     sym = str(alert.get("symbol") or "")
     close_t = alert.get("kline_close_time") or alert.get("time") or alert.get("kline_open_time") or ""
-    kind = str(alert.get("kind") or alert.get("signal_kind") or "")
+    kind = normalize_stats_kind(
+        str(alert.get("kind") or alert.get("signal_kind") or ""),
+        str(alert.get("type_label") or alert.get("pattern_label") or alert.get("message") or ""),
+    )
     side = str(alert.get("side") or "").lower()
     if side == "bull":
         side = "long"
@@ -268,7 +411,7 @@ def _normalize(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         and isinstance(r.get("signalAt"), (int, float))
         and int(r["signalAt"]) > 0
     ]
-    cleaned.sort(key=lambda r: int(r.get("signalAt") or 0), reverse=True)
+    cleaned = _dedupe_stats_items(cleaned)
     if _MAX_ITEMS > 0 and len(cleaned) > _MAX_ITEMS:
         cleaned = cleaned[:_MAX_ITEMS]
     return cleaned
@@ -446,17 +589,7 @@ def list_interval_options(items: list[dict[str, Any]] | None = None) -> list[dic
         bucket = buckets[iv]
         if not bucket:
             continue
-        s = summarize(bucket)
-        out.append(
-            {
-                "label": iv,
-                "count": len(bucket),
-                "wins": s["wins"],
-                "losses": s["losses"],
-                "winRate": s["winRate"],
-                "totalPnlPct": s.get("totalPnlPct"),
-            }
-        )
+        out.append({"label": iv, **_facet_option_stats(bucket)})
     return out
 
 
@@ -464,11 +597,31 @@ def list_type_labels(items: list[dict[str, Any]] | None = None) -> list[str]:
     return [x["label"] for x in list_type_options(items)]
 
 
+def _facet_option_stats(bucket: list[dict[str, Any]]) -> dict[str, Any]:
+    """下拉选项与列表 header summary 同口径（观察档不计入胜率/盈亏）。"""
+    s = summarize(bucket)
+    return {
+        "count": int(s.get("total") or 0),
+        "wins": s.get("wins") or 0,
+        "losses": s.get("losses") or 0,
+        "winRate": s.get("winRate"),
+        "totalPnlPct": s.get("totalPnlPct"),
+    }
+
+
 def _rec_pnl_pct(rec: dict[str, Any]) -> float | None:
     """与前端 alertStatsPnlPct / summarizeAlertWinRate 同口径（杠杆保证金 %）。"""
     oc = str(rec.get("outcome") or "pending")
     if oc in ("pending", "error"):
         return None
+    stored = rec.get("pnlPct")
+    try:
+        if stored is not None:
+            val = float(stored)
+            if val == val:  # finite
+                return round(val, 2)
+    except (TypeError, ValueError):
+        pass
     move = rec.get("movePct")
     try:
         price_move = float(move) if move is not None else None
@@ -510,32 +663,10 @@ def list_session_options(items: list[dict[str, Any]] | None = None) -> list[dict
                 buckets[sid].append(r)
                 break
     out: list[dict[str, Any]] = []
-    s_all = summarize(rows)
-    out.append(
-        {
-            "id": "all",
-            "label": SESSION_LABELS["all"],
-            "count": len(rows),
-            "wins": s_all["wins"],
-            "losses": s_all["losses"],
-            "winRate": s_all["winRate"],
-            "totalPnlPct": s_all.get("totalPnlPct"),
-        }
-    )
+    out.append({"id": "all", "label": SESSION_LABELS["all"], **_facet_option_stats(rows)})
     for sid in SESSION_ORDER:
         bucket = buckets[sid]
-        s = summarize(bucket)
-        out.append(
-            {
-                "id": sid,
-                "label": SESSION_LABELS[sid],
-                "count": len(bucket),
-                "wins": s["wins"],
-                "losses": s["losses"],
-                "winRate": s["winRate"],
-                "totalPnlPct": s.get("totalPnlPct"),
-            }
-        )
+        out.append({"id": sid, "label": SESSION_LABELS[sid], **_facet_option_stats(bucket)})
     return out
 
 
@@ -552,32 +683,32 @@ def list_daytype_options(items: list[dict[str, Any]] | None = None) -> list[dict
                 buckets[did].append(r)
                 break
     out: list[dict[str, Any]] = []
-    s_all = summarize(rows)
-    out.append(
-        {
-            "id": "all",
-            "label": DAYTYPE_LABELS["all"],
-            "count": len(rows),
-            "wins": s_all["wins"],
-            "losses": s_all["losses"],
-            "winRate": s_all["winRate"],
-            "totalPnlPct": s_all.get("totalPnlPct"),
-        }
-    )
+    out.append({"id": "all", "label": DAYTYPE_LABELS["all"], **_facet_option_stats(rows)})
     for did in DAYTYPE_ORDER:
         bucket = buckets[did]
-        s = summarize(bucket)
-        out.append(
-            {
-                "id": did,
-                "label": DAYTYPE_LABELS[did],
-                "count": len(bucket),
-                "wins": s["wins"],
-                "losses": s["losses"],
-                "winRate": s["winRate"],
-                "totalPnlPct": s.get("totalPnlPct"),
-            }
-        )
+        out.append({"id": did, "label": DAYTYPE_LABELS[did], **_facet_option_stats(bucket)})
+    return out
+
+
+def list_confluence_options(items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """综合评分 A/B/C/D 下拉：含胜率、合计盈亏（相对当前已叠加的其他筛选）。"""
+    from oi_mornitor.pattern_mtf_resonance import attach_mtf_resonance
+    from oi_mornitor.signal_confluence import _TIER_ORDER, attach_signal_confluence
+
+    rows = list(items if items is not None else _load())
+    attach_mtf_resonance(rows)
+    attach_signal_confluence(rows)
+    buckets: dict[str, list[dict[str, Any]]] = {t: [] for t in _TIER_ORDER}
+    for r in rows:
+        conf = r.get("confluence")
+        tier = str(conf.get("tier") if isinstance(conf, dict) else "C").upper()
+        if tier not in buckets:
+            tier = "C"
+        buckets[tier].append(r)
+    out: list[dict[str, Any]] = []
+    out.append({"id": "all", "label": "全部", **_facet_option_stats(rows)})
+    for tid in _TIER_ORDER:
+        out.append({"id": tid, "label": tid, **_facet_option_stats(buckets[tid])})
     return out
 
 
@@ -594,32 +725,9 @@ def list_mcap_tier_options(items: list[dict[str, Any]] | None = None) -> list[di
             tid = "t3"
         buckets[tid].append(r)
     out: list[dict[str, Any]] = []
-    s_all = summarize(rows)
-    out.append(
-        {
-            "id": "all",
-            "label": "全部梯队",
-            "count": len(rows),
-            "wins": s_all["wins"],
-            "losses": s_all["losses"],
-            "winRate": s_all["winRate"],
-            "totalPnlPct": s_all.get("totalPnlPct"),
-        }
-    )
+    out.append({"id": "all", "label": "全部梯队", **_facet_option_stats(rows)})
     for tid in MCAP_TIER_ORDER:
-        bucket = buckets[tid]
-        s = summarize(bucket)
-        out.append(
-            {
-                "id": tid,
-                "label": mcap_tier_label(tid),
-                "count": len(bucket),
-                "wins": s["wins"],
-                "losses": s["losses"],
-                "winRate": s["winRate"],
-                "totalPnlPct": s.get("totalPnlPct"),
-            }
-        )
+        out.append({"id": tid, "label": mcap_tier_label(tid), **_facet_option_stats(buckets[tid])})
     return out
 
 
@@ -632,17 +740,7 @@ def list_type_options(items: list[dict[str, Any]] | None = None) -> list[dict[st
         groups.setdefault(lab, []).append(r)
     out: list[dict[str, Any]] = []
     for lab, bucket in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-        s = summarize(bucket)
-        out.append(
-            {
-                "label": lab,
-                "count": len(bucket),
-                "wins": s["wins"],
-                "losses": s["losses"],
-                "winRate": s["winRate"],
-                "totalPnlPct": s.get("totalPnlPct"),
-            }
-        )
+        out.append({"label": lab, **_facet_option_stats(bucket)})
     return out
 
 
@@ -653,6 +751,7 @@ def _apply_tier_filters(
     mtf_resonance_only: bool,
     mcap_tier_filter: str,
     skip_mcap: bool = False,
+    skip_confluence: bool = False,
     mtf_peer_rows: list[dict[str, Any]] | None = None,
     confluence_exact: bool = False,
 ) -> list[dict[str, Any]]:
@@ -673,18 +772,23 @@ def _apply_tier_filters(
     attach_mcap_tier(out)
     conf = str(confluence_min_tier or "all").strip() or "all"
     mcap_f = str(mcap_tier_filter or "all").strip() or "all"
-    if confluence_exact:
-        out = filter_items_by_confluence(
-            out,
-            exact_tier=conf,
-            mtf_resonance_only=mtf_resonance_only,
-        )
-    else:
-        out = filter_items_by_confluence(
-            out,
-            min_tier=conf,
-            mtf_resonance_only=mtf_resonance_only,
-        )
+    if not skip_confluence:
+        if confluence_exact:
+            out = filter_items_by_confluence(
+                out,
+                exact_tier=conf,
+                mtf_resonance_only=mtf_resonance_only,
+            )
+        else:
+            out = filter_items_by_confluence(
+                out,
+                min_tier=conf,
+                mtf_resonance_only=mtf_resonance_only,
+            )
+    elif mtf_resonance_only:
+        from oi_mornitor.pattern_mtf_resonance import has_mtf_resonance
+
+        out = [it for it in out if has_mtf_resonance(it)]
     if not skip_mcap:
         out = filter_by_mcap_tier(out, mcap_tier=mcap_f)
     # 形态信号列表：始终按信号时间降序（最新在前）；共振分仅作展示字段
@@ -752,7 +856,12 @@ def list_alert_stats_page(
         asset_class=asset_class,
     )
 
-    def _tier_rows(base: list[dict[str, Any]], *, skip_mcap: bool = False) -> list[dict[str, Any]]:
+    def _tier_rows(
+        base: list[dict[str, Any]],
+        *,
+        skip_mcap: bool = False,
+        skip_confluence: bool = False,
+    ) -> list[dict[str, Any]]:
         if not tier_active:
             return base
         return _apply_tier_filters(
@@ -761,6 +870,7 @@ def list_alert_stats_page(
             mtf_resonance_only=mtf_resonance_only,
             mcap_tier_filter=mcap_f,
             skip_mcap=skip_mcap,
+            skip_confluence=skip_confluence,
             mtf_peer_rows=mtf_peer_pool,
             confluence_exact=confluence_exact,
         )
@@ -857,6 +967,17 @@ def list_alert_stats_page(
             skip_mcap=True,
         )
     )
+    confluence_opts = list_confluence_options(
+        _tier_rows(
+            filter_alert_stats(
+                scoped,
+                type_label=tl or None,
+                interval=iv or None,
+            ),
+            skip_confluence=True,
+        )
+    )
+    page_summary = summarize(filtered)
     total = len(filtered)
     pages = max(1, (total + size - 1) // size) if total else 1
     if page > pages:
@@ -869,12 +990,13 @@ def list_alert_stats_page(
         "page": page,
         "pageSize": size,
         "pages": pages,
-        "summary": summarize(filtered),
+        "summary": page_summary,
         "typeOptions": type_opts,
         "intervalOptions": interval_opts,
         "sessionOptions": session_opts,
         "daytypeOptions": daytype_opts,
         "mcapTierOptions": mcap_opts,
+        "confluenceOptions": confluence_opts,
         # 兼容旧前端
         "typeLabels": [x["label"] for x in type_opts],
     }
@@ -1091,10 +1213,27 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
 
     with _LOCK:
         items = _load()
-        existing = next((r for r in items if r.get("key") == key), None)
+        probe = {
+            "key": key,
+            "tradeSymbol": trade_symbol,
+            "symbol": sym_raw,
+            "signalAt": signal_at,
+            "side": side,
+            "interval": interval,
+            "typeLabel": type_label,
+        }
+        existing = _find_existing_stats_record(items, probe) or next(
+            (r for r in items if r.get("key") == key),
+            None,
+        )
         if existing:
             # 已存在：只补缺字段，不覆盖已核结果
             patched = dict(existing)
+            if patched.get("key") != key and key.count(":") >= 4:
+                patched["key"] = key
+                changed_key = True
+            else:
+                changed_key = False
             changed = False
             if not patched.get("typeLabel") and type_label:
                 patched["typeLabel"] = type_label
@@ -1105,8 +1244,12 @@ def record_alert_from_push(alert: dict[str, Any]) -> dict[str, Any] | None:
             if not patched.get("tradeSymbol") and trade_symbol:
                 patched["tradeSymbol"] = trade_symbol
                 changed = True
+            if changed_key:
+                changed = True
             if changed:
-                items = [patched if r.get("key") == key else r for r in items]
+                did = stats_dedupe_id(patched)
+                items = [r for r in items if stats_dedupe_id(r) != did]
+                items.insert(0, patched)
                 _save(items)
                 return patched
             return existing
@@ -1306,7 +1449,7 @@ def apply_settle_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 if k in allow:
                     cur[k] = v
             by_key[key] = cur
-        merged = list(by_key.values())
+        merged = _dedupe_stats_items(list(by_key.values()))
         return _save(merged)
 
 

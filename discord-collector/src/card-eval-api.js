@@ -5,6 +5,10 @@ import { archiveCardToClient, resolveCardChannelName } from "./card-archive-serv
 import { parseProgressJson } from "./card-level-progress.js";
 import { parseArchiveRangeMs, resolveArchiveListSourceTypes } from "./card-archive-api.js";
 import { isCardEnteredForEval, resolveCardEvalOutcome } from "./card-eval-outcome.js";
+import { runEvalPendingSettleSweep } from "./card-eval-pending-settle.js";
+import { createLogger } from "./logger.js";
+
+const evalSettleLog = createLogger("card-eval-settle");
 
 /**
  * @param {string} range
@@ -55,9 +59,12 @@ export function classifyCardEval(card) {
   const status = String(progress?.status ?? "");
 
   if (status === "not_entered") {
+    const ex = card.execution && typeof card.execution === "object" ? card.execution : null;
+    const exo = String(ex?.outcome ?? "").trim();
+    const outcome = exo === "cancelled" ? "cancelled" : "pending";
     return {
       entered: false,
-      outcome: "pending",
+      outcome,
       pnlPct: 0,
       tpHits: [],
       progress,
@@ -209,7 +216,7 @@ function groupByChannel(cards) {
  * @param {ReturnType<typeof archiveCardToClient>[]} cards
  */
 export function buildEvalCardListItems(cards) {
-  return cards.map((card) => {
+  const items = cards.map((card) => {
     const c = classifyCardEval(card);
     const ex = card.execution && typeof card.execution === "object" ? card.execution : null;
     const planned = ex?.planned && typeof ex.planned === "object" ? ex.planned : null;
@@ -234,6 +241,13 @@ export function buildEvalCardListItems(cards) {
       backtest: card.backtest ?? null,
     };
   });
+  items.sort((a, b) => {
+    const ta = a.signalAt ? Date.parse(String(a.signalAt)) : 0;
+    const tb = b.signalAt ? Date.parse(String(b.signalAt)) : 0;
+    if (tb !== ta) return tb - ta;
+    return Number(b.id ?? 0) - Number(a.id ?? 0);
+  });
+  return items;
 }
 
 /** Telegram 群组评估窗口标注时区（滚动窗口以当前时刻为右界）。 */
@@ -424,13 +438,28 @@ export function registerCardEvalRoutes(app, store, deps = {}) {
     }
   }
 
+  async function evalPendingSettleSweepHandler(req, res) {
+    try {
+      const force =
+        String(req.query.force ?? req.body?.force ?? "1").toLowerCase() !== "0" &&
+        String(req.query.force ?? req.body?.force ?? "1").toLowerCase() !== "false";
+      const limit = Math.min(500, Number(req.query.limit ?? req.body?.limit) || 300);
+      const summary = await runEvalPendingSettleSweep(store, evalSettleLog, { force, limit });
+      res.json(summary);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
+    }
+  }
+
   app.get("/api/cards/eval/summary", evalSummaryHandler);
   app.get("/api/cards/eval/channel-strip", evalChannelStripHandler);
   app.get("/api/cards/eval/channels/:channelId", evalChannelDetailHandler);
+  app.post("/api/cards/eval/pending-settle-sweep", evalPendingSettleSweepHandler);
 
   if (openAuth) {
     app.get("/api/v1/cards/eval/summary", openAuth, evalSummaryHandler);
     app.get("/api/v1/cards/eval/channel-strip", openAuth, evalChannelStripHandler);
     app.get("/api/v1/cards/eval/channels/:channelId", openAuth, evalChannelDetailHandler);
+    app.post("/api/v1/cards/eval/pending-settle-sweep", openAuth, evalPendingSettleSweepHandler);
   }
 }

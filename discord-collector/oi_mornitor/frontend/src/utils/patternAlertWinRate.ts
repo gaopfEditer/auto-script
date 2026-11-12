@@ -213,6 +213,92 @@ function withVerifyLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+const INTERVAL_SUFFIX_RE = /^[0-9]+[mhdw]$/i;
+
+function stripLabelInterval(text: string): string {
+  const s = String(text || "").trim();
+  for (const sep of [" · ", "·", "|", "｜"]) {
+    if (!s.includes(sep)) continue;
+    const idx = s.lastIndexOf(sep);
+    const head = s.slice(0, idx).trim();
+    const tail = s.slice(idx + sep.length).trim();
+    if (INTERVAL_SUFFIX_RE.test(tail)) return head;
+  }
+  return s;
+}
+
+/** 与 pattern_alert_stats.normalize_stats_kind 对齐 */
+export function normalizeStatsKind(rawKind = "", typeLabel = ""): string {
+  const k = stripLabelInterval(String(rawKind || "").trim());
+  const lab = stripLabelInterval(String(typeLabel || "").trim());
+  const blob = `${k} ${lab}`;
+  if (k.includes("bottom_secondary_test") || blob.includes("二次探底")) {
+    return "bottom_secondary_test";
+  }
+  if (k.includes("shooting_star") || blob.includes("射击之星")) {
+    return "shooting_star";
+  }
+  if (k.includes("inverted_hammer") || blob.includes("倒锤子")) {
+    return "inverted_hammer";
+  }
+  if (k.includes("spring_2b") || blob.includes("破底翻")) {
+    return "spring_2b";
+  }
+  if (
+    ["hs_top", "m_top", "sweep_top", "curvature_top"].includes(k) ||
+    ["头肩", "M顶", "顶部结构", "流动性掠夺", "圆弧"].some((x) => blob.includes(x))
+  ) {
+    if (k.includes("m_top")) return "m_top";
+    if (k.includes("sweep") || blob.includes("掠夺")) return "sweep_top";
+    if (k.includes("curvature") || blob.includes("圆弧")) return "curvature_top";
+    return "hs_top";
+  }
+  if (k && /^[a-z][a-z0-9_]*$/.test(k)) return k;
+  if (lab) return lab.replace(/\s+/g, "_").slice(0, 64);
+  return k || "unknown";
+}
+
+/** 与后端 alert_stats_key 对齐（禁止用 message 作 key 段） */
+export function alertStatsKeyFromPattern(alert: PatternAlert): string {
+  const typ = String(alert.type || "");
+  const sym = String(alert.symbol || "");
+  const closeT =
+    alert.kline_close_time ?? alert.time ?? alert.kline_open_time ?? "";
+  const kind = normalizeStatsKind(
+    String(alert.kind || alert.signal_kind || ""),
+    String(alert.type_label || alert.pattern_label || alert.message || ""),
+  );
+  let side = String(alert.side || "").toLowerCase();
+  if (side === "bull") side = "long";
+  else if (side === "bear") side = "short";
+  else if (!side) {
+    const hint = String(alert.side_hint || "");
+    if (hint.includes("多")) side = "long";
+    else if (hint.includes("空")) side = "short";
+  }
+  return `${typ}:${sym}:${closeT}:${kind}:${side}`;
+}
+
+function statsDedupeId(rec: {
+  tradeSymbol?: string;
+  symbol?: string;
+  signalAt?: number;
+  side?: string;
+  interval?: string;
+  typeLabel?: string;
+  key?: string;
+}): string {
+  const sym = toUsdtSymbol(rec.tradeSymbol || rec.symbol || "");
+  const sat = Number(rec.signalAt) || 0;
+  let side = String(rec.side || "").toLowerCase();
+  if (side === "bull") side = "long";
+  if (side === "bear") side = "short";
+  const iv = String(rec.interval || "").trim().toLowerCase();
+  const kindPart = String(rec.key || "").split(":")[3] || "";
+  const kind = normalizeStatsKind(kindPart, String(rec.typeLabel || ""));
+  return `${sym}|${sat}|${side}|${iv}|${kind}`;
+}
+
 /** 从 alert / message / key 解析类型文案（兼容旧缓存缺 typeLabel） */
 export function resolveAlertTypeLabel(
   alert?: Partial<PatternAlert> | null,
@@ -456,16 +542,18 @@ function mergeAlertStatsLists(
   primary: AlertStatsRecord[],
   secondary: AlertStatsRecord[],
 ): AlertStatsRecord[] {
-  const byKey = new Map<string, AlertStatsRecord>();
+  const byId = new Map<string, AlertStatsRecord>();
   for (const r of secondary) {
-    if (r?.key) byKey.set(r.key, r);
+    if (!r?.key) continue;
+    byId.set(statsDedupeId(r), r);
   }
   for (const r of primary) {
     if (!r?.key) continue;
-    const cur = byKey.get(r.key);
-    byKey.set(r.key, cur ? preferStatsRecord(cur, r) : r);
+    const id = statsDedupeId(r);
+    const cur = byId.get(id);
+    byId.set(id, cur ? preferStatsRecord(cur, r) : r);
   }
-  return pruneStats([...byKey.values()]);
+  return pruneStats([...byId.values()]);
 }
 
 export type AlertStatsTypeOption = {
@@ -500,6 +588,23 @@ export type AlertStatsDaytypeOption = AlertStatsTypeOption & {
   id: AlertStatsDaytypeFilter;
 };
 
+export type AlertStatsConfluenceFilter = "all" | "A" | "B" | "C" | "D";
+
+export type AlertStatsConfluenceOption = AlertStatsTypeOption & {
+  id: AlertStatsConfluenceFilter;
+};
+
+export const ALERT_STATS_CONFLUENCE_FILTERS: {
+  id: AlertStatsConfluenceFilter;
+  label: string;
+}[] = [
+  { id: "all", label: "全部" },
+  { id: "A", label: "A" },
+  { id: "B", label: "B" },
+  { id: "C", label: "C" },
+  { id: "D", label: "D" },
+];
+
 export type AlertStatsPageResult = {
   items: AlertStatsRecord[];
   total: number;
@@ -512,6 +617,7 @@ export type AlertStatsPageResult = {
   sessionOptions: AlertStatsSessionOption[];
   daytypeOptions: AlertStatsDaytypeOption[];
   mcapTierOptions?: McapTierOption[];
+  confluenceOptions?: AlertStatsConfluenceOption[];
   /** @deprecated 用 typeOptions */
   typeLabels: string[];
 };
@@ -653,6 +759,7 @@ export async function fetchAlertStatsPage(opts: {
     sessionOptions: mergeSessionOptions([]),
     daytypeOptions: mergeDaytypeOptions([]),
     mcapTierOptions: [],
+    confluenceOptions: mergeConfluenceOptions([]),
     typeLabels: [],
   };
   try {
@@ -673,6 +780,7 @@ export async function fetchAlertStatsPage(opts: {
       sessionOptions?: AlertStatsSessionOption[];
       daytypeOptions?: AlertStatsDaytypeOption[];
       mcapTierOptions?: McapTierOption[];
+      confluenceOptions?: AlertStatsConfluenceOption[];
       typeLabels?: string[];
     };
     if (!body?.ok || !Array.isArray(body.items)) return empty;
@@ -704,6 +812,9 @@ export async function fetchAlertStatsPage(opts: {
       sessionOptions,
       daytypeOptions,
       mcapTierOptions: Array.isArray(body.mcapTierOptions) ? body.mcapTierOptions : [],
+      confluenceOptions: mergeConfluenceOptions(
+        normalizeConfluenceOptions(body.confluenceOptions),
+      ),
       typeLabels: typeOptions.map((t) => t.label),
     };
   } catch {
@@ -853,6 +964,55 @@ export function formatAlertTypeOptionLabel(opt: AlertStatsTypeOption): string {
       : `合计 ${opt.totalPnlPct > 0 ? "+" : ""}${opt.totalPnlPct.toFixed(1)}%`;
   const n = opt.count > 0 ? ` (${opt.count})` : "";
   return `${opt.label}${n} · ${wr} · ${pnl}`;
+}
+
+function normalizeConfluenceOptions(
+  raw: AlertStatsConfluenceOption[] | undefined,
+): AlertStatsConfluenceOption[] {
+  if (!Array.isArray(raw) || !raw.length) return [];
+  return raw
+    .filter((o) => o && typeof o.id === "string")
+    .map((o) => ({
+      id: String(o.id).toUpperCase() === "ALL" ? "all" : (String(o.id).toUpperCase() as AlertStatsConfluenceFilter),
+      label: String(o.label || o.id || ""),
+      count: Number(o.count) || 0,
+      wins: Number(o.wins) || 0,
+      losses: Number(o.losses) || 0,
+      winRate:
+        o.winRate == null || !Number.isFinite(Number(o.winRate))
+          ? null
+          : Number(o.winRate),
+      totalPnlPct:
+        o.totalPnlPct == null || !Number.isFinite(Number(o.totalPnlPct))
+          ? null
+          : Number(o.totalPnlPct),
+    }));
+}
+
+export function mergeConfluenceOptions(
+  raw: AlertStatsConfluenceOption[],
+): AlertStatsConfluenceOption[] {
+  const byId = new Map(raw.map((o) => [o.id, o]));
+  return ALERT_STATS_CONFLUENCE_FILTERS.map(({ id, label }) => {
+    const fromBackend = byId.get(id);
+    if (fromBackend) return { ...fromBackend, label: fromBackend.label || label };
+    return {
+      id,
+      label,
+      count: 0,
+      wins: 0,
+      losses: 0,
+      winRate: null,
+      totalPnlPct: null,
+    };
+  });
+}
+
+/** 综合评分下拉：与其它维度相同「胜率 · 合计」口径 */
+export function formatConfluenceOptionLabel(opt: AlertStatsConfluenceOption): string {
+  const display =
+    opt.id === "all" ? "全部" : String(opt.label || opt.id).trim() || opt.id;
+  return formatAlertTypeOptionLabel({ ...opt, label: display });
 }
 
 export function formatIntervalOptionLabel(opt: AlertStatsIntervalOption): string {
@@ -1090,30 +1250,20 @@ export function summarizeAlertWinRate(records: AlertStatsRecord[]): AlertWinRate
     else if (r.outcome === "flat") flats++;
     else errors++;
 
-    // 与 alertStatsPnlPct 同口径；缺 movePct 时用 stepPct（TP1 3%）兜底，避免合计空白
     if (r.outcome !== "pending" && r.outcome !== "error") {
-      let priceMove: number | null =
-        r.movePct != null && Number.isFinite(r.movePct) ? Number(r.movePct) : null;
-      if (priceMove == null && (r.outcome === "take_profit" || r.outcome === "stop_loss")) {
-        const step = r.stepPct > 0 ? r.stepPct : ALERT_DEFAULT_TP_SL_PCT;
-        priceMove = step;
-      }
-      if (priceMove != null && Number.isFinite(priceMove)) {
-        const signed =
-          r.outcome === "stop_loss"
-            ? -Math.abs(priceMove)
-            : r.outcome === "take_profit"
-              ? Math.abs(priceMove)
-              : priceMove;
-        const lev = resolveAlertLeverage(r.symbol, resolveRecordAssetClass(r));
-        totalPnl += Math.round(signed * lev * 100) / 100;
+      const stored = alertStatsPnlPct(r);
+      if (stored != null && Number.isFinite(stored)) {
+        totalPnl += stored;
         pnlN++;
       }
     }
   }
   const settled = wins + losses;
+  const headline = rows.filter(
+    (r) => r.outcome !== "flat" && r.outcome !== "error",
+  );
   return {
-    total: rows.length,
+    total: headline.length,
     pending,
     wins,
     losses,
@@ -1133,7 +1283,8 @@ export function upsertAlertForStats(input: {
   dir: "多" | "空" | "—";
 }): AlertStatsRecord | null {
   if (isStablecoinSymbol(String(input.alert.symbol || ""))) return null;
-  if (isRetiredPatternAlert(input.alert, input.key)) return null;
+  const canonicalKey = alertStatsKeyFromPattern(input.alert);
+  if (isRetiredPatternAlert(input.alert, canonicalKey)) return null;
   const side = alertSide(input.dir, input.alert);
   if (side === "flat") return null;
   const entry = alertEntryPrice(input.alert);
@@ -1142,12 +1293,24 @@ export function upsertAlertForStats(input: {
   const signalAt = toMs(input.signalAt);
   const tier = detectTier(input.alert.symbol);
   const stepPct = ALERT_DEFAULT_TP_SL_PCT;
-  const typeLabel = resolveAlertTypeLabel(input.alert, input.key);
+  const typeLabel = resolveAlertTypeLabel(input.alert, canonicalKey);
   const interval = String(input.alert.interval || "").trim();
   const tradeSymbol =
     toUsdtSymbol(input.alert.symbol) || String(input.alert.symbol || "");
   const list = loadAlertStats();
-  const existing = list.find((r) => r.key === input.key);
+  const probe = {
+    tradeSymbol,
+    symbol: input.alert.symbol,
+    signalAt,
+    side,
+    interval,
+    typeLabel,
+    key: canonicalKey,
+  };
+  const probeId = statsDedupeId(probe);
+  const existing = list.find(
+    (r) => r.key === canonicalKey || statsDedupeId(r) === probeId,
+  );
   if (existing) {
     const needLabel = !String(existing.typeLabel || "").trim() && !!typeLabel;
     const needInterval = !String(existing.interval || "").trim() && !!interval;
@@ -1177,14 +1340,18 @@ export function upsertAlertForStats(input: {
             }
           : {}),
       };
-      persistStats(list.map((r) => (r.key === input.key ? patched : r)));
+      const did = statsDedupeId(patched);
+      persistStats([
+        patched,
+        ...list.filter((r) => statsDedupeId(r) !== did && r.key !== patched.key),
+      ]);
       return patched;
     }
     return existing;
   }
 
   const rec: AlertStatsRecord = {
-    key: input.key,
+    key: canonicalKey,
     symbol: displaySymbol(input.alert.symbol),
     tradeSymbol,
     dir: input.dir,
@@ -1678,6 +1845,9 @@ export function alertStatsLeverage(rec: AlertStatsRecord): number {
  */
 export function alertStatsPnlPct(rec: AlertStatsRecord): number | null {
   if (rec.outcome === "pending" || rec.outcome === "error") return null;
+  if (rec.pnlPct != null && Number.isFinite(Number(rec.pnlPct))) {
+    return Math.round(Number(rec.pnlPct) * 100) / 100;
+  }
   if (rec.movePct == null || !Number.isFinite(rec.movePct)) return null;
   const priceMove = Number(rec.movePct);
   const signed =

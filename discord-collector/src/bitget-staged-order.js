@@ -1,5 +1,5 @@
 /**
- * 分阶段 Bitget 下单：市价开仓 → 4.3% 初始止损 → TP/SL 更新 → 分批止盈 / 反手。
+ * 分阶段 Bitget 下单：市价开仓 → 默认 5% 初始止损 → TP/SL 更新 → 分批止盈 / 反手。
  */
 import {
   STAGED_INITIAL_SL_PCT,

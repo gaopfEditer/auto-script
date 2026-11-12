@@ -1,10 +1,11 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { fetchTelegramGroupEvalCards } from "../lib/telegramGroupEvalApi.js";
 import {
   DEFAULT_COPY_SIZING_PARAMS,
-  loadCopySizingParams,
-  saveCopySizingParams,
+  formatCopySizingBrief,
+  loadCopySizingParamsForChat,
+  saveCopySizingParamsForChat,
 } from "../lib/telegramCopySizingStorage.js";
 import { replayFromEvalCards } from "../../../src/telegram-copy-sizing.js";
 
@@ -21,27 +22,86 @@ const EVAL_WINDOWS = [
   { key: "all", label: "总计" },
 ];
 
-const params = ref(loadCopySizingParams());
+const selectedChatId = ref("");
+const params = ref({ ...DEFAULT_COPY_SIZING_PARAMS });
+let paramsHydrating = false;
 /** @type {import('vue').Ref<"month"|"week"|"all">} */
 const replayWindow = ref("all");
 const fetching = ref(false);
 const fetchError = ref("");
 
-/** @type {import('vue').Ref<Array<{ chatId: string, name: string, replayCount: number, suggestedNextPosition: number, cumulativeSimPnl: number, steps: import("../../../src/telegram-copy-sizing.js").CopySizingReplayStep[] }>>} */
+/** @type {import('vue').Ref<Array<{ chatId: string, name: string, replayCount: number, suggestedNextPosition: number, cumulativeSimPnl: number, paramBrief?: string, steps: import("../../../src/telegram-copy-sizing.js").CopySizingReplayStep[], error?: string }>>} */
 const groupResults = ref([]);
 
 const expandedChatId = ref("");
 
+const selectedChannelName = computed(() => {
+  const hit = props.channels.find(
+    (c) => c.chatId === selectedChatId.value || String(c.chatId) === selectedChatId.value,
+  );
+  return hit?.name || selectedChatId.value || "—";
+});
+
+function ensureSelectedChannel() {
+  const list = props.channels.filter((c) => c?.chatId);
+  if (!list.length) {
+    selectedChatId.value = "";
+    return;
+  }
+  const ok = list.some((c) => c.chatId === selectedChatId.value);
+  if (!ok) selectedChatId.value = list[0].chatId;
+}
+
+function loadParamsForSelected() {
+  paramsHydrating = true;
+  params.value = selectedChatId.value
+    ? loadCopySizingParamsForChat(selectedChatId.value)
+  : { ...DEFAULT_COPY_SIZING_PARAMS };
+  void nextTick(() => {
+    paramsHydrating = false;
+  });
+}
+
+watch(
+  () => props.channels,
+  () => {
+    ensureSelectedChannel();
+    loadParamsForSelected();
+  },
+  { immediate: true, deep: true },
+);
+
+watch(open, (v) => {
+  if (v) {
+    ensureSelectedChannel();
+    loadParamsForSelected();
+  }
+});
+
+watch(selectedChatId, () => {
+  loadParamsForSelected();
+});
+
 watch(
   params,
   (v) => {
-    saveCopySizingParams(v);
+    if (paramsHydrating || !selectedChatId.value) return;
+    saveCopySizingParamsForChat(selectedChatId.value, v);
   },
   { deep: true },
 );
 
 function restoreDefaults() {
   params.value = { ...DEFAULT_COPY_SIZING_PARAMS };
+  if (selectedChatId.value) {
+    saveCopySizingParamsForChat(selectedChatId.value, params.value);
+  }
+}
+
+/** @param {string} chatId */
+function focusChannelParams(chatId) {
+  selectedChatId.value = chatId;
+  expandedChatId.value = "";
 }
 
 function close() {
@@ -88,7 +148,7 @@ function settledLabel(step) {
 
 const summaryNote = computed(
   () =>
-    "回放口径：与群组评估一致（任意 TP=赢、先 SL=亏、Asia/Shanghai 窗口）；单笔盈亏按 ±100% × 当时仓位（U），不使用卡片实际 pnl%。",
+    "每个频道独立保存底仓/加减仓比例（localStorage）；回放按各群自己的参数递推。口径：任意 TP=赢、先 SL=亏；单笔模拟 ±100%×当时仓位（U）。",
 );
 
 async function fetchHistoricalBonus() {
@@ -104,9 +164,12 @@ async function fetchHistoricalBonus() {
   try {
     /** @type {typeof groupResults.value} */
     const out = [];
-    const cfg = saveCopySizingParams(params.value);
+    if (selectedChatId.value) {
+      saveCopySizingParamsForChat(selectedChatId.value, params.value);
+    }
     await Promise.all(
       list.map(async (ch) => {
+        const cfg = loadCopySizingParamsForChat(ch.chatId);
         try {
           const data = await fetchTelegramGroupEvalCards(ch.chatId, replayWindow.value);
           const replay = replayFromEvalCards(data.cards, cfg);
@@ -116,6 +179,7 @@ async function fetchHistoricalBonus() {
             replayCount: replay.replayCount,
             suggestedNextPosition: replay.suggestedNextPosition,
             cumulativeSimPnl: replay.cumulativeSimPnl,
+            paramBrief: formatCopySizingBrief(cfg),
             steps: replay.steps,
           });
         } catch (e) {
@@ -125,6 +189,7 @@ async function fetchHistoricalBonus() {
             replayCount: 0,
             suggestedNextPosition: cfg.basePosition,
             cumulativeSimPnl: 0,
+            paramBrief: formatCopySizingBrief(cfg),
             steps: [],
             error: String(/** @type {Error} */ (e).message ?? e),
           });
@@ -150,15 +215,33 @@ function stepOutcomeLabel(outcome) {
 </script>
 
 <template>
-  <div v-if="open" class="modal copy-sizing-modal" role="dialog" aria-modal="true">
+  <div
+    v-if="open"
+    class="modal copy-sizing-modal"
+    role="dialog"
+    aria-modal="true"
+    @click.self="close"
+  >
     <div class="modal-card wide">
       <header>
         <div>
           <strong>跟单加成 · 历史回放</strong>
-          <p class="muted tiny">仅本机可见 · 配置存 localStorage · 不触达实盘下单</p>
+          <p class="muted tiny">每频道独立参数 · 本机 localStorage · 不触达实盘</p>
         </div>
         <button type="button" class="ghost" @click="close">关闭</button>
       </header>
+
+      <section class="channel-pick" aria-label="编辑参数的频道">
+        <label class="field channel-pick-field">
+          <span>当前编辑频道</span>
+          <select v-model="selectedChatId" :disabled="!channels.length">
+            <option v-for="c in channels" :key="c.chatId" :value="c.chatId">{{ c.name }}</option>
+          </select>
+        </label>
+        <p class="muted tiny channel-pick-hint">
+          正在配置：<strong>{{ selectedChannelName }}</strong> 的底仓 / 加减仓（与其它频道互不影响）
+        </p>
+      </section>
 
       <section class="param-grid" aria-label="策略参数">
         <label class="field">
@@ -203,6 +286,7 @@ function stepOutcomeLabel(outcome) {
               <th>回放笔数</th>
               <th>建议下一单仓位</th>
               <th>模拟累计盈亏</th>
+              <th>加成参数</th>
               <th></th>
             </tr>
           </thead>
@@ -228,10 +312,20 @@ function stepOutcomeLabel(outcome) {
                 >
                   {{ formatPnlU(row.cumulativeSimPnl) }}
                 </td>
+                <td class="tiny param-brief-cell">
+                  <span class="param-brief">{{ row.paramBrief || "—" }}</span>
+                  <button
+                    type="button"
+                    class="link-btn"
+                    @click.stop="focusChannelParams(row.chatId)"
+                  >
+                    改参数
+                  </button>
+                </td>
                 <td class="tiny muted">{{ expandedChatId === row.chatId ? "收起" : "明细" }}</td>
               </tr>
               <tr v-if="expandedChatId === row.chatId" class="detail-row">
-                <td colspan="5">
+                <td colspan="6">
                   <h4 class="tiny">回放明细 · {{ row.name }}</h4>
                   <table class="detail-table">
                     <thead>
@@ -278,16 +372,134 @@ function stepOutcomeLabel(outcome) {
 </template>
 
 <style scoped>
+/* 本组件独立挂载，不能依赖 TelegramPromView 的 scoped .modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(0, 0, 0, 0.62);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+.modal-card {
+  width: min(520px, 100%);
+  background: #2b2d31;
+  border: 1px solid #4e5058;
+  border-radius: 10px;
+  padding: 0.85rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  color: #dbdee1;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.modal-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+.modal-card strong {
+  font-size: 1rem;
+  color: #f2f3f5;
+}
 .copy-sizing-modal .modal-card.wide {
+  width: min(960px, 96vw);
   max-width: min(960px, 96vw);
   max-height: min(90vh, 880px);
   overflow: auto;
+}
+button {
+  border: 1px solid #4e5058;
+  background: #383a40;
+  color: #e8eaed;
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+button.ghost {
+  background: transparent;
+}
+.muted {
+  margin: 0;
+  color: #949ba4;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.tiny {
+  font-size: 0.72rem;
+}
+.err {
+  color: #f23f43;
+  font-size: 0.85rem;
+  margin: 0.35rem 0 0;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 9rem;
+  font-size: 0.72rem;
+  color: #949ba4;
+}
+.field select,
+.field input {
+  border: 1px solid #4e5058;
+  background: #1e1f22;
+  color: #e8eaed;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+}
+.channel-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #404249;
+  background: #232428;
+}
+.channel-pick-field {
+  min-width: 12rem;
+}
+.channel-pick-hint {
+  margin: 0;
+}
+.channel-pick-hint strong {
+  color: #dee0fc;
 }
 .param-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 0.75rem 1rem;
   margin: 0.75rem 0;
+}
+.param-brief-cell {
+  max-width: 11rem;
+}
+.param-brief {
+  display: block;
+  color: #b5bac1;
+  line-height: 1.35;
+}
+.link-btn {
+  margin-top: 0.2rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #5865f2;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+.link-btn:hover {
+  text-decoration: underline;
 }
 .replay-actions {
   display: flex;

@@ -42,6 +42,11 @@ import {
   needsTp1Breakeven,
   resolveStagedTp1Price,
 } from "./discord-signal-staged-trade.js";
+import {
+  buildEvalPendingSettlePatch,
+  isCardPendingSettleDue,
+  settleEvalPendingCard,
+} from "./card-eval-pending-settle.js";
 import { config } from "./config.js";
 
 /**
@@ -59,6 +64,8 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
   let beTimer = null;
   /** 档位进度上次完整跑批时间 */
   let lastLevelCheckAt = 0;
+  /** 评估待结算上次跑批 */
+  let lastPendingSettleAt = 0;
   /** @type {Set<number>} */
   const beInFlight = new Set();
 
@@ -500,6 +507,45 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
     }
   }
 
+  /** 已入场超过评估窗口仍未决 → 批量按末价结算（默认每 4h 扫一轮） */
+  async function runPendingSettleCheck() {
+    if (!config.cardEvalPendingSettleEnabled) return;
+    if (!store.listCardsForProgressCheck) return;
+    const intervalMs = Math.max(60_000, Number(config.cardEvalPendingSettleIntervalMs) || 4 * 3_600_000);
+    const now = Date.now();
+    if (lastPendingSettleAt > 0 && now - lastPendingSettleAt < intervalMs) return;
+    lastPendingSettleAt = now;
+
+    const rows = await store.listCardsForProgressCheck({ limit: 200 });
+    let settled = 0;
+    for (const row of rows) {
+      const card = archiveCardToClient(row);
+      if (!isCardPendingSettleDue(card, now)) continue;
+      try {
+        const doc = await settleEvalPendingCard(card);
+        if (doc.skipped || doc.error || !doc.ok || !doc.result) continue;
+        const patch = buildEvalPendingSettlePatch(card, doc.result);
+        await store.updateSignalCard(card.id, patch);
+        settled += 1;
+        broadcast?.("meta", {
+          kind: "card_eval_pending_settle",
+          cardId: card.id,
+          symbol: card.symbol,
+          outcome: doc.result.outcome,
+          pnlPct: doc.result.pnlPct,
+        });
+        log.info(
+          `评估待结算 #${card.id} ${card.symbol} outcome=${doc.result.outcome} pnl=${doc.result.pnlPct ?? "-"}`
+        );
+      } catch (e) {
+        log.debug(`评估待结算失败 #${card.id}: ${/** @type {Error} */ (e).message}`);
+      }
+    }
+    if (settled > 0) {
+      log.info(`评估待结算本轮完成 settled=${settled}`);
+    }
+  }
+
   async function runBatchBacktestCheck() {
     if (!config.cardBatchBacktestEnabled) return;
     if (!store.listCardsForProgressCheck) return;
@@ -522,9 +568,16 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
     }
   }
 
+  async function runStartupPendingSettleSweep() {
+    if (!config.cardEvalPendingSettleEnabled) return;
+    lastPendingSettleAt = 0;
+    await runPendingSettleCheck();
+  }
+
   async function tick() {
     await runProximityCheck();
     await runLevelProgressCheck();
+    await runPendingSettleCheck();
     await runBatchBacktestCheck();
     await runAutoEval();
   }
@@ -536,6 +589,9 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
       void tick().catch((e) => log.warn(`价格监控 tick: ${/** @type {Error} */ (e).message}`));
     }, ms);
     void tick().catch((e) => log.warn(`价格监控首次: ${/** @type {Error} */ (e).message}`));
+    void runStartupPendingSettleSweep().catch((e) =>
+      log.warn(`评估待结算启动扫: ${/** @type {Error} */ (e).message}`)
+    );
 
     if (config.cardTp1BreakevenEnabled && (deps.bitgetOrder || deps.weexOrder)) {
       const beMs = Math.max(10_000, Number(config.cardTp1BreakevenIntervalMs) || 30_000);
@@ -553,6 +609,7 @@ export function createCardPriceMonitor(store, log, systemTelegram, broadcast, de
       `卡片监控已启动 tick=${config.cardPriceMonitorIntervalMs}ms | ` +
         `接近 每${Math.round(config.cardProximityCryptoCheckMs / 60000)}min±${config.cardProximityCryptoBandPct}% | ` +
         `档位检查=${config.cardLevelCheckEnabled ? `每${Math.round((config.cardLevelCheckMs || 3600000) / 60000)}min` : "off"} | ` +
+        `评估待结算=${config.cardEvalPendingSettleEnabled ? `>${Math.round((config.cardEvalPendingMaxAgeMs || 0) / 3600000)}h 每${Math.round((config.cardEvalPendingSettleIntervalMs || 0) / 3600000)}h` : "off"} | ` +
         `自动评价=${config.cardAutoEvalEnabled ? "on" : "off"}` +
         (config.cardProfitTrailEnabled
           ? ` | 盈利移损提醒=${getProfitTrailLevels().join("/")}%`

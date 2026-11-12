@@ -95,6 +95,29 @@ export function applyDefaultTpSl(entry, isShort, tps, sl) {
   return { tps: outTps, sl: outSl };
 }
 
+/**
+ * 自动下单：信号止损若严于 minPct，放宽到至少 minPct（相对参考价）。
+ * 多单：止损价更低更远；空单：止损价更高更远。
+ * @param {number} refPrice 参考价（市价/成交价）
+ * @param {number | null | undefined} sl
+ * @param {boolean} isShort
+ * @param {number} [minPct] 默认 5
+ */
+export function widenStopLossToMinPct(refPrice, sl, isShort, minPct = LIQUIDATION_DEFAULT_TP_SL_PCT) {
+  if (!Number.isFinite(refPrice) || refPrice <= 0) return sl ?? null;
+  const pct = Number(minPct);
+  const ratio = (Number.isFinite(pct) && pct > 0 ? pct : LIQUIDATION_DEFAULT_TP_SL_PCT) / 100;
+  const floorSl = isShort ? refPrice * (1 + ratio) : refPrice * (1 - ratio);
+  const slNum = sl != null ? Number(sl) : NaN;
+  if (!Number.isFinite(slNum) || slNum <= 0) return floorSl;
+  if (isShort) {
+    if (!isValidSlLevel(refPrice, slNum, true)) return floorSl;
+    return Math.max(slNum, floorSl);
+  }
+  if (!isValidSlLevel(refPrice, slNum, false)) return floorSl;
+  return Math.min(slNum, floorSl);
+}
+
 /** @param {Record<string, unknown>} card @param {ReturnType<typeof resolveCardExecution>} execution */
 export function resolveCardExitPlan(card, execution) {
   const parsed =
@@ -300,7 +323,7 @@ function buildNotEnteredResult(note, ctx) {
 /**
  * @param {Record<string, unknown>} card
  * @param {Array<{ open?: number, high: number, low: number, close?: number, ts?: number }>} klines
- * @param {{ signalMs: number }} opts
+ * @param {{ signalMs: number, maxEndMs?: number, entryTolerancePct?: number, ignoreEntryDeadline?: boolean, forcedEntry?: { price: number, hitAt?: string }, fixedLevels?: { tps: number[], sl: number } }} opts
  */
 export function evaluateLiquidation(card, klines, opts) {
   const signalMs = Number(opts.signalMs);
@@ -350,19 +373,38 @@ export function evaluateLiquidation(card, klines, opts) {
   /** @type {number | null} */
   let entryPriceUsed = null;
 
-  if (marketHint || plannedEntry == null) {
+  const entryTol = Number(opts.entryTolerancePct);
+  const entryTolerancePct =
+    Number.isFinite(entryTol) && entryTol > 0 ? entryTol : LIQUIDATION_ENTRY_TOLERANCE_PCT;
+  const entryDeadline = opts.ignoreEntryDeadline
+    ? Number.isFinite(Number(opts.maxEndMs))
+      ? Number(opts.maxEndMs)
+      : nowMs
+    : entryDeadlineMs;
+
+  if (
+    opts.forcedEntry &&
+    opts.forcedEntry.price != null &&
+    Number.isFinite(Number(opts.forcedEntry.price))
+  ) {
+    entryHitAt =
+      typeof opts.forcedEntry.hitAt === "string"
+        ? opts.forcedEntry.hitAt
+        : new Date(signalMs).toISOString();
+    entryPriceUsed = Number(opts.forcedEntry.price);
+  } else if (marketHint || plannedEntry == null) {
     entryHitAt = new Date(signalMs).toISOString();
     entryPriceUsed = marketAtSignal;
   } else {
     const diffPct = (Math.abs(marketAtSignal - plannedEntry) / plannedEntry) * 100;
-    if (diffPct <= LIQUIDATION_ENTRY_TOLERANCE_PCT) {
+    if (diffPct <= entryTolerancePct) {
       entryHitAt = new Date(signalMs).toISOString();
       entryPriceUsed = marketAtSignal;
     } else {
       for (const k of sorted) {
         const kTs = k.ts ?? 0;
         if (kTs < signalMs) continue;
-        if (kTs > entryDeadlineMs) break;
+        if (kTs > entryDeadline) break;
         const high = Number(k.high);
         const low = Number(k.low);
         if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
@@ -376,7 +418,7 @@ export function evaluateLiquidation(card, klines, opts) {
   }
 
   if (!entryHitAt || entryPriceUsed == null) {
-    if (nowMs < entryDeadlineMs) {
+    if (!opts.ignoreEntryDeadline && nowMs < entryDeadlineMs) {
       return {
         mode: "liquidation",
         skipped: true,

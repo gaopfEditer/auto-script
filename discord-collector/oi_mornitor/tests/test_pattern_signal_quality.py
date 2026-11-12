@@ -15,6 +15,25 @@ from oi_mornitor.strategy.candle_signals import htf_trend_gate_ok
 
 
 class AlertStatsKeyTests(unittest.TestCase):
+    def test_label_and_kind_same_key(self) -> None:
+        from oi_mornitor.pattern_alert_stats import normalize_stats_kind
+
+        self.assertEqual(
+            normalize_stats_kind("bottom_secondary_test", ""),
+            normalize_stats_kind("底部二次探底确认 · 1h", "底部二次探底确认"),
+        )
+        a = {
+            "type": "structure_pattern_card",
+            "symbol": "KITEUSDT",
+            "kline_close_time": 1_794_475_900_000,
+            "kind": "bottom_secondary_test",
+            "side": "bull",
+            "type_label": "底部二次探底确认",
+            "message": "底部二次探底确认 · 1h",
+        }
+        b = {**a, "kind": "", "message": "底部二次探底确认 · 1h"}
+        self.assertEqual(alert_stats_key(a), alert_stats_key(b))
+
     def test_key_uses_kind_side_not_message(self) -> None:
         a = {
             "type": "candle_pattern_card",

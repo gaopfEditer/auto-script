@@ -15,7 +15,7 @@ export const STAGED_SYMBOL_DEDUP_MS = 4 * 60 * 60 * 1000;
 export const STAGED_REVERSE_WINDOW_MS = 5 * 60 * 1000;
 /** 开仓后补 TP/SL 的关联窗口（山寨之王常见 20 分钟内补发） */
 export const STAGED_TPSL_LINK_MS = 20 * 60 * 1000;
-export const STAGED_INITIAL_SL_PCT = 4.3;
+export const STAGED_INITIAL_SL_PCT = 5;
 export const STAGED_TP_PARTIAL_RATIOS = [0.3, 0.3, 1];
 
 /** @type {Set<string>} */

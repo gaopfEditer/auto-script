@@ -1589,7 +1589,7 @@ export async function openStore(cfg, log) {
    * @param {{ limit?: number }} [opts]
    */
   async function listCardsForProgressCheck(opts = {}) {
-    const lim = Math.min(300, Math.max(1, Number(opts.limit) || 150));
+    const lim = Math.min(2000, Math.max(1, Number(opts.limit) || 150));
     const [rows] = await pool.query(
       `SELECT ${SIGNAL_CARD_SELECT}
        FROM discord_signal_cards sc
@@ -1600,7 +1600,7 @@ export async function openStore(cfg, log) {
          AND (
            sc.progress_json IS NULL
            OR JSON_UNQUOTE(JSON_EXTRACT(sc.progress_json, '$.status')) IS NULL
-           OR JSON_UNQUOTE(JSON_EXTRACT(sc.progress_json, '$.status')) NOT IN ('closed_tp', 'closed_sl', 'expired')
+           OR JSON_UNQUOTE(JSON_EXTRACT(sc.progress_json, '$.status')) NOT IN ('closed_tp', 'closed_sl')
          )
        ORDER BY sc.id DESC
        LIMIT ${lim}`

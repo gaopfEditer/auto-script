@@ -542,7 +542,8 @@ async def handle_backtest_structure_options(_request: web.Request) -> web.Respon
             ),
             "mcapTiers": tier_catalog_for_api(),
             "mcapTierNote": (
-                "市值梯队与胜率弹窗同源；未在白名单的币默认为第三梯队（其他山寨）。"
+                "市值梯队按 CoinGecko 美元市值实时划分：大于 500 亿为第一梯队，"
+                "大于 80 亿为第二梯队，其余或暂无数据为第三梯队。历史胜率按当前市值归档。"
                 "回测默认 Live 漏斗，与实时形态卡片一致。"
             ),
             "klineSource": "bybit_v5_parquet",

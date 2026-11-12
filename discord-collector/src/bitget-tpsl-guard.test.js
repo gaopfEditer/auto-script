@@ -71,7 +71,7 @@ describe("classifyBitgetTpslRepairError", () => {
 });
 
 describe("resolveRepairTpslLevels", () => {
-  it("信号价相对 mark 仍有效时保留信号档位", () => {
+  it("信号 SL 仍有效但严于 initialSlPct 时放宽止损", () => {
     const r = resolveRepairTpslLevels({
       mark: 3500,
       holdSide: "long",
@@ -81,7 +81,7 @@ describe("resolveRepairTpslLevels", () => {
       signalTakeProfitStr: "3800",
       sizeStr: "1",
     });
-    assert.equal(r.stopLossStr, "3400");
+    assert.equal(r.stopLossStr, "3349.5");
     assert.equal(r.takeProfitStr, "3800");
     assert.equal(r.usedSignalSl, true);
     assert.equal(r.usedSignalTp, true);
@@ -551,10 +551,10 @@ describe("placeBitgetOpenWithPresets tick", () => {
     assert.equal(result.ok, true);
     assert.equal(bodies.length, 1);
     const body = JSON.parse(bodies[0]);
-    assert.equal(body.presetStopLossPrice, "0.4001");
-    assert.equal(body.presetStopSurplusPrice, "0.4513");
-    assert.equal(body.presetStopLossExecutePrice, "0.4001");
-    assert.equal(body.presetStopSurplusExecutePrice, "0.4513");
+    assert.equal(body.presetStopLossPrice, "0.399");
+    assert.equal(body.presetStopSurplusPrice, "0.441");
+    assert.equal(body.presetStopLossExecutePrice, "0.399");
+    assert.equal(body.presetStopSurplusExecutePrice, "0.441");
     assert.ok(Number(body.presetStopLossExecutePrice) > 0);
   });
 });

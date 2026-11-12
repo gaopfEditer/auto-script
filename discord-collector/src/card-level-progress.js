@@ -347,7 +347,7 @@ export function expireProgressIfStale(card, nowMs = Date.now()) {
     prev ?? emptyProgress(),
     emptyProgress({
       status: "expired",
-      note: "stale_8h",
+      note: `stale_${Math.round((Number(config.cardKlineVerifyMaxAgeMs) || 16 * 3_600_000) / 3_600_000)}h`,
       lastCheckAt: new Date().toISOString(),
     })
   );

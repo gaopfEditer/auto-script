@@ -11,14 +11,11 @@ import {
 import {
   fetchTelegramGroupEval,
   fetchTelegramGroupEvalCards,
-  formatPnlCompact,
   formatTotalPnlLabel,
-  formatWinLossLabel,
-  formatWinRateLabel,
 } from "../lib/telegramGroupEvalApi.js";
 import { directionLabel, outcomeLabel } from "../lib/signalExecution.js";
-import { isLocalClient } from "../lib/localClient.js";
-import TelegramCopySizingModal from "../components/TelegramCopySizingModal.vue";
+import TelegramChannelInsightModal from "../components/TelegramChannelInsightModal.vue";
+import TelegramEvalColoredMetrics from "../components/TelegramEvalColoredMetrics.vue";
 
 defineOptions({ name: "TelegramPromView" });
 
@@ -45,17 +42,6 @@ const EVAL_WINDOWS = [
   { key: "all", label: "总计" },
 ];
 
-const GROUP_EVAL_STICKY_KEY = "telegram.live.groupEvalStickyByChat";
-
-function readGroupEvalStickyMap() {
-  try {
-    const raw = localStorage.getItem(GROUP_EVAL_STICKY_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
 
 const TIME_OPTIONS = [
   { value: "1h", label: "近 1 小时" },
@@ -76,14 +62,14 @@ const error = ref("");
 const status = ref("连接中…");
 const showRealIdentity = ref(getTelegramShowRealIdentity());
 const canToggleIdentity = canToggleTelegramRealIdentity();
-const showCopySizingTools = isLocalClient();
-const copySizingOpen = ref(false);
+const channelInsightOpen = ref(false);
+const insightChatId = ref("");
+const insightChannelName = ref("");
 
 const groupEvalNote = ref("");
 const groupEvalRows = ref(/** @type {import("../lib/telegramGroupEvalApi.js").TgGroupEvalRow[]} */ ([]));
 const groupEvalLoading = ref(false);
 const groupEvalError = ref("");
-const groupEvalStickyByChat = ref(readGroupEvalStickyMap());
 
 const detailOpen = ref(false);
 const detailLoading = ref(false);
@@ -193,27 +179,11 @@ const groupEvalMap = computed(() => {
   return map;
 });
 
-/** @param {string} chatId */
-function isGroupEvalSticky(chatId) {
-  const map = groupEvalStickyByChat.value;
-  if (map[chatId]) return true;
-  const n = Number(chatId);
-  return Number.isFinite(n) ? Boolean(map[String(n)]) : false;
-}
-
-/** @param {string} chatId */
-function toggleGroupEvalSticky(chatId) {
-  const next = { ...groupEvalStickyByChat.value };
-  const on = !isGroupEvalSticky(chatId);
-  next[chatId] = on;
-  const n = Number(chatId);
-  if (Number.isFinite(n)) delete next[String(n)];
-  groupEvalStickyByChat.value = next;
-  try {
-    localStorage.setItem(GROUP_EVAL_STICKY_KEY, JSON.stringify(next));
-  } catch {
-    /* ignore quota */
-  }
+/** @param {{ chatId: string, name?: string }} channel */
+function openChannelInsight(channel) {
+  insightChatId.value = channel.chatId;
+  insightChannelName.value = String(channel.name || channel.chatId);
+  channelInsightOpen.value = true;
 }
 
 /** @param {string} chatId @param {import("../lib/telegramGroupEvalApi.js").TgEvalWindowKey} key */
@@ -243,6 +213,14 @@ function cardPnlText(card) {
   const p = Number(card.pnlPct);
   if (Number.isFinite(p)) return `${p >= 0 ? "+" : ""}${p.toFixed(2)}%`;
   return "—";
+}
+
+/** @param {string|undefined} outcome */
+function outcomeToneClass(outcome) {
+  const o = String(outcome || "");
+  if (o === "take_profit") return "outcome-win";
+  if (o === "stop_loss") return "outcome-loss";
+  return "outcome-pending";
 }
 
 /** @param {string} iso */
@@ -574,22 +552,19 @@ onUnmounted(() => {
         >
           {{ showRealIdentity ? "显示别名" : "显示真实" }}
         </button>
-        <button
-          v-if="showCopySizingTools"
-          type="button"
-          class="ghost"
-          title="本机专用：按历史赢亏递推仓位"
-          @click="copySizingOpen = true"
-        >
-          历史加成
-        </button>
         <button type="button" :disabled="loading" @click="loadMessages">
           {{ loading ? "刷新中…" : "刷新" }}
         </button>
       </div>
     </header>
 
-    <TelegramCopySizingModal v-model:open="copySizingOpen" :channels="channels" />
+    <TelegramChannelInsightModal
+      v-model:open="channelInsightOpen"
+      :chat-id="insightChatId"
+      :channel-name="insightChannelName"
+      :metrics-for="(key) => windowMetrics(insightChatId, key)"
+      @open-detail="(key) => openGroupEvalDetail(insightChatId, key)"
+    />
 
     <p v-if="error" class="err">{{ error }}</p>
     <p v-if="groupEvalError" class="err subtle">{{ groupEvalError }}</p>
@@ -632,8 +607,9 @@ onUnmounted(() => {
         type="button"
         class="chip"
         :class="{ on: activeChatId === c.chatId }"
-        :title="showRealIdentity ? c.chatId : `${c.name} · ${c.chatId}`"
+        :title="(showRealIdentity ? c.chatId : `${c.name} · ${c.chatId}`) + ' · 双击打开统计'"
         @click="selectChannel(c.chatId)"
+        @dblclick.stop="openChannelInsight(c)"
       >
         <img v-if="c.avatarUrl" class="chip-av" :src="c.avatarUrl" alt="" />
         <span>{{ c.name }}</span>
@@ -681,58 +657,12 @@ onUnmounted(() => {
           <div v-else class="col-av fallback">{{ (c.name || "?").slice(0, 1) }}</div>
           <div class="col-head-main">
             <div class="col-title">
-              <strong>{{ c.name }}</strong>
-              <span>{{ messagesForChannel(c.chatId).length }} 条实时消息</span>
-            </div>
-            <div
-              v-if="!isGroupEvalSticky(c.chatId)"
-              class="col-eval"
-              aria-label="信号卡周期统计"
-            >
-              <div class="col-eval-toolbar">
-                <span class="col-eval-hint">盈亏 · 胜率 · 盈利率（MySQL 信号卡）</span>
-                <label class="eval-sticky-toggle" :title="'滚动群消息时统计条' + (isGroupEvalSticky(c.chatId) ? '悬浮' : '不悬浮')">
-                  <input
-                    type="checkbox"
-                    :checked="isGroupEvalSticky(c.chatId)"
-                    @change="toggleGroupEvalSticky(c.chatId)"
-                  />
-                  <span>统计悬浮</span>
-                </label>
-              </div>
-              <div class="col-eval-grid">
-                <button
-                  v-for="w in EVAL_WINDOWS"
-                  :key="c.chatId + '-head-' + w.key"
-                  type="button"
-                  class="eval-pill eval-pill-rich"
-                  :title="`查看${w.label}单子详情`"
-                  @click="openGroupEvalDetail(c.chatId, w.key)"
-                >
-                  <span class="eval-pill-label">{{ w.label }}</span>
-                  <span class="eval-pill-metrics">
-                    <span class="eval-pill-row">{{ formatWinLossLabel(windowMetrics(c.chatId, w.key)) }}</span>
-                    <span class="eval-pill-row">{{ formatWinRateLabel(windowMetrics(c.chatId, w.key)) }}</span>
-                    <span
-                      class="eval-pill-row eval-pill-pnl"
-                      :class="pnlToneClass(windowMetrics(c.chatId, w.key)?.totalPnlPct)"
-                    >
-                      盈利率 {{ formatPnlCompact(windowMetrics(c.chatId, w.key)?.totalPnlPct) }}
-                    </span>
-                  </span>
-                  <span class="eval-pill-more">详情</span>
-                </button>
-              </div>
-            </div>
-            <div v-else class="col-eval-toolbar col-eval-toolbar-compact">
-              <label class="eval-sticky-toggle" title="关闭后统计固定在群标题下">
-                <input
-                  type="checkbox"
-                  :checked="isGroupEvalSticky(c.chatId)"
-                  @change="toggleGroupEvalSticky(c.chatId)"
-                />
-                <span>统计悬浮</span>
-              </label>
+              <strong
+                class="col-name"
+                title="双击打开：近一个月 / 七天 / 总计 + 跟单加成"
+                @dblclick.stop="openChannelInsight(c)"
+              >{{ c.name }}</strong>
+              <span class="col-sub">{{ messagesForChannel(c.chatId).length }} 条 · 双击群名看统计</span>
             </div>
           </div>
         </header>
@@ -740,36 +670,6 @@ onUnmounted(() => {
           class="col-body"
           :ref="(el) => setColBody(c.chatId, /** @type {HTMLElement | null} */ (el))"
         >
-          <div
-            v-if="isGroupEvalSticky(c.chatId)"
-            class="col-eval col-eval-floating"
-            aria-label="信号卡周期统计（悬浮）"
-          >
-            <span class="col-eval-hint">盈亏 · 胜率 · 盈利率</span>
-            <div class="col-eval-grid">
-              <button
-                v-for="w in EVAL_WINDOWS"
-                :key="c.chatId + '-float-' + w.key"
-                type="button"
-                class="eval-pill eval-pill-rich"
-                :title="`查看${w.label}单子详情`"
-                @click="openGroupEvalDetail(c.chatId, w.key)"
-              >
-                <span class="eval-pill-label">{{ w.label }}</span>
-                <span class="eval-pill-metrics">
-                  <span class="eval-pill-row">{{ formatWinLossLabel(windowMetrics(c.chatId, w.key)) }}</span>
-                  <span class="eval-pill-row">{{ formatWinRateLabel(windowMetrics(c.chatId, w.key)) }}</span>
-                  <span
-                    class="eval-pill-row eval-pill-pnl"
-                    :class="pnlToneClass(windowMetrics(c.chatId, w.key)?.totalPnlPct)"
-                  >
-                    盈利率 {{ formatPnlCompact(windowMetrics(c.chatId, w.key)?.totalPnlPct) }}
-                  </span>
-                </span>
-                <span class="eval-pill-more">详情</span>
-              </button>
-            </div>
-          </div>
           <article
             v-for="m in messagesForChannel(c.chatId)"
             :key="m.id"
@@ -805,36 +705,52 @@ onUnmounted(() => {
       </p>
     </section>
 
-    <div v-if="detailOpen" class="modal group-eval-modal" role="dialog" aria-modal="true">
-      <div class="modal-card wide">
+    <div
+      v-if="detailOpen"
+      class="modal group-eval-modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="closeGroupDetail"
+    >
+      <div class="modal-card wide group-eval-card">
         <header>
           <div>
-            <strong
-              >{{ detailPayload?.name || detailChatId }} · {{ detailWindowLabel }} ·
-              单子详情</strong
+            <strong class="group-eval-title"
+              >{{ detailPayload?.name || detailChatId }} · {{ detailWindowLabel }}</strong
             >
+            <p class="muted tiny group-eval-sub">信号卡单子详情</p>
             <p v-if="detailPayload?.note" class="muted tiny">{{ detailPayload.note }}</p>
           </div>
           <button type="button" class="ghost" @click="closeGroupDetail">关闭</button>
         </header>
-        <p v-if="detailLoading" class="muted">加载中…</p>
+        <p v-if="detailLoading" class="muted detail-loading">加载中…</p>
         <template v-else-if="detailPayload">
-          <p class="detail-summary muted">
-            {{ formatWinLossLabel(detailPayload.metrics) }}
-            · {{ formatWinRateLabel(detailPayload.metrics) }}
-            · 盈利率
-            <span
-              :class="pnlToneClass(Number(detailPayload.metrics?.totalPnlPct))"
-              class="mono"
-            >
-              {{
-                formatTotalPnlLabel(
-                  Number(detailPayload.metrics?.totalPnlPct),
-                  detailPayload.metrics,
-                )
-              }}
-            </span>
-          </p>
+          <div v-if="detailPayload.metrics" class="detail-kpi-row">
+            <div class="detail-kpi">
+              <span class="detail-kpi-label">盈亏</span>
+              <span class="detail-kpi-value">
+                <TelegramEvalColoredMetrics :metrics="detailPayload.metrics" kind="winloss" />
+              </span>
+            </div>
+            <div class="detail-kpi">
+              <span class="detail-kpi-label">胜率</span>
+              <span class="detail-kpi-value">
+                <TelegramEvalColoredMetrics :metrics="detailPayload.metrics" kind="winrate" />
+              </span>
+            </div>
+            <div class="detail-kpi detail-kpi-pnl">
+              <span class="detail-kpi-label">盈利率</span>
+              <span class="detail-kpi-value">
+                <TelegramEvalColoredMetrics :metrics="detailPayload.metrics" kind="pnl" />
+                <span
+                  v-if="detailPayload.metrics?.pendingCount > 0"
+                  class="tiny pending-hint"
+                >
+                  · {{ detailPayload.metrics.pendingCount }}待定
+                </span>
+              </span>
+            </div>
+          </div>
           <div class="detail-table-wrap">
             <table class="detail-table">
               <thead>
@@ -853,7 +769,9 @@ onUnmounted(() => {
                   <td class="mono">{{ card.symbol || "—" }}</td>
                   <td>{{ directionLabel(card.direction) }}</td>
                   <td class="mono tiny">{{ card.entry ?? "—" }}</td>
-                  <td>{{ outcomeLabel(card.outcome) }}</td>
+                  <td :class="outcomeToneClass(String(card.outcome))">
+                    {{ outcomeLabel(card.outcome) }}
+                  </td>
                   <td class="mono" :class="pnlToneClass(Number(card.pnlPct))">
                     {{ cardPnlText(card) }}
                   </td>
@@ -1109,7 +1027,7 @@ button.ghost {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 0.55rem;
 }
 .col-eval-toolbar {
   display: flex;
@@ -1225,16 +1143,118 @@ button.ghost {
   width: min(920px, 96vw);
   max-height: 86vh;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #5c5f66 #2b2d31;
 }
-.group-eval-modal .detail-summary {
-  margin: 0 0 0.65rem;
-  font-size: 0.8rem;
+.modal-card.wide::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.modal-card.wide::-webkit-scrollbar-track {
+  background: #2b2d31;
+  border-radius: 8px;
+}
+.modal-card.wide::-webkit-scrollbar-thumb {
+  background: #5c5f66;
+  border-radius: 8px;
+  border: 2px solid #2b2d31;
+}
+.modal-card.wide::-webkit-scrollbar-thumb:hover {
+  background: #6d7178;
+}
+.group-eval-card {
+  gap: 0.85rem;
+}
+.group-eval-title {
+  font-size: 1.05rem;
+}
+.group-eval-sub {
+  margin: 0.15rem 0 0;
+}
+.detail-loading {
+  margin: 0.5rem 0;
+}
+.detail-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+@media (max-width: 640px) {
+  .detail-kpi-row {
+    grid-template-columns: 1fr;
+  }
+}
+.detail-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #404249;
+  background: #1e1f22;
+}
+.detail-kpi-label {
+  font-size: 0.68rem;
+  color: #848990;
+}
+.detail-kpi-value {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #e8eaed;
+}
+.detail-kpi-pnl .detail-kpi-value {
+  font-size: 1rem;
+}
+.pending-hint {
+  color: #949ba4;
+  font-weight: 400;
+  margin-left: 0.25rem;
+}
+.outcome-win {
+  color: #3ba55d;
+  font-weight: 600;
+}
+.outcome-loss {
+  color: #ed4245;
+  font-weight: 600;
+}
+.outcome-pending {
+  color: #f0b90b;
+}
+.board.single :deep(.eval-stat-row) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: visible;
+}
+.board.single :deep(.eval-stat-card) {
+  flex: auto;
+  min-width: 0;
 }
 .detail-table-wrap {
   overflow: auto;
   max-height: 58vh;
   border: 1px solid #383a40;
   border-radius: 8px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #5c5f66 #1e1f22;
+}
+.detail-table-wrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.detail-table-wrap::-webkit-scrollbar-track {
+  background: #1e1f22;
+  border-radius: 8px;
+}
+.detail-table-wrap::-webkit-scrollbar-thumb {
+  background: #5c5f66;
+  border-radius: 8px;
+  border: 2px solid #1e1f22;
+}
+.detail-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: #6d7178;
 }
 .detail-table {
   width: 100%;
@@ -1281,16 +1301,24 @@ button.ghost {
   gap: 0.1rem;
   min-width: 0;
 }
-.col-title strong {
+.col-title strong.col-name {
   font-size: 0.82rem;
   color: #e8eaed;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0.05rem 0.15rem;
+  margin: -0.05rem -0.15rem;
 }
-.col-title span {
-  font-size: 0.7rem;
-  color: #949ba4;
+.col-title strong.col-name:hover {
+  color: #dee0fc;
+  background: rgba(88, 101, 242, 0.12);
+}
+.col-title .col-sub {
+  font-size: 0.68rem;
+  color: #848990;
 }
 .col-body {
   flex: 1;

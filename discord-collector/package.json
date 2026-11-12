@@ -25,7 +25,10 @@
     "news:start": "PYTHONPATH=. ${NEWS_PYTHON:-../../auto-deal-eth/news_mornitor/venv/bin/python} news_mornitor/run.py web",
     "content:start": "PYTHONPATH=. oi_mornitor/venv/bin/python -m content_board",
     "test": "BITGET_SKIP_TELEGRAM_ALERT=1 node --test src/*.test.js",
-    "cards:digest-main-telegram": "node scripts/main-card-telegram-digest.mjs"
+    "cards:digest-main-telegram": "node scripts/main-card-telegram-digest.mjs",
+    "card-eval:settle-sweep": "node src/card-eval-pending-settle-cli.js",
+    "card-eval:settle-scheduled": "node src/card-eval-pending-settle-cli.js --scheduled",
+    "card-eval:settle-symbols": "node src/card-eval-pending-settle-batch.js"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",

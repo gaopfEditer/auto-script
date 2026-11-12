@@ -4,6 +4,7 @@ import type { ChartAlertEntryFocus, PatternAlert } from "../types";
 import { formatAlertHoverDetail } from "../utils/alertHoverDetail";
 import { isOiOperator } from "../utils/oiOperator";
 import {
+  alertStatsKeyFromPattern,
   ALERT_SETTLE_RULES_SUMMARY,
   isRetiredPatternAlert,
   loadAlertStats,
@@ -191,7 +192,7 @@ function alertReason(a: PatternAlert): string {
 }
 
 function alertKey(a: PatternAlert): string {
-  return `${a.type}:${a.symbol}:${a.kline_close_time}:${a.message || a.type_label || ""}`;
+  return alertStatsKeyFromPattern(a);
 }
 
 function makeTickerItem(alert: PatternAlert, now = Date.now()): TickerItem {

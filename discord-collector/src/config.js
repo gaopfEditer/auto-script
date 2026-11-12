@@ -440,8 +440,22 @@ export const config = {
     String(process.env.CARD_LEVEL_CHECK_ENABLED ?? "1").toLowerCase()
   ),
   cardLevelCheckMs: Number(process.env.CARD_LEVEL_CHECK_MS ?? 3_600_000),
-  /** 超过该时长未完结的卡片视为失效，不再拉 K 线兜底核验（默认 8h） */
-  cardKlineVerifyMaxAgeMs: Number(process.env.CARD_KLINE_VERIFY_MAX_AGE_MS ?? 8 * 3_600_000),
+  /** 超过该时长未完结的卡片视为失效，不再拉 K 线兜底核验（默认 16h，与评估待结算窗口对齐） */
+  cardKlineVerifyMaxAgeMs: Number(process.env.CARD_KLINE_VERIFY_MAX_AGE_MS ?? 16 * 3_600_000),
+  /** 已入场仍未决：超过该窗口按末价强制结算（默认 16h） */
+  cardEvalPendingMaxAgeMs: Number(
+    process.env.CARD_EVAL_PENDING_MAX_AGE_MS ??
+      (Number(process.env.CARD_EVAL_PENDING_MAX_HOURS ?? 16) || 16) * 3_600_000
+  ),
+  /** 待结算批量检查间隔（默认 4h） */
+  cardEvalPendingSettleIntervalMs: Number(
+    process.env.CARD_EVAL_PENDING_SETTLE_INTERVAL_MS ?? 4 * 3_600_000
+  ),
+  cardEvalPendingSettleEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.CARD_EVAL_PENDING_SETTLE_ENABLED ?? "1").toLowerCase()
+  ),
+  /** 强制结算扫：计划入场价与现价相差 ≤ 该 % 则按现价视为已入场（默认 2） */
+  cardEvalNearMarketEntryPct: Number(process.env.CARD_EVAL_NEAR_MARKET_ENTRY_PCT ?? 2),
   /**
    * 卡片挂 Bitget/WEEX 单后：TP1 触达则把止损移到开仓价（默认开，每 30s 扫一次）。
    */
@@ -569,7 +583,7 @@ export const config = {
   bitgetOrderSizeUsdt: Number(process.env.BITGET_ORDER_SIZE_USDT ?? 1),
   bitgetMajorLeverage: Number(process.env.BITGET_MAJOR_LEVERAGE ?? 100),
   bitgetAltcoinLeverage: Number(process.env.BITGET_ALTCOIN_LEVERAGE ?? 30),
-  bitgetInitialSlPct: Number(process.env.BITGET_INITIAL_SL_PCT ?? 4.3),
+  bitgetInitialSlPct: Number(process.env.BITGET_INITIAL_SL_PCT ?? 5),
   bitgetTradeConfigFile: (process.env.BITGET_TRADE_CONFIG_FILE ?? "").trim()
     ? path.resolve(process.env.BITGET_TRADE_CONFIG_FILE.trim())
     : path.join(_collectorRoot, "config", "bitget-trade-channels.json"),

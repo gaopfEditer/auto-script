@@ -1,4 +1,13 @@
-"""市值梯队（一 / 二 / 三）：与结算 tier(major/altcoin) 独立，用于筛选与胜率分桶。"""
+"""市值梯队（一 / 二 / 三）：按 CoinGecko 美元市值实时划分。
+
+门槛（默认，可在 symbol_mcap_tiers.json 调整）：
+  第一梯队：市值大于 500 亿美元
+  第二梯队：市值大于 80 亿美元、不超过 500 亿美元
+  第三梯队：其余（含无数据、稳定币等排除项）
+
+与结算杠杆分档（BTC/ETH/SOL 100x、其余 20x）相互独立。
+历史胜率按「当前市值」归档，存在一定事后偏差，需在展示中标明。
+"""
 from __future__ import annotations
 
 import json
@@ -14,6 +23,8 @@ logger = logging.getLogger(__name__)
 MCAP_TIER_ORDER = ("t1", "t2", "t3")
 
 _DEFAULT_FILE = Path(__file__).resolve().parent / "data" / "symbol_mcap_tiers.json"
+_DEFAULT_T1_USD = 50_000_000_000
+_DEFAULT_T2_USD = 8_000_000_000
 
 _STRATEGY_HINTS: dict[str, str] = {
     "t1": (
@@ -30,9 +41,7 @@ _STRATEGY_HINTS: dict[str, str] = {
     ),
 }
 
-_symbol_to_tier: dict[str, str] | None = None
-_tier_labels: dict[str, str] | None = None
-_tier_mcap_notes: dict[str, str] | None = None
+_cfg_cache: dict[str, Any] | None = None
 _default_tier: str = "t3"
 
 
@@ -43,26 +52,56 @@ def _config_path() -> Path:
     return _DEFAULT_FILE
 
 
-def _load_config() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-    global _symbol_to_tier, _tier_labels, _tier_mcap_notes, _default_tier
-    if _symbol_to_tier is not None:
-        return _symbol_to_tier, _tier_labels or {}, _tier_mcap_notes or {}
+def _base_asset(symbol: str) -> str:
+    n = normalize_usdt_symbol(symbol)
+    if not n:
+        return ""
+    if n.endswith("USDT"):
+        return n[: -len("USDT")]
+    if n.endswith("USD"):
+        return n[: -len("USD")]
+    return n
 
-    sym_map: dict[str, str] = {}
-    labels: dict[str, str] = {
-        "t1": "第一梯队",
-        "t2": "第二梯队",
-        "t3": "第三梯队",
+
+def _load_config() -> dict[str, Any]:
+    global _cfg_cache, _default_tier
+    if _cfg_cache is not None:
+        return _cfg_cache
+
+    labels: dict[str, str] = {"t1": "第一梯队", "t2": "第二梯队", "t3": "第三梯队"}
+    notes: dict[str, str] = {
+        "t1": "市值大于 500 亿美元（按 CoinGecko 美元市值实时划分）",
+        "t2": "市值大于 80 亿美元、不超过 500 亿美元",
+        "t3": "市值 80 亿美元及以下，或暂无市值数据 / 稳定币等排除项",
     }
-    notes: dict[str, str] = {}
+    t1_usd = _DEFAULT_T1_USD
+    t2_usd = _DEFAULT_T2_USD
+    exclude: set[str] = set()
+    fallback: dict[str, str] = {}
+    default_tier = "t3"
 
     path = _config_path()
     try:
         if path.is_file():
             raw = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
-                _default_tier = str(raw.get("default") or "t3").strip().lower() or "t3"
-                bands = raw.get("bands")
+                default_tier = str(raw.get("default") or "t3").strip().lower() or "t3"
+                th = raw.get("thresholdsUsd") or {}
+                if isinstance(th, dict):
+                    if th.get("t1") is not None:
+                        t1_usd = float(th["t1"])
+                    if th.get("t2") is not None:
+                        t2_usd = float(th["t2"])
+                excl = raw.get("exclude") or {}
+                if isinstance(excl, dict):
+                    for key in ("bases", "symbols"):
+                        items = excl.get(key) or []
+                        if isinstance(items, list):
+                            for s in items:
+                                b = _base_asset(str(s)) or str(s).strip().upper()
+                                if b:
+                                    exclude.add(b)
+                bands = raw.get("bands") or {}
                 if isinstance(bands, dict):
                     for tid in MCAP_TIER_ORDER:
                         block = bands.get(tid)
@@ -72,51 +111,99 @@ def _load_config() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
                         note = str(block.get("mcapNote") or "").strip()
                         if note:
                             notes[tid] = note
-                        syms = block.get("symbols") or []
-                        if isinstance(syms, list):
-                            for s in syms:
-                                n = normalize_usdt_symbol(str(s))
-                                if n:
-                                    sym_map[n] = tid
+                        # 旧版白名单仅作接口失败时的兜底
+                        for s in block.get("symbols") or []:
+                            n = normalize_usdt_symbol(str(s))
+                            if n:
+                                fallback[n] = tid
+                fb = raw.get("fallbackSymbols") or {}
+                if isinstance(fb, dict):
+                    for tid, syms in fb.items():
+                        if tid not in MCAP_TIER_ORDER or not isinstance(syms, list):
+                            continue
+                        for s in syms:
+                            n = normalize_usdt_symbol(str(s))
+                            if n:
+                                fallback[n] = tid
     except Exception as exc:  # noqa: BLE001
         logger.warning("读取市值梯队配置失败 %s: %s", path, exc)
 
-    if not sym_map:
-        sym_map = {
-            normalize_usdt_symbol("BTCUSDT"): "t1",
-            normalize_usdt_symbol("ETHUSDT"): "t1",
-            normalize_usdt_symbol("BNBUSDT"): "t2",
-            normalize_usdt_symbol("SOLUSDT"): "t2",
-            normalize_usdt_symbol("XRPUSDT"): "t2",
-        }
-
-    _symbol_to_tier = sym_map
-    _tier_labels = labels
-    _tier_mcap_notes = notes
-    return sym_map, labels, notes
+    _default_tier = default_tier
+    _cfg_cache = {
+        "labels": labels,
+        "notes": notes,
+        "t1_usd": t1_usd,
+        "t2_usd": t2_usd,
+        "exclude": exclude,
+        "fallback": fallback,
+        "default": default_tier,
+    }
+    return _cfg_cache
 
 
 def reload_mcap_tier_config() -> None:
-    global _symbol_to_tier, _tier_labels, _tier_mcap_notes
-    _symbol_to_tier = None
-    _tier_labels = None
-    _tier_mcap_notes = None
+    global _cfg_cache
+    _cfg_cache = None
     _load_config()
 
 
-def resolve_mcap_tier(symbol: str) -> str:
-    """t1 | t2 | t3；未在白名单的永续币为 default（第三梯队 / 其他）。"""
-    sym_map, _, _ = _load_config()
+def mcap_thresholds_usd() -> tuple[float, float]:
+    cfg = _load_config()
+    return float(cfg["t1_usd"]), float(cfg["t2_usd"])
+
+
+def _is_excluded(symbol: str) -> bool:
+    cfg = _load_config()
+    base = _base_asset(symbol)
+    if not base:
+        return False
+    return base in cfg["exclude"]
+
+
+def _fallback_tier(symbol: str) -> str:
+    cfg = _load_config()
     n = normalize_usdt_symbol(symbol)
-    if not n:
-        return _default_tier
-    return sym_map.get(n, _default_tier)
+    if n and n in cfg["fallback"]:
+        return str(cfg["fallback"][n])
+    return str(cfg["default"])
+
+
+def tier_from_market_cap_usd(cap_usd: float | None, *, excluded: bool = False) -> str:
+    """纯函数：便于测试。excluded 或无市值 → 默认第三梯队。门槛为「大于」。"""
+    cfg = _load_config()
+    if excluded or cap_usd is None:
+        return str(cfg["default"])
+    try:
+        cap = float(cap_usd)
+    except (TypeError, ValueError):
+        return str(cfg["default"])
+    if cap > float(cfg["t1_usd"]):
+        return "t1"
+    if cap > float(cfg["t2_usd"]):
+        return "t2"
+    return "t3"
+
+
+def resolve_mcap_tier(symbol: str) -> str:
+    """t1 | t2 | t3。优先用实时市值；排除项与无数据走默认（第三梯队）。
+
+    若 CoinGecko 缓存完全不可用，回退到配置里的 fallbackSymbols。
+    """
+    from oi_mornitor.mcap_market_quote import ensure_market_cap_map, market_cap_usd_sync
+
+    if _is_excluded(symbol):
+        return _default_tier if _cfg_cache else _load_config()["default"]
+    cmap = ensure_market_cap_map()
+    cap = market_cap_usd_sync(symbol, refresh=False)
+    if cap is None and not cmap:
+        return _fallback_tier(symbol)
+    return tier_from_market_cap_usd(cap, excluded=False)
 
 
 def mcap_tier_label(tier_id: str) -> str:
-    _, labels, _ = _load_config()
+    cfg = _load_config()
     tid = str(tier_id or "").strip().lower()
-    return labels.get(tid, tid or "—")
+    return cfg["labels"].get(tid, tid or "—")
 
 
 def mcap_tier_strategy_hint(tier_id: str) -> str:
@@ -125,9 +212,9 @@ def mcap_tier_strategy_hint(tier_id: str) -> str:
 
 
 def mcap_tier_mcap_note(tier_id: str) -> str:
-    _, _, notes = _load_config()
+    cfg = _load_config()
     tid = str(tier_id or "").strip().lower()
-    return notes.get(tid, "")
+    return cfg["notes"].get(tid, "")
 
 
 def mcap_tier_title(tier_id: str) -> str:
@@ -143,11 +230,17 @@ def mcap_tier_title(tier_id: str) -> str:
 
 
 def attach_mcap_tier(items: list[dict[str, Any]]) -> None:
+    from oi_mornitor.mcap_market_quote import ensure_market_cap_map, market_cap_usd_sync
+
+    ensure_market_cap_map()
     for it in items:
         if not isinstance(it, dict):
             continue
         sym = str(it.get("tradeSymbol") or it.get("symbol") or "")
+        cap = None if _is_excluded(sym) else market_cap_usd_sync(sym, refresh=False)
         it["mcapTier"] = resolve_mcap_tier(sym)
+        if cap is not None and cap > 0:
+            it["marketCapUsd"] = cap
 
 
 def filter_by_mcap_tier(
@@ -171,6 +264,7 @@ def filter_by_mcap_tier(
 
 
 def tier_catalog_for_api() -> list[dict[str, Any]]:
+    t1, t2 = mcap_thresholds_usd()
     out: list[dict[str, Any]] = []
     for tid in MCAP_TIER_ORDER:
         out.append(
@@ -179,6 +273,8 @@ def tier_catalog_for_api() -> list[dict[str, Any]]:
                 "label": mcap_tier_label(tid),
                 "mcapNote": mcap_tier_mcap_note(tid),
                 "strategyHint": mcap_tier_strategy_hint(tid),
+                "thresholdUsd": {"t1": t1, "t2": t2}.get(tid),
+                "source": "coingecko_live",
             }
         )
     return out
@@ -186,13 +282,18 @@ def tier_catalog_for_api() -> list[dict[str, Any]]:
 
 def symbol_mcap_tier_for_api(symbol: str) -> dict[str, Any]:
     """单币市值梯队（形态图 pattern-chart-meta）。"""
-    sym_map, _, _ = _load_config()
-    n = normalize_usdt_symbol(symbol)
+    from oi_mornitor.mcap_market_quote import market_cap_usd_sync
+
     tid = resolve_mcap_tier(symbol)
+    cap = None if _is_excluded(symbol) else market_cap_usd_sync(symbol, refresh=False)
     return {
         "id": tid,
         "label": mcap_tier_label(tid),
         "mcapNote": mcap_tier_mcap_note(tid),
         "strategyHint": mcap_tier_strategy_hint(tid),
-        "listedInTierConfig": bool(n and n in sym_map),
+        "marketCapUsd": cap,
+        "classifiedBy": "market_cap" if cap is not None else (
+            "excluded" if _is_excluded(symbol) else "default_or_fallback"
+        ),
+        "listedInTierConfig": cap is not None,
     }

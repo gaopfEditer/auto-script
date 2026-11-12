@@ -22,6 +22,8 @@ import {
   formatIntervalOptionLabel,
   formatDaytypeOptionLabel,
   formatSessionOptionLabel,
+  formatConfluenceOptionLabel,
+  type AlertStatsConfluenceOption,
   type AlertStatsIntervalOption,
   type AlertStatsRecord,
   type AlertStatsAssetFilter,
@@ -200,6 +202,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
   const [sessionOptions, setSessionOptions] = useState<AlertStatsSessionOption[]>([]);
   const [daytypeOptions, setDaytypeOptions] = useState<AlertStatsDaytypeOption[]>([]);
   const [mcapTierOptions, setMcapTierOptions] = useState<McapTierOption[]>([]);
+  const [confluenceOptions, setConfluenceOptions] = useState<AlertStatsConfluenceOption[]>([]);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [loadingList, setLoadingList] = useState(false);
@@ -249,6 +252,7 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
         setSessionOptions(res.sessionOptions ?? []);
         setDaytypeOptions(res.daytypeOptions ?? []);
         setMcapTierOptions(res.mcapTierOptions ?? []);
+        setConfluenceOptions(res.confluenceOptions ?? []);
         setTotal(res.total);
         setPages(res.pages);
         setPage(res.page);
@@ -337,6 +341,11 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
     if (mcapTierFilter === "all") return;
     if (!mcapTierOptions.some((o) => o.id === mcapTierFilter)) setMcapTierFilter("all");
   }, [mcapTierOptions, mcapTierFilter]);
+
+  useEffect(() => {
+    if (confluenceTier === "all") return;
+    if (!confluenceOptions.some((o) => o.id === confluenceTier)) setConfluenceTier("all");
+  }, [confluenceOptions, confluenceTier]);
 
   const activeExtraFilters = useMemo(() => {
     const parts: string[] = [];
@@ -717,7 +726,10 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
               ))}
             </select>
           </label>
-          <label className="pattern-wr-type-filter" title="综合评分精确筛选（A/B/C）；与其它筛选项取交集">
+          <label
+            className="pattern-wr-type-filter"
+            title="综合评分精确筛选（A/B/C/D）；下拉胜率与合计盈利率随其它筛选项联动"
+          >
             <span>综合评分</span>
             <select
               value={confluenceTier}
@@ -727,10 +739,22 @@ export const PatternAlertWinRateModal = memo(function PatternAlertWinRateModal({
               }}
               aria-label="按综合评分 A/B/C 筛选"
             >
-              <option value="all">全部</option>
-              <option value="A">A</option>
-              <option value="B">B</option>
-              <option value="C">C</option>
+              {(confluenceOptions.length
+                ? confluenceOptions
+                : [
+                    {
+                      id: "all" as const,
+                      label: "全部",
+                      count: 0,
+                      winRate: null,
+                      totalPnlPct: null,
+                    },
+                  ]
+              ).map((o) => (
+                <option key={o.id} value={o.id}>
+                  {formatConfluenceOptionLabel(o)}
+                </option>
+              ))}
             </select>
           </label>
           <label className="pattern-wr-mtf-filter" title="15m/1h/4h 同币同向、同形态族，4h 内 ≥2 周期">

@@ -3,6 +3,7 @@
  */
 import { isLongDirection, isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
+import { widenStopLossToMinPct } from "./card-liquidation-engine.js";
 import { envBool, envInt, envStr } from "./env-defaults.js";
 
 const LIQUIDATION_DEFAULT_TP_SL_PCT = 5;
@@ -405,8 +406,12 @@ export function resolveRepairTpslLevels(input) {
 
   let slNum = Number(String(input.signalStopLossStr).replace(/[^\d.]/g, ""));
   let tpNum = Number(String(input.signalTakeProfitStr).replace(/[^\d.]/g, ""));
-  const useSignalSl = Number.isFinite(slNum) && slNum > 0 && isValidStopLoss(mark, slNum, holdSide);
-  const useSignalTp = Number.isFinite(tpNum) && tpNum > 0 && isValidTakeProfit(mark, tpNum, holdSide);
+  const markOnly =
+    input.parsed?.tradeTpslFromMark === true || input.forceMarkOnlyTpsl === true;
+  const useSignalSl =
+    !markOnly && Number.isFinite(slNum) && slNum > 0 && isValidStopLoss(mark, slNum, holdSide);
+  const useSignalTp =
+    !markOnly && Number.isFinite(tpNum) && tpNum > 0 && isValidTakeProfit(mark, tpNum, holdSide);
 
   const resolved = resolveOpenTpslPrices({
     parsed: input.parsed ?? {},
@@ -416,6 +421,14 @@ export function resolveRepairTpslLevels(input) {
     initialSlPct: input.initialSlPct,
   });
 
+  if (useSignalSl) {
+    slNum = widenStopLossToMinPct(
+      mark,
+      slNum,
+      holdSide === "short",
+      input.initialSlPct
+    );
+  }
   let stopLossStr = useSignalSl ? priceStr(slNum) : resolved.stopLossStr;
   let takeProfitStr = useSignalTp ? priceStr(tpNum) : resolved.takeProfitStr;
 
@@ -658,33 +671,48 @@ export function formatBitgetNakedPositionAlert(details) {
  *   contractMeta?: ReturnType<typeof enrichBitgetContractMeta> | null;
  * }} input
  */
+function usesMarkOnlyTpsl(input) {
+  return input.markOnlyTpsl === true || input.parsed?.tradeTpslFromMark === true;
+}
+
 export function resolveOpenTpslPrices(input) {
   const ex = normalizeExecution(input.executionJson ?? null, input.parsed);
   const direction = input.direction;
   const fillPrice = input.fillPrice;
   const isShort = isShortDirection(direction);
+  const markOnly = usesMarkOnlyTpsl(input);
 
-  let slNum = Number(
-    String(ex.planned?.stopLossPrice ?? input.parsed.stopLoss ?? "")
-      .replace(/[^\d.]/g, "")
-  );
-  if (!Number.isFinite(slNum) || slNum <= 0) {
-    slNum = calcInitialStopLoss(fillPrice, direction, input.initialSlPct) ?? 0;
-  }
+  let slNum;
+  let tpNums;
 
-  let tpNums = (ex.planned?.takeProfitPrices ?? [])
-    .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
-    .filter((n) => Number.isFinite(n) && n > 0);
-  if (!tpNums.length && Array.isArray(input.parsed.takeProfits)) {
-    tpNums = input.parsed.takeProfits
+  if (markOnly) {
+    const applied = applyDefaultTpSl(fillPrice, isShort, [], null);
+    slNum = calcInitialStopLoss(fillPrice, direction, input.initialSlPct) ?? applied.sl;
+    tpNums = applied.tps;
+  } else {
+    slNum = Number(
+      String(ex.planned?.stopLossPrice ?? input.parsed.stopLoss ?? "")
+        .replace(/[^\d.]/g, "")
+    );
+    if (!Number.isFinite(slNum) || slNum <= 0) {
+      slNum = calcInitialStopLoss(fillPrice, direction, input.initialSlPct) ?? 0;
+    }
+
+    tpNums = (ex.planned?.takeProfitPrices ?? [])
       .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
       .filter((n) => Number.isFinite(n) && n > 0);
-  }
+    if (!tpNums.length && Array.isArray(input.parsed.takeProfits)) {
+      tpNums = input.parsed.takeProfits
+        .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
+        .filter((n) => Number.isFinite(n) && n > 0);
+    }
 
-  const slForDefault = Number.isFinite(slNum) && slNum > 0 ? slNum : null;
-  const applied = applyDefaultTpSl(fillPrice, isShort, tpNums, slForDefault);
-  slNum = applied.sl;
-  tpNums = applied.tps;
+    const slForDefault = Number.isFinite(slNum) && slNum > 0 ? slNum : null;
+    const applied = applyDefaultTpSl(fillPrice, isShort, tpNums, slForDefault);
+    slNum = applied.sl;
+    tpNums = applied.tps;
+    slNum = widenStopLossToMinPct(fillPrice, slNum, isShort, input.initialSlPct);
+  }
 
   const takeProfits = tpNums.map((n) => priceStr(n)).filter(Boolean);
   const stopLoss = priceStr(slNum);
@@ -845,8 +873,9 @@ export async function placeBitgetOpenWithPresets(client, p) {
       initialSlPct: p.initialSlPct,
       contractMeta,
     });
-    let slStr = presetAttempt === 1 && p.stopLossStr ? p.stopLossStr : resolved.stopLossStr;
-    let tpStr = presetAttempt === 1 && p.takeProfitStr ? p.takeProfitStr : resolved.takeProfitStr;
+    // 每轮用当前标记价重算 TP/SL，避免预计算价与实盘偏离导致止损过近或 sl_breached 裸平
+    let slStr = resolved.stopLossStr;
+    let tpStr = resolved.takeProfitStr;
     const presetPrices = sanitizeBitgetOpenPresetPrices({
       stopLossRaw: slStr,
       takeProfitRaw: tpStr,

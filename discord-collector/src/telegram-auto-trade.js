@@ -85,7 +85,7 @@ export async function enrichTelegramMarketEntry(parsed, execution, symbol, opts 
   const sym = firstRealSymbol(symbol, parsed.symbol, execution.symbol);
   if (!sym) return;
   const entryRaw = firstNonBlank(parsed.entry, execution.planned?.entryPrice);
-  if (!isMarketEntryLabel(entryRaw)) return;
+  if (!opts.forceLivePrice && !isMarketEntryLabel(entryRaw)) return;
   const fetchPrice = opts.fetchPrice ?? fetchFuturesPrice;
   try {
     const { price } = await fetchPrice(sym);
@@ -102,7 +102,22 @@ export async function enrichTelegramMarketEntry(parsed, execution, symbol, opts 
 }
 
 /**
- * 合并 execution → parsed，缺 TP/SL 时按 5/8/12% + 5% SL 补全（需有效入场价）。
+ * 自动下单口径：以参考价（通常为拉取的实时价）按 5% SL + 5/8/12% TP，不用信号里的止损止盈。
+ * @param {number} refPrice
+ * @param {string} direction
+ */
+export function buildTelegramMarkTpsl(refPrice, direction) {
+  const isShort = isShortDirection(direction);
+  const applied = applyDefaultTpSl(refPrice, isShort, [], null);
+  return {
+    takeProfits: applied.tps.map((p) => priceStr(p)),
+    stopLoss: priceStr(applied.sl),
+    exitPlan: buildDefaultTelegramExitPlan(),
+  };
+}
+
+/**
+ * 合并 execution → parsed；有有效参考价时固定按实时价 ±5% SL / 默认 TP 下单。
  * @param {Record<string, unknown>} parsed
  * @param {ReturnType<typeof normalizeExecution>} execution
  */
@@ -120,47 +135,21 @@ export function prepareTelegramTradeParsed(parsed, execution) {
     if (plannedEntry && !isMarketEntryLabel(plannedEntry)) next.entry = plannedEntry;
   }
 
-  /** @type {string[]} */
-  let tps = [];
-  const plannedTps = execution.planned?.takeProfitPrices ?? [];
-  const parsedTps = Array.isArray(next.takeProfits) ? next.takeProfits : [];
-  const tpSource = plannedTps.length ? plannedTps : parsedTps;
-  tps = tpSource.map((x) => String(x ?? "").trim()).filter(Boolean);
-  tps = tps.flatMap((p) => {
-    const parts = p.split(/[,，/|｜\s—–~～-]+/).map((s) => s.trim()).filter((s) => /^[\d.]+$/.test(s) && Number(s) > 0);
-    return parts.length ? parts : [];
-  });
-  let slRaw = firstNonBlank(next.stopLoss, execution.planned?.stopLossPrice);
-
   const direction = next.direction;
   const entryNum =
     parseEntryPriceForOrder(next.entry, direction) ??
     parseEntryPrice(next.entry) ??
     null;
 
+  /** @type {string[]} */
+  let tps = [];
+  let slRaw = "";
   if (entryNum && entryNum > 0) {
-    const isShort = isShortDirection(direction);
-    const tpNums = tps
-      .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    let slNum = parseSlNum(slRaw);
-    const needDefaultTp = !tps.length;
-    const needDefaultSl = slNum == null;
-    if (needDefaultTp || needDefaultSl) {
-      const applied = applyDefaultTpSl(entryNum, isShort, tpNums, slNum);
-      if (needDefaultTp) {
-        tps = applied.tps.map((p) => priceStr(p));
-      }
-      if (needDefaultSl && applied.sl != null) {
-        slRaw = priceStr(applied.sl);
-        slNum = applied.sl;
-      }
-      if (!next.exitPlan || typeof next.exitPlan !== "object") {
-        next.exitPlan = buildDefaultTelegramExitPlan();
-      } else if (needDefaultSl) {
-        next.exitPlan = { .../** @type {Record<string, unknown>} */ (next.exitPlan), defaultApplied: true };
-      }
-    }
+    const markTpsl = buildTelegramMarkTpsl(entryNum, direction);
+    tps = markTpsl.takeProfits;
+    slRaw = markTpsl.stopLoss;
+    next.tradeTpslFromMark = true;
+    next.exitPlan = markTpsl.exitPlan;
   }
 
   next.takeProfits = tps;
@@ -262,7 +251,10 @@ export async function prepareAutoTradeForOrder(parsed, execution, symbol, opts =
     if (!nextEx.symbol || isPlaceholderTradeSymbol(nextEx.symbol)) nextEx.symbol = hinted;
   }
   absorbTelegramSignalFields(nextParsed, nextEx);
-  await enrichTelegramMarketEntry(nextParsed, nextEx, hinted || String(nextParsed.symbol ?? ""), opts);
+  await enrichTelegramMarketEntry(nextParsed, nextEx, hinted || String(nextParsed.symbol ?? ""), {
+    ...opts,
+    forceLivePrice: true,
+  });
   return prepareTelegramTradeParsed(nextParsed, nextEx);
 }
 
