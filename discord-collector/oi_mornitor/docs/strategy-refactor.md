@@ -16,10 +16,10 @@
 
 | 变量 | 默认 | 含义 |
 |------|------|------|
-| `OI_PAUSE_BOTTOM_SECONDARY` | **关** | 整类暂停二次探底（默认不暂停） |
-| `OI_PAUSE_SHOOTING_STAR` | **关** | 整类暂停射击之星（默认不暂停） |
-| `OI_REQUIRE_DIRECTION_OR_HTF_REVERSAL` | 开 | 二次探底/射击之星：方向未破 **或** 4h 已反转才放行 |
-| `OI_BOTTOM_4H_DOWNTREND_FORBID_LONG` | **关** | 旧闸：4h 下跌一律禁止底部做多（默认改用情境闸） |
+| `OI_PAUSE_BOTTOM_SECONDARY` | 开 | 暂停原版底部二次探底确认的实盘推送与**默认**结构回测 |
+| `OI_PAUSE_SHOOTING_STAR` | 开 | 暂停原版射击之星（含连续走平）同上 |
+| `OI_REQUIRE_DIRECTION_OR_HTF_REVERSAL` | 开 | 若研究重开：方向未破 **或** 4h 已反转才放行 |
+| `OI_BOTTOM_4H_DOWNTREND_FORBID_LONG` | 开 | 假设闸：4h 明显下降趋势禁止底部直接做多（重开时生效） |
 | `OI_SETTLE_LIQUIDATION` | 开 | 模拟强平（维持保证金） |
 | `OI_SETTLE_CAP_LOSS_AT_MARGIN` | 开 | 单笔 ROE 不低于 -100（不超过保证金） |
 | `OI_SETTLE_LEVERAGE_MAJOR` | 100 | BTC/ETH/SOL |
@@ -33,7 +33,7 @@
 
 ## 形态分级
 
-- **情境闸（替代整类暂停）**：底部二次探底、射击之星默认启用；须满足「信号周期方向未被反向收盘 BOS」**或**「4h 已同向反转（trend 同向 / CHoCH）」。不要继续抠几何参数。
+- **暂停原版**：底部二次探底确认、射击之星（不要继续优化几何参数；后续新决策策略再接入）。研究重开时，另有情境闸：「信号周期方向未被反向收盘 BOS」**或**「4h 已同向反转」。
 - **保留、不主动调参**：头肩顶。
 - **观察**：M 顶（样本不足，不可当核心）。
 - **保留研究**：流动性掠夺 → 升级为严格独立策略（必须 sweep+reclaim+CHoCH）。

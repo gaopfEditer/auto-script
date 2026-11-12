@@ -1,9 +1,9 @@
-"""形态暂停与环境闸：二次探底 / 射击之星默认**不再整类暂停**。
+"""形态暂停与环境闸：默认停用原版二次探底 / 射击之星的实盘推送与默认回测交易。
 
-改为情境闸（可 env 开关）：
+可通过 env 重新打开供研究。打开后仍可走情境闸（可 env 开关）：
   放行 ⟺ 方向尚未被反向收盘突破  OR  大周期已出现同向反转
 
-旧的「4h 下跌一律禁止底部做多」保留为可选（默认关，由情境闸替代）。
+旧的「4h 下跌一律禁止底部做多」默认开，在二次探底被研究重开时生效。
 这些是待验证的假设，不是已证明有效的规则。
 """
 from __future__ import annotations
@@ -14,11 +14,11 @@ import pandas as pd
 
 from oi_mornitor.env_parse import env_bool
 
-# 默认不整类暂停（可用 env 重新整类关掉）。
-OI_PAUSE_BOTTOM_SECONDARY = env_bool("OI_PAUSE_BOTTOM_SECONDARY", False)
-OI_PAUSE_SHOOTING_STAR = env_bool("OI_PAUSE_SHOOTING_STAR", False)
-# 旧闸：4h 下跌禁止底部做多。默认关——改由 direction_or_htf_reversal 情境闸。
-OI_BOTTOM_4H_DOWNTREND_FORBID_LONG = env_bool("OI_BOTTOM_4H_DOWNTREND_FORBID_LONG", False)
+# 默认暂停：原版底部二次探底、原版射击之星（含连续走平）。
+OI_PAUSE_BOTTOM_SECONDARY = env_bool("OI_PAUSE_BOTTOM_SECONDARY", True)
+OI_PAUSE_SHOOTING_STAR = env_bool("OI_PAUSE_SHOOTING_STAR", True)
+# 假设闸：4h 明显下降趋势时禁止底部形态直接做多（仅在二次探底被研究重开时生效；默认 ON）。
+OI_BOTTOM_4H_DOWNTREND_FORBID_LONG = env_bool("OI_BOTTOM_4H_DOWNTREND_FORBID_LONG", True)
 # 情境闸：方向未破 OR 大周期已反转（默认开）。
 OI_REQUIRE_DIRECTION_OR_HTF_REVERSAL = env_bool("OI_REQUIRE_DIRECTION_OR_HTF_REVERSAL", True)
 
@@ -113,7 +113,7 @@ def kind_option_meta(kind_id: str, label: str, side: str) -> dict[str, Any]:
 
 
 def bottom_long_forbidden_by_4h_downtrend(regime_4h: str | None) -> bool:
-    """旧假设闸：4h 明显下降趋势时禁止底部直接做多（默认关）。"""
+    """假设闸：4h 明显下降趋势时禁止底部直接做多（默认开；暂停期间不生效）。"""
     if not OI_BOTTOM_4H_DOWNTREND_FORBID_LONG:
         return False
     r = str(regime_4h or "").strip().lower()

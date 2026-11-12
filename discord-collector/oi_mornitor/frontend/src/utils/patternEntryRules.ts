@@ -6,6 +6,8 @@
 export type PatternEntryRule = {
   /** 列表里的 typeLabel / 简称 */
   label: string;
+  /** 默认暂停实盘推送（可用 env 研究重开） */
+  paused?: boolean;
   /** 方向 */
   side: "多" | "空" | "—";
   /** 一句话 */
@@ -19,8 +21,9 @@ export type PatternEntryRule = {
 export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   {
     label: "底部二次探底确认",
+    paused: true,
     side: "多",
-    summary: "恐慌抛售插针后，二次回踩同一低点并用阳线确认支撑（Double Bottom）。情境闸：方向未破或 4h 已反转。",
+    summary: "恐慌抛售插针后，二次回踩同一低点并用阳线确认支撑（Double Bottom）。默认已暂停；若研究重开，须过情境闸（方向未破或 4h 已反转）。",
     impl: "structure_signals._detect_bottom_reversal + pattern_pause.passes_direction_or_htf_reversal",
     conditions: [
       "① 恐慌柱（L1）：成交量 ≥ 2.0×MA20，且（下影 > 振幅×0.4 或 大阴实体 > 振幅×0.5）",
@@ -44,8 +47,9 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   },
   {
     label: "射击之星",
+    paused: true,
     side: "空",
-    summary: "上影长、实体小的看跌蜡烛；形态 + 放量。情境闸：方向未破或 4h 已反转。",
+    summary: "上影长、实体小的看跌蜡烛；形态 + 放量。默认已暂停；若研究重开，须过情境闸（方向未破或 4h 已反转）。",
     impl: "candle_signals + indicators.detect_shooting_star + pattern_pause.passes_direction_or_htf_reversal",
     conditions: [
       "① 形态：上影 ∈ [1.5×实体, max]；下影很短或下影×2 < 上影；近下轨时必须收阴",
@@ -57,6 +61,7 @@ export const PATTERN_ENTRY_RULES: PatternEntryRule[] = [
   },
   {
     label: "连续走平射击之星",
+    paused: true,
     side: "空",
     summary: "短窗内再次出现射击之星（「射击之星（2）」），强化顶部钝化。",
     impl: "candle_signals consecutive shoot",
