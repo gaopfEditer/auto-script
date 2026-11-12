@@ -10,12 +10,14 @@ import { readJsonResponse } from "./httpJson.js";
  *   decidedCount: number,
  * }} TgWindowMetrics */
 
+/** @typedef {"month"|"week"|"all"} TgEvalWindowKey */
+
 /** @typedef {{
  *   chatId: string,
  *   name: string,
  *   month: TgWindowMetrics,
  *   week: TgWindowMetrics,
- *   lastWeek: TgWindowMetrics,
+ *   all: TgWindowMetrics,
  * }} TgGroupEvalRow */
 
 /**
@@ -42,7 +44,7 @@ export async function fetchTelegramGroupEval() {
 
 /**
  * @param {string} chatId
- * @param {"month"|"week"|"lastWeek"} window
+ * @param {TgEvalWindowKey} window
  */
 export async function fetchTelegramGroupEvalCards(chatId, window) {
   const id = encodeURIComponent(chatId);
@@ -77,4 +79,33 @@ export function formatTotalPnlLabel(pnl, m) {
   const undecided =
     m && m.pendingCount > 0 ? `（${m.pendingCount}待定）` : "";
   return `${body}${sample}${undecided}`;
+}
+
+/**
+ * @param {TgWindowMetrics|undefined|null} m
+ */
+export function formatWinLossLabel(m) {
+  if (!m) return "盈亏 —";
+  const decided = (m.winCount || 0) + (m.lossCount || 0);
+  if (!decided) return "盈亏 0笔";
+  return `${m.winCount}盈 / ${m.lossCount}亏`;
+}
+
+/**
+ * @param {TgWindowMetrics|undefined|null} m
+ */
+export function formatWinRateLabel(m) {
+  if (!m) return "胜率 —";
+  const decided = (m.winCount || 0) + (m.lossCount || 0);
+  if (!decided || m.winRate == null) return "胜率 —";
+  return `胜率 ${Number(m.winRate).toFixed(1)}%`;
+}
+
+/**
+ * @param {number|null|undefined} pnl
+ */
+export function formatPnlCompact(pnl) {
+  const v = Number(pnl);
+  if (!Number.isFinite(v)) return "盈利率 —";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 }
