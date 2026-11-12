@@ -86,3 +86,9 @@ python -m oi_mornitor.scripts.run_independent_strategies --symbol BTCUSDT --df1h
 ## 前端
 
 结构回测页：暂停形态标注「已暂停」（仍可勾选做研究）；默认勾选不含暂停项；结果表可显示环境/出场/MFE·MAE；任务级「出场诊断」与导出命令。
+
+## 6m 回测快照（情境闸）
+
+- 报告：[`backtest-6m-opt-context-gate-2026-11-12.md`](./backtest-6m-opt-context-gate-2026-11-12.md)（`b7216c4`，2026-11-12 13:37 HKT）
+- 对照旧版 1u：[`backtest-6m-lev-1u-2026-11-12.md`](./backtest-6m-lev-1u-2026-11-12.md)
+- 摘要：结构层少亏但仍为负；独立三策略仅 UNI 合计为正；二次探底仍是主拖累；射击之星样本过小。
