@@ -53,7 +53,10 @@ def main_card_equity_symbols() -> frozenset[str]:
 
 
 def is_main_card_symbol(symbol: str) -> bool:
-    """MAIN 群仅推送 env `OI_MAIN_CARD_DEFAULT_SYMBOLS` 中的币种（不含 focus 文件扩展）。"""
+    """MAIN 群仅推送 env `OI_MAIN_CARD_DEFAULT_SYMBOLS` 中的币种（不含 focus 文件扩展）。
+    
+    自动处理 USD/USDT 别名，例如 ETHUSD → ETHUSDT。
+    """
     n = normalize_focus_symbol(symbol)
     return bool(n) and n in _main_card_symbols()
 
