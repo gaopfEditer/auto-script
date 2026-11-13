@@ -1,6 +1,6 @@
 /** 市值梯队（与 oi_mornitor/mcap_tier.py、symbol_mcap_tiers.json 同源） */
 
-export type McapTierId = "t1" | "t2" | "t3";
+export type McapTierId = string;
 
 export type McapTierMeta = {
   id: McapTierId;
@@ -31,6 +31,41 @@ export const MCAP_TIER_CATALOG: McapTierMeta[] = [
     strategyHint:
       "控盘 / 叙事 · 右侧突破快进快出、移动止损；高位射击之星果断离场；仓位 3~5%、杠杆 1~2x。",
   },
+  {
+    id: "eq-t1",
+    label: "美股个股·第一梯队",
+    mcapNote: "公司市值大于 500 亿美元（不使用代币流通市值）",
+  },
+  {
+    id: "eq-t2",
+    label: "美股个股·第二梯队",
+    mcapNote: "公司市值大于 80 亿美元、不超过 500 亿美元",
+  },
+  {
+    id: "eq-t3",
+    label: "美股个股·第三梯队",
+    mcapNote: "公司市值 80 亿美元及以下，或暂无公司市值",
+  },
+  {
+    id: "eq-index",
+    label: "美股集合·指数",
+    mcapNote: "QQQ / SPY / IWM，不套市值门槛",
+  },
+  {
+    id: "eq-lev",
+    label: "美股集合·杠杆",
+    mcapNote: "SOXL / SOXS，不套市值门槛",
+  },
+  {
+    id: "eq-macro",
+    label: "美股集合·宏观",
+    mcapNote: "XAU / TLT（含 PAXG），不套市值门槛",
+  },
+  {
+    id: "eq-other",
+    label: "美股其他",
+    mcapNote: "白名单内加密映射等，暂不按主要科技股市值归档",
+  },
 ];
 
 const BY_ID = new Map(MCAP_TIER_CATALOG.map((x) => [x.id, x]));
@@ -42,6 +77,20 @@ export function mcapTierMeta(id?: string | null): McapTierMeta | undefined {
 
 export function formatMcapTierBadge(id?: string | null): string {
   const m = mcapTierMeta(id);
+  const raw = String(id || "").toLowerCase();
+  const badges: Record<string, string> = {
+    t1: "T1",
+    t2: "T2",
+    t3: "T3",
+    "eq-t1": "美T1",
+    "eq-t2": "美T2",
+    "eq-t3": "美T3",
+    "eq-index": "指数",
+    "eq-lev": "杠杆",
+    "eq-macro": "宏观",
+    "eq-other": "美股其他",
+  };
+  if (badges[raw]) return badges[raw];
   if (!m) return "—";
   return m.id.toUpperCase();
 }

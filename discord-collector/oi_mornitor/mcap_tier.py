@@ -21,6 +21,16 @@ from oi_mornitor.symbol_aliases import normalize_usdt_symbol
 logger = logging.getLogger(__name__)
 
 MCAP_TIER_ORDER = ("t1", "t2", "t3")
+EQUITY_TIER_ORDER = (
+    "eq-t1",
+    "eq-t2",
+    "eq-t3",
+    "eq-index",
+    "eq-lev",
+    "eq-macro",
+    "eq-other",
+)
+ALL_TIER_ORDER = MCAP_TIER_ORDER + EQUITY_TIER_ORDER
 
 _DEFAULT_FILE = Path(__file__).resolve().parent / "data" / "symbol_mcap_tiers.json"
 _DEFAULT_T1_USD = 50_000_000_000
@@ -68,11 +78,29 @@ def _load_config() -> dict[str, Any]:
     if _cfg_cache is not None:
         return _cfg_cache
 
-    labels: dict[str, str] = {"t1": "第一梯队", "t2": "第二梯队", "t3": "第三梯队"}
+    labels: dict[str, str] = {
+        "t1": "第一梯队",
+        "t2": "第二梯队",
+        "t3": "第三梯队",
+        "eq-t1": "美股个股·第一梯队",
+        "eq-t2": "美股个股·第二梯队",
+        "eq-t3": "美股个股·第三梯队",
+        "eq-index": "美股集合·指数",
+        "eq-lev": "美股集合·杠杆",
+        "eq-macro": "美股集合·宏观",
+        "eq-other": "美股其他",
+    }
     notes: dict[str, str] = {
         "t1": "市值大于 500 亿美元（按 CoinGecko 美元市值实时划分）",
         "t2": "市值大于 80 亿美元、不超过 500 亿美元",
         "t3": "市值 80 亿美元及以下，或暂无市值数据 / 稳定币等排除项",
+        "eq-t1": "公司市值大于 500 亿美元（不使用代币流通市值）",
+        "eq-t2": "公司市值大于 80 亿美元、不超过 500 亿美元",
+        "eq-t3": "公司市值 80 亿美元及以下，或暂无公司市值",
+        "eq-index": "QQQ / SPY / IWM，不套市值门槛",
+        "eq-lev": "SOXL / SOXS，不套市值门槛",
+        "eq-macro": "XAU / TLT（含 PAXG），不套市值门槛",
+        "eq-other": "白名单内加密映射等，暂不按主要科技股市值归档",
     }
     t1_usd = _DEFAULT_T1_USD
     t2_usd = _DEFAULT_T2_USD
@@ -103,7 +131,7 @@ def _load_config() -> dict[str, Any]:
                                     exclude.add(b)
                 bands = raw.get("bands") or {}
                 if isinstance(bands, dict):
-                    for tid in MCAP_TIER_ORDER:
+                    for tid in ALL_TIER_ORDER:
                         block = bands.get(tid)
                         if not isinstance(block, dict):
                             continue
@@ -185,11 +213,28 @@ def tier_from_market_cap_usd(cap_usd: float | None, *, excluded: bool = False) -
 
 
 def resolve_mcap_tier(symbol: str) -> str:
-    """t1 | t2 | t3。优先用实时市值；排除项与无数据走默认（第三梯队）。
-
-    若 CoinGecko 缓存完全不可用，回退到配置里的 fallbackSymbols。
-    """
+    """加密 t1|t2|t3，或美股 eq-* 。加密优先用 CoinGecko；美股集合不套门槛。"""
+    from oi_mornitor.equity_mcap import (
+        classify_equity,
+        company_market_cap_usd,
+        equity_tier_from_company_cap,
+    )
     from oi_mornitor.mcap_market_quote import ensure_market_cap_map, market_cap_usd_sync
+
+    eq = classify_equity(symbol)
+    if eq:
+        kind, base = eq
+        if kind == "index":
+            return "eq-index"
+        if kind == "leveraged":
+            return "eq-lev"
+        if kind == "macro":
+            return "eq-macro"
+        if kind == "stock":
+            t1, t2 = mcap_thresholds_usd()
+            cap = company_market_cap_usd(base, refresh=True)
+            return equity_tier_from_company_cap(cap, t1_usd=t1, t2_usd=t2)
+        return "eq-other"
 
     if _is_excluded(symbol):
         return _default_tier if _cfg_cache else _load_config()["default"]
@@ -230,14 +275,21 @@ def mcap_tier_title(tier_id: str) -> str:
 
 
 def attach_mcap_tier(items: list[dict[str, Any]]) -> None:
+    from oi_mornitor.equity_mcap import classify_equity, company_market_cap_usd, ensure_equity_cap_map
     from oi_mornitor.mcap_market_quote import ensure_market_cap_map, market_cap_usd_sync
 
     ensure_market_cap_map()
+    ensure_equity_cap_map()
     for it in items:
         if not isinstance(it, dict):
             continue
         sym = str(it.get("tradeSymbol") or it.get("symbol") or "")
-        cap = None if _is_excluded(sym) else market_cap_usd_sync(sym, refresh=False)
+        eq = classify_equity(sym)
+        cap = None
+        if eq and eq[0] == "stock":
+            cap = company_market_cap_usd(eq[1], refresh=False)
+        elif not eq and not _is_excluded(sym):
+            cap = market_cap_usd_sync(sym, refresh=False)
         it["mcapTier"] = resolve_mcap_tier(sym)
         if cap is not None and cap > 0:
             it["marketCapUsd"] = cap
@@ -266,15 +318,25 @@ def filter_by_mcap_tier(
 def tier_catalog_for_api() -> list[dict[str, Any]]:
     t1, t2 = mcap_thresholds_usd()
     out: list[dict[str, Any]] = []
-    for tid in MCAP_TIER_ORDER:
+    for tid in ALL_TIER_ORDER:
+        crypto = tid in MCAP_TIER_ORDER
+        stock = tid in ("eq-t1", "eq-t2", "eq-t3")
+        threshold = None
+        if tid in ("t1", "eq-t1"):
+            threshold = t1
+        elif tid in ("t2", "eq-t2"):
+            threshold = t2
         out.append(
             {
                 "id": tid,
                 "label": mcap_tier_label(tid),
                 "mcapNote": mcap_tier_mcap_note(tid),
                 "strategyHint": mcap_tier_strategy_hint(tid),
-                "thresholdUsd": {"t1": t1, "t2": t2}.get(tid),
-                "source": "coingecko_live",
+                "thresholdUsd": threshold,
+                "source": "coingecko_live" if crypto else (
+                    "company_market_cap" if stock else "equity_basket"
+                ),
+                "assetClass": "crypto" if crypto else "equity",
             }
         )
     return out
@@ -284,16 +346,31 @@ def symbol_mcap_tier_for_api(symbol: str) -> dict[str, Any]:
     """单币市值梯队（形态图 pattern-chart-meta）。"""
     from oi_mornitor.mcap_market_quote import market_cap_usd_sync
 
+    from oi_mornitor.equity_mcap import classify_equity, company_market_cap_usd
+
     tid = resolve_mcap_tier(symbol)
-    cap = None if _is_excluded(symbol) else market_cap_usd_sync(symbol, refresh=False)
+    eq = classify_equity(symbol)
+    cap = None
+    classified = "default_or_fallback"
+    if eq:
+        if eq[0] == "stock":
+            cap = company_market_cap_usd(eq[1], refresh=False)
+            classified = "company_market_cap" if cap is not None else "equity_stock_no_cap"
+        elif eq[0] in ("index", "leveraged", "macro"):
+            classified = "equity_basket"
+        else:
+            classified = "equity_other"
+    elif _is_excluded(symbol):
+        classified = "excluded"
+    else:
+        cap = market_cap_usd_sync(symbol, refresh=False)
+        classified = "market_cap" if cap is not None else "default_or_fallback"
     return {
         "id": tid,
         "label": mcap_tier_label(tid),
         "mcapNote": mcap_tier_mcap_note(tid),
         "strategyHint": mcap_tier_strategy_hint(tid),
         "marketCapUsd": cap,
-        "classifiedBy": "market_cap" if cap is not None else (
-            "excluded" if _is_excluded(symbol) else "default_or_fallback"
-        ),
-        "listedInTierConfig": cap is not None,
+        "classifiedBy": classified,
+        "listedInTierConfig": cap is not None or (eq is not None),
     }

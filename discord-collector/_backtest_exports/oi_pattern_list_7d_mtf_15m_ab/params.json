@@ -1,0 +1,122 @@
+{
+  "task": "形态信号列表 最近七天 / 仅多周期共振 / 15分钟 / 综合评分 A,B / 三梯队胜率",
+  "computedAtCst": "2026-11-13 07:44:09",
+  "timezone": "Asia/Shanghai (UTC+8)",
+  "cutoffMs": 1794527049741,
+  "cutoffCst": "2026-11-13 07:44:09",
+  "window": "7d",
+  "windowMs": 604800000,
+  "windowStartMs": 1793922249741,
+  "windowStartCst": "2026-11-06 07:44:09",
+  "windowEndCst": "2026-11-13 07:44:09",
+  "filters": {
+    "source": "形态信号列表 /api/pattern-alert-stats 与 list_alert_stats_page 同口径",
+    "time_filter": "7d",
+    "interval": "15m",
+    "mtfResonanceOnly": true,
+    "confluence": "union of exact A and exact B (equivalent to min_tier=B, confluenceExact=0)",
+    "confluenceNote": "列表 UI 综合评分默认精确单档（confluenceExact=1）；本次按用户要求取 A 与 B 的并集，不是 C/D。评分字段为 confluence.tier（V2 百分位：A≥80，B≥60，其余 C）。",
+    "mcapTierFilter": "all（筛选不按梯队切，事后用当前市值分桶）",
+    "decisionGroup": "all（未使用 agentDecision 分组）"
+  },
+  "mtfResonanceDefinition": {
+    "intervals": [
+      "15m",
+      "1h",
+      "4h"
+    ],
+    "window": "±4 hours (MTF_RESONANCE_WINDOW_MS=14400000)",
+    "rule": "同币、同向、同形态族，时间窗内覆盖 ≥2 个周期",
+    "peerPool": "不按时间/周期/形态收窄的全库（与 list_alert_stats_page 一致）；仍会按 asset/symbol 若调用方传入，本次未限制 symbol/assetClass",
+    "futureInformation": true,
+    "futureInformationNote": "窗为信号时刻前后各 4 小时，会用到信号之后才出现的同行周期，因此列表「仅多周期共振」统计 ≠ 可交易的因果回测。本次未改用户所指的列表筛选。"
+  },
+  "settlement": {
+    "source": "形态信号列表已落盘 outcome（pattern_alert_stats），本次未重跑 K 线、未写入生产库",
+    "rulesSummary": "BTC/ETH/SOL 100.0x · 山寨 20.0x · V2：SL=结构invalid与ATR×k、cap%取更紧 · TP=1R/2R 分类型 · 核实窗按周期×市值梯队 · 观察档不计入默认胜率 · 强平模拟+亏损封顶-100 · 手续费默认 0.06%/边 · 滑点 0.03%/边 · 资金费未建模 · 15m 步进核实 · 未平则按窗口末价",
+    "verifyWindow15mHours": 6.0,
+    "leverage": "BTC/ETH/SOL 100x，其他加密 20x；与市值梯队独立",
+    "winRateDefinition": "列表 summarize：观察档默认排除；flat/error 不进头条分母；winRate = take_profit / (take_profit + stop_loss)；pending 不计分母；缺失不当中性",
+    "feesInStoredListSettlements": "live/recalculate-v2 调用 settle_signal_batch 时未传入 fee/slippage，默认 0.0。文档/结构回测默认 OI_BT_FEE_PCT=0.06%/边、OI_BT_SLIPPAGE_PCT=0.03%/边，与列表落盘不一致。本次胜率按列表落盘 outcome，不暗改费用。",
+    "auditAssumptions": {
+      "leverageMajor": 100.0,
+      "leverageAlt": 20.0,
+      "leverageMajorAssets": [
+        "BTC",
+        "ETH",
+        "SOL"
+      ],
+      "feePctPerSideDefaultDocumented": 0.06,
+      "slippagePctPerSideDefaultDocumented": 0.03
+    }
+  },
+  "mcapTiers": {
+    "cryptoThresholdsUsd": {
+      "t1_gt": 50000000000.0,
+      "t2_gt": 8000000000.0
+    },
+    "cryptoRule": "当前 CoinGecko 美元流通市值严格大于 500 亿为 t1，大于 80 亿为 t2，其余 t3；稳定币/Figure Heloc 等排除项与缺失市值记 t3",
+    "lookAhead": "用当前市值划分历史样本，存在轻微前视/事后偏差",
+    "equity": "美股公司市值三档与加密分开，不可合并；QQQ/SPY/IWM 指数、SOXL 杠杆、XAU/TLT/PAXG 宏观集合单列无三档；MSTR/COIN/HOOD/MARA/CRCL/SMCI 为 eq-other"
+  },
+  "funnel": {
+    "allLoaded": 12963,
+    "afterTime7d": 1207,
+    "afterInterval15m": 841,
+    "mtfPeerPoolSize": 12963,
+    "afterMtfResonanceOnly": 58,
+    "exactA": 55,
+    "exactB": 0,
+    "unionExactAB": 55,
+    "minTierB": 55,
+    "unionEqualsMinB": true,
+    "finalFiltered": 55
+  },
+  "mtfOnlyConfluenceDistribution": {
+    "A": 55,
+    "C": 3
+  },
+  "futureMtf": {
+    "signalsWithFuturePeer": 44,
+    "signalsThatWouldDropIfCausalOnly": 33,
+    "causalOnlyCount": 22
+  },
+  "settleVersions": {
+    "rules=2|walk=None": 54,
+    "rules=None|walk=None": 1
+  },
+  "storedFeePctPerSideValues": {
+    "None": 55
+  },
+  "settleProfiles": {
+    "structure_t3_15m": 54
+  },
+  "elapsedSec": 1.319,
+  "limitations": {
+    "usedStoredListSettlements": true,
+    "didNotRewalkKlines": true,
+    "didNotWriteProductionDb": true,
+    "didNotRestartServices": true,
+    "storedSettleProfile": "54/55 条落盘为 structure_t3_15m（含 BTC/ETH/NVDA/QQQ）；结算时的 SL/TP 参数按当时 t3 档，不是按本次当前市值三档重算。",
+    "fees": "列表落盘未写入/未扣除手续费与滑点（fee 字段全空）。文档默认 0.06%/边+0.03% 滑点仅用于结构回测脚本，本次未暗改。",
+    "mtfLookAhead": "多周期共振时间窗为信号前后各 4 小时，会使用信号之后的同行周期。55 条中 44 条存在未来 peer；若改为仅用当时及之前 peer，33 条将不再满足共振。列表统计 ≠ 可交易因果回测。本次未改用户所指的列表筛选。",
+    "confluenceAttach": "筛选使用与 list_alert_stats_page 相同的宽 peer 池即时综合分。本窗口内 A∪B 共 55 条，即时综合分全部为 A（约 86–96 分），B 为 0。API 下拉 confluenceOptions 会在已收窄的 15m 行上重算共振，计数可能出现 B，与实际筛选不一致。",
+    "mcapLookAhead": "加密按 2026-11-13 07:44:03 的当前 CoinGecko 流通市值缓存划分历史样本，存在轻微前视。美股公司市值用同日 00:20–00:24 种子缓存（NVDA 4.013T、TSLA 1.551T）；实时刷新因本机代理连接失败未成功。",
+    "missingCapToT3": "无 CoinGecko 市值记 t3。1000PEPEUSDT 未映射到 PEPE（PEPE 约 19.0 亿美元，仍为 t3，档位未变）。KGEN 等缺失亦记 t3。",
+    "tokenizedNamesLeftInCryptoT3": [
+      "MUUSDT",
+      "SKHYNIXUSDT",
+      "SKHYUSDT",
+      "TQQQUSDT",
+      "XAGUSDT",
+      "CLUSDT",
+      "SNXXUSDT",
+      "OPGUSDT"
+    ],
+    "tokenizedNamesNote": "上述不在当前美股白名单，且无 CoinGecko 市值，按系统规则留在加密 t3，未改分到美股/宏观。不可与加密三档结论混读时忽略这一点。",
+    "observation": "TSLA 2026-11-10 22:35 为 take_profit，但 confluence_observation_only=True，按列表头条胜率排除，不进分母。",
+    "clustering": "大量样本集中在 2026-11-09 清晨至上午的连续 15m 重复信号（尤其 NVDA、QQQ、SK Hynix/MU），并非独立试验。",
+    "assetClassField": "库内 assetClass 多为 crypto 或空，美股判定依据 classify_equity / 当前市值梯队，不依赖该字段。",
+    "pid69355": "检查时 PID 69355 已不在运行；本任务未重启或停止任何服务。"
+  }
+}

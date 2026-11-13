@@ -1,0 +1,325 @@
+{
+  "resultKind": "既有结算复核：MTF-only vs A/B-only vs baseline vs MTF+A/B；未重跑 K 线；未改生产默认",
+  "timezone": "Asia/Shanghai (UTC+8)",
+  "windowStartCst": "2026-05-13 08:12:28",
+  "windowEndCst": "2026-11-13 08:12:28",
+  "windowStartMs": 1778631148000,
+  "windowEndMs": 1794528748000,
+  "repoHead": "deeb97d3b957fed71df6f4c346beffe21e5d077d",
+  "mcapTiersProduction": {
+    "t1_gt": 50000000000.0,
+    "t2_gt": 8000000000.0,
+    "expectedProduction": {
+      "t1_gt": 50000000000,
+      "t2_gt": 8000000000
+    },
+    "lookAhead": "Historical rows classified with CURRENT circulating/company cap (disk cache, no live refresh this run). Mild look-ahead.",
+    "cacheN": 0,
+    "cacheTsUnix": 0.0
+  },
+  "researchT2": {
+    "t2_gt": 5000000000,
+    "label": "research cut only, not auto-script default; production remains 8B"
+  },
+  "settlement": {
+    "engineB": "list_alert_stats stored outcomes; pnlPct = alertStatsPnlPct leveraged margin return; fees typically not deducted",
+    "rulesSummary": "BTC/ETH/SOL 100.0x · 山寨 20.0x · V2：SL=结构invalid与ATR×k、cap%取更紧 · TP=1R/2R 分类型 · 核实窗按周期×市值梯队 · 观察档不计入默认胜率 · 强平模拟+亏损封顶-100 · 手续费默认 0.06%/边 · 滑点 0.03%/边 · 资金费未建模 · 15m 步进核实 · 未平则按窗口末价",
+    "winRateDenominator": "take_profit + stop_loss only"
+  },
+  "mtfDefinition": {
+    "supportedIntervals": [
+      "15m",
+      "1h",
+      "4h"
+    ],
+    "window": "±4 hours",
+    "rule": "same symbol, same side, same pattern family, covering >=2 of 15m/1h/4h",
+    "dailyWeeklySupported": false
+  },
+  "filters": {
+    "cryptoInterval": "15m only",
+    "equityIntervals": [
+      "4h",
+      "1d",
+      "1w"
+    ],
+    "equityExcludedIntervals": [
+      "15m",
+      "1h"
+    ],
+    "confluenceAB": "min_tier=B (A and B)"
+  },
+  "funnel": {
+    "allLoaded": 12968,
+    "afterFixed6mWindowRaw": 12965,
+    "afterFilterAlertStats": 12965,
+    "afterAttachAndReport": 12965,
+    "intervalInWindow": {
+      "1h": 3125,
+      "15m": 9567,
+      "4h": 233,
+      "8h": 3,
+      "1d": 36,
+      "1w": 1
+    },
+    "cryptoAnyInterval": 7617,
+    "crypto15mBaseline": 5804,
+    "crypto15mMtfOnly": 718,
+    "crypto15mAbOnly": 2947,
+    "crypto15mMtfAb": 480,
+    "crypto15mBaselineSettled": 5784,
+    "crypto15mMtfOnlySettled": 716,
+    "crypto15mAbOnlySettled": 2933,
+    "crypto15mMtfAbSettled": 479,
+    "us4hBaseline": 114,
+    "us4hMtfOnly": 11,
+    "us4hAbOnly": 73,
+    "us4hMtfAb": 9,
+    "us1dBaseline": 26,
+    "us1dAbOnly": 11,
+    "us1wBaseline": 1,
+    "us1wAbOnly": 0,
+    "soxsExcludedFromTradable": 0,
+    "excludedCrypto15m15mOr1hUS_notInThisBaseline": {
+      "us15m": 3763,
+      "us1h": 1444
+    },
+    "unknownInCrypto15mPath": 1788,
+    "stableExcluded15m": 0,
+    "crypto15m_baseline_settledHeadline": 5692,
+    "crypto15m_baseline_obsExcluded": 93,
+    "crypto15m_mtf_only_settledHeadline": 712,
+    "crypto15m_mtf_only_obsExcluded": 4,
+    "crypto15m_ab_only_settledHeadline": 2925,
+    "crypto15m_ab_only_obsExcluded": 9,
+    "crypto15m_mtf_ab_settledHeadline": 479,
+    "crypto15m_mtf_ab_obsExcluded": 0
+  },
+  "checksumOfficialMtfAb": {
+    "matched": false,
+    "details": {
+      "t1": {
+        "expected": {
+          "settled": 130,
+          "wins": 95,
+          "losses": 35,
+          "winRatePct": 73.08,
+          "sumPnl": 5052.31
+        },
+        "got": {
+          "settled": 130,
+          "wins": 95,
+          "losses": 35,
+          "winRatePct": 73.08,
+          "sumPnl": 5052.31
+        },
+        "match": true
+      },
+      "t2": {
+        "expected": {
+          "settled": 75,
+          "wins": 45,
+          "losses": 30,
+          "winRatePct": 60.0,
+          "sumPnl": 1166.69
+        },
+        "got": {
+          "settled": 75,
+          "wins": 45,
+          "losses": 30,
+          "winRatePct": 60.0,
+          "sumPnl": 1166.69
+        },
+        "match": true
+      },
+      "t3": {
+        "expected": {
+          "settled": 267,
+          "wins": 146,
+          "losses": 121,
+          "winRatePct": 54.68,
+          "sumPnl": 1431.86
+        },
+        "got": {
+          "settled": 274,
+          "wins": 148,
+          "losses": 126,
+          "winRatePct": 54.01,
+          "sumPnl": 1510.32
+        },
+        "match": false
+      },
+      "all": {
+        "expected": {
+          "settled": 472,
+          "wins": 286,
+          "losses": 186,
+          "winRatePct": 60.59
+        },
+        "got": {
+          "settled": 479,
+          "wins": 288,
+          "losses": 191,
+          "winRatePct": 60.13,
+          "sumPnl": 7729.32
+        },
+        "match": false
+      }
+    }
+  },
+  "gateDoc": {
+    "repoHeadExpected": "deeb97d3b957fed71df6f4c346beffe21e5d077d",
+    "codeDefault_OI_PATTERN_PUSH_MTF_MIN": 2,
+    "runtime_OI_PATTERN_PUSH_MTF_MIN": 1,
+    "runtimeNote_MTF": "config.py default is 2; current process/env on this machine is 1. If runtime==1, live push MTF gate is a no-op (need<=1 returns True).",
+    "codeDefault_OI_CONFLUENCE_PUSH_MIN_TIER": "B",
+    "runtime_OI_CONFLUENCE_PUSH_MIN_TIER": "B",
+    "emitGate_passes_pattern_card_emit_gate": [
+      "is_blocked_stats_record (retired/blocked labels and types)",
+      "is_paused_alert when apply_pause=True (live default: bottom_secondary_test paused; shooting_star not paused)",
+      "is_disabled_pattern_interval (30m)",
+      "kind in {破底翻确认, spring_2b} blocked",
+      "passes_push_mtf_gate: resonance tier count >= OI_PATTERN_PUSH_MTF_MIN"
+    ],
+    "telegramOrWouldPush": [
+      "emit gate, then attach confluence, then passes_confluence_push_gate (min tier B by default)",
+      "if confluence fails: record confluence_observation_only (settled but excluded from headline win rate)"
+    ],
+    "backtestEmit_passes_backtest_emit_gate": [
+      "excludes is_observation_record",
+      "apply_pause=False (paused kinds may enter if selected in job kinds)",
+      "otherwise same emit gate including runtime MTF min"
+    ],
+    "situationGatesNeedKlines": {
+      "OI_REQUIRE_DIRECTION_OR_HTF_REVERSAL": true,
+      "OI_BOTTOM_4H_DOWNTREND_FORBID_LONG": true,
+      "CONTEXT_GATED_KINDS": [
+        "bottom_secondary_test",
+        "consecutive_flat_shooting_star",
+        "shooting_star"
+      ],
+      "note": "cannot apply without kline data; not applied in this script"
+    },
+    "pausedDefaults": {
+      "OI_PAUSE_BOTTOM_SECONDARY": true,
+      "OI_PAUSE_SHOOTING_STAR": false,
+      "PAUSED_BOTTOM_KINDS": [
+        "bottom_secondary_test"
+      ],
+      "PAUSED_SHOOT_KINDS": [
+        "consecutive_flat_shooting_star",
+        "shooting_star"
+      ]
+    },
+    "aiSkipLlm": "ai_btc_backtest_jobs skip_llm / gates_only skips the LLM after gates. Existing jobs on this machine are small (BTC/ETH-scale, often 7d), not a 6m full-universe official study. A full structure kline job previously took 12425s (~3.45h) for 200 symbols 15m; not restarted.",
+    "structureJobExisting": {
+      "path": "/Users/maotouying/frontend/code/1.operations/auto-script/discord-collector/oi_mornitor/data/structure_mtf_15m_6m/trades_15m.csv",
+      "abAvailable": false,
+      "mtfAvailable": true
+    }
+  },
+  "elapsedSec": 24.486,
+  "winRateCorrection": "Recomputed: observation records with TP/SL are EXCLUDED from the headline denominator, matching this morning. First pass had incorrectly included them. MTF+A/B official slice has 0 observation, so t1/t2 checksum was already exact; t3 delta is PONS only.",
+  "checksumOfficialMtfAb_PONS_excluded": {
+    "matched": true,
+    "details": {
+      "t1": {
+        "expected": {
+          "settled": 130,
+          "wins": 95,
+          "losses": 35,
+          "winRatePct": 73.08,
+          "sumPnl": 5052.31
+        },
+        "got": {
+          "settled": 130,
+          "wins": 95,
+          "losses": 35,
+          "winRatePct": 73.08,
+          "sumPnl": 5052.31
+        },
+        "match": true
+      },
+      "t2": {
+        "expected": {
+          "settled": 75,
+          "wins": 45,
+          "losses": 30,
+          "winRatePct": 60.0,
+          "sumPnl": 1166.69
+        },
+        "got": {
+          "settled": 75,
+          "wins": 45,
+          "losses": 30,
+          "winRatePct": 60.0,
+          "sumPnl": 1166.69
+        },
+        "match": true
+      },
+      "t3": {
+        "expected": {
+          "settled": 267,
+          "wins": 146,
+          "losses": 121,
+          "winRatePct": 54.68,
+          "sumPnl": 1431.86
+        },
+        "got": {
+          "settled": 267,
+          "wins": 146,
+          "losses": 121,
+          "winRatePct": 54.68,
+          "sumPnl": 1431.86
+        },
+        "match": true
+      },
+      "all": {
+        "expected": {
+          "settled": 472,
+          "wins": 286,
+          "losses": 186,
+          "winRatePct": 60.59
+        },
+        "got": {
+          "settled": 472,
+          "wins": 286,
+          "losses": 186,
+          "winRatePct": 60.59,
+          "sumPnl": 7650.86
+        },
+        "match": true
+      }
+    }
+  },
+  "ponsReclassified": {
+    "n": 7,
+    "stats": {
+      "total": 7,
+      "observation": 0,
+      "pending": 0,
+      "winsRaw": 2,
+      "lossesRaw": 5,
+      "wins": 2,
+      "losses": 5,
+      "flats": 0,
+      "errors": 0,
+      "otherOutcome": 0,
+      "settledForWinRate": 7,
+      "winRate": 0.2857142857142857,
+      "winRatePct": 28.57,
+      "smallSample": true,
+      "pnlPct": {
+        "source": "pnlPct",
+        "n": 7,
+        "avg": 11.2086,
+        "median": -6.09,
+        "sum": 78.46
+      },
+      "symbols": {
+        "PONSUSDT": 7
+      }
+    },
+    "note": "7 PONSUSDT 15m MTF+A/B rows were unknown this morning (excluded from crypto WR). Cache now has PONS cap ~105e6 USD, so they enter t3. Outcomes unchanged."
+  }
+}

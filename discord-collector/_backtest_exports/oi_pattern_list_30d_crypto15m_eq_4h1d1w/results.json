@@ -1,0 +1,758 @@
+{
+  "resultKind": "既有结算复核统计（未重跑 K 线）",
+  "params": {
+    "resultKind": "既有结算复核统计（未重跑 K 线）",
+    "task": "形态信号列表 滚动30天 / 仅多周期共振 / 综合评分 A,B / 币圈仅15m / 美股个股及集合仅4h·1d·1w",
+    "timezone": "Asia/Shanghai (UTC+8)",
+    "cutoffMs": 1794528748604,
+    "cutoffCst": "2026-11-13 08:12:28",
+    "window": "rolling_30d",
+    "windowMs": 2592000000,
+    "windowStartMs": 1791936748604,
+    "windowStartCst": "2026-10-14 08:12:28",
+    "windowEndCst": "2026-11-13 08:12:28",
+    "filters": {
+      "source": "形态信号列表同口径 list_alert_stats + _apply_tier_filters，不改生产默认/策略/通知周期",
+      "time": "滚动 30×24 小时，截止与起点在运行时固定",
+      "confluence": "A∪B（min_tier=B，精确 A+精确 B）",
+      "mtfResonanceOnly": true,
+      "cryptoInterval": "15m only",
+      "equityIntervalsRequested": [
+        "4h",
+        "1d",
+        "1w"
+      ],
+      "equityExcludedIntervals": [
+        "15m",
+        "1h"
+      ]
+    },
+    "mtfResonanceDefinition": {
+      "supportedIntervals": [
+        "15m",
+        "1h",
+        "4h"
+      ],
+      "window": "±4 hours",
+      "rule": "同币、同向、同形态族，时间窗内覆盖 ≥2 个周期（仅 15m/1h/4h 为合格周期）",
+      "dailyWeeklySupported": false,
+      "dailyWeeklyNote": "现逻辑 MTF_RESONANCE_INTERVALS={'15m','1h','4h'}，未实现 1d/1w 共振。本次不发明日周线共振。1d/1w 在「仅多周期共振」下官方样本不适用，不记 0% 胜率；仅报告库内原始数量。"
+    },
+    "settlement": {
+      "source": "形态信号列表已落盘 outcome，未重跑 K 线，未写入生产库",
+      "rulesSummary": "BTC/ETH/SOL 100.0x · 山寨 20.0x · V2：SL=结构invalid与ATR×k、cap%取更紧 · TP=1R/2R 分类型 · 核实窗按周期×市值梯队 · 观察档不计入默认胜率 · 强平模拟+亏损封顶-100 · 手续费默认 0.06%/边 · 滑点 0.03%/边 · 资金费未建模 · 15m 步进核实 · 未平则按窗口末价",
+      "fees": "落盘通常未扣手续费/滑点",
+      "auditAssumptions": {
+        "leverageMajor": 100.0,
+        "leverageAlt": 20.0,
+        "feePctPerSideDefaultDocumented": 0.06,
+        "slippagePctPerSideDefaultDocumented": 0.03
+      }
+    },
+    "mcapTiers": {
+      "cryptoThresholdsUsd": {
+        "t1_gt": 50000000000.0,
+        "t2_gt": 8000000000.0
+      },
+      "lookAhead": "用当前 CoinGecko 缓存与同日公司市值种子划分历史样本，存在轻微前视；本次实时刷新因代理失败未成功，沿用缓存",
+      "majorTechList": [
+        "AAPL",
+        "AMZN",
+        "AVGO",
+        "GOOG",
+        "GOOGL",
+        "META",
+        "MSFT",
+        "NVDA",
+        "ORCL",
+        "PLTR",
+        "TSLA",
+        "TSM"
+      ]
+    },
+    "funnel": {
+      "allLoaded": 12964,
+      "afterRolling30d": 3570,
+      "cryptoCandidate15m": 2445,
+      "all4hInWindow": 91,
+      "all1dInWindow": 32,
+      "all1wInWindow": 0,
+      "mtfAb15mAllAssets": 105,
+      "mtfAb1hAllAssets": 82,
+      "mtfAb4hAllAssets": 3,
+      "mtfAb1dAllAssets": 0,
+      "mtfAb1wAllAssets": 0,
+      "officialCrypto15mAfterReportClass": 41,
+      "officialUs4hAfterReportClass": 3,
+      "excludedUs15mMtfAb": 64,
+      "excludedUs1hMtfAb": 43,
+      "rawUs1dInWindow": 22,
+      "rawCrypto1dInWindow": 10,
+      "scoreOnly1dAB_notOfficial": 9,
+      "unknownInOfficial15m": 0,
+      "stableExcludedInOfficial15m": 0
+    },
+    "coverageByInterval": {
+      "15m": {
+        "allTime": 9568,
+        "inWindow": 2445,
+        "allTimeRangeCst": [
+          "2026-05-12 22:20:00",
+          "2026-11-13 05:35:00"
+        ],
+        "windowRangeCst": [
+          "2026-10-14 08:16:44",
+          "2026-11-13 05:35:00"
+        ]
+      },
+      "1h": {
+        "allTime": 3123,
+        "inWindow": 999,
+        "allTimeRangeCst": [
+          "2026-05-13 20:05:00",
+          "2026-11-13 02:05:00"
+        ],
+        "windowRangeCst": [
+          "2026-10-14 09:01:11",
+          "2026-11-13 02:05:00"
+        ]
+      },
+      "4h": {
+        "allTime": 233,
+        "inWindow": 91,
+        "allTimeRangeCst": [
+          "2026-05-27 00:05:00",
+          "2026-11-13 04:05:00"
+        ],
+        "windowRangeCst": [
+          "2026-10-15 04:05:18",
+          "2026-11-13 04:05:00"
+        ]
+      },
+      "1d": {
+        "allTime": 36,
+        "inWindow": 32,
+        "allTimeRangeCst": [
+          "2026-10-12 08:42:27",
+          "2026-11-09 08:05:00"
+        ],
+        "windowRangeCst": [
+          "2026-10-14 20:26:08",
+          "2026-11-09 08:05:00"
+        ]
+      },
+      "8h": {
+        "allTime": 3,
+        "inWindow": 3,
+        "allTimeRangeCst": [
+          "2026-10-17 16:07:21",
+          "2026-11-11 00:05:00"
+        ],
+        "windowRangeCst": [
+          "2026-10-17 16:07:21",
+          "2026-11-11 00:05:00"
+        ]
+      },
+      "1w": {
+        "allTime": 1,
+        "inWindow": 0,
+        "allTimeRangeCst": [
+          "2026-10-12 08:42:27",
+          "2026-10-12 08:42:27"
+        ],
+        "windowRangeCst": null
+      }
+    },
+    "futureMtfOfficialCrypto15m": {
+      "n": 41,
+      "withFuturePeer": 24,
+      "wouldDropIfCausalOnly": 21
+    },
+    "futureMtfOfficialUs4h": {
+      "n": 3,
+      "withFuturePeer": 1,
+      "wouldDropIfCausalOnly": 1
+    },
+    "elapsedSec": 1.96,
+    "productionUnchanged": true,
+    "sevenDayBaselinePreserved": "/workspace/oi_pattern_list_7d_mtf_15m_ab/"
+  },
+  "crypto15mOfficial": {
+    "summary": {
+      "total": 41,
+      "observation": 0,
+      "pending": 0,
+      "wins": 26,
+      "losses": 15,
+      "flats": 0,
+      "errors": 0,
+      "otherOutcome": 0,
+      "settledForWinRate": 41,
+      "headlineWins": 26,
+      "headlineLosses": 15,
+      "headlinePending": 0,
+      "winRate": 0.6341463414634146,
+      "winRatePct": 63.41,
+      "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+      "headlineTotalPnlPct": 1830.11,
+      "rawTotalPnlPct": 1830.11,
+      "symbols": {
+        "KITEUSDT": 1,
+        "KGENUSDT": 1,
+        "OPGUSDT": 1,
+        "ETHUSDT": 2,
+        "BTCUSDT": 12,
+        "ZECUSDT": 2,
+        "1000PEPEUSDT": 2,
+        "HYPEUSDT": 5,
+        "LITUSDT": 3,
+        "BNBUSDT": 1,
+        "SOLUSDT": 3,
+        "AEROUSDT": 2,
+        "CCUSDT": 1,
+        "BTWUSDT": 1,
+        "KASUSDT": 1,
+        "QUSDT": 1,
+        "BCHUSDT": 2
+      }
+    },
+    "byTier": {
+      "t1": {
+        "tier": "t1",
+        "label": "加密第一梯队",
+        "total": 15,
+        "observation": 0,
+        "pending": 0,
+        "wins": 13,
+        "losses": 2,
+        "flats": 0,
+        "errors": 0,
+        "otherOutcome": 0,
+        "settledForWinRate": 15,
+        "headlineWins": 13,
+        "headlineLosses": 2,
+        "headlinePending": 0,
+        "winRate": 0.8666666666666667,
+        "winRatePct": 86.67,
+        "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+        "headlineTotalPnlPct": 1494.85,
+        "rawTotalPnlPct": 1494.85,
+        "symbols": {
+          "ETHUSDT": 2,
+          "BTCUSDT": 12,
+          "BNBUSDT": 1
+        }
+      },
+      "t2": {
+        "tier": "t2",
+        "label": "加密第二梯队",
+        "total": 10,
+        "observation": 0,
+        "pending": 0,
+        "wins": 8,
+        "losses": 2,
+        "flats": 0,
+        "errors": 0,
+        "otherOutcome": 0,
+        "settledForWinRate": 10,
+        "headlineWins": 8,
+        "headlineLosses": 2,
+        "headlinePending": 0,
+        "winRate": 0.8,
+        "winRatePct": 80.0,
+        "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+        "headlineTotalPnlPct": 411.41,
+        "rawTotalPnlPct": 411.41,
+        "symbols": {
+          "ZECUSDT": 2,
+          "HYPEUSDT": 5,
+          "SOLUSDT": 3
+        }
+      },
+      "t3": {
+        "tier": "t3",
+        "label": "加密第三梯队",
+        "total": 16,
+        "observation": 0,
+        "pending": 0,
+        "wins": 5,
+        "losses": 11,
+        "flats": 0,
+        "errors": 0,
+        "otherOutcome": 0,
+        "settledForWinRate": 16,
+        "headlineWins": 5,
+        "headlineLosses": 11,
+        "headlinePending": 0,
+        "winRate": 0.3125,
+        "winRatePct": 31.25,
+        "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+        "headlineTotalPnlPct": -76.15,
+        "rawTotalPnlPct": -76.15,
+        "symbols": {
+          "KITEUSDT": 1,
+          "KGENUSDT": 1,
+          "OPGUSDT": 1,
+          "1000PEPEUSDT": 2,
+          "LITUSDT": 3,
+          "AEROUSDT": 2,
+          "CCUSDT": 1,
+          "BTWUSDT": 1,
+          "KASUSDT": 1,
+          "QUSDT": 1,
+          "BCHUSDT": 2
+        }
+      }
+    },
+    "unknownSeparated": {
+      "total": 0,
+      "observation": 0,
+      "pending": 0,
+      "wins": 0,
+      "losses": 0,
+      "flats": 0,
+      "errors": 0,
+      "otherOutcome": 0,
+      "settledForWinRate": 0,
+      "headlineWins": 0,
+      "headlineLosses": 0,
+      "headlinePending": 0,
+      "winRate": null,
+      "winRatePct": null,
+      "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+      "headlineTotalPnlPct": null,
+      "rawTotalPnlPct": null,
+      "symbols": {}
+    }
+  },
+  "equityOfficial": {
+    "note": "官方口径仅 4h 可进入现有多周期共振；1d/1w 不适用，不记 0% 胜率。未混入美股 15m/1h。",
+    "interval4h": {
+      "summary": {
+        "total": 3,
+        "observation": 0,
+        "pending": 0,
+        "wins": 2,
+        "losses": 1,
+        "flats": 0,
+        "errors": 0,
+        "otherOutcome": 0,
+        "settledForWinRate": 3,
+        "headlineWins": 2,
+        "headlineLosses": 1,
+        "headlinePending": 0,
+        "winRate": 0.6666666666666666,
+        "winRatePct": 66.67,
+        "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+        "headlineTotalPnlPct": 5.39,
+        "rawTotalPnlPct": 5.39,
+        "symbols": {
+          "TSLAUSDT": 1,
+          "QQQUSDT": 1,
+          "CLUSDT": 1
+        }
+      },
+      "usMajor": {
+        "eq-t1": {
+          "tier": "eq-t1",
+          "label": "美股个股·第一梯队",
+          "total": 1,
+          "observation": 0,
+          "pending": 0,
+          "wins": 1,
+          "losses": 0,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 1,
+          "headlineWins": 1,
+          "headlineLosses": 0,
+          "headlinePending": 0,
+          "winRate": 1.0,
+          "winRatePct": 100.0,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": 0.9,
+          "rawTotalPnlPct": 0.9,
+          "symbols": {
+            "TSLAUSDT": 1
+          }
+        },
+        "eq-t2": {
+          "tier": "eq-t2",
+          "label": "美股个股·第二梯队",
+          "total": 0,
+          "observation": 0,
+          "pending": 0,
+          "wins": 0,
+          "losses": 0,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 0,
+          "headlineWins": 0,
+          "headlineLosses": 0,
+          "headlinePending": 0,
+          "winRate": null,
+          "winRatePct": null,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": null,
+          "rawTotalPnlPct": null,
+          "symbols": {}
+        },
+        "eq-t3": {
+          "tier": "eq-t3",
+          "label": "美股个股·第三梯队",
+          "total": 0,
+          "observation": 0,
+          "pending": 0,
+          "wins": 0,
+          "losses": 0,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 0,
+          "headlineWins": 0,
+          "headlineLosses": 0,
+          "headlinePending": 0,
+          "winRate": null,
+          "winRatePct": null,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": null,
+          "rawTotalPnlPct": null,
+          "symbols": {}
+        }
+      },
+      "otherGroups": {
+        "eq-other": {
+          "tier": "eq-other",
+          "label": "美股其他",
+          "total": 0,
+          "observation": 0,
+          "pending": 0,
+          "wins": 0,
+          "losses": 0,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 0,
+          "headlineWins": 0,
+          "headlineLosses": 0,
+          "headlinePending": 0,
+          "winRate": null,
+          "winRatePct": null,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": null,
+          "rawTotalPnlPct": null,
+          "symbols": {}
+        },
+        "eq-index": {
+          "tier": "eq-index",
+          "label": "美股集合·指数",
+          "total": 1,
+          "observation": 0,
+          "pending": 0,
+          "wins": 0,
+          "losses": 1,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 1,
+          "headlineWins": 0,
+          "headlineLosses": 1,
+          "headlinePending": 0,
+          "winRate": 0.0,
+          "winRatePct": 0.0,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": -3.35,
+          "rawTotalPnlPct": -3.35,
+          "symbols": {
+            "QQQUSDT": 1
+          }
+        },
+        "eq-lev": {
+          "tier": "eq-lev",
+          "label": "美股集合·杠杆",
+          "total": 0,
+          "observation": 0,
+          "pending": 0,
+          "wins": 0,
+          "losses": 0,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 0,
+          "headlineWins": 0,
+          "headlineLosses": 0,
+          "headlinePending": 0,
+          "winRate": null,
+          "winRatePct": null,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": null,
+          "rawTotalPnlPct": null,
+          "symbols": {}
+        },
+        "eq-macro": {
+          "tier": "eq-macro",
+          "label": "美股集合·宏观",
+          "total": 1,
+          "observation": 0,
+          "pending": 0,
+          "wins": 1,
+          "losses": 0,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 1,
+          "headlineWins": 1,
+          "headlineLosses": 0,
+          "headlinePending": 0,
+          "winRate": 1.0,
+          "winRatePct": 100.0,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": 7.84,
+          "rawTotalPnlPct": 7.84,
+          "symbols": {
+            "CLUSDT": 1
+          }
+        },
+        "non_us_equity": {
+          "tier": "non_us_equity",
+          "label": "非美股权益",
+          "total": 0,
+          "observation": 0,
+          "pending": 0,
+          "wins": 0,
+          "losses": 0,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 0,
+          "headlineWins": 0,
+          "headlineLosses": 0,
+          "headlinePending": 0,
+          "winRate": null,
+          "winRatePct": null,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": null,
+          "rawTotalPnlPct": null,
+          "symbols": {}
+        },
+        "unknown": {
+          "tier": "unknown",
+          "label": "未知待核验",
+          "total": 0,
+          "observation": 0,
+          "pending": 0,
+          "wins": 0,
+          "losses": 0,
+          "flats": 0,
+          "errors": 0,
+          "otherOutcome": 0,
+          "settledForWinRate": 0,
+          "headlineWins": 0,
+          "headlineLosses": 0,
+          "headlinePending": 0,
+          "winRate": null,
+          "winRatePct": null,
+          "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+          "headlineTotalPnlPct": null,
+          "rawTotalPnlPct": null,
+          "symbols": {}
+        }
+      }
+    },
+    "interval1d": {
+      "officialStatus": "unsupported_mtf",
+      "officialSampleNA": true,
+      "officialWinRateNotComputed": true,
+      "rawInWindowNonCrypto": {
+        "total": 22,
+        "observation": 0,
+        "pending": 0,
+        "wins": 8,
+        "losses": 14,
+        "flats": 0,
+        "errors": 0,
+        "otherOutcome": 0,
+        "settledForWinRate": 22,
+        "headlineWins": 8,
+        "headlineLosses": 14,
+        "headlinePending": 0,
+        "winRate": 0.36363636363636365,
+        "winRatePct": 36.36,
+        "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+        "headlineTotalPnlPct": -90.47,
+        "rawTotalPnlPct": -90.47,
+        "symbols": {
+          "QQQUSDT": 6,
+          "MSTRUSDT": 1,
+          "SPYUSDT": 2,
+          "TSLAUSDT": 3,
+          "METAUSDT": 2,
+          "AMZNUSDT": 1,
+          "NVDAUSDT": 3,
+          "SOXLUSDT": 1,
+          "GOOGLUSDT": 1,
+          "CLUSDT": 2
+        }
+      },
+      "scoreOnlyAB_notOfficial": 9
+    },
+    "interval1w": {
+      "officialStatus": "unsupported_mtf",
+      "officialSampleNA": true,
+      "officialWinRateNotComputed": true,
+      "rawInWindowNonCrypto": {
+        "total": 0,
+        "observation": 0,
+        "pending": 0,
+        "wins": 0,
+        "losses": 0,
+        "flats": 0,
+        "errors": 0,
+        "otherOutcome": 0,
+        "settledForWinRate": 0,
+        "headlineWins": 0,
+        "headlineLosses": 0,
+        "headlinePending": 0,
+        "winRate": null,
+        "winRatePct": null,
+        "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+        "headlineTotalPnlPct": null,
+        "rawTotalPnlPct": null,
+        "symbols": {}
+      },
+      "allTimeNonCryptoListedForCoverage": [
+        {
+          "signalAtCst": "2026-10-12 08:42:27",
+          "tradeSymbol": "PAXGUSDT",
+          "typeLabel": "倒锤子",
+          "outcome": "take_profit",
+          "inWindow": false
+        }
+      ]
+    },
+    "officialCombinedEquals4hOnly": {
+      "total": 3,
+      "observation": 0,
+      "pending": 0,
+      "wins": 2,
+      "losses": 1,
+      "flats": 0,
+      "errors": 0,
+      "otherOutcome": 0,
+      "settledForWinRate": 3,
+      "headlineWins": 2,
+      "headlineLosses": 1,
+      "headlinePending": 0,
+      "winRate": 0.6666666666666666,
+      "winRatePct": 66.67,
+      "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+      "headlineTotalPnlPct": 5.39,
+      "rawTotalPnlPct": 5.39,
+      "symbols": {
+        "TSLAUSDT": 1,
+        "QQQUSDT": 1,
+        "CLUSDT": 1
+      }
+    }
+  },
+  "excludedFromThisRequest": {
+    "us15mMtfAb": {
+      "total": 64,
+      "observation": 1,
+      "pending": 0,
+      "wins": 31,
+      "losses": 33,
+      "flats": 0,
+      "errors": 0,
+      "otherOutcome": 0,
+      "settledForWinRate": 63,
+      "headlineWins": 30,
+      "headlineLosses": 33,
+      "headlinePending": 0,
+      "winRate": 0.47619047619047616,
+      "winRatePct": 47.62,
+      "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+      "headlineTotalPnlPct": -31.97,
+      "rawTotalPnlPct": -24.53,
+      "symbols": {
+        "XAUUSDT": 7,
+        "XAGUSDT": 5,
+        "TSLAUSDT": 3,
+        "SOXLUSDT": 4,
+        "NVDAUSDT": 13,
+        "MUUSDT": 3,
+        "SKHYNIXUSDT": 5,
+        "TQQQUSDT": 2,
+        "SKHYUSDT": 2,
+        "QQQUSDT": 9,
+        "SNXXUSDT": 2,
+        "CLUSDT": 4,
+        "KORUUSDT": 1,
+        "CRCLUSDT": 1,
+        "SPCXUSDT": 1,
+        "BZUSDT": 1,
+        "XAUTUSDT": 1
+      }
+    },
+    "us1hMtfAb": {
+      "total": 43,
+      "observation": 1,
+      "pending": 0,
+      "wins": 17,
+      "losses": 26,
+      "flats": 0,
+      "errors": 0,
+      "otherOutcome": 0,
+      "settledForWinRate": 42,
+      "headlineWins": 17,
+      "headlineLosses": 25,
+      "headlinePending": 0,
+      "winRate": 0.40476190476190477,
+      "winRatePct": 40.48,
+      "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+      "headlineTotalPnlPct": -11.09,
+      "rawTotalPnlPct": -19.55,
+      "symbols": {
+        "XAUUSDT": 3,
+        "XAGUSDT": 4,
+        "TSLAUSDT": 4,
+        "SOXLUSDT": 4,
+        "NVDAUSDT": 5,
+        "MUUSDT": 2,
+        "QQQUSDT": 4,
+        "SKHYUSDT": 2,
+        "SKHYNIXUSDT": 2,
+        "SNXXUSDT": 2,
+        "TQQQUSDT": 2,
+        "CLUSDT": 4,
+        "KORUUSDT": 1,
+        "CRCLUSDT": 1,
+        "SPCXUSDT": 1,
+        "BZUSDT": 1,
+        "XAUTUSDT": 1
+      }
+    },
+    "crypto4hMtfAbNotInCryptoScope": {
+      "total": 0,
+      "observation": 0,
+      "pending": 0,
+      "wins": 0,
+      "losses": 0,
+      "flats": 0,
+      "errors": 0,
+      "otherOutcome": 0,
+      "settledForWinRate": 0,
+      "headlineWins": 0,
+      "headlineLosses": 0,
+      "headlinePending": 0,
+      "winRate": null,
+      "winRatePct": null,
+      "winRateDefinition": "wins / (wins + losses)；仅 take_profit/stop_loss；观察档、pending、flat、error、缺失不进分母；缺失不当中性",
+      "headlineTotalPnlPct": null,
+      "rawTotalPnlPct": null,
+      "symbols": {}
+    }
+  }
+}

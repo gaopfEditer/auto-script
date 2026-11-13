@@ -88,3 +88,51 @@ def test_empty_cache_falls_back_to_configured_symbols() -> None:
     assert resolve_mcap_tier("LEOUSDT") == "t2"
     assert resolve_mcap_tier("WBTUSDT") == "t2"
     assert resolve_mcap_tier("ADAUSDT") == "t3"
+
+
+def test_equity_tiers_do_not_mix_with_crypto() -> None:
+    from oi_mornitor.equity_mcap import reset_equity_cap_cache_for_tests
+    from oi_mornitor.mcap_tier import reload_mcap_tier_config, resolve_mcap_tier
+
+    reload_mcap_tier_config()
+    reset_equity_cap_cache_for_tests(
+        {
+            "AAPL": 5.2e12,
+            "NVDA": 4.0e12,
+            "MSFT": 3.9e12,
+            "GOOG": 3.6e12,
+            "GOOGL": 3.6e12,
+            "AMZN": 2.9e12,
+            "TSM": 2.1e12,
+            "AVGO": 1.7e12,
+            "META": 1.6e12,
+            "TSLA": 1.5e12,
+            "PLTR": 4.15e11,
+            "ORCL": 4.01e11,
+        },
+        freeze=True,
+    )
+    assert resolve_mcap_tier("QQQUSDT") == "eq-index"
+    assert resolve_mcap_tier("SPYUSDT") == "eq-index"
+    assert resolve_mcap_tier("IWMUSDT") == "eq-index"
+    assert resolve_mcap_tier("SOXLUSDT") == "eq-lev"
+    assert resolve_mcap_tier("SOXSUSDT") == "eq-lev"
+    assert resolve_mcap_tier("XAUUSDT") == "eq-macro"
+    assert resolve_mcap_tier("PAXGUSDT") == "eq-macro"
+    assert resolve_mcap_tier("TLTUSDT") == "eq-macro"
+    assert resolve_mcap_tier("NVDAUSDT") == "eq-t1"
+    assert resolve_mcap_tier("NVDAXUSDT") == "eq-t1"
+    assert resolve_mcap_tier("AAPLUSDT") == "eq-t1"
+    assert resolve_mcap_tier("GOOGUSDT") == "eq-t1"
+    assert resolve_mcap_tier("ORCLUSDT") == "eq-t1"
+    assert resolve_mcap_tier("PLTRUSDT") == "eq-t1"
+    assert resolve_mcap_tier("MSTRUSDT") == "eq-other"
+    assert resolve_mcap_tier("COINUSDT") == "eq-other"
+    assert resolve_mcap_tier("HOODUSDT") == "eq-other"
+    assert resolve_mcap_tier("MARAUSDT") == "eq-other"
+    # 加密梯队不受美股影响
+    from oi_mornitor.mcap_market_quote import reset_market_cap_cache_for_tests
+    reset_market_cap_cache_for_tests({"BTC": 1.4e12, "XRP": 6.5e10, "SOL": 4.8e10}, freeze=True)
+    assert resolve_mcap_tier("BTCUSDT") == "t1"
+    assert resolve_mcap_tier("XRPUSDT") == "t1"
+    assert resolve_mcap_tier("SOLUSDT") == "t2"

@@ -1,0 +1,382 @@
+{
+  "checksum_current": {
+    "matched": false,
+    "details": {
+      "t1": {
+        "expected": {
+          "settled": 130,
+          "wins": 95,
+          "losses": 35,
+          "winRatePct": 73.08,
+          "sumPnl": 5052.31
+        },
+        "got": {
+          "settled": 130,
+          "wins": 95,
+          "losses": 35,
+          "winRatePct": 73.08,
+          "sumPnl": 5052.31
+        },
+        "match": true
+      },
+      "t2": {
+        "expected": {
+          "settled": 75,
+          "wins": 45,
+          "losses": 30,
+          "winRatePct": 60.0,
+          "sumPnl": 1166.69
+        },
+        "got": {
+          "settled": 75,
+          "wins": 45,
+          "losses": 30,
+          "winRatePct": 60.0,
+          "sumPnl": 1166.69
+        },
+        "match": true
+      },
+      "t3": {
+        "expected": {
+          "settled": 267,
+          "wins": 146,
+          "losses": 121,
+          "winRatePct": 54.68,
+          "sumPnl": 1431.86
+        },
+        "got": {
+          "settled": 274,
+          "wins": 148,
+          "losses": 126,
+          "winRatePct": 54.01,
+          "sumPnl": 1510.32
+        },
+        "match": false
+      },
+      "all": {
+        "expected": {
+          "settled": 472,
+          "wins": 286,
+          "losses": 186,
+          "winRatePct": 60.59
+        },
+        "got": {
+          "settled": 479,
+          "wins": 288,
+          "losses": 191,
+          "winRatePct": 60.13,
+          "sumPnl": 7729.32
+        },
+        "match": false
+      }
+    }
+  },
+  "checksum_pons_excluded": {
+    "matched": true,
+    "details": {
+      "t1": {
+        "expected": {
+          "settled": 130,
+          "wins": 95,
+          "losses": 35,
+          "winRatePct": 73.08,
+          "sumPnl": 5052.31
+        },
+        "got": {
+          "settled": 130,
+          "wins": 95,
+          "losses": 35,
+          "winRatePct": 73.08,
+          "sumPnl": 5052.31
+        },
+        "match": true
+      },
+      "t2": {
+        "expected": {
+          "settled": 75,
+          "wins": 45,
+          "losses": 30,
+          "winRatePct": 60.0,
+          "sumPnl": 1166.69
+        },
+        "got": {
+          "settled": 75,
+          "wins": 45,
+          "losses": 30,
+          "winRatePct": 60.0,
+          "sumPnl": 1166.69
+        },
+        "match": true
+      },
+      "t3": {
+        "expected": {
+          "settled": 267,
+          "wins": 146,
+          "losses": 121,
+          "winRatePct": 54.68,
+          "sumPnl": 1431.86
+        },
+        "got": {
+          "settled": 267,
+          "wins": 146,
+          "losses": 121,
+          "winRatePct": 54.68,
+          "sumPnl": 1431.86
+        },
+        "match": true
+      },
+      "all": {
+        "expected": {
+          "settled": 472,
+          "wins": 286,
+          "losses": 186,
+          "winRatePct": 60.59
+        },
+        "got": {
+          "settled": 472,
+          "wins": 286,
+          "losses": 186,
+          "winRatePct": 60.59,
+          "sumPnl": 7650.86
+        },
+        "match": true
+      }
+    }
+  },
+  "pons": {
+    "n": 7,
+    "stats": {
+      "total": 7,
+      "observation": 0,
+      "pending": 0,
+      "winsRaw": 2,
+      "lossesRaw": 5,
+      "wins": 2,
+      "losses": 5,
+      "flats": 0,
+      "errors": 0,
+      "otherOutcome": 0,
+      "settledForWinRate": 7,
+      "winRate": 0.2857142857142857,
+      "winRatePct": 28.57,
+      "smallSample": true,
+      "pnlPct": {
+        "source": "pnlPct",
+        "n": 7,
+        "avg": 11.2086,
+        "median": -6.09,
+        "sum": 78.46
+      },
+      "symbols": {
+        "PONSUSDT": 7
+      }
+    },
+    "text": "28.57%（2/7） 〔小样本〕"
+  },
+  "comparison_crypto": {
+    "baseline": {
+      "text": "50.19%（2857/5692）",
+      "total": 5804,
+      "settledForWinRate": 5692,
+      "wins": 2857,
+      "losses": 2835,
+      "winRatePct": 50.19,
+      "observationExcluded": 93,
+      "pnl": {
+        "source": "pnlPct",
+        "n": 5692,
+        "avg": 1.1621,
+        "median": 0.27,
+        "sum": 6614.66
+      }
+    },
+    "mtf_only": {
+      "text": "55.06%（392/712）",
+      "total": 718,
+      "settledForWinRate": 712,
+      "wins": 392,
+      "losses": 320,
+      "winRatePct": 55.06,
+      "observationExcluded": 4,
+      "pnl": {
+        "source": "pnlPct",
+        "n": 712,
+        "avg": 6.6671,
+        "median": 3.715,
+        "sum": 4746.95
+      },
+      "vsBaseline": {
+        "pp": 4.87,
+        "settledNew": 712,
+        "settledBase": 5692,
+        "winsNew": 392,
+        "winsBase": 2857
+      }
+    },
+    "ab_only": {
+      "text": "51.83%（1516/2925）",
+      "total": 2947,
+      "settledForWinRate": 2925,
+      "wins": 1516,
+      "losses": 1409,
+      "winRatePct": 51.83,
+      "observationExcluded": 9,
+      "pnl": {
+        "source": "pnlPct",
+        "n": 2925,
+        "avg": 3.7233,
+        "median": 1.99,
+        "sum": 10890.67
+      },
+      "vsBaseline": {
+        "pp": 1.64,
+        "settledNew": 2925,
+        "settledBase": 5692,
+        "winsNew": 1516,
+        "winsBase": 2857
+      }
+    },
+    "mtf_ab": {
+      "text": "60.13%（288/479）",
+      "total": 480,
+      "settledForWinRate": 479,
+      "wins": 288,
+      "losses": 191,
+      "winRatePct": 60.13,
+      "observationExcluded": 0,
+      "pnl": {
+        "source": "pnlPct",
+        "n": 479,
+        "avg": 16.1364,
+        "median": 9.13,
+        "sum": 7729.32
+      },
+      "vsBaseline": {
+        "pp": 9.94,
+        "settledNew": 479,
+        "settledBase": 5692,
+        "winsNew": 288,
+        "winsBase": 2857
+      },
+      "vsMtfOnly": {
+        "pp": 5.07,
+        "settledNew": 479,
+        "settledBase": 712,
+        "winsNew": 288,
+        "winsBase": 392
+      },
+      "vsAbOnly": {
+        "pp": 8.3,
+        "settledNew": 479,
+        "settledBase": 2925,
+        "winsNew": 288,
+        "winsBase": 1516
+      }
+    },
+    "whichSingleConstraintHigher": "mtf_only",
+    "combinedBetterThanBothSingles": true
+  },
+  "comparison_us4h": {
+    "baseline": {
+      "text": "51.00%（51/100）",
+      "total": 114,
+      "settledForWinRate": 100,
+      "wins": 51,
+      "losses": 49,
+      "winRatePct": 51.0,
+      "observationExcluded": 13,
+      "pnl": {
+        "source": "pnlPct",
+        "n": 100,
+        "avg": 1.5632,
+        "median": 0.035,
+        "sum": 156.32
+      }
+    },
+    "mtf_only": {
+      "text": "54.55%（6/11） 〔小样本〕",
+      "total": 11,
+      "settledForWinRate": 11,
+      "wins": 6,
+      "losses": 5,
+      "winRatePct": 54.55,
+      "observationExcluded": 0,
+      "pnl": {
+        "source": "pnlPct",
+        "n": 11,
+        "avg": 0.1164,
+        "median": 0.29,
+        "sum": 1.28
+      },
+      "vsBaseline": {
+        "pp": 3.55,
+        "settledNew": 11,
+        "settledBase": 100,
+        "winsNew": 6,
+        "winsBase": 51
+      }
+    },
+    "ab_only": {
+      "text": "47.83%（33/69）",
+      "total": 73,
+      "settledForWinRate": 69,
+      "wins": 33,
+      "losses": 36,
+      "winRatePct": 47.83,
+      "observationExcluded": 3,
+      "pnl": {
+        "source": "pnlPct",
+        "n": 69,
+        "avg": -0.1001,
+        "median": -0.22,
+        "sum": -6.91
+      },
+      "vsBaseline": {
+        "pp": -3.17,
+        "settledNew": 69,
+        "settledBase": 100,
+        "winsNew": 33,
+        "winsBase": 51
+      }
+    },
+    "mtf_ab": {
+      "text": "66.67%（6/9） 〔小样本〕",
+      "total": 9,
+      "settledForWinRate": 9,
+      "wins": 6,
+      "losses": 3,
+      "winRatePct": 66.67,
+      "observationExcluded": 0,
+      "pnl": {
+        "source": "pnlPct",
+        "n": 9,
+        "avg": 1.4156,
+        "median": 0.9,
+        "sum": 12.74
+      },
+      "vsBaseline": {
+        "pp": 15.67,
+        "settledNew": 9,
+        "settledBase": 100,
+        "winsNew": 6,
+        "winsBase": 51
+      },
+      "vsMtfOnly": {
+        "pp": 12.12,
+        "settledNew": 9,
+        "settledBase": 11,
+        "winsNew": 6,
+        "winsBase": 6
+      },
+      "vsAbOnly": {
+        "pp": 18.84,
+        "settledNew": 9,
+        "settledBase": 69,
+        "winsNew": 6,
+        "winsBase": 33
+      }
+    },
+    "whichSingleConstraintHigher": "mtf_only",
+    "combinedBetterThanBothSingles": true
+  }
+}

@@ -1,0 +1,177 @@
+{
+  "resultKind": "既有结算复核统计（未重跑 K 线）",
+  "task": "形态信号列表 滚动30天 / 仅多周期共振 / 综合评分 A,B / 币圈仅15m / 美股个股及集合仅4h·1d·1w",
+  "timezone": "Asia/Shanghai (UTC+8)",
+  "cutoffMs": 1794528748604,
+  "cutoffCst": "2026-11-13 08:12:28",
+  "window": "rolling_30d",
+  "windowMs": 2592000000,
+  "windowStartMs": 1791936748604,
+  "windowStartCst": "2026-10-14 08:12:28",
+  "windowEndCst": "2026-11-13 08:12:28",
+  "filters": {
+    "source": "形态信号列表同口径 list_alert_stats + _apply_tier_filters，不改生产默认/策略/通知周期",
+    "time": "滚动 30×24 小时，截止与起点在运行时固定",
+    "confluence": "A∪B（min_tier=B，精确 A+精确 B）",
+    "mtfResonanceOnly": true,
+    "cryptoInterval": "15m only",
+    "equityIntervalsRequested": [
+      "4h",
+      "1d",
+      "1w"
+    ],
+    "equityExcludedIntervals": [
+      "15m",
+      "1h"
+    ]
+  },
+  "mtfResonanceDefinition": {
+    "supportedIntervals": [
+      "15m",
+      "1h",
+      "4h"
+    ],
+    "window": "±4 hours",
+    "rule": "同币、同向、同形态族，时间窗内覆盖 ≥2 个周期（仅 15m/1h/4h 为合格周期）",
+    "dailyWeeklySupported": false,
+    "dailyWeeklyNote": "现逻辑 MTF_RESONANCE_INTERVALS={'15m','1h','4h'}，未实现 1d/1w 共振。本次不发明日周线共振。1d/1w 在「仅多周期共振」下官方样本不适用，不记 0% 胜率；仅报告库内原始数量。"
+  },
+  "settlement": {
+    "source": "形态信号列表已落盘 outcome，未重跑 K 线，未写入生产库",
+    "rulesSummary": "BTC/ETH/SOL 100.0x · 山寨 20.0x · V2：SL=结构invalid与ATR×k、cap%取更紧 · TP=1R/2R 分类型 · 核实窗按周期×市值梯队 · 观察档不计入默认胜率 · 强平模拟+亏损封顶-100 · 手续费默认 0.06%/边 · 滑点 0.03%/边 · 资金费未建模 · 15m 步进核实 · 未平则按窗口末价",
+    "fees": "落盘通常未扣手续费/滑点",
+    "auditAssumptions": {
+      "leverageMajor": 100.0,
+      "leverageAlt": 20.0,
+      "feePctPerSideDefaultDocumented": 0.06,
+      "slippagePctPerSideDefaultDocumented": 0.03
+    }
+  },
+  "mcapTiers": {
+    "cryptoThresholdsUsd": {
+      "t1_gt": 50000000000.0,
+      "t2_gt": 8000000000.0
+    },
+    "lookAhead": "用当前 CoinGecko 缓存与同日公司市值种子划分历史样本，存在轻微前视；本次实时刷新因代理失败未成功，沿用缓存",
+    "majorTechList": [
+      "AAPL",
+      "AMZN",
+      "AVGO",
+      "GOOG",
+      "GOOGL",
+      "META",
+      "MSFT",
+      "NVDA",
+      "ORCL",
+      "PLTR",
+      "TSLA",
+      "TSM"
+    ]
+  },
+  "funnel": {
+    "allLoaded": 12964,
+    "afterRolling30d": 3570,
+    "cryptoCandidate15m": 2445,
+    "all4hInWindow": 91,
+    "all1dInWindow": 32,
+    "all1wInWindow": 0,
+    "mtfAb15mAllAssets": 105,
+    "mtfAb1hAllAssets": 82,
+    "mtfAb4hAllAssets": 3,
+    "mtfAb1dAllAssets": 0,
+    "mtfAb1wAllAssets": 0,
+    "officialCrypto15mAfterReportClass": 41,
+    "officialUs4hAfterReportClass": 3,
+    "excludedUs15mMtfAb": 64,
+    "excludedUs1hMtfAb": 43,
+    "rawUs1dInWindow": 22,
+    "rawCrypto1dInWindow": 10,
+    "scoreOnly1dAB_notOfficial": 9,
+    "unknownInOfficial15m": 0,
+    "stableExcludedInOfficial15m": 0
+  },
+  "coverageByInterval": {
+    "15m": {
+      "allTime": 9568,
+      "inWindow": 2445,
+      "allTimeRangeCst": [
+        "2026-05-12 22:20:00",
+        "2026-11-13 05:35:00"
+      ],
+      "windowRangeCst": [
+        "2026-10-14 08:16:44",
+        "2026-11-13 05:35:00"
+      ]
+    },
+    "1h": {
+      "allTime": 3123,
+      "inWindow": 999,
+      "allTimeRangeCst": [
+        "2026-05-13 20:05:00",
+        "2026-11-13 02:05:00"
+      ],
+      "windowRangeCst": [
+        "2026-10-14 09:01:11",
+        "2026-11-13 02:05:00"
+      ]
+    },
+    "4h": {
+      "allTime": 233,
+      "inWindow": 91,
+      "allTimeRangeCst": [
+        "2026-05-27 00:05:00",
+        "2026-11-13 04:05:00"
+      ],
+      "windowRangeCst": [
+        "2026-10-15 04:05:18",
+        "2026-11-13 04:05:00"
+      ]
+    },
+    "1d": {
+      "allTime": 36,
+      "inWindow": 32,
+      "allTimeRangeCst": [
+        "2026-10-12 08:42:27",
+        "2026-11-09 08:05:00"
+      ],
+      "windowRangeCst": [
+        "2026-10-14 20:26:08",
+        "2026-11-09 08:05:00"
+      ]
+    },
+    "8h": {
+      "allTime": 3,
+      "inWindow": 3,
+      "allTimeRangeCst": [
+        "2026-10-17 16:07:21",
+        "2026-11-11 00:05:00"
+      ],
+      "windowRangeCst": [
+        "2026-10-17 16:07:21",
+        "2026-11-11 00:05:00"
+      ]
+    },
+    "1w": {
+      "allTime": 1,
+      "inWindow": 0,
+      "allTimeRangeCst": [
+        "2026-10-12 08:42:27",
+        "2026-10-12 08:42:27"
+      ],
+      "windowRangeCst": null
+    }
+  },
+  "futureMtfOfficialCrypto15m": {
+    "n": 41,
+    "withFuturePeer": 24,
+    "wouldDropIfCausalOnly": 21
+  },
+  "futureMtfOfficialUs4h": {
+    "n": 3,
+    "withFuturePeer": 1,
+    "wouldDropIfCausalOnly": 1
+  },
+  "elapsedSec": 1.96,
+  "productionUnchanged": true,
+  "sevenDayBaselinePreserved": "/workspace/oi_pattern_list_7d_mtf_15m_ab/"
+}

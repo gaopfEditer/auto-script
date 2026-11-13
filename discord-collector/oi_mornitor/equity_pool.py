@@ -149,20 +149,28 @@ class EquityPoolStats:
 
 
 def _whitelist_bases() -> list[tuple[str, int]]:
-    """(base, priority) 越小越优先。"""
+    """(base, priority) 越小越优先。集合与大市值个股优先占坑。"""
+    from oi_mornitor.equity_mcap import EQUITY_PREFERRED_BASES
+
     out: list[tuple[str, int]] = []
-    for i, b in enumerate(EQUITY_CORE_BASES):
+    seen: set[str] = set()
+    for i, b in enumerate(EQUITY_PREFERRED_BASES):
         out.append((b, i))
-    off = len(EQUITY_CORE_BASES)
-    for i, b in enumerate(EQUITY_SECONDARY_BASES):
-        out.append((b, off + i))
-    off += len(EQUITY_SECONDARY_BASES)
-    for i, b in enumerate(EQUITY_SATELLITE_BASES):
-        out.append((b, off + i))
+        seen.add(b)
+    rest: list[str] = []
+    for seq in (EQUITY_CORE_BASES, EQUITY_SECONDARY_BASES, EQUITY_SATELLITE_BASES):
+        for b in seq:
+            if b not in seen:
+                rest.append(b)
+                seen.add(b)
     extra = [x.strip().upper() for x in (OI_EQUITY_WHITELIST_EXTRA or "").split(",") if x.strip()]
-    for i, b in enumerate(extra):
-        if b and b not in {x[0] for x in out}:
-            out.append((b, off + len(EQUITY_SATELLITE_BASES) + i))
+    for b in extra:
+        if b and b not in seen:
+            rest.append(b)
+            seen.add(b)
+    off = len(out)
+    for i, b in enumerate(rest):
+        out.append((b, off + i))
     return out
 
 

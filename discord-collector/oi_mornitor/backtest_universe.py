@@ -16,6 +16,14 @@ from oi_mornitor.symbol_aliases import is_stablecoin_symbol, normalize_usdt_symb
 logger = logging.getLogger(__name__)
 
 _MAJORS = frozenset({"BTCUSDT", "ETHUSDT", "SOLUSDT"})
+
+def _equity_must_include() -> frozenset[str]:
+    try:
+        from oi_mornitor.equity_mcap import equity_must_include_symbols
+        return frozenset(equity_must_include_symbols())
+    except Exception:
+        return frozenset()
+
 _DEFAULT_TOP_N = 200
 _DEFAULT_MIN_LISTING_DAYS = 14
 _UNIVERSE_DIR = Path(BACKTEST_KLINES_DIR) / "universe"
@@ -138,7 +146,7 @@ async def select_backtest_universe(
         if not tk:
             continue
         score = _rank_score(tk, rank_by=rank_by)
-        if score <= 0 and sym not in _MAJORS:
+        if score <= 0 and sym not in _MAJORS and sym not in _equity_must_include():
             continue
         eligible.append(
             {
@@ -161,7 +169,7 @@ async def select_backtest_universe(
         if len(picked) >= top_n:
             break
 
-    for major in sorted(_MAJORS):
+    for major in sorted(_MAJORS | _equity_must_include()):
         if major not in picked:
             picked.insert(0, major)
             meta[major] = tickers.get(major, {"forced": True})
