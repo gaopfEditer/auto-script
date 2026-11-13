@@ -32,6 +32,14 @@
 `signal_type`, `market_cap_tier`, `trigger_time`, `confirm_time`, `entry_time`, `direction`, `entry_price`, `stop_price`, `target_price`, `price_return`, `net_return`, `MAE`, `MFE`, `exit_reason`  
 另有 `status`：`observe` / `entry_ready` / `traded` / `skipped`。
 
+## 入场质量闸（默认开）
+
+机会形成在 **15m**。默认 `--gate-mode and`：须同时满足 **多周期共振 AND 综合评分 ≥ B**：
+
+- **多周期共振**：需 **1h+4h** 结构偏置同向（V1：4H 环境 · 1H 结构）。无 4h 时 soft：15m+1h
+- **综合评分**：量/OI/RR 等加分（不含 MTF）；≥80A / ≥60B
+- `--gate-mode or`：共振 OR 评分；`--no-quality-gate` 关闸
+
 ## 怎么跑
 
 在 `discord-collector` 目录：

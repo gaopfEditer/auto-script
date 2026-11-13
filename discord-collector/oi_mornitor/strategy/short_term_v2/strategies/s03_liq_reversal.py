@@ -58,17 +58,8 @@ def scan_s03(ctx: BarContext) -> list[V2Signal]:
     if ctx.idx < 40:
         return []
     if not ctx.liq_events:
-        return [V2Signal(
-            signal_type="S03",
-            market_cap_tier=ctx.market_cap_tier,
-            symbol=ctx.symbol,
-            status="skipped",
-            skip_reason="liq_data_missing",
-            trigger_idx=ctx.idx,
-            trigger_time=ctx.ts(),
-            evidence=["无清算历史，不假装检出"],
-            data_flags={"liq_available": False},
-        )]
+        # 无清算数据时整策略静默跳过（不要每根写 skip，否则回测信号表会爆）
+        return []
 
     hist = _historical_liq_series(ctx, ctx.idx)
     pctile = tier_param(ctx.market_cap_tier, "liq_pctile")

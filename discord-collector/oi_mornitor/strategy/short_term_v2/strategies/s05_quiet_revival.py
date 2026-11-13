@@ -26,30 +26,38 @@ from oi_mornitor.strategy.short_term_v2.signal import V2Signal
 
 
 def _is_quiet(ctx: BarContext) -> tuple[bool, list[str]]:
-    """过去约 30 天 ATR%/Close 处于过去约 180 天的 P20 以下，且横盘。"""
+    """过去约 30 天 ATR%/Close 处于过去约 180 天的 P20 以下，且横盘。
+
+    依赖 metrics.precompute_indicators：整表 ATR% 只算一次，禁止按根重扫窗口。
+    """
     # 15m 近似：30d≈2880 根，180d≈17280；样本不足时用可用窗口
     need_short = QUIET_LOOKBACK_DAYS * 24 * 4
     need_long = QUIET_BASELINE_DAYS * 24 * 4
     if ctx.idx < min(need_short, 200):
         return False, ["沉寂窗口不足"]
-    start_long = max(0, ctx.idx - need_long)
-    atr_pcts: list[float] = []
-    for i in range(max(start_long, 14), ctx.idx + 1):
-        ap = atr_pct_at(ctx.df_15m, i)
-        if ap is not None:
-            atr_pcts.append(ap)
-    if len(atr_pcts) < 50:
+    # 触发预计算（已缓存则 O(1)）
+    atr_pct_at(ctx.df_15m, ctx.idx)
+    from oi_mornitor.strategy.short_term_v2.metrics import get_indicator_cache
+
+    cache = get_indicator_cache(ctx.df_15m) or {}
+    atr_pct = np.asarray(cache.get("atr_pct"), dtype=float)
+    if atr_pct.size == 0 or ctx.idx >= atr_pct.size:
         return False, ["ATR% 样本不足"]
-    short_n = min(len(atr_pcts), need_short)
-    recent = atr_pcts[-short_n:]
-    baseline = atr_pcts
+    start_long = max(14, ctx.idx - need_long)
+    baseline = atr_pct[start_long : ctx.idx + 1]
+    baseline = baseline[~np.isnan(baseline)]
+    if baseline.size < 50:
+        return False, ["ATR% 样本不足"]
+    short_n = min(int(baseline.size), need_short)
+    recent = baseline[-short_n:]
     p20 = float(np.percentile(baseline, QUIET_ATR_PCTILE))
     recent_med = float(np.median(recent))
     if recent_med > p20:
         return False, [f"近期ATR%中位={recent_med:.4f} > P20={p20:.4f}"]
-    # 横盘：近 30d 高低振幅 / 中价 较小
-    sl = ctx.df_15m.iloc[ctx.idx - short_n + 1 : ctx.idx + 1]
-    hi, lo = float(sl["high"].max()), float(sl["low"].min())
+    # 横盘：近 short_n 根高低振幅 / 中价 较小
+    sl_start = max(0, ctx.idx - short_n + 1)
+    hi = float(ctx.df_15m["high"].iloc[sl_start : ctx.idx + 1].max())
+    lo = float(ctx.df_15m["low"].iloc[sl_start : ctx.idx + 1].min())
     mid = (hi + lo) / 2.0
     range_pct = (hi - lo) / mid * 100.0 if mid > 0 else 999.0
     if range_pct > 25.0:

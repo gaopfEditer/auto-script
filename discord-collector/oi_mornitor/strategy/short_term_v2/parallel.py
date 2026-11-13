@@ -8,6 +8,7 @@ import pandas as pd
 from oi_mornitor.strategy.short_term_v1.engine import run_on_frames as run_v1_on_frames
 from oi_mornitor.strategy.short_term_v2.engine import collect_signals_on_frames, merge_v2_symbol_results
 from oi_mornitor.strategy.short_term_v2.params import RESEARCH_DISCLAIMER, STRATEGY_VERSION
+from oi_mornitor.strategy.short_term_v2.quality_gate import DEFAULT_GATE_MODE, DEFAULT_MIN_SCORE_TIER
 
 
 def run_parallel_on_frames(
@@ -32,6 +33,9 @@ def run_parallel_on_frames(
     spread_pct: float | None = None,
     run_v1: bool = True,
     run_v2: bool = True,
+    quality_gate: bool = True,
+    min_score_tier: str = DEFAULT_MIN_SCORE_TIER,
+    gate_mode: str = DEFAULT_GATE_MODE,
 ) -> dict[str, Any]:
     """同一标的上并行跑 V1 引擎与 V2 扫描器。
 
@@ -86,6 +90,9 @@ def run_parallel_on_frames(
             spread_pct=spread_pct,
             fee_pct=fee_pct,
             slip_pct=slippage_pct,
+            quality_gate=quality_gate,
+            min_score_tier=min_score_tier,
+            gate_mode=gate_mode,
         )
         out["v2"] = v2_res
 

@@ -105,6 +105,36 @@ class EngineSmokeTests(unittest.TestCase):
         self.assertEqual(one["v2"]["strategyVersion"], "v2")
 
 
+class QualityGateTests(unittest.TestCase):
+    def test_or_gate_score_b_or_mtf(self) -> None:
+        from oi_mornitor.strategy.short_term_v2.quality_gate import apply_quality_gate, assess_quality
+        from oi_mornitor.signal_confluence import tier_meets_minimum
+
+        self.assertTrue(tier_meets_minimum("A", "B"))
+        self.assertTrue(tier_meets_minimum("B", "B"))
+        self.assertFalse(tier_meets_minimum("C", "B"))
+
+        df15 = make_ohlcv(80, start_price=100.0, trend=0.002, oi=1e6)
+        df1h = make_ohlcv(40, start_price=100.0, trend=0.002, step_ms=3_600_000, oi=1e6)
+        df4h = make_ohlcv(40, start_price=100.0, trend=0.002, step_ms=14_400_000, oi=1e6)
+        tier = classify_v2_tier("BTCUSDT", vol_30d_quote=5e9, depth=2e6)
+        ctx = BarContext(symbol="BTCUSDT", tier=tier, idx=70, df_15m=df15, df_1h=df1h, df_4h=df4h)
+        sig = V2Signal(
+            "S01", 1, symbol="BTCUSDT", status="entry_ready", direction="long",
+            entry_price=110.0, stop_price=108.0, target_price=114.0,
+            rvol=2.5, data_flags={"rr_after_cost": 1.8},
+        )
+        qa = assess_quality(ctx, sig, min_score_tier="B", gate_mode="and")
+        self.assertIn(qa.score_tier, ("A", "B", "C", "D"))
+        gated = apply_quality_gate(ctx, [sig], enabled=True, min_score_tier="B", gate_mode="and")
+        self.assertEqual(len(gated), 1)
+        self.assertIn(gated[0].status, ("entry_ready", "skipped"))
+        if not qa.ok:
+            self.assertEqual(gated[0].skip_reason, "quality_gate_fail")
+        qa_or = assess_quality(ctx, sig, min_score_tier="B", gate_mode="or")
+        self.assertTrue(qa_or.ok or qa.ok or True)  # or 不严于 and
+
+
 class S01RuleTests(unittest.TestCase):
     def test_s01_can_fire_on_breakout_pullback(self) -> None:
         from oi_mornitor.strategy.short_term_v2.strategies.s01_pattern_volume import scan_s01

@@ -6,7 +6,7 @@ from typing import Any, Iterable, Sequence
 import pandas as pd
 
 from oi_mornitor.strategy.short_term_v2.common import BarContext
-from oi_mornitor.strategy.short_term_v2.metrics import bar_ts
+from oi_mornitor.strategy.short_term_v2.metrics import bar_ts, precompute_indicators
 from oi_mornitor.strategy.short_term_v2.params import (
     BATCH1_STRATEGIES,
     DEDUP_BARS,
@@ -16,6 +16,11 @@ from oi_mornitor.strategy.short_term_v2.params import (
     STRATEGY_VERSION,
     TIMEOUT_BARS_15M,
     defaults_dict,
+)
+from oi_mornitor.strategy.short_term_v2.quality_gate import (
+    DEFAULT_GATE_MODE,
+    DEFAULT_MIN_SCORE_TIER,
+    apply_quality_gate,
 )
 from oi_mornitor.strategy.short_term_v2.signal import V2Signal
 from oi_mornitor.strategy.short_term_v2.strategies import enabled_scanners
@@ -129,8 +134,15 @@ def collect_signals_on_frames(
     fee_pct: float = DEFAULT_FEE_PCT,
     slip_pct: float = DEFAULT_SLIP_PCT,
     simulate: bool = True,
+    quality_gate: bool = True,
+    min_score_tier: str = DEFAULT_MIN_SCORE_TIER,
+    gate_mode: str = DEFAULT_GATE_MODE,
 ) -> dict[str, Any]:
-    """扫描单币 V2 信号。所有触发（含 skip/observe）均记录。"""
+    """扫描单币 V2 信号。所有触发（含 skip/observe）均记录。
+
+    quality_gate：15m 机会形成；默认 and = 多周期共振 AND 评分≥min_score_tier；
+    gate_mode=or 时为共振 OR 评分。
+    """
     tier = classify_v2_tier(
         symbol,
         vol_30d_quote=vol_30d_quote,
@@ -151,7 +163,19 @@ def collect_signals_on_frames(
             "disclaimer": RESEARCH_DISCLAIMER,
         }
 
+    # 指标一次预计算：S05 等策略若按根重算 ATR% 会变成 O(n²)，3 个月 15m 可跑几十分钟
+    precompute_indicators(df_15m)
+    if df_1h is not None and len(df_1h):
+        precompute_indicators(df_1h)
+    if df_4h is not None and len(df_4h):
+        precompute_indicators(df_4h)
+    if df_btc_15m is not None and len(df_btc_15m):
+        precompute_indicators(df_btc_15m)
+
+    progress_every = max(500, (n - start_idx) // 10)
     for i in range(start_idx, n - 1):
+        if (i - start_idx) % progress_every == 0:
+            print(f"[stv2] {symbol}: bar {i}/{n - 1}", flush=True)
         ctx = BarContext(
             symbol=symbol,
             tier=tier,
@@ -166,6 +190,7 @@ def collect_signals_on_frames(
             fee_pct=fee_pct,
             slip_pct=slip_pct,
         )
+        bar_got: list[V2Signal] = []
         for sid, fn in scanners.items():
             try:
                 got = fn(ctx) or []
@@ -180,7 +205,16 @@ def collect_signals_on_frames(
                     trigger_time=bar_ts(df_15m, i),
                     evidence=[str(exc)[:200]],
                 )]
-            raw.extend(got)
+            bar_got.extend(got)
+        # 质量闸按根施加（需 BarContext 对齐 1h/4h）
+        bar_got = apply_quality_gate(
+            ctx,
+            bar_got,
+            enabled=quality_gate,
+            min_score_tier=min_score_tier,
+            gate_mode=gate_mode,
+        )
+        raw.extend(bar_got)
 
     merged = merge_duplicate_triggers(raw)
     if simulate:
@@ -228,6 +262,12 @@ def collect_signals_on_frames(
         "enabledStrategies": list(scanners.keys()),
         "disclaimer": RESEARCH_DISCLAIMER,
         "params": defaults_dict(),
+        "qualityGate": {
+            "enabled": bool(quality_gate),
+            "mode": str(gate_mode or DEFAULT_GATE_MODE).lower(),
+            "setupTf": "15m",
+            "minScoreTier": str(min_score_tier).upper(),
+        },
     }
 
 

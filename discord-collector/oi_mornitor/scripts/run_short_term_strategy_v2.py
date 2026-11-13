@@ -60,6 +60,31 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", type=Path, default=None)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--limit-bars", type=int, default=0)
+    p.add_argument(
+        "--quality-gate",
+        dest="quality_gate",
+        action="store_true",
+        default=True,
+        help="入场需多周期共振 OR 评分≥min-score-tier（默认开）",
+    )
+    p.add_argument(
+        "--no-quality-gate",
+        dest="quality_gate",
+        action="store_false",
+        help="关闭质量闸（对比基线用）",
+    )
+    p.add_argument(
+        "--min-score-tier",
+        default="B",
+        choices=("A", "B", "C", "D"),
+        help="综合评分最低档，默认 B",
+    )
+    p.add_argument(
+        "--gate-mode",
+        default="and",
+        choices=("and", "or"),
+        help="and=15m+共振且评分达标（默认）；or=共振或评分",
+    )
     args = p.parse_args(argv)
 
     from oi_mornitor.strategy.short_term_v2.runner import run_short_term_v2
@@ -88,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
         parallel_v1=args.parallel_v1,
         v1_experiment=args.v1_experiment,
         equity=args.equity,
+        quality_gate=bool(args.quality_gate),
+        min_score_tier=args.min_score_tier,
+        gate_mode=args.gate_mode,
     )
     print(json.dumps({
         "out_dir": result.get("out_dir"),

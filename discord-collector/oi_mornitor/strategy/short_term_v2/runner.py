@@ -21,6 +21,7 @@ from oi_mornitor.strategy.short_term_v2.params import (
     STRATEGY_VERSION,
     defaults_dict,
 )
+from oi_mornitor.strategy.short_term_v2.quality_gate import DEFAULT_GATE_MODE, DEFAULT_MIN_SCORE_TIER
 
 _PKG = Path(__file__).resolve().parents[2]
 _OUT_ROOT = _PKG / "data" / "short_term_v2"
@@ -109,12 +110,17 @@ def run_short_term_v2(
     parallel_v1: bool = False,
     v1_experiment: str = "E",
     equity: float = 10_000.0,
+    quality_gate: bool = True,
+    min_score_tier: str = DEFAULT_MIN_SCORE_TIER,
+    gate_mode: str = DEFAULT_GATE_MODE,
 ) -> dict[str, Any]:
     fee = OI_BT_FEE_PCT if fee_pct is None else float(fee_pct)
     slip = OI_BT_SLIPPAGE_PCT if slippage_pct is None else float(slippage_pct)
     dest = _ensure_out(out_dir)
     t0 = time.time()
     strat = list(strategies) if strategies else list(BATCH1_STRATEGIES)
+    min_tier = str(min_score_tier or DEFAULT_MIN_SCORE_TIER).strip().upper() or DEFAULT_MIN_SCORE_TIER
+    gmode = str(gate_mode or DEFAULT_GATE_MODE).strip().lower() or DEFAULT_GATE_MODE
 
     if dry_run:
         if parallel_v1:
@@ -153,7 +159,11 @@ def run_short_term_v2(
         if df15 is None or len(df15) < 100:
             print(f"[stv2] {i}/{len(syms)} {sym}: 15m 不足，跳过", flush=True)
             continue
-        print(f"[stv2] {i}/{len(syms)} {sym}: 15m={len(df15)} 开始", flush=True)
+        print(
+            f"[stv2] {i}/{len(syms)} {sym}: 15m={len(df15)} 开始 "
+            f"quality_gate={quality_gate} mode={gmode} min_score>={min_tier}",
+            flush=True,
+        )
         t1 = time.time()
         if parallel_v1:
             rec = run_parallel_on_frames(
@@ -170,6 +180,9 @@ def run_short_term_v2(
                 equity=equity,
                 fee_pct=fee,
                 slippage_pct=slip,
+                quality_gate=quality_gate,
+                min_score_tier=min_tier,
+                gate_mode=gmode,
             )
         else:
             rec = collect_signals_on_frames(
@@ -182,6 +195,9 @@ def run_short_term_v2(
                 include_batch2=include_batch2,
                 fee_pct=fee,
                 slip_pct=slip,
+                quality_gate=quality_gate,
+                min_score_tier=min_tier,
+                gate_mode=gmode,
             )
         results.append(rec)
         print(f"[stv2] {sym}: 完成 {round(time.time() - t1, 1)}s", flush=True)
@@ -207,5 +223,9 @@ def run_short_term_v2(
         "feePct": fee,
         "slippagePct": slip,
         "universe": universe,
+        "qualityGate": quality_gate,
+        "minScoreTier": min_tier,
+        "qualityGateMode": gmode,
+        "setupTf": "15m",
     })
     return merged
