@@ -57,17 +57,37 @@ _task: asyncio.Task | None = None
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
+def _normalize_ip(host: str) -> str:
+    host = str(host or "").strip().lower()
+    if host.startswith("::ffff:"):
+        host = host[7:]
+    return host
+
+
 def _client_is_local(request: Request) -> bool:
-    """是否允许触发抓取：直连本机，或显式允许远程。"""
+    """是否允许触发抓取：直连本机，或显式允许远程。
+
+    经 Nginx / collect:ui 反代时，直连地址会是 127.0.0.1，
+    必须再看 X-Forwarded-For / X-Real-IP，避免公网用户被当成本地。
+    """
     if REFRESH_ALLOW_REMOTE:
         return True
     host = ""
     if request.client and request.client.host:
-        host = str(request.client.host).strip().lower()
-    # 去掉 IPv4-mapped IPv6 前缀
-    if host.startswith("::ffff:"):
-        host = host[7:]
-    return host in _LOCAL_HOSTS
+        host = str(request.client.host)
+    host = _normalize_ip(host)
+    if host not in _LOCAL_HOSTS:
+        return False
+    forwarded = ""
+    xri = str(request.headers.get("x-real-ip") or "").strip()
+    xff = str(request.headers.get("x-forwarded-for") or "").strip()
+    if xri:
+        forwarded = _normalize_ip(xri.split(",")[0])
+    elif xff:
+        forwarded = _normalize_ip(xff.split(",")[0])
+    if forwarded:
+        return forwarded in _LOCAL_HOSTS
+    return True
 
 
 def _can_fetch(request: Request, *, refresh: bool, empty: bool) -> bool:

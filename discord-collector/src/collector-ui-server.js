@@ -45,6 +45,7 @@ import { startContentSupervisor } from "../scripts/content-supervisor.mjs";
 import { startNewsSupervisor } from "../scripts/news-supervisor.mjs";
 import { startTelegramSupervisor } from "../scripts/telegram-supervisor.mjs";
 import { registerContentBoardProxy } from "./content-board-proxy.js";
+import { registerNewsMornitorProxy } from "./news-mornitor-proxy.js";
 import { registerYoutubeArchiveRoutes } from "./youtube-archives.js";
 import { registerYoutubeFetchProxyRoutes } from "./youtube-fetch-proxy.js";
 import { registerYoutubePasteParseRoutes } from "./youtube-paste-parse.js";
@@ -152,6 +153,11 @@ async function main() {
   registerContentBoardProxy(app, {
     baseUrl: config.contentBoardBaseUrl,
     log: createLogger("content-proxy"),
+  });
+  // 必须在 express.json 与静态 SPA 之前，把 /news/index.html、/static、/api/v1 转到 :8770
+  registerNewsMornitorProxy(app, {
+    baseUrl: config.newsWebBaseUrl,
+    log: createLogger("news-proxy"),
   });
 
   const wss = new WebSocketServer({ server, path: "/ws" });

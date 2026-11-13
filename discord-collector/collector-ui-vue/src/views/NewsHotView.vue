@@ -13,16 +13,41 @@ const iframeReady = ref(false);
 
 let pollTimer = null;
 
+function isLocalClient() {
+  const host = String(typeof location !== "undefined" ? location.hostname : "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+}
+
+function isLocalhostUrl(url) {
+  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/i.test(String(url ?? "").trim());
+}
+
+/** 主站 SPA（/ 或 /show 或包装页 /news），不能当作热点 iframe */
+function isCollectorMainSiteUrl(url) {
+  const raw = String(url ?? "").trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw, typeof location !== "undefined" ? location.href : "https://example.invalid/");
+    const p = parsed.pathname.replace(/\/+$/, "") || "/";
+    if (p === "/" || p === "/show") return true;
+    if (p === "/news") return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * 根据当前页面 URL 判断：
- * - http://localhost/* → 嵌本机 news (http://127.0.0.1:8770/)
- * - https://* → 生产同源 /news/index.html
+ * 本机嵌 :8770；线上用公网地址，且绝不用 127.0.0.1 或主站 /show。
  * @param {Record<string, unknown>} j
  */
 function pickEmbedUrl(j) {
-  const protocol = String(typeof location !== "undefined" ? location.protocol : "https:");
-  if (protocol === "http:") {
+  if (isLocalClient()) {
     return "http://127.0.0.1:8770/";
+  }
+  const pub = String(j?.publicEmbedUrl || j?.embedUrl || "").trim();
+  if (pub && !isLocalhostUrl(pub) && !isCollectorMainSiteUrl(pub)) {
+    return pub;
   }
   return "/news/index.html";
 }
