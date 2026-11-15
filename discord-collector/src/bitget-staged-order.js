@@ -447,16 +447,25 @@ export async function executeStagedMarketOpen(client, input) {
     );
     if (!verify.ok) {
       const failRecord = verify.record ?? record;
-      return {
-        ok: false,
-        reason: verify.reason ?? "tpsl_verify_failed",
-        error: String(
-          failRecord.nakedPositionCloseError ?? failRecord.tpslRepair?.error ?? "开仓后 TP/SL 校验失败"
-        ),
-        record: failRecord,
-      };
+      if (failRecord.nakedPositionClosed) {
+        return {
+          ok: false,
+          reason: verify.reason ?? "tpsl_verify_failed",
+          error: String(
+            failRecord.nakedPositionCloseError ?? failRecord.tpslRepair?.error ?? "开仓后 TP/SL 校验失败并已平仓"
+          ),
+          record: failRecord,
+        };
+      }
+      input.log?.warn?.(
+        `Bitget 开仓已带预设 TP/SL，校验/补挂未完全通过 card=#${input.cardId}（持仓保留，止损为计划价非立即平仓）`
+      );
+      record.tpslVerifyDeferred = true;
+      record.tpslVerification = failRecord.tpslVerification ?? { ok: false, deferred: true };
+      if (verify.record) Object.assign(record, verify.record);
+    } else if (verify.record) {
+      Object.assign(record, verify.record);
     }
-    if (verify.record) Object.assign(record, verify.record);
   }
 
   return { ok: true, record };

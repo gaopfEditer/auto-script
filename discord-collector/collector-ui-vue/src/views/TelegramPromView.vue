@@ -106,6 +106,24 @@ const editSaving = ref(false);
 
 /** @type {import("vue").Ref<Record<string, HTMLElement | null>>} */
 const colBodies = ref({});
+/** 仅首屏定位到底部；之后页面在前台时不再抢滚动 */
+let didInitialScroll = false;
+
+function pageIsActive() {
+  if (typeof document === "undefined") return true;
+  return document.visibilityState !== "hidden" && document.hasFocus();
+}
+
+/** @param {string} chatId @param {{ smooth?: boolean, force?: boolean }} [opts] */
+function scrollColumnToBottom(chatId, { smooth = false, force = false } = {}) {
+  if (!force && pageIsActive()) return;
+  const el = colBodies.value[chatId];
+  if (!el) return;
+  el.scrollTo({
+    top: el.scrollHeight,
+    behavior: smooth ? "smooth" : "auto",
+  });
+}
 
 function msgTime(m) {
   const t = Date.parse(String(m.at || ""));
@@ -272,18 +290,9 @@ function setColBody(chatId, el) {
   else delete colBodies.value[chatId];
 }
 
-function scrollColumnToBottom(chatId, { smooth = false } = {}) {
-  const el = colBodies.value[chatId];
-  if (!el) return;
-  el.scrollTo({
-    top: el.scrollHeight,
-    behavior: smooth ? "smooth" : "auto",
-  });
-}
-
-function scrollAllToBottom({ smooth = false } = {}) {
+function scrollAllToBottom({ smooth = false, force = false } = {}) {
   for (const c of visibleChannels.value) {
-    scrollColumnToBottom(c.chatId, { smooth });
+    scrollColumnToBottom(c.chatId, { smooth, force });
   }
 }
 
@@ -387,7 +396,12 @@ async function loadMessages() {
     status.value = `库内 ${j.total ?? rows.length} 条 · 置顶 ${j.pinnedCount ?? 0} · ${channels.value.length} 群`;
     error.value = "";
     await nextTick();
-    scrollAllToBottom();
+    if (!didInitialScroll) {
+      scrollAllToBottom({ force: true });
+      didInitialScroll = true;
+    } else if (!pageIsActive()) {
+      scrollAllToBottom();
+    }
   } catch (e) {
     error.value = String(/** @type {Error} */ (e).message ?? e);
   } finally {
@@ -397,7 +411,6 @@ async function loadMessages() {
 
 function selectChannel(id) {
   activeChatId.value = activeChatId.value === id ? "" : id;
-  void nextTick(() => scrollAllToBottom());
 }
 
 function clearFilters() {
@@ -473,7 +486,7 @@ function onWs(msg) {
     const m = /** @type {LiveMessage} */ (msg.message);
     upsertMessage(m);
     status.value = `实时 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
-    if (kind === "telegram_message") {
+    if (kind === "telegram_message" && !pageIsActive()) {
       void nextTick(() => scrollColumnToBottom(m.chatId, { smooth: true }));
     }
   }
@@ -481,7 +494,7 @@ function onWs(msg) {
 
 watch([timePeriod, symbolQuery, activeChatId], async () => {
   await nextTick();
-  scrollAllToBottom();
+  if (!pageIsActive()) scrollAllToBottom();
 });
 
 let unsub = /** @type {null | (() => void)} */ (null);
@@ -943,6 +956,23 @@ button.ghost {
   background: rgba(240, 185, 11, 0.08);
   max-height: 28vh;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(109, 113, 120, 0.7) transparent;
+}
+.pins::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.pins::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pins::-webkit-scrollbar-thumb {
+  background: rgba(109, 113, 120, 0.45);
+  border-radius: 999px;
+}
+.pins::-webkit-scrollbar-thumb:hover {
+  background: rgba(109, 113, 120, 0.78);
 }
 .pins-head {
   padding: 0.45rem 0.7rem;
@@ -993,6 +1023,23 @@ button.ghost {
   gap: 0.65rem;
   overflow-x: auto;
   overflow-y: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(109, 113, 120, 0.7) transparent;
+}
+.board::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.board::-webkit-scrollbar-track {
+  background: transparent;
+}
+.board::-webkit-scrollbar-thumb {
+  background: rgba(109, 113, 120, 0.45);
+  border-radius: 999px;
+}
+.board::-webkit-scrollbar-thumb:hover {
+  background: rgba(109, 113, 120, 0.78);
 }
 .board.single {
   grid-template-columns: minmax(280px, 560px);
@@ -1328,6 +1375,27 @@ button.ghost {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(109, 113, 120, 0.75) transparent;
+}
+.col-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.col-body::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 2px 0;
+}
+.col-body::-webkit-scrollbar-thumb {
+  background: rgba(109, 113, 120, 0.42);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.col-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 155, 164, 0.82);
+  background-clip: padding-box;
 }
 .bubble {
   padding: 0.5rem 0.6rem;

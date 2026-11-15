@@ -119,6 +119,31 @@ class PatternAlertStatsPageFilterTests(unittest.TestCase):
         self.assertEqual(only_c["total"], 1)
         self.assertEqual(only_c["items"][0]["key"], "b4h")
 
+    def test_facet_count_matches_summary_when_selected(self) -> None:
+        rows = [dict(r) for r in self.rows]
+        rows[0]["confluence"] = {"score": 90, "tier": "A"}
+        rows[1]["confluence"] = {"score": 70, "tier": "B"}
+        rows[2]["confluence"] = {"score": 40, "tier": "C"}
+
+        def fake_attach(recs):
+            return None
+
+        with mock.patch("oi_mornitor.pattern_alert_stats._load", return_value=rows):
+            with mock.patch(
+                "oi_mornitor.signal_confluence.attach_signal_confluence",
+                side_effect=fake_attach,
+            ):
+                out = list_alert_stats_page(
+                    interval="15m",
+                    confluence_min_tier="A",
+                    confluence_exact=True,
+                    page=1,
+                    page_size=100,
+                )
+        summary_n = int(out["summary"]["total"])
+        conf_a = next(o for o in out["confluenceOptions"] if o["id"] == "A")
+        self.assertEqual(int(conf_a["count"]), summary_n)
+
 
 if __name__ == "__main__":
     unittest.main()

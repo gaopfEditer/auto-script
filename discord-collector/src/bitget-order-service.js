@@ -37,9 +37,11 @@ import {
 import { isStagedTradeSignal } from "./discord-signal-staged-trade.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import {
+  fillMissingAutoTradeTpslAtMark,
   prepareAutoTradeForOrder,
   telegramTradeRequiresTpsl,
 } from "./telegram-auto-trade.js";
+import { normalizeSymbol } from "./card-fields.js";
 
 import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
 import { STAGED_TP_PARTIAL_RATIOS } from "./discord-signal-staged-trade.js";
@@ -390,7 +392,32 @@ export function createBitgetOrderService(store, log) {
     }
 
     const isStaged = isStagedTradeSignal(parsed) || resolved.channel.stagedTrade;
-    const exAfterPrepare = normalizeExecution(executionJson, parsed);
+    let exAfterPrepare = normalizeExecution(executionJson, parsed);
+    if (!telegramTradeRequiresTpsl(exAfterPrepare)) {
+      const credsForMark = credentials();
+      if (credsForMark) {
+        const sym = normalizeSymbol(autoTradeSym || String(parsed.symbol ?? ""));
+        const productType = String(resolved.channel.productType ?? "USDT-FUTURES");
+        if (sym) {
+          try {
+            const markClient = createBitgetClient(credsForMark);
+            const ticker = await markClient.getMixTicker({ symbol: sym, productType });
+            const mark = Number(ticker?.markPrice ?? ticker?.lastPr ?? 0);
+            if (mark > 0) {
+              const filled = fillMissingAutoTradeTpslAtMark(parsed, exAfterPrepare, mark);
+              parsed = filled.parsed;
+              executionJson = filled.execution;
+              exAfterPrepare = normalizeExecution(executionJson, parsed);
+              input = { ...input, parsed, executionJson };
+            }
+          } catch (e) {
+            log.warn(
+              `Bitget 拉标记价补止盈止损失败 card=#${input.cardId}: ${/** @type {Error} */ (e).message}`
+            );
+          }
+        }
+      }
+    }
     if (!telegramTradeRequiresTpsl(exAfterPrepare) && !isStaged) {
       log.warn(
         `Bitget 跳过 card=#${input.cardId}：务必设置止盈止损（已试默认 TP/SL 仍缺有效入场）`

@@ -7,7 +7,8 @@
 | 配置 | 含义 |
 |------|------|
 | `MAIN_CARD_TELEGRAM_CHAT_ID` | `-1003860925903`（短线/长线/结构统一打到该群） |
-| `OI_MAIN_CARD_DEFAULT_SYMBOLS` | `BTCUSDT, ETHUSDT, QQQUSDT, SUIUSDT`（MAIN 镜像白名单） |
+| `OI_MAIN_CARD_DEFAULT_SYMBOLS` | `BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, QQQUSDT, SUIUSDT`（MAIN 镜像白名单） |
+| 第一/二梯队 MTF + **综合 A** | t1/t2 + 共振≥2 + tier A → MAIN 顶栏；**BTC**「重中之重」；t2「第二梯队」 |
 | `OI_MAIN_CARD_OTHER_SYMBOLS` | 含 BTC/ETH/SUI → 形态群（candle）可推 |
 | `OI_MAIN_CARD_LONG_SYMBOLS` | 美股/商品合约长线形态名单 |
 | `OI_CONFLUENCE_PUSH_MIN_TIER` | **B** 及以上才推 TG |

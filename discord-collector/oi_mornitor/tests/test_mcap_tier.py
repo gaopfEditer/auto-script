@@ -16,14 +16,14 @@ def setup_function() -> None:
 def test_thresholds_from_config() -> None:
     t1, t2 = mcap_thresholds_usd()
     assert t1 == 50_000_000_000
-    assert t2 == 8_000_000_000
+    assert t2 == 500_000_000
 
 
 def test_tier_from_market_cap_boundaries() -> None:
-    assert tier_from_market_cap_usd(50_000_000_001) == "t1"
-    assert tier_from_market_cap_usd(50_000_000_000) == "t2"  # 大于 500 亿才进第一档
-    assert tier_from_market_cap_usd(8_000_000_001) == "t2"
-    assert tier_from_market_cap_usd(8_000_000_000) == "t3"
+    assert tier_from_market_cap_usd(5_000_000_001) == "t1"
+    assert tier_from_market_cap_usd(5_000_000_000) == "t2"
+    assert tier_from_market_cap_usd(500_000_001) == "t2"
+    assert tier_from_market_cap_usd(500_000_000) == "t3"
     assert tier_from_market_cap_usd(None) == "t3"
     assert tier_from_market_cap_usd(200_000_000_000, excluded=True) == "t3"
 
@@ -62,12 +62,12 @@ def test_resolve_uses_live_caps_and_excludes_stables() -> None:
     assert resolve_mcap_tier("ZECUSDT") == "t2"
     assert resolve_mcap_tier("XMRUSDT") == "t2"
     assert resolve_mcap_tier("DOGEUSDT") == "t2"
-    assert resolve_mcap_tier("LEOUSDT") == "t2"
-    assert resolve_mcap_tier("WBTUSDT") == "t2"
-    assert resolve_mcap_tier("LINKUSDT") == "t3"
-    assert resolve_mcap_tier("ADAUSDT") == "t3"
+    assert resolve_mcap_tier("LINKUSDT") == "t2"
+    assert resolve_mcap_tier("ADAUSDT") == "t2"
+    assert resolve_mcap_tier("LEOUSDT") == "t3"
+    assert resolve_mcap_tier("WBTUSDT") == "t3"
     assert resolve_mcap_tier("FIGR_HELOCUSDT") == "t3"
-    assert resolve_mcap_tier("PEPEUSDT") == "t3"
+    assert resolve_mcap_tier("PEPEUSDT") == "t2"
 
 
 def test_attach_mcap_tier_sets_fields() -> None:
@@ -85,9 +85,9 @@ def test_empty_cache_falls_back_to_configured_symbols() -> None:
     reset_market_cap_cache_for_tests({}, freeze=True)
     assert resolve_mcap_tier("BNBUSDT") == "t1"
     assert resolve_mcap_tier("DOGEUSDT") == "t2"
-    assert resolve_mcap_tier("LEOUSDT") == "t2"
-    assert resolve_mcap_tier("WBTUSDT") == "t2"
-    assert resolve_mcap_tier("ADAUSDT") == "t3"
+    assert resolve_mcap_tier("LEOUSDT") == "t3"
+    assert resolve_mcap_tier("WBTUSDT") == "t3"
+    assert resolve_mcap_tier("ADAUSDT") == "t2"
 
 
 def test_equity_tiers_do_not_mix_with_crypto() -> None:

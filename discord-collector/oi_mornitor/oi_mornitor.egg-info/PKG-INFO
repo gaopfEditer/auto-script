@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: oi-mornitor
+Version: 1.0.0
+Summary: 币安永续 OI 动态热钱雷达
+Requires-Python: >=3.11
+Requires-Dist: aiohttp>=3.9.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: pyarrow>=14.0.0
+Requires-Dist: websockets>=12.0

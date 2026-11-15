@@ -383,6 +383,9 @@ def _send_card_text_to_chat(alert: dict[str, Any], text: str, chat_id: str) -> b
     dedupe = alert_push_dedupe_key(alert)
     if not try_claim_telegram_push(chat, dedupe):
         return False
+    from oi_mornitor.main_tier_mtf_highlight import decorate_main_chat_tier_mtf_message
+
+    text = decorate_main_chat_tier_mtf_message(alert, text, chat)
     ok = send_telegram_text(text, chat_id=chat)
     if not ok:
         release_telegram_push_claim(chat, dedupe)

@@ -320,20 +320,29 @@ describe("repairBitgetPositionTpsl", () => {
     assert.equal(record.tpslRepair?.closeReason, "request_param_exhausted");
   });
 
-  it("sl_breached：立即标记平仓原因", async () => {
+  it("sl_breached：按最新标记价重算止损并重试，不立即平仓", async () => {
     process.env.BITGET_TPSL_REPAIR_RETRIES = "3";
+    let calls = 0;
     const client = {
+      getMixTicker: async () => ({ markPrice: "3500" }),
+      getMixContract: async () => ({ pricePlace: "1", priceEndStep: "1" }),
+      getSinglePosition: async () => ({ data: [{ symbol: "ETHUSDT", holdSide: "long", total: "1" }] }),
+      getOrdersPlanPending: async () => ({ data: [] }),
       withHoldSideFallback: async (fn) => fn("long"),
       placePosTpsl: async () => {
-        throw new Error("stop loss price of the long position should be less than the current price");
+        calls += 1;
+        if (calls < 3) {
+          throw new Error("stop loss price of the long position should be less than the current price");
+        }
+        return { data: { ok: true } };
       },
     };
     const record = {};
     const result = await repairBitgetPositionTpsl(client, baseCtx, record);
-    assert.equal(result.ok, false);
-    assert.equal(result.closeImmediately, true);
-    assert.equal(result.closeReason, "sl_breached");
-    assert.equal(record.tpslRepair.attempts.length, 1);
+    assert.equal(result.closeImmediately, false);
+    assert.ok(calls >= 2);
+    assert.ok(record.tpslRepair.attempts.length >= 2);
+    assert.ok(record.tpslRepair.attempts.some((a) => a.category === "sl_breached"));
   });
 });
 
@@ -376,19 +385,17 @@ describe("ensureBitgetPositionTpslAfterOpen", () => {
     assert.equal(record.tpslRepair.attempts.length, 1);
   });
 
-  it("sl_breached 时立即平仓且告警含分类与 mark", async () => {
+  it("sl_breached 补挂失败时不因穿越止损立即市价平仓", async () => {
     process.env.BITGET_REQUIRE_TPSL = "1";
     process.env.BITGET_NAKED_POSITION_ACTION = "close";
     process.env.BITGET_TPSL_VERIFY_SEC = "2";
-    process.env.BITGET_TPSL_REPAIR_RETRIES = "3";
+    process.env.BITGET_TPSL_REPAIR_RETRIES = "2";
 
     let closed = false;
-    /** @type {string[]} */
-    const alertBodies = [];
-    const origAlert = process.env.BITGET_SKIP_TELEGRAM_ALERT;
-    process.env.BITGET_SKIP_TELEGRAM_ALERT = "1";
 
     const client = {
+      getMixTicker: async () => ({ markPrice: "3500" }),
+      getMixContract: async () => ({ pricePlace: "1", priceEndStep: "1" }),
       getSinglePosition: async () => ({ data: [{ symbol: "ETHUSDT", holdSide: "long", total: "1" }] }),
       getOrdersPlanPending: async () => ({ data: [] }),
       withHoldSideFallback: async (fn) => fn("long"),
@@ -406,12 +413,9 @@ describe("ensureBitgetPositionTpslAfterOpen", () => {
     const record = {};
     const result = await ensureBitgetPositionTpslAfterOpen(client, log, baseCtx, record);
 
-    assert.equal(result.reason, "naked_closed");
-    assert.equal(closed, true);
-    assert.equal(record.nakedCloseCategory, "sl_breached");
-    assert.equal(record.tpslRepair.attempts[0].category, "sl_breached");
-
-    if (origAlert !== undefined) process.env.BITGET_SKIP_TELEGRAM_ALERT = origAlert;
+    assert.equal(closed, false);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "naked_alert_only");
   });
 });
 

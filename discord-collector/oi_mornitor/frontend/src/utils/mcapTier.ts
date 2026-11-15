@@ -13,21 +13,21 @@ export const MCAP_TIER_CATALOG: McapTierMeta[] = [
   {
     id: "t1",
     label: "第一梯队",
-    mcapNote: "市值大于 500 亿美元（按 CoinGecko 美元市值实时划分）",
+    mcapNote: ">$50B 自选：BTC/ETH/BNB/XRP",
     strategyHint:
       "机构博弈 · 重宏观与结构：假突破/Spring、流动性掠夺；4H/日线趋势；少追箱体突破；杠杆宜 2~5x。",
   },
   {
     id: "t2",
     label: "第二梯队",
-    mcapNote: "市值大于 80 亿美元、不超过 500 亿美元",
+    mcapNote: "$5B–$50B 与 $500M–$5B 合并自选",
     strategyHint:
       "主升浪先锋 · 重动量与 RS：BTC 横盘时逆势强币；15m/1h EMA 回踩；OI+突破轧空；杠杆宜 2~3x。",
   },
   {
     id: "t3",
     label: "第三梯队",
-    mcapNote: "市值 80 亿美元及以下，或暂无市值数据 / 稳定币等排除项",
+    mcapNote: "未列入一、二梯队自选名单的合约",
     strategyHint:
       "控盘 / 叙事 · 右侧突破快进快出、移动止损；高位射击之星果断离场；仓位 3~5%、杠杆 1~2x。",
   },

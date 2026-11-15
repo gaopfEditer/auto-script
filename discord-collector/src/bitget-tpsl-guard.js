@@ -477,6 +477,7 @@ export async function repairBitgetPositionTpsl(client, ctx, record) {
   record.tpslRepair = repair;
 
   let forcePrecision = false;
+  let forceMarkOnly = false;
   let closeImmediately = false;
   /** @type {TpslRepairErrorCategory} */
   let lastCategory = "unknown";
@@ -539,6 +540,7 @@ export async function repairBitgetPositionTpsl(client, ctx, record) {
       signalTakeProfitStr: ctx.takeProfitStr,
       contractMeta,
       forcePrecisionRound: forcePrecision,
+      forceMarkOnlyTpsl: forceMarkOnly,
       sizeStr,
     });
 
@@ -597,9 +599,9 @@ export async function repairBitgetPositionTpsl(client, ctx, record) {
       repair.attempts.push(attemptRec);
 
       if (lastCategory === "sl_breached") {
-        closeImmediately = true;
-        repair.closeReason = "sl_breached";
-        break;
+        // 预设止损相对现价无效：用最新标记价重算计划止损，不立刻市价平仓
+        forceMarkOnly = true;
+        forcePrecision = true;
       }
       if (lastCategory === "precision") {
         forcePrecision = true;
@@ -672,7 +674,11 @@ export function formatBitgetNakedPositionAlert(details) {
  * }} input
  */
 function usesMarkOnlyTpsl(input) {
-  return input.markOnlyTpsl === true || input.parsed?.tradeTpslFromMark === true;
+  return (
+    input.markOnlyTpsl === true ||
+    input.forceMarkOnlyTpsl === true ||
+    input.parsed?.tradeTpslFromMark === true
+  );
 }
 
 export function resolveOpenTpslPrices(input) {
@@ -689,6 +695,7 @@ export function resolveOpenTpslPrices(input) {
     const applied = applyDefaultTpSl(fillPrice, isShort, [], null);
     slNum = calcInitialStopLoss(fillPrice, direction, input.initialSlPct) ?? applied.sl;
     tpNums = applied.tps;
+    slNum = widenStopLossToMinPct(fillPrice, slNum, isShort, input.initialSlPct);
   } else {
     slNum = Number(
       String(ex.planned?.stopLossPrice ?? input.parsed.stopLoss ?? "")
@@ -889,9 +896,18 @@ export async function placeBitgetOpenWithPresets(client, p) {
     let tpNum = Number(tpStr);
 
     if (!isValidStopLoss(mark, slNum, holdSide) || !isValidTakeProfit(mark, tpNum, holdSide)) {
+      const markResolved = resolveOpenTpslPrices({
+        parsed: p.parsed ?? {},
+        executionJson: p.executionJson,
+        fillPrice: mark,
+        direction: p.direction,
+        initialSlPct: p.initialSlPct,
+        contractMeta,
+        markOnlyTpsl: true,
+      });
       const fallback = sanitizeBitgetOpenPresetPrices({
-        stopLossRaw: resolved.stopLossStr,
-        takeProfitRaw: resolved.takeProfitStr,
+        stopLossRaw: markResolved.stopLossStr,
+        takeProfitRaw: markResolved.takeProfitStr,
         meta: contractMeta,
         holdSide,
         forcedTick,
@@ -1109,8 +1125,12 @@ export async function ensureBitgetPositionTpslAfterOpen(client, log, ctx, record
   };
   const alertText = formatBitgetNakedPositionAlert(alertDetails);
 
+  const hadSlBreached = (repair.attempts ?? []).some((a) => a.category === "sl_breached");
   const shouldClose =
-    action === "close" && (repairResult.closeImmediately || category === "retries_exhausted" || category === "sl_breached");
+    action === "close" &&
+    !repairResult.closeImmediately &&
+    category === "retries_exhausted" &&
+    !hadSlBreached;
 
   if (shouldClose) {
     try {

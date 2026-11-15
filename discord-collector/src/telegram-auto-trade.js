@@ -121,11 +121,69 @@ export function buildTelegramMarkTpsl(refPrice, direction) {
  * @param {Record<string, unknown>} parsed
  * @param {ReturnType<typeof normalizeExecution>} execution
  */
+function isTelegramTradeParser(parsed) {
+  return String(parsed?.parser ?? "") === "telegram";
+}
+
+/**
+ * 用参考价补缺失的 TP/SL（保留信号里已有的止损止盈）。
+ * @param {Record<string, unknown>} parsed
+ * @param {ReturnType<typeof normalizeExecution>} execution
+ * @param {number} refPrice
+ */
+export function fillMissingAutoTradeTpslAtMark(parsed, execution, refPrice) {
+  const direction = firstNonBlank(parsed.direction, execution.direction);
+  if (!(refPrice > 0) || !direction) return { parsed, execution };
+
+  /** @type {Record<string, unknown>} */
+  const next = { ...parsed };
+  const ex = { ...execution, planned: { ...(execution.planned ?? {}) } };
+
+  const entryNum =
+    parseEntryPriceForOrder(String(next.entry ?? ""), direction) ??
+    parseEntryPrice(next.entry) ??
+    refPrice;
+  if (entryNum > 0 && (isMarketEntryLabel(next.entry) || !String(next.entry ?? "").trim())) {
+    const entry = formatFetchedPrice(refPrice);
+    next.entry = entry;
+    ex.planned.entryPrice = entry;
+    next.orderMode = String(next.orderMode ?? "market");
+  }
+
+  const hasSl = parseSlNum(next.stopLoss) != null || parseSlNum(ex.planned?.stopLossPrice) != null;
+  const plannedTps = Array.isArray(ex.planned?.takeProfitPrices) ? ex.planned.takeProfitPrices : [];
+  const parsedTps = Array.isArray(next.takeProfits) ? next.takeProfits : [];
+  const hasTp = (plannedTps.length ? plannedTps : parsedTps).filter(Boolean).length > 0;
+
+  if (!hasSl || !hasTp) {
+    const markTpsl = buildTelegramMarkTpsl(refPrice, direction);
+    if (!hasSl) {
+      next.stopLoss = markTpsl.stopLoss;
+      ex.planned.stopLossPrice = markTpsl.stopLoss;
+    }
+    if (!hasTp) {
+      next.takeProfits = markTpsl.takeProfits;
+      ex.planned.takeProfitPrices = markTpsl.takeProfits;
+      if (!next.exitPlan) next.exitPlan = markTpsl.exitPlan;
+    }
+  }
+
+  if (telegramTradeRequiresTpsl(ex)) {
+    next.signalPhase = "full";
+    next.awaitingTpsl = false;
+  }
+
+  if (next.symbol) ex.symbol = String(next.symbol);
+  if (next.direction) ex.direction = String(next.direction);
+  return { parsed: next, execution: ex };
+}
+
 export function prepareTelegramTradeParsed(parsed, execution) {
   /** @type {Record<string, unknown>} */
   const next = { ...parsed };
-  next.parser = String(next.parser ?? "telegram");
-  next.orderMode = "market";
+  const isTelegram = isTelegramTradeParser(next);
+  if (isTelegram) next.parser = "telegram";
+  if (!next.orderMode && (isTelegram || isMarketEntryLabel(next.entry))) next.orderMode = "market";
   const realSymbol = firstRealSymbol(execution.symbol, next.symbol);
   next.symbol = realSymbol || firstNonBlank(execution.symbol, next.symbol);
   next.direction = firstNonBlank(execution.direction, next.direction);
@@ -142,14 +200,33 @@ export function prepareTelegramTradeParsed(parsed, execution) {
     null;
 
   /** @type {string[]} */
-  let tps = [];
-  let slRaw = "";
+  let tps = (Array.isArray(next.takeProfits) ? next.takeProfits : []).map((x) => String(x ?? "").trim()).filter(
+    Boolean
+  );
+  let slRaw = firstNonBlank(next.stopLoss, execution.planned?.stopLossPrice);
+  if (!tps.length && Array.isArray(execution.planned?.takeProfitPrices)) {
+    tps = execution.planned.takeProfitPrices.map((x) => String(x ?? "").trim()).filter(Boolean);
+  }
+
   if (entryNum && entryNum > 0) {
-    const markTpsl = buildTelegramMarkTpsl(entryNum, direction);
-    tps = markTpsl.takeProfits;
-    slRaw = markTpsl.stopLoss;
-    next.tradeTpslFromMark = true;
-    next.exitPlan = markTpsl.exitPlan;
+    if (isTelegram) {
+      const markTpsl = buildTelegramMarkTpsl(entryNum, direction);
+      tps = markTpsl.takeProfits;
+      slRaw = markTpsl.stopLoss;
+      next.tradeTpslFromMark = true;
+      next.exitPlan = markTpsl.exitPlan;
+    } else {
+      const hasSl = parseSlNum(slRaw) != null;
+      const hasTp = tps.length > 0;
+      if (!hasSl || !hasTp) {
+        const markTpsl = buildTelegramMarkTpsl(entryNum, direction);
+        if (!hasSl) slRaw = markTpsl.stopLoss;
+        if (!hasTp) {
+          tps = markTpsl.takeProfits;
+          if (!next.exitPlan) next.exitPlan = markTpsl.exitPlan;
+        }
+      }
+    }
   }
 
   next.takeProfits = tps;
@@ -251,9 +328,12 @@ export async function prepareAutoTradeForOrder(parsed, execution, symbol, opts =
     if (!nextEx.symbol || isPlaceholderTradeSymbol(nextEx.symbol)) nextEx.symbol = hinted;
   }
   absorbTelegramSignalFields(nextParsed, nextEx);
+  const entryForLive = firstNonBlank(nextParsed.entry, nextEx.planned?.entryPrice);
+  const forceLive =
+    isTelegramTradeParser(nextParsed) || isMarketEntryLabel(entryForLive) || Boolean(opts.forceLivePrice);
   await enrichTelegramMarketEntry(nextParsed, nextEx, hinted || String(nextParsed.symbol ?? ""), {
     ...opts,
-    forceLivePrice: true,
+    forceLivePrice: forceLive,
   });
   return prepareTelegramTradeParsed(nextParsed, nextEx);
 }

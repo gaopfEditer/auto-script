@@ -860,7 +860,8 @@ export function parsePangmao(text) {
   const stopLossAbs =
     matchLine(joined, /([\d.]+)\s*止损/) ||
     matchLine(joined, /止损\s*[：:]?\s*([\d.]+)/i) ||
-    matchLine(joined, /止[損损]\s*[：:]?\s*([\d.]+)/i);
+    matchLine(joined, /止[損损]\s*[：:]?\s*([\d.]+)/i) ||
+    matchLine(joined, /止损放在\s*([\d.]+)/);
   const takeProfitAbs =
     matchLine(joined, /目标\s*[：:]?\s*([\d.]+)/) ||
     matchLine(joined, /第一目标\s*[：:]?\s*([\d.]+)/) ||
@@ -871,7 +872,9 @@ export function parsePangmao(text) {
     matchLine(joined, /(止损上方[^，。\n]+)/);
 
   // 仅止损 / 仅目标
-  const hasOpenKeyword = /(做多|做空|现价|低位|继续|附近)/.test(joined);
+  const hasOpenKeyword = /(做多|做空|多进去|空进去|现价|低位|继续|附近|接个[多空]|蚂蚁仓空)/.test(
+    joined,
+  );
   if ((stopLossAbs || takeProfitAbs) && !hasOpenKeyword) {
     if (!stopLossAbs && !takeProfitAbs) return null;
     if (/^止损$/.test(compact)) return null;
@@ -902,6 +905,26 @@ export function parsePangmao(text) {
   }
 
   if (!direction) {
+    const nearOnly = joined.match(/(\d+(?:\.\d+)?)\s*附近\s*([多空])/);
+    if (nearOnly) {
+      entry = nearOnly[1];
+      direction = nearOnly[2] === "空" ? "做空" : "做多";
+      const ep = Number(entry);
+      if (!symbol && Number.isFinite(ep) && ep >= 100) symbol = "ETH";
+    }
+  }
+
+  if (!direction) {
+    const recv = joined.match(/([\d.]+)\s*接个([多空])/);
+    if (recv) {
+      entry = recv[1];
+      direction = recv[2] === "空" ? "做空" : "做多";
+      const ep = Number(entry);
+      if (!symbol && Number.isFinite(ep) && ep >= 100) symbol = "ETH";
+    }
+  }
+
+  if (!direction) {
     const openM =
       compact.match(
         /([A-Za-z][A-Za-z0-9]{1,14}|闪迪|以太坊?|比特币)(?:也值得|现价格?|现在价格?|现在|现价|低位|继续)?(做多|做空)/i
@@ -916,6 +939,26 @@ export function parsePangmao(text) {
       if (/^以太/.test(rawSym)) symbol = "ETH";
       if (rawSym === "比特币") symbol = "BTC";
       direction = /空/.test(openM[2]) ? "做空" : "做多";
+    }
+  }
+
+  if (!direction) {
+    const injM =
+      joined.match(
+        /([A-Za-z][A-Za-z0-9]{1,14})\s*(?:给我|轻仓)?\s*(多进去|空进去)/i
+      ) ||
+      compact.match(/([A-Za-z][A-Za-z0-9]{1,14})(?:给我|轻仓)?(多进去|空进去)/i);
+    if (injM) {
+      symbol = matchSymbolFromText(injM[1]) || String(injM[1]).toUpperCase();
+      direction = /空/.test(injM[2]) ? "做空" : "做多";
+    }
+  }
+
+  if (!direction) {
+    const antM = joined.match(/蚂蚁仓空\s*([A-Za-z][A-Za-z0-9]{1,14})/i);
+    if (antM) {
+      symbol = matchSymbolFromText(antM[1]) || String(antM[1]).toUpperCase();
+      direction = "做空";
     }
   }
 

@@ -44,8 +44,22 @@ export function stripBackfillGroupPnl(group) {
   };
 }
 
+/** 北京时间当日 0:00 的毫秒时间戳 */
+export function shanghaiCalendarDayStartMs(nowMs = Date.now()) {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const day = fmt.format(new Date(nowMs));
+  const start = Date.parse(`${day}T00:00:00+08:00`);
+  return Number.isFinite(start) ? start : nowMs - 86400000;
+}
+
 /** @type {Record<string, { days: number, label: string }>} */
 export const DISCORD_BACKFILL_PERIODS = {
+  day: { days: 1, label: "今天" },
   week: { days: 7, label: "近 1 周" },
   month1: { days: 30, label: "近 1 月" },
   month2: { days: 60, label: "近 2 月" },
@@ -59,6 +73,7 @@ export const DISCORD_BACKFILL_PERIODS = {
  */
 export function normalizeDiscordBackfillPeriod(raw) {
   const p = String(raw ?? "week").trim().toLowerCase();
+  if (p === "today" || p === "1d" || p === "日" || p === "当天") return "day";
   if (p === "month" || p === "30d" || p === "m" || p === "1m") return "month1";
   if (p in DISCORD_BACKFILL_PERIODS) return /** @type {keyof typeof DISCORD_BACKFILL_PERIODS} */ (p);
   return "week";
@@ -69,8 +84,12 @@ export function normalizeDiscordBackfillPeriod(raw) {
  */
 export function discordBackfillPeriodBounds(period) {
   const key = normalizeDiscordBackfillPeriod(period);
-  const days = DISCORD_BACKFILL_PERIODS[key]?.days ?? 7;
   const toMs = Date.now();
+  if (key === "day") {
+    const fromMs = shanghaiCalendarDayStartMs(toMs);
+    return { period: key, days: 1, fromMs, toMs };
+  }
+  const days = DISCORD_BACKFILL_PERIODS[key]?.days ?? 7;
   const fromMs = toMs - days * 86400000;
   return { period: key, days, fromMs, toMs };
 }

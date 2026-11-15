@@ -22,6 +22,7 @@ import {
   type ChartEmaKey,
   TD9_MARKER_KINDS,
   REV_VOL_MARKER_KINDS,
+  WICK_OI_VOL_MARKER_KINDS,
   type ChartLayers,
 } from "../../utils/chartLayers";
 import { buildMacdCrossMarkers } from "../../utils/chartMacdMarkers";
@@ -141,6 +142,8 @@ function toCandleMarkers(
       const kind = m.kind ?? "";
       if (TD9_MARKER_KINDS.has(kind)) return layers.td9 && candleTimes.has(m.time);
       if (REV_VOL_MARKER_KINDS.has(kind)) return layers.revVol && candleTimes.has(m.time);
+      if (WICK_OI_VOL_MARKER_KINDS.has(kind)) return layers.candlePattern && candleTimes.has(m.time);
+      if (kind === "oi_anomaly") return false;
       if (!layers.candlePattern && COMPACT_MARKER_KINDS.has(kind)) return false;
       if (!layers.structure && STRUCTURE_MARKER_KINDS.has(kind)) return false;
       return candleTimes.has(m.time);

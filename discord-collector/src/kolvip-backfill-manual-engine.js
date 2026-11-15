@@ -5,6 +5,7 @@
 import { config } from "./config.js";
 import {
   DISCORD_BACKFILL_PERIODS,
+  discordBackfillPeriodBounds,
   normalizeDiscordBackfillPeriod,
   stripBackfillGroupPnl,
 } from "./discord-backfill-engine.js";
@@ -36,11 +37,7 @@ export const KOLVIP_BACKFILL_PERIODS = DISCORD_BACKFILL_PERIODS;
 export const normalizeKolvipBackfillPeriod = normalizeDiscordBackfillPeriod;
 
 export function kolvipBackfillPeriodBounds(period) {
-  const key = normalizeKolvipBackfillPeriod(period);
-  const days = KOLVIP_BACKFILL_PERIODS[key]?.days ?? 7;
-  const toMs = Date.now();
-  const fromMs = toMs - days * 86400000;
-  return { period: key, days, fromMs, toMs };
+  return discordBackfillPeriodBounds(normalizeKolvipBackfillPeriod(period));
 }
 
 function sleepMs(ms) {

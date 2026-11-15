@@ -60,6 +60,8 @@ export type AlertStatsRecord = {
   confluence?: AlertConfluence;
   /** 只读 Agent 决策 A/B/C（PA 层，非下单） */
   agentDecision?: AgentDecision;
+  /** OI 异动 / 清算触发后（服务端 pattern_context_filters） */
+  contextFlags?: { oiAnomaly?: boolean; postLiq?: boolean };
   invalid_level?: number;
   observation_only?: boolean;
   settleProfileId?: string;
@@ -605,6 +607,21 @@ export const ALERT_STATS_CONFLUENCE_FILTERS: {
   { id: "D", label: "D" },
 ];
 
+export type AlertStatsContextFilter = "all" | "oi_anomaly" | "post_liq";
+
+export type AlertStatsContextOption = AlertStatsTypeOption & {
+  id: AlertStatsContextFilter;
+};
+
+export const ALERT_STATS_CONTEXT_FILTERS: {
+  id: AlertStatsContextFilter;
+  label: string;
+}[] = [
+  { id: "all", label: "全部" },
+  { id: "oi_anomaly", label: "OI异动" },
+  { id: "post_liq", label: "清算触发" },
+];
+
 export type AlertStatsPageResult = {
   items: AlertStatsRecord[];
   total: number;
@@ -618,6 +635,7 @@ export type AlertStatsPageResult = {
   daytypeOptions: AlertStatsDaytypeOption[];
   mcapTierOptions?: McapTierOption[];
   confluenceOptions?: AlertStatsConfluenceOption[];
+  contextOptions?: AlertStatsContextOption[];
   /** @deprecated 用 typeOptions */
   typeLabels: string[];
 };
@@ -781,6 +799,7 @@ export async function fetchAlertStatsPage(opts: {
       daytypeOptions?: AlertStatsDaytypeOption[];
       mcapTierOptions?: McapTierOption[];
       confluenceOptions?: AlertStatsConfluenceOption[];
+      contextOptions?: AlertStatsContextOption[];
       typeLabels?: string[];
     };
     if (!body?.ok || !Array.isArray(body.items)) return empty;
@@ -1012,6 +1031,51 @@ export function mergeConfluenceOptions(
 export function formatConfluenceOptionLabel(opt: AlertStatsConfluenceOption): string {
   const display =
     opt.id === "all" ? "全部" : String(opt.label || opt.id).trim() || opt.id;
+  return formatAlertTypeOptionLabel({ ...opt, label: display });
+}
+
+function normalizeContextOptions(
+  raw: AlertStatsContextOption[] | undefined,
+): AlertStatsContextOption[] {
+  if (!Array.isArray(raw) || !raw.length) return [];
+  return raw
+    .filter((o) => o && typeof o.id === "string")
+    .map((o) => ({
+      id: String(o.id) as AlertStatsContextFilter,
+      label: String(o.label || o.id || ""),
+      count: Number(o.count) || 0,
+      wins: Number(o.wins) || 0,
+      losses: Number(o.losses) || 0,
+      winRate: o.winRate == null ? null : Number(o.winRate),
+      totalPnlPct:
+        o.totalPnlPct == null || !Number.isFinite(Number(o.totalPnlPct))
+          ? null
+          : Number(o.totalPnlPct),
+    }));
+}
+
+export function mergeContextOptions(
+  raw: AlertStatsContextOption[],
+): AlertStatsContextOption[] {
+  const byId = new Map(raw.map((o) => [o.id, o]));
+  return ALERT_STATS_CONTEXT_FILTERS.map(({ id, label }) => {
+    const fromBackend = byId.get(id);
+    if (fromBackend) return { ...fromBackend, label: fromBackend.label || label };
+    return {
+      id,
+      label,
+      count: 0,
+      wins: 0,
+      losses: 0,
+      winRate: null,
+      totalPnlPct: null,
+    };
+  });
+}
+
+export function formatContextOptionLabel(opt: AlertStatsContextOption): string {
+  const display =
+    opt.id === "all" ? "全部状态" : String(opt.label || opt.id).trim() || opt.id;
   return formatAlertTypeOptionLabel({ ...opt, label: display });
 }
 

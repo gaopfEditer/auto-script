@@ -1,9 +1,8 @@
 """市值梯队（一 / 二 / 三）：按 CoinGecko 美元市值实时划分。
 
 门槛（默认，可在 symbol_mcap_tiers.json 调整）：
-  第一梯队：市值大于 500 亿美元
-  第二梯队：市值大于 80 亿美元、不超过 500 亿美元
-  第三梯队：其余（含无数据、稳定币等排除项）
+  assignmentMode=bands_first：按 bands.*.symbols 自选名单分档，未列入 → 第三梯队
+  assignmentMode=threshold（默认逻辑）：按 CoinGecko 市值与 thresholdsUsd 划分
 
 与结算杠杆分档（BTC/ETH/SOL 100x、其余 20x）相互独立。
 历史胜率按「当前市值」归档，存在一定事后偏差，需在展示中标明。
@@ -106,6 +105,8 @@ def _load_config() -> dict[str, Any]:
     t2_usd = _DEFAULT_T2_USD
     exclude: set[str] = set()
     fallback: dict[str, str] = {}
+    band_symbols: dict[str, str] = {}
+    assignment_mode = "threshold"
     default_tier = "t3"
 
     path = _config_path()
@@ -114,6 +115,9 @@ def _load_config() -> dict[str, Any]:
             raw = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
                 default_tier = str(raw.get("default") or "t3").strip().lower() or "t3"
+                am = str(raw.get("assignmentMode") or "threshold").strip().lower()
+                if am in ("bands_first", "bands", "whitelist"):
+                    assignment_mode = "bands_first"
                 th = raw.get("thresholdsUsd") or {}
                 if isinstance(th, dict):
                     if th.get("t1") is not None:
@@ -144,6 +148,8 @@ def _load_config() -> dict[str, Any]:
                             n = normalize_usdt_symbol(str(s))
                             if n:
                                 fallback[n] = tid
+                                if tid in MCAP_TIER_ORDER:
+                                    band_symbols[n] = tid
                 fb = raw.get("fallbackSymbols") or {}
                 if isinstance(fb, dict):
                     for tid, syms in fb.items():
@@ -164,6 +170,8 @@ def _load_config() -> dict[str, Any]:
         "t2_usd": t2_usd,
         "exclude": exclude,
         "fallback": fallback,
+        "band_symbols": band_symbols,
+        "assignment_mode": assignment_mode,
         "default": default_tier,
     }
     return _cfg_cache
@@ -193,6 +201,19 @@ def _fallback_tier(symbol: str) -> str:
     n = normalize_usdt_symbol(symbol)
     if n and n in cfg["fallback"]:
         return str(cfg["fallback"][n])
+    return str(cfg["default"])
+
+
+def _tier_from_bands(symbol: str) -> str | None:
+    cfg = _load_config()
+    if str(cfg.get("assignment_mode") or "") != "bands_first":
+        return None
+    n = normalize_usdt_symbol(symbol)
+    if not n:
+        return None
+    hit = (cfg.get("band_symbols") or {}).get(n)
+    if hit in MCAP_TIER_ORDER:
+        return str(hit)
     return str(cfg["default"])
 
 
@@ -238,6 +259,9 @@ def resolve_mcap_tier(symbol: str) -> str:
 
     if _is_excluded(symbol):
         return _default_tier if _cfg_cache else _load_config()["default"]
+    from_bands = _tier_from_bands(symbol)
+    if from_bands is not None:
+        return from_bands
     cmap = ensure_market_cap_map()
     cap = market_cap_usd_sync(symbol, refresh=False)
     if cap is None and not cmap:

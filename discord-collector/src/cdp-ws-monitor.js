@@ -300,6 +300,16 @@ function isDiscordPageUrl(url) {
   }
 }
 
+/** 加载中 / 失败占位页：应在原标签 reload，禁止再 newPage */
+function isStuckDiscordNavigationUrl(url) {
+  const s = String(url || "").trim();
+  if (!s || s === "about:blank") return true;
+  return /^chrome(-error)?:\/\//i.test(s);
+}
+
+const MAX_DISCORD_WORKSPACE_TABS = 2;
+const NEW_DISCORD_TAB_COOLDOWN_MS = 120_000;
+
 function scoreDiscordPageForChannelNav(url, g, c) {
   let u;
   try {
@@ -555,6 +565,115 @@ function hasLiveDiscordMountedPage(mounted) {
     }
   }
   return false;
+}
+
+/**
+ * 含卡住/空白页：避免加载失败时被误判为「无标签」而连开新 tab。
+ * @param {{ page?: import('playwright').Page }[]} mounted
+ */
+function hasReusableDiscordMountedPage(mounted) {
+  for (const entry of mounted) {
+    const page = entry?.page;
+    if (!page) continue;
+    try {
+      if (page.isClosed()) continue;
+      const u = page.url();
+      if (isDiscordPageUrl(u) || isStuckDiscordNavigationUrl(u)) return true;
+    } catch {
+      /* disposed */
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {import('playwright').Browser} br
+ * @param {string} targetUrl
+ * @param {{ mounted?: { page: import('playwright').Page }[] }} [opts]
+ */
+function pickFallbackDiscordWorkspacePage(br, targetUrl, opts = {}) {
+  const normal = pickExistingDiscordPage(br, targetUrl, opts);
+  if (normal) return normal;
+
+  /** @type {{ page: import('playwright').Page, url: string, score: number } | null} */
+  let best = null;
+  const bump = (/** @type {import('playwright').Page} */ page, url, score) => {
+    if (!best || score > best.score) best = { page, url, score };
+  };
+
+  const consider = (/** @type {import('playwright').Page} */ page, inMounted) => {
+    if (!page || page.isClosed()) return;
+    let u = "";
+    try {
+      u = page.url();
+    } catch {
+      return;
+    }
+    if (isDiscordPageUrl(u)) {
+      bump(page, u, scorePageUrlForDiscordNav(u, targetUrl));
+      return;
+    }
+    if (inMounted && isStuckDiscordNavigationUrl(u)) {
+      bump(page, u, 2);
+    }
+  };
+
+  for (const entry of opts.mounted || []) {
+    if (entry?.page) consider(entry.page, true);
+  }
+  try {
+    for (const ctx of br.contexts()) {
+      for (const page of ctx.pages()) consider(page, false);
+    }
+  } catch {
+    /* disconnected */
+  }
+  return best;
+}
+
+/**
+ * 关闭多余的 Discord 工作标签（保留 keepPage），防止崩溃。
+ * @param {import('playwright').Browser} br
+ * @param {import('playwright').Page | null | undefined} keepPage
+ * @param {{ page?: import('playwright').Page }[]} mounted
+ * @param {Logger} log
+ */
+async function pruneExtraDiscordTabs(br, keepPage, mounted, log) {
+  /** @type {import('playwright').Page[]} */
+  const candidates = [];
+  const seen = new Set();
+  const add = (/** @type {import('playwright').Page} */ page) => {
+    if (!page || seen.has(page) || page === keepPage || page.isClosed()) return;
+    seen.add(page);
+    let u = "";
+    try {
+      u = page.url();
+    } catch {
+      return;
+    }
+    if (isDiscordPageUrl(u) || isStuckDiscordNavigationUrl(u)) candidates.push(page);
+  };
+  for (const entry of mounted) add(entry?.page);
+  try {
+    for (const ctx of br.contexts()) {
+      for (const page of ctx.pages()) add(page);
+    }
+  } catch {
+    return;
+  }
+  if (candidates.length <= MAX_DISCORD_WORKSPACE_TABS) return;
+  const excess = candidates.length - MAX_DISCORD_WORKSPACE_TABS;
+  for (let i = 0; i < excess; i += 1) {
+    const p = candidates[i];
+    let u = "";
+    try {
+      u = p.url();
+    } catch {
+      continue;
+    }
+    log.warn(`CDP 清理多余 Discord 标签 ${shortenUrl(u, 120)}（保留单工作标签）`);
+    await p.close().catch(() => {});
+  }
 }
 
 /** Document / API / WS 升级请求，便于判断页面是否真的在拉接口 */
@@ -1277,7 +1396,7 @@ function wireWebSocketFrames(cdp, log, opts, getPageUrl, wsMeta) {
  * - **无头模式**（未设置 `cdpConnectUrl`）：Playwright 自启 Chromium，`goto(startUrl)`，可选定时 reload。
  * - **附加模式**（设置 `CDP_CONNECT_URL`）：`connectOverCDP` 连接你已打开的 Chrome（需带 `--remote-debugging-port`），
  *   对已有标签页 + 之后新开的标签页挂载 Network 监听；保活/切频道优先复用 discord.com 标签，
- *   若尚无任何 discord.com 页且 COLLECTOR_CDP_AUTO_GOTO≠0，则在同一 Context 内 newPage 打开 1 个。
+ *   若尚无任何 discord.com 页且 COLLECTOR_CDP_AUTO_GOTO≠0，才允许 newPage 打开 1 个；加载失败/空白页优先原标签刷新。
  *
  * @param {{
  *   startUrl: string,
@@ -1370,10 +1489,21 @@ export async function startCdpWebSocketMonitor(opts, log) {
    * @param {import('playwright').Browser} br
    * @param {string} targetUrl
    */
+  /** @type {number} */
+  let lastNewDiscordTabAt = 0;
+  let ensureDiscordInFlight = false;
+
   async function openNewDiscordTab(br, targetUrl) {
     const url = String(targetUrl || "").trim();
     if (!url || !/discord\.com/i.test(url)) {
       throw new Error("targetUrl 须为 discord.com 频道链接");
+    }
+    const discordTabCount = countDiscordPagesInBrowser(br, mounted);
+    if (discordTabCount > 0 || hasReusableDiscordMountedPage(mounted)) {
+      const msg =
+        `拒绝新建 Discord 标签：浏览器中已有 ${discordTabCount} 个 discord 页或可复用挂载页，请在原标签刷新`;
+      log.warn(`CDP ${msg}`);
+      throw new Error(msg);
     }
     const contexts = br.contexts();
     if (!contexts.length) {
@@ -1433,6 +1563,9 @@ export async function startCdpWebSocketMonitor(opts, log) {
       if (!picked) {
         picked = await pickExistingDiscordPageAsync(br, url, { mounted, log });
       }
+      if (!picked) {
+        picked = pickFallbackDiscordWorkspacePage(br, url, { mounted });
+      }
 
       /** @type {import('playwright').Page} */
       let page;
@@ -1443,18 +1576,45 @@ export async function startCdpWebSocketMonitor(opts, log) {
         const tabs = summarizeBrowserTabsForLog(br, mounted);
         const autoGoto = opts.cdpAutoGoto !== false;
         const discordTabCount = countDiscordPagesInBrowser(br, mounted);
+        const reusableMounted = hasReusableDiscordMountedPage(mounted);
         if (!autoGoto) {
           const msg = `未找到已打开的 Discord 标签（Chrome ${tabCount} 个标签；${tabs}）。COLLECTOR_CDP_AUTO_GOTO=0 时不自动新建。`;
           log.warn(`CDP ${msg}`);
           throw new Error(msg);
         }
-        if (discordTabCount > 0) {
-          log.warn(
-            `CDP 未找到可操作的 Discord 标签，但可见 ${discordTabCount} 个 discord.com 页（可能已关或 Playwright 未映射；Chrome ${tabCount} 个标签；${tabs}）— 将新建 1 个标签恢复采集`
-          );
+        if (discordTabCount > 0 || reusableMounted) {
+          const entry = mounted.find((m) => {
+            const p = m?.page;
+            if (!p || p.isClosed()) return false;
+            try {
+              const u = p.url();
+              return isDiscordPageUrl(u) || isStuckDiscordNavigationUrl(u);
+            } catch {
+              return false;
+            }
+          });
+          if (entry?.page) {
+            log.warn(
+              `CDP 未映射到目标 Discord 标签，但存在可复用挂载页（Chrome ${tabCount} 个标签；${tabs}）— 在原标签恢复，禁止 newPage`
+            );
+            page = entry.page;
+            await attachToPage(page);
+          } else {
+            const msg = `CDP 可见 ${discordTabCount} 个 discord.com 页但无法复用（Chrome ${tabCount} 个标签；${tabs}），请手动刷新其中一个 Discord 标签`;
+            log.warn(msg);
+            throw new Error(msg);
+          }
+        } else {
+          const since = Date.now() - lastNewDiscordTabAt;
+          if (since < NEW_DISCORD_TAB_COOLDOWN_MS) {
+            const msg = `CDP 新建 Discord 标签冷却中（${Math.ceil((NEW_DISCORD_TAB_COOLDOWN_MS - since) / 1000)}s），等待原标签重试`;
+            log.warn(msg);
+            throw new Error(msg);
+          }
+          page = await openNewDiscordTab(br, url);
+          lastNewDiscordTabAt = Date.now();
+          reusedTab = false;
         }
-        page = await openNewDiscordTab(br, url);
-        reusedTab = false;
       } else {
         page = picked.page;
         await attachToPage(page);
@@ -1482,7 +1642,21 @@ export async function startCdpWebSocketMonitor(opts, log) {
         for (const p of c.pages()) pagesBefore.add(p);
       }
 
-      if (navOpts.forceReload && already) {
+      if (navOpts.forceReload && isStuckDiscordNavigationUrl(cur)) {
+        log.info(
+          `CDP 卡住页（${shortenUrl(cur, 48) || "blank"}）在原标签打开 ${shortenUrl(url, 160)}（不 newPage）`
+        );
+        try {
+          await page.evaluate((next) => {
+            window.location.assign(next);
+          }, url);
+        } catch (e) {
+          const msg = String(/** @type {Error} */ (e).message ?? e);
+          log.warn(`CDP 卡住页 assign 失败，同标签 reload: ${msg}`);
+          await reloadDiscordPageInPlace(page, mounted, log, opts);
+        }
+        await page.waitForLoadState("domcontentloaded", { timeout: 90_000 }).catch(() => {});
+      } else if (navOpts.forceReload && already) {
         log.info(
           `CDP 保活${isCdpSilentNavigation(opts) ? "静默" : ""}刷新已有标签 ${shortenUrl(url, 160)}`
         );
@@ -1516,11 +1690,17 @@ export async function startCdpWebSocketMonitor(opts, log) {
           } catch {
             continue;
           }
-          if (!/discord\.com|discordapp\.com|^about:blank$/i.test(extraUrl)) continue;
+          if (
+            !/discord\.com|discordapp\.com|^about:blank$/i.test(extraUrl) &&
+            !/^chrome(-error)?:\/\//i.test(extraUrl)
+          ) {
+            continue;
+          }
           log.warn(`CDP 导航期间多开标签，已关闭 ${shortenUrl(extraUrl, 120)}`);
           await p.close().catch(() => {});
         }
       }
+      await pruneExtraDiscordTabs(br, page, mounted, log);
       return page;
     };
 
@@ -1576,7 +1756,7 @@ export async function startCdpWebSocketMonitor(opts, log) {
     }
   }
 
-  /** Discord 标签被关或 CDP 无可用页时，debounce 后自动 newPage + goto 保活频道 */
+  /** Discord 标签被关或卡住时，debounce 后在原标签刷新；仅无任何页时才允许 newPage */
   function scheduleEnsureDiscordTab(reason = "missing_tab") {
     if (sessionClosed || !connectUrl || opts.cdpAutoGoto === false) return;
     const keepUrl = cdpKeepDiscordUrl();
@@ -1585,22 +1765,30 @@ export async function startCdpWebSocketMonitor(opts, log) {
     ensureDiscordTimer = setTimeout(() => {
       ensureDiscordTimer = null;
       void (async () => {
+        if (ensureDiscordInFlight) return;
+        ensureDiscordInFlight = true;
         try {
           if (sessionClosed || !browser?.isConnected?.()) return;
           if (hasLiveDiscordMountedPage(mounted)) return;
+          const forceInPlace = hasReusableDiscordMountedPage(mounted);
           log.info(
-            `CDP 检测到无可用 Discord 标签（${reason}），自动打开 ${shortenUrl(keepUrl, 200)}`
+            `CDP 检测到无有效 Discord 标签（${reason}），${forceInPlace ? "在原标签刷新" : "尝试打开"} ${shortenUrl(keepUrl, 200)}`
           );
           opts.diagnosticSink?.({
             kind: "cdp_discord_tab_recovery",
             reason,
             targetUrl: keepUrl,
+            inPlaceReload: forceInPlace,
           });
-          await openOrRefreshDiscordUrl(browser, keepUrl, { forceReload: false });
+          await openOrRefreshDiscordUrl(browser, keepUrl, {
+            forceReload: forceInPlace,
+          });
         } catch (e) {
           log.warn(
             `CDP 自动恢复 Discord 标签失败: ${/** @type {Error} */ (e).message}`
           );
+        } finally {
+          ensureDiscordInFlight = false;
         }
       })();
     }, 2000);
@@ -1656,7 +1844,10 @@ export async function startCdpWebSocketMonitor(opts, log) {
           }
         }
         if (!hasLiveDiscordMountedPage(mounted)) {
-          scheduleEnsureDiscordTab("rescan_no_discord");
+          const reason = hasReusableDiscordMountedPage(mounted)
+            ? "rescan_stuck_discord"
+            : "rescan_no_discord";
+          scheduleEnsureDiscordTab(reason);
         }
       } catch {
         /* ignore */

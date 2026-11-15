@@ -123,8 +123,5 @@ export function buildConfluenceChartMarkers(
   candles: PatternCandle[],
   opts?: { barDurationMs?: number; nowMs?: number },
 ): PatternChartMarker[] {
-  return [
-    ...buildTd9Markers(candles, opts),
-    ...buildRevVolMarkers(candles, opts),
-  ];
+  return [...buildTd9Markers(candles, opts), ...buildRevVolMarkers(candles, opts)];
 }

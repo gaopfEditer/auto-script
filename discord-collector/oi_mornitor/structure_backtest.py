@@ -297,6 +297,20 @@ async def _persist_job_async(job: BacktestJob) -> None:
         logger.warning("写入回测快照失败 %s", job.id, exc_info=True)
 
 
+def _job_runner_pid_alive(job: BacktestJob) -> bool:
+    """CLI 回灌进程与 UI 服务分属不同 Python；仅当 runner 进程仍存活时不宜判失败。"""
+    import os
+
+    pid = job.params.get("runnerPid")
+    if pid is None:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _load_job_from_disk(job_id: str) -> BacktestJob | None:
     path = _JOB_DIR / f"{job_id}.json"
     if not path.is_file():
@@ -306,7 +320,23 @@ def _load_job_from_disk(job_id: str) -> BacktestJob | None:
         if not isinstance(data, dict) or not data.get("id"):
             return None
         job = _dict_to_job(data)
+        if (
+            job.status == "failed"
+            and _job_runner_pid_alive(job)
+            and "回测进程已重启" in str(job.error or "")
+            and job.id not in _jobs
+        ):
+            job.status = "running"
+            job.error = None
+            _persist_job(job)
         if job.status in ("running", "pending") and job.id not in _jobs:
+            if _job_runner_pid_alive(job):
+                return job
+            try:
+                if time.time() - path.stat().st_mtime < 180:
+                    return job
+            except OSError:
+                pass
             prog = job.progress if isinstance(job.progress, dict) else {}
             done = int(prog.get("done") or 0)
             total = int(prog.get("total") or 0)
@@ -464,13 +494,15 @@ async def _ensure_symbol_settle_5m(
     start_ms: int,
     end_ms: int,
     live_funnel: bool,
+    use_binance: bool | None = None,
 ) -> None:
     """按币种补 5m（本地够则跳过）；Live 漏斗走 Binance。"""
     settle_lo = start_ms - 60_000
     settle_hi = end_ms + _VERIFY_DELAY_MS + 5 * 60_000
     if store.has_sufficient_coverage(symbol, "5m", settle_lo, settle_hi):
         return
-    source = "binance" if live_funnel else "bybit"
+    binance = use_binance if use_binance is not None else live_funnel
+    source = "binance" if binance else "bybit"
     await store.ensure_range(
         session,
         symbol,
@@ -479,7 +511,7 @@ async def _ensure_symbol_settle_5m(
         settle_hi,
         as_of_ms=end_ms,
         source=source,
-        binance_base_url=FAPI_BASE_URL if live_funnel else None,
+        binance_base_url=FAPI_BASE_URL if binance else None,
     )
 
 
@@ -989,6 +1021,7 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
         max_symbols = int(p.get("maxSymbols") or 200)
 
         skip_fetch = bool(p.get("skipFetch", True))
+        skip_settle_5m_prefetch = bool(p.get("skipSettle5mPrefetch", False))
         live_funnel = bool(p.get("liveFunnel", True))
         store = BacktestKlineStore()
         symbols: list[str] = []
@@ -997,7 +1030,14 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
         scan_jobs: list[tuple[str, str, bool]] = []
         funnel = CardFunnelState() if live_funnel else None
 
-        if skip_fetch:
+        explicit = [str(s).upper() for s in (p.get("symbols") or []) if str(s).strip()]
+        if explicit:
+            symbols = explicit
+            universe_meta = {
+                "count": len(symbols),
+                "note": "explicit symbols list",
+            }
+        elif skip_fetch:
             symbols, universe_meta = resolve_local_backtest_symbols(
                 scope=scope,
                 max_symbols=max_symbols,
@@ -1075,33 +1115,38 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
         settled_5m: set[str] = set()
         oi_cache: dict[tuple[str, str], dict[int, float]] = {}
         need_structure_oi = live_funnel and bool(kinds - CANDLE_KINDS)
+        use_binance = bool(live_funnel or p.get("useBinanceKlines"))
         px = proxy_url()
         fetch_session = make_http_session(trust_env=False, default_proxy=px)
 
         try:
             for i, (sym, iv, is_major) in enumerate(tasks):
                 if sym not in settled_5m:
-                    job.progress = {
-                        "phase": "fetch5m",
-                        "done": len(settled_5m),
-                        "total": fetch5m_total,
-                        "symbols": len(unique_symbols),
-                        "current": f"5m {sym}",
-                        "source": "binance" if live_funnel else "bybit",
-                    }
-                    try:
-                        await _ensure_symbol_settle_5m(
-                            fetch_session,
-                            store,
-                            symbol=sym,
-                            start_ms=start_ms,
-                            end_ms=end_ms,
-                            live_funnel=live_funnel,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("回测 5m 补全失败 %s: %s", sym, exc)
-                    settled_5m.add(sym)
-                    await _persist_job_async(job)
+                    if skip_settle_5m_prefetch:
+                        settled_5m.add(sym)
+                    else:
+                        job.progress = {
+                            "phase": "fetch5m",
+                            "done": len(settled_5m),
+                            "total": fetch5m_total,
+                            "symbols": len(unique_symbols),
+                            "current": f"5m {sym}",
+                            "source": "binance" if use_binance else "bybit",
+                        }
+                        try:
+                            await _ensure_symbol_settle_5m(
+                                fetch_session,
+                                store,
+                                symbol=sym,
+                                start_ms=start_ms,
+                                end_ms=end_ms,
+                                live_funnel=live_funnel,
+                                use_binance=use_binance,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("回测 5m 补全失败 %s: %s", sym, exc)
+                        settled_5m.add(sym)
+                        await _persist_job_async(job)
 
                 job.progress = {
                     "phase": "scan",
@@ -1109,7 +1154,7 @@ async def _run_job(job: BacktestJob, get_pool_rows: Callable[[], list[dict[str, 
                     "total": total,
                     "symbols": len(unique_symbols),
                     "current": f"扫描 {sym} {iv}",
-                    "source": "binance" if live_funnel else "bybit",
+                    "source": "binance" if use_binance else "bybit",
                     "fetch5mDone": len(settled_5m),
                     "fetch5mTotal": fetch5m_total,
                 }
@@ -1207,6 +1252,8 @@ async def start_structure_backtest(
     intervals = params.get("intervals") or list(STRUCTURE_CARD_INTERVALS)
     kinds = params.get("kinds") or DEFAULT_KINDS
 
+    import os
+
     job = BacktestJob(
         id=uuid.uuid4().hex[:12],
         params={
@@ -1217,11 +1264,17 @@ async def start_structure_backtest(
             "symbolScope": params.get("symbolScope") or "top200",
             "maxSymbols": params.get("maxSymbols") or 200,
             "skipFetch": bool(params.get("skipFetch", True)),
+            "skipSettle5mPrefetch": bool(params.get("skipSettle5mPrefetch", False)),
             "liveFunnel": bool(params.get("liveFunnel", True)),
+            "useBinanceKlines": bool(params.get("useBinanceKlines", False)),
             "confluenceMinTier": str(params.get("confluenceMinTier") or "all"),
             "mtfResonanceOnly": bool(params.get("mtfResonanceOnly", False)),
+            "runnerPid": os.getpid(),
         },
     )
+    raw_symbols = params.get("symbols")
+    if isinstance(raw_symbols, (list, tuple)) and raw_symbols:
+        job.params["symbols"] = [str(s).upper() for s in raw_symbols if str(s).strip()]
 
     async with _jobs_lock:
         if len(_jobs) >= _MAX_JOBS:

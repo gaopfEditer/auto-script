@@ -9,6 +9,7 @@ import {
 describe("prepareAutoTradeForOrder", () => {
   it("有数字入场时用该价按 5% SL / 默认 TP 下单（不用信号止损）", async () => {
     const parsed = {
+      parser: "telegram",
       symbol: "RUNE",
       direction: "long",
       entry: "0.041",
@@ -30,7 +31,7 @@ describe("prepareAutoTradeForOrder", () => {
   });
 
   it("市价且有方向时用注入价格补默认止损", async () => {
-    const parsed = { symbol: "WLD", direction: "long", entry: "市价" };
+    const parsed = { parser: "telegram", symbol: "WLD", direction: "long", entry: "市价" };
     const execution = normalizeExecution(null, parsed);
     const out = await prepareAutoTradeForOrder(parsed, execution, "WLD", {
       fetchPrice: async () => ({ price: 2.5 }),
@@ -43,6 +44,7 @@ describe("prepareAutoTradeForOrder", () => {
 
   it("正文有止损也会被实时价规则覆盖", async () => {
     const parsed = {
+      parser: "telegram",
       symbol: "RUNE",
       direction: "long",
       entry: "0.041",

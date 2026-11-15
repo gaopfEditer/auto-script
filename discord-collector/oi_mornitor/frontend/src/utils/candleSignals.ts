@@ -3,6 +3,7 @@
  * （射击之星 / 倒锤子 / 连续插针 + 维加斯 V 前缀 + OI 异动后缀）
  */
 import type { PatternCandle, PatternChartMarker } from "../types";
+import { buildWickOiVolumePinMarkers } from "./wickOiVolumePin";
 
 const SHOOT_WICK_RATIO = 1.5;
 const SHOOT_WICK_MAX = 20;
@@ -186,13 +187,6 @@ export function computeOiAnomalyFlags(
   return { flags, deltas };
 }
 
-function oiOnlyLabel(delta: number | null): string {
-  if (delta == null) return "OI异动";
-  if (delta > 0) return "OI异动↑";
-  if (delta < 0) return "OI异动↓";
-  return "OI异动";
-}
-
 function sigPrefix(name: string, nearVegas: boolean, oiAnomaly: boolean): string {
   const base = nearVegas ? `V${name}` : name;
   return oiAnomaly ? `${base}(oi异动)` : base;
@@ -219,6 +213,7 @@ export function buildCandleSignalMarkers(
     vegasB2: Map<number, number>;
     /** candle.time(sec) → open interest */
     oiByTime?: Map<number, number>;
+    barDurationMs?: number;
   },
 ): PatternChartMarker[] {
   const markers: PatternChartMarker[] = [];
@@ -260,7 +255,7 @@ export function buildCandleSignalMarkers(
     });
   }
 
-  const { flags: oiFlags, deltas: oiDeltas } = computeOiAnomalyFlags(volumes, oiSeries);
+  const { flags: oiFlags } = computeOiAnomalyFlags(volumes, oiSeries);
 
   let contUpper = 0;
   let contLower = 0;
@@ -274,7 +269,6 @@ export function buildCandleSignalMarkers(
     const c = candles[i];
     const nearV = nearVegasChannel(b);
     const oiTag = oiFlags[i];
-    const oiDelta = oiDeltas[i];
     const label = (name: string) => sigPrefix(name, nearV, oiTag);
     const beforeN = markers.length;
 
@@ -419,21 +413,11 @@ export function buildCandleSignalMarkers(
       }
     }
 
-    const patternHit = markers.slice(beforeN).some((m) => PATTERN_MARKER_KINDS.has(m.kind ?? ""));
-    if (oiTag && !patternHit) {
-      const up = oiDelta == null || oiDelta > 0;
-      markers.push({
-        time: c.time,
-        position: up ? "aboveBar" : "belowBar",
-        color: "#ff9800",
-        shape: "circle",
-        text: oiOnlyLabel(oiDelta),
-        price: up ? c.high : c.low,
-        kind: "oi_anomaly",
-        oi_anomaly: true,
-      });
-    }
   }
+
+  markers.push(
+    ...buildWickOiVolumePinMarkers(candles, opts.oiByTime, { barDurationMs: opts.barDurationMs }),
+  );
 
   return markers;
 }

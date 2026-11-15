@@ -15,7 +15,13 @@ import {
   type UTCTimestamp,
   type WhitespaceData,
 } from "lightweight-charts";
-import type { ChartAlertEntryFocus, PatternCandle, PatternChartData, PatternState } from "../types";
+import type {
+  ChartAlertEntryFocus,
+  PatternCandle,
+  PatternChartData,
+  PatternChartMarker,
+  PatternState,
+} from "../types";
 import {
   chartOscillatorFormat,
   chartPriceFormat,
@@ -59,8 +65,29 @@ import {
   TRAIN_CHART_LAYER_TOGGLES,
   TD9_MARKER_KINDS,
   REV_VOL_MARKER_KINDS,
+  WICK_OI_VOL_MARKER_KINDS,
+  VP_CHASE_MARKER_KINDS,
+  VP_VOL_SPIKE_MARKER_KINDS,
+  VP_CASCADE_ENTRY_KINDS,
+  MTF_REINFORCE_MARKER_KINDS,
   type ChartEmaKey,
 } from "../utils/chartLayers";
+import {
+  buildVpCascadeMarkers,
+  buildVpChaseOnlyMarkers,
+  collectVpChaseWatchWindows,
+  immediateParentTfForChart,
+  parentTfsForChart,
+  vpParentKlineLimit,
+} from "../utils/vpCascadeChartMarkers";
+import {
+  buildMtfChildReversalConfirmMarkers,
+  buildMtfParentReversalMarkers,
+  buildVolPinMarkers,
+  childTfForChart,
+  mergeMtfReversalMarkersWithPins,
+  vpChildKlineFetchOpts,
+} from "../utils/mtfVolPatternReinforceMarkers";
 import { chartLocalization, chartTimeScaleOptions, formatCandleLocalTime } from "../utils/chartLocale";
 import { buildChartFromCandles, buildChartIndicatorSeries } from "../utils/chartIndicators";
 import {
@@ -233,11 +260,20 @@ const MARKER_LEGEND = [
   { kind: "inverted_hammer", label: "倒锤子", color: "#00bcd4" },
   { kind: "continuous_upper_wick", label: "连续上插针", color: "#9c27b0" },
   { kind: "continuous_lower_wick", label: "连续下插针", color: "#9c27b0" },
-  { kind: "oi_anomaly", label: "OI异动（无形态）", color: "#ff9800" },
   { kind: "td9_overbought", label: "TD9 超买", color: "#ff6f00" },
   { kind: "td9_oversold", label: "TD9 超卖", color: "#c6ff00" },
   { kind: "rev_vol_buy", label: "新低末端放量买", color: "#69f0ae" },
   { kind: "rev_vol_sell", label: "新高末端放量卖", color: "#ea80fc" },
+  { kind: "wick_pin_upper", label: "上插针·放量OI", color: "#ff7043" },
+  { kind: "wick_pin_lower", label: "下插针·放量OI", color: "#26c6da" },
+  { kind: "vp_vol_spike", label: "本周期放量（仅当前 TF）", color: "#ffb74d" },
+  { kind: "vp_chase_buy", label: "追涨观察（父周期炒买）", color: "#ab47bc" },
+  { kind: "vp_chase_sell", label: "杀跌观察（父周期炒卖）", color: "#5c6bc0" },
+  { kind: "vp_cascade_short", label: "入场·父涨子空（如1h涨15m入）", color: "#ec407a" },
+  { kind: "vp_cascade_long", label: "入场·父跌子多（如1h跌15m入）", color: "#26a69a" },
+  { kind: "vol_pin_spike", label: "放量插针 ≥1.5×（巨≥2.5×）", color: "#ff9800" },
+  { kind: "mtf_parent_reversal_bear", label: "MTF反转·空（如15m1h反转，钉住不冲掉）", color: "#e91e63" },
+  { kind: "mtf_parent_reversal_bull", label: "MTF反转·多（如15m1h反转，钉住不冲掉）", color: "#00acc1" },
   { kind: "alert_entry_focus", label: "形态信号入场", color: "#b8ff3c" },
 ];
 
@@ -257,11 +293,18 @@ const COMPACT_MARKER_KINDS = new Set([
   "continuous_lower_wick",
   "continuous_non_upper_wick",
   "continuous_non_lower_wick",
-  "oi_anomaly",
   "td9_overbought",
   "td9_oversold",
   "rev_vol_buy",
   "rev_vol_sell",
+  "wick_pin_upper",
+  "wick_pin_lower",
+  "vp_chase_buy",
+  "vp_chase_sell",
+  "vp_vol_spike",
+  "vp_cascade_short",
+  "vp_cascade_long",
+  "vol_pin_spike",
 ]);
 const COMPACT_MARKER_SIZE = 0.5;
 /** 图表全局字号 = LWC 默认 12 × 60% */
@@ -306,13 +349,80 @@ function rebuildChartMarkers(
   candles: PatternCandle[],
   state: PatternState | undefined,
   barDurationMs?: number,
+  oiByTime?: Map<number, number>,
+  chartTf?: ChartTimeframe,
+  parentCandlesByTf?: Partial<Record<ChartTimeframe, PatternCandle[]>>,
+  childCandlesByTf?: Partial<Record<ChartTimeframe, PatternCandle[]>>,
+  mtfReversalPins?: Map<string, PatternChartMarker>,
 ): PatternChartData["markers"] {
   const built = buildChartFromCandles(
     candles,
     state as unknown as Record<string, unknown> | undefined,
-    { barDurationMs },
+    { barDurationMs, oiByTime },
   );
-  return built.markers;
+  let markers = built.markers;
+  if (chartTf) {
+    const parentTfs = parentTfsForChart(chartTf);
+    const vpMarkers: PatternChartData["markers"] = [];
+    if (parentTfs.length) {
+      const suppressFor4hOn15m =
+        chartTf === "15m" && parentCandlesByTf?.["1h"]?.length
+          ? collectVpChaseWatchWindows(parentCandlesByTf["1h"]!, "1h", "15m", {
+              barDurationMs,
+            })
+          : undefined;
+      for (const parentTf of parentTfs) {
+        const pc = parentCandlesByTf?.[parentTf];
+        if (pc?.length) {
+          vpMarkers.push(
+            ...buildVpCascadeMarkers(candles, pc, chartTf, parentTf, {
+              barDurationMs,
+              suppressEntryInWindows:
+                parentTf === "4h" && chartTf === "15m" ? suppressFor4hOn15m : undefined,
+            }),
+          );
+        }
+      }
+    } else {
+      vpMarkers.push(...buildVpChaseOnlyMarkers(candles, chartTf, { barDurationMs }));
+    }
+    if (vpMarkers.length) markers = [...markers, ...vpMarkers];
+    markers = [...markers, ...buildVolPinMarkers(candles, { barDurationMs })];
+
+    const visibleTimes = new Set(candles.map((c) => c.time));
+    let mtfFresh: PatternChartMarker[] = [];
+    const childTf = childTfForChart(chartTf);
+    if (childTf && childCandlesByTf?.[childTf]?.length) {
+      mtfFresh.push(
+        ...buildMtfParentReversalMarkers(
+          candles,
+          childCandlesByTf[childTf]!,
+          chartTf,
+          childTf,
+          { barDurationMs },
+        ),
+      );
+    }
+    const parentTf = immediateParentTfForChart(chartTf);
+    if (parentTf && parentCandlesByTf?.[parentTf]?.length) {
+      mtfFresh.push(
+        ...buildMtfChildReversalConfirmMarkers(
+          parentCandlesByTf[parentTf]!,
+          candles,
+          parentTf,
+          chartTf,
+          { barDurationMs },
+        ),
+      );
+    }
+    if (mtfFresh.length && mtfReversalPins) {
+      mtfFresh = mergeMtfReversalMarkersWithPins(mtfFresh, mtfReversalPins, visibleTimes);
+    }
+    if (mtfFresh.length) {
+      markers = [...markers, ...mtfFresh];
+    }
+  }
+  return markers;
 }
 
 function toCandleMarkers(
@@ -322,6 +432,8 @@ function toCandleMarkers(
   candles?: PatternCandle[],
   showTd9: boolean = true,
   showRevVol: boolean = true,
+  showVpCascade: boolean = true,
+  showMtfReinforce: boolean = true,
 ): SeriesMarker<UTCTimestamp>[] {
   const candleTimes = (candles ?? []).map((c) => c.time).sort((a, b) => a - b);
   const candleTimeSet = new Set(candleTimes);
@@ -329,11 +441,28 @@ function toCandleMarkers(
   return [...(markers ?? [])]
     .filter((m) => {
       const kind = m.kind ?? "";
+      if (kind === "oi_anomaly") return false;
       if (TD9_MARKER_KINDS.has(kind)) return showTd9;
       if (REV_VOL_MARKER_KINDS.has(kind)) return showRevVol;
+      if (
+        VP_CHASE_MARKER_KINDS.has(kind) ||
+        VP_VOL_SPIKE_MARKER_KINDS.has(kind) ||
+        VP_CASCADE_ENTRY_KINDS.has(kind)
+      ) {
+        return showVpCascade;
+      }
+      if (MTF_REINFORCE_MARKER_KINDS.has(kind)) return showMtfReinforce;
+      if (WICK_OI_VOL_MARKER_KINDS.has(kind)) return showCandlePattern;
       if (!showCandlePattern && COMPACT_MARKER_KINDS.has(kind)) return false;
       if (!showStructure && STRUCTURE_MARKER_KINDS.has(kind)) return false;
       return true;
+    })
+    .sort((a, b) => {
+      const dt = a.time - b.time;
+      if (dt !== 0) return dt;
+      const aMtf = MTF_REINFORCE_MARKER_KINDS.has(a.kind ?? "") ? 1 : 0;
+      const bMtf = MTF_REINFORCE_MARKER_KINDS.has(b.kind ?? "") ? 1 : 0;
+      return aMtf - bMtf;
     })
     .map((m) => {
       const aligned = alignMarkerTime(m.time, candleTimeSet, candleTimes);
@@ -583,6 +712,12 @@ export const PatternChartPanel = memo(function PatternChartPanel({
   const focusLoadingMoreRef = useRef(false);
 
   const candlesRef = useRef<PatternCandle[]>([]);
+  /** 量价级联：父周期 K（5m←15m、15m←1h/4h、1h←4h） */
+  const parentCandlesByTfRef = useRef<Partial<Record<ChartTimeframe, PatternCandle[]>>>({});
+  /** MTF 反转：子周期 K（1h←15m 等，供父图 15m1h反转） */
+  const childCandlesByTfRef = useRef<Partial<Record<ChartTimeframe, PatternCandle[]>>>({});
+  /** 已确认的 15m1h反转 等：refresh 重算暂缺时仍保留 */
+  const mtfReversalPinsRef = useRef<Map<string, PatternChartMarker>>(new Map());
   const hasMoreRef = useRef(true);
   const loadingMoreRef = useRef(false);
   /** >0 时忽略 range 续载（程序性 setVisibleLogicalRange / 初次定位） */
@@ -786,6 +921,11 @@ export const PatternChartPanel = memo(function PatternChartPanel({
             sortedCandles,
             (metaRef.current?.state || payload.state) as PatternState | undefined,
             barMs,
+            oiValueByTimeRef.current,
+            timeframe,
+            parentCandlesByTfRef.current,
+            childCandlesByTfRef.current,
+            mtfReversalPinsRef.current,
           ),
           ...alertEntryMarkersRef.current,
         ];
@@ -796,6 +936,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           sortedCandles,
           showTd9,
           showRevVol,
+          layersRef.current.vpCascade,
+          layersRef.current.mtfReinforce,
         );
         if (markers.length) {
           series.setMarkers(markers);
@@ -1158,6 +1300,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           candlesRef.current,
           next.td9,
           next.revVol,
+          next.vpCascade,
+          next.mtfReinforce,
         ),
       );
     }
@@ -1240,7 +1384,16 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       const candles = candlesRef.current;
       if (!series || !candles.length) return;
       const rebuilt = [
-        ...rebuildChartMarkers(candles, metaRef.current?.state, chartBarDurationMs(timeframe)),
+        ...rebuildChartMarkers(
+          candles,
+          metaRef.current?.state,
+          chartBarDurationMs(timeframe),
+          oiValueByTimeRef.current,
+          timeframe,
+          parentCandlesByTfRef.current,
+          childCandlesByTfRef.current,
+          mtfReversalPinsRef.current,
+        ),
         ...markers,
       ];
       if (metaRef.current) metaRef.current = { ...metaRef.current, markers: rebuilt };
@@ -1252,6 +1405,8 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           candles,
           layersRef.current.td9,
           layersRef.current.revVol,
+          layersRef.current.vpCascade,
+          layersRef.current.mtfReinforce,
         ),
       );
       applyAlertEntryPriceLine(candles);
@@ -1330,6 +1485,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     loadingMoreRef.current = false;
     metaRef.current = null;
     analysisRef.current = null;
+    parentCandlesByTfRef.current = {};
+    childCandlesByTfRef.current = {};
+    mtfReversalPinsRef.current.clear();
     skipNextDataApplyRef.current = false;
     setHasMore(true);
     setData(null);
@@ -1416,6 +1574,128 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       cancelled = true;
     };
   }, [symbol, timeframe]);
+
+  /** 量价级联：预拉父周期 K 线（可多档，如 15m 同时拉 1h + 4h） */
+  useEffect(() => {
+    if (loading || err || !symbol) return;
+    const parentTfs = parentTfsForChart(timeframe);
+    if (!parentTfs.length) {
+      parentCandlesByTfRef.current = {};
+      return;
+    }
+    let cancelled = false;
+    const childN = candlesRef.current.length || CHART_DEFAULT_LIMIT;
+    const chartCandles = candlesRef.current;
+    const chartEndMs = chartCandles.length
+      ? chartCandles[chartCandles.length - 1].time * 1000 + chartBarDurationMs(timeframe)
+      : undefined;
+    void (async () => {
+      try {
+        const byTf: Partial<Record<ChartTimeframe, PatternCandle[]>> = {};
+        await Promise.all(
+          parentTfs.map(async (parentTf) => {
+            const limit = vpParentKlineLimit(childN, timeframe, parentTf);
+            const json = await fetchPatternChart(symbol, parentTf, {
+              limit,
+              endTimeMs: chartEndMs,
+            });
+            if (cancelled) return;
+            byTf[parentTf] = json.candles ?? [];
+          }),
+        );
+        if (cancelled) return;
+        parentCandlesByTfRef.current = byTf;
+        const series = seriesRef.current;
+        const candles = candlesRef.current;
+        if (!series || !candles.length || !metaRef.current) return;
+        const rebuilt = [
+          ...rebuildChartMarkers(
+            candles,
+            metaRef.current.state as PatternState | undefined,
+            chartBarDurationMs(timeframe),
+            oiValueByTimeRef.current,
+            timeframe,
+            parentCandlesByTfRef.current,
+            childCandlesByTfRef.current,
+            mtfReversalPinsRef.current,
+          ),
+          ...alertEntryMarkersRef.current,
+        ];
+        metaRef.current = { ...metaRef.current, markers: rebuilt };
+        series.setMarkers(
+          toCandleMarkers(
+            rebuilt,
+            layersRef.current.candlePattern,
+            layersRef.current.structure,
+            candles,
+            layersRef.current.td9,
+            layersRef.current.revVol,
+            layersRef.current.vpCascade,
+            layersRef.current.mtfReinforce,
+          ),
+        );
+      } catch {
+        /* 保留上一版父 K，避免 MTF 反转被清空 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, timeframe, loading, err, candleCount]);
+
+  /** 多周期反转：预拉子周期 K（1h 图 ← 15m）；失败不 clear，配合 pin 保留 15m1h反转 */
+  useEffect(() => {
+    if (loading || err || !symbol) return;
+    const childTf = childTfForChart(timeframe);
+    if (!childTf) return;
+    let cancelled = false;
+    const parentCandles = candlesRef.current;
+    const { limit, endTimeMs } = vpChildKlineFetchOpts(parentCandles, timeframe, childTf);
+    void (async () => {
+      try {
+        const json = await fetchPatternChart(symbol, childTf, { limit, endTimeMs });
+        if (cancelled) return;
+        childCandlesByTfRef.current = {
+          ...childCandlesByTfRef.current,
+          [childTf]: json.candles ?? [],
+        };
+        const series = seriesRef.current;
+        const candles = candlesRef.current;
+        if (!series || !candles.length || !metaRef.current) return;
+        const rebuilt = [
+          ...rebuildChartMarkers(
+            candles,
+            metaRef.current.state as PatternState | undefined,
+            chartBarDurationMs(timeframe),
+            oiValueByTimeRef.current,
+            timeframe,
+            parentCandlesByTfRef.current,
+            childCandlesByTfRef.current,
+            mtfReversalPinsRef.current,
+          ),
+          ...alertEntryMarkersRef.current,
+        ];
+        metaRef.current = { ...metaRef.current, markers: rebuilt };
+        series.setMarkers(
+          toCandleMarkers(
+            rebuilt,
+            layersRef.current.candlePattern,
+            layersRef.current.structure,
+            candles,
+            layersRef.current.td9,
+            layersRef.current.revVol,
+            layersRef.current.vpCascade,
+            layersRef.current.mtfReinforce,
+          ),
+        );
+      } catch {
+        /* 保留上一版子 K */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, timeframe, loading, err, candleCount]);
 
   useEffect(() => {
     if (loading || err || !data?.candles?.length || !symbol) return;
@@ -1886,6 +2166,37 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       fillMap(payload.spotNet, spotNetByTimeRef);
       fillMap(payload.futuresNet, futNetByTimeRef);
 
+      const series = seriesRef.current;
+      const candles = candlesRef.current;
+      if (series && candles.length && metaRef.current) {
+        const rebuilt = [
+          ...rebuildChartMarkers(
+            candles,
+            metaRef.current.state as PatternState | undefined,
+            chartBarDurationMs(timeframe),
+            oiValueByTimeRef.current,
+            timeframe,
+            parentCandlesByTfRef.current,
+            childCandlesByTfRef.current,
+            mtfReversalPinsRef.current,
+          ),
+          ...alertEntryMarkersRef.current,
+        ];
+        metaRef.current = { ...metaRef.current, markers: rebuilt };
+        series.setMarkers(
+          toCandleMarkers(
+            rebuilt,
+            layersRef.current.candlePattern,
+            layersRef.current.structure,
+            candles,
+            layersRef.current.td9,
+            layersRef.current.revVol,
+            layersRef.current.vpCascade,
+            layersRef.current.mtfReinforce,
+          ),
+        );
+      }
+
       const range = chartApi.current?.timeScale().getVisibleLogicalRange();
       if (range && chartApi.current) {
         derivSyncingRef.current = true;
@@ -2277,9 +2588,9 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     oiAutoscaleProvider,
   ]);
 
-  /** 持仓量副图数据：与当前已加载 K 线时间戳对齐 */
+  /** 持仓量副图数据：与当前已加载 K 线时间戳对齐（插针·放量OI 标记也需 OI 序列） */
   useEffect(() => {
-    if (!layers.oi) {
+    if (!layers.oi && !layers.candlePattern) {
       setOiSubLoading(false);
       setOiSubErr("");
       return;
@@ -2330,6 +2641,23 @@ export const PatternChartPanel = memo(function PatternChartPanel({
       try {
         const payload = await fetchChartDerivSubplots(symbol, timeframe, times);
         if (cancelled) return;
+        const oiMap = new Map<number, number>();
+        let lastOi = 0;
+        for (const row of payload.oi) {
+          if (row == null || !("time" in row)) continue;
+          const t = Number(row.time);
+          if (!Number.isFinite(t)) continue;
+          if ("value" in row && row.value != null) {
+            const v = Number(row.value);
+            if (Number.isFinite(v) && v > 0) {
+              lastOi = v;
+              oiMap.set(t, v);
+              continue;
+            }
+          }
+          if (lastOi > 0) oiMap.set(t, lastOi);
+        }
+        oiValueByTimeRef.current = oiMap;
         // 副图实例可能比本 effect 晚一帧挂好
         for (let i = 0; i < 24 && !oiSeriesRef.current; i++) {
           await new Promise((r) => requestAnimationFrame(() => r(null)));
@@ -2337,15 +2665,45 @@ export const PatternChartPanel = memo(function PatternChartPanel({
         }
         if (!oiSeriesRef.current) {
           pendingDerivPayloadRef.current = { payload, times };
+          const series = seriesRef.current;
+          const candles = candlesRef.current;
+          if (series && candles.length && metaRef.current && layersRef.current.candlePattern) {
+            const rebuilt = [
+              ...rebuildChartMarkers(
+                candles,
+                metaRef.current.state as PatternState | undefined,
+                chartBarDurationMs(timeframe),
+                oiValueByTimeRef.current,
+                timeframe,
+                parentCandlesByTfRef.current,
+                childCandlesByTfRef.current,
+                mtfReversalPinsRef.current,
+              ),
+              ...alertEntryMarkersRef.current,
+            ];
+            metaRef.current = { ...metaRef.current, markers: rebuilt };
+            series.setMarkers(
+              toCandleMarkers(
+                rebuilt,
+                layersRef.current.candlePattern,
+                layersRef.current.structure,
+                candles,
+                layersRef.current.td9,
+                layersRef.current.revVol,
+                layersRef.current.vpCascade,
+                layersRef.current.mtfReinforce,
+              ),
+            );
+          }
         } else {
           applyDerivSubplotsToCharts(payload, times);
         }
         const { oi: oiN, spotNet: spotN, futuresNet: futN } = payload.stats;
-        if (oiN + spotN + futN === 0) {
+        if (layersRef.current.oi && oiN + spotN + futN === 0) {
           setOiSubErr(
             "副图数据为空（币安 openInterest / 净买入未返回）。请确认 discord-collector/.env 已设 HTTPS_PROXY 且 OI 服务已重启；现货接口在国内常 451，合约 OI 需走代理。",
           );
-        } else if (oiN === 0 || spotN === 0 || futN === 0) {
+        } else if (layersRef.current.oi && (oiN === 0 || spotN === 0 || futN === 0)) {
           const parts: string[] = [];
           if (oiN === 0) parts.push("OI");
           if (spotN === 0) parts.push("现货净买入");
@@ -2364,7 +2722,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
     return () => {
       cancelled = true;
     };
-  }, [layers.oi, symbol, timeframe, candleCount, oiChartsGen, applyDerivSubplotsToCharts]);
+  }, [layers.oi, layers.candlePattern, symbol, timeframe, candleCount, oiChartsGen, applyDerivSubplotsToCharts]);
 
   const activeKinds = new Set(data?.markers?.map((m) => m.kind).filter(Boolean) ?? []);
   data?.price_lines?.forEach((l) => activeKinds.add(l.kind));
@@ -2523,6 +2881,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                       STRUCTURE_MARKER_KINDS.has(m.kind) ||
                       TD9_MARKER_KINDS.has(m.kind) ||
                       REV_VOL_MARKER_KINDS.has(m.kind) ||
+                      WICK_OI_VOL_MARKER_KINDS.has(m.kind) ||
                       m.kind === "alert_entry_focus" ||
                       !COMPACT_MARKER_KINDS.has(m.kind)),
                 ).map((m) => (
@@ -2602,8 +2961,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                     {mtf.allow_short === false ? " · 过滤空信号" : ""}
                   </span>
                 ) : null}
-                {analysis?.oi_anomaly_only && <span className="sig oi">OI异动</span>}
-                {analysis?.oi_anomaly && !analysis?.oi_anomaly_only && (
+                {analysis?.oi_anomaly && (
                   <span className="sig oi-combo">形态+OI异动</span>
                 )}
                 {analysis?.sweep_momentum ? (

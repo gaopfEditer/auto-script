@@ -11,11 +11,14 @@ import { config } from "./config.js";
 import { isCdpSendChannel } from "./telegram-channel-profiles.js";
 import {
   isTelegramPushBypassMessage,
+  markTelegramCardPushSent,
   resolveTelegramMessageRef,
+  shouldSkipTelegramCardPushDuplicate,
 } from "./telegram-card-push-dedup.js";
 import { formatSendCdpLog } from "./signal-pipeline-log.js";
 import {
   sanitizeCdpPlatformText,
+  sanitizeTelegramPushText,
   stripCdpPlatformHeader,
 } from "./telegram-content-sanitize.js";
 
@@ -24,10 +27,14 @@ export { stripCdpPlatformHeader } from "./telegram-content-sanitize.js";
 /** @type {Map<string, number>} */
 const recentPublish = new Map();
 const DEDUP_MS = Math.max(60_000, Number(process.env.TRADE_SIGNAL_AI_PUBLISH_DEDUP_MS ?? 600_000));
-/** 同频道+币种 CDP 冷却（默认 3 分钟，避免引用/补 TP 连发） */
+/** 同频道+币种+方向 entry CDP 冷却（默认与 TG 推送窗一致，30 分钟） */
 const SYMBOL_COOLDOWN_MS = Math.max(
   60_000,
-  Number(process.env.TRADE_SIGNAL_CDP_SYMBOL_COOLDOWN_MS ?? 180_000),
+  Number(
+    process.env.TRADE_SIGNAL_CDP_SYMBOL_COOLDOWN_MS ??
+      process.env.TELEGRAM_CARD_PUSH_DEDUP_MS ??
+      30 * 60_000,
+  ),
 );
 /** @type {Map<string, number>} */
 const recentSymbolPublish = new Map();
@@ -65,9 +72,13 @@ function wasRecentlyPublished(key) {
   return true;
 }
 
-/** @param {string} channelId @param {string} symbol */
-function buildSymbolCooldownKey(channelId, symbol) {
-  return `sym:${String(channelId ?? "").trim()}:${String(symbol ?? "").trim().toUpperCase()}`;
+/** @param {string} channelId @param {string} symbol @param {string} [direction] @param {string} [event] */
+function buildSymbolCooldownKey(channelId, symbol, direction = "", event = "entry") {
+  const dir = String(direction ?? "")
+    .trim()
+    .toLowerCase();
+  const ev = String(event ?? "entry").trim() || "entry";
+  return `sym:${String(channelId ?? "").trim()}:${String(symbol ?? "").trim().toUpperCase()}:${dir}:${ev}`;
 }
 
 /** @param {string} key */
@@ -187,8 +198,21 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
     card?.rawContent,
     card?.note,
   );
+  const msgRef = resolveTelegramMessageRef(card, opts.ingestSourceRef);
+  const dedupBodyText = sanitizeTelegramPushText(narrativePreview);
+  const telegramDedupInput = {
+    channelId,
+    symbol,
+    bodyText: dedupBodyText,
+    cardId: card?.id != null ? Number(card.id) : null,
+    messageRef: msgRef,
+  };
   if (event === "update" && !config.tradeSignalAiPublishOnUpdate && !bypass) {
     skipCdp(card, opts, "合并更新默认不重复 CDP（TRADE_SIGNAL_AI_PUBLISH_ON_UPDATE=1 可开）");
+    return false;
+  }
+  if (!bypass && dedupBodyText && shouldSkipTelegramCardPushDuplicate(telegramDedupInput)) {
+    skipCdp(card, opts, "与已推 TG/CDP 正文重复或高度相似");
     return false;
   }
   const dedupKey = buildDedupKey(card, event, opts.ingestSourceRef);
@@ -196,16 +220,16 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
     skipCdp(
       card,
       opts,
-      `同一条 TG 消息已 CDP ref=${resolveTelegramMessageRef(card, opts.ingestSourceRef) || dedupKey}`,
+      `同一条 TG 消息已 CDP ref=${msgRef || dedupKey}`,
     );
     return false;
   }
-  const symCooldownKey = buildSymbolCooldownKey(channelId, symbol);
-  if (!bypass && wasRecentlyPublishedSymbol(symCooldownKey)) {
+  const symCooldownKey = buildSymbolCooldownKey(channelId, symbol, direction, event);
+  if (!bypass && event === "entry" && wasRecentlyPublishedSymbol(symCooldownKey)) {
     skipCdp(
       card,
       opts,
-      `同频道同币种 ${Math.round(SYMBOL_COOLDOWN_MS / 1000)}s 内已 CDP（${symbol}）`,
+      `同频道同币种同方向 ${Math.round(SYMBOL_COOLDOWN_MS / 1000)}s 内已 CDP（${symbol} ${direction}）`,
     );
     return false;
   }
@@ -250,10 +274,10 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
 
   if (!bypass) {
     markPublished(dedupKey);
-    markSymbolPublished(symCooldownKey);
+    if (event === "entry") markSymbolPublished(symCooldownKey);
+    if (dedupBodyText) markTelegramCardPushSent(telegramDedupInput);
   }
   const log = opts.log;
-  const msgRef = resolveTelegramMessageRef(card, opts.ingestSourceRef);
   if (bypass) {
     log?.info?.(
       formatSendCdpLog("cdp_bypass", {
@@ -298,6 +322,7 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
       }
       if (!r.ok || j?.success === false) {
         recentPublish.delete(dedupKey);
+        recentSymbolPublish.delete(symCooldownKey);
         log?.warn?.(
           formatSendCdpLog("cdp_fail", {
             cardId: card?.id ?? "?",
@@ -325,6 +350,7 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
     })
     .catch((e) => {
       recentPublish.delete(dedupKey);
+      recentSymbolPublish.delete(symCooldownKey);
       log?.warn?.(
         formatSendCdpLog("cdp_fail", {
           cardId: card?.id ?? "?",

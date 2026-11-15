@@ -497,16 +497,23 @@ async def start_kline_prefetch(
         if _should_resume(latest):
             return await resume_prefetch_job(latest, get_pool_rows)
 
+    job_params: dict[str, Any] = {
+        "startMs": start_ms,
+        "endMs": end_ms,
+        "chunkDays": chunk_days,
+        "symbolScope": scope,
+        "maxSymbols": max_symbols,
+        "intervals": params.get("intervals") or _PREFETCH_INTERVALS,
+    }
+    raw_symbols = params.get("symbols")
+    if isinstance(raw_symbols, (list, tuple)) and raw_symbols:
+        job_params["symbols"] = [str(s).upper() for s in raw_symbols if str(s).strip()]
+    if params.get("useBinanceKlines") is not None:
+        job_params["useBinanceKlines"] = bool(params.get("useBinanceKlines"))
+
     job = PrefetchJob(
         id=uuid.uuid4().hex[:12],
-        params={
-            "startMs": start_ms,
-            "endMs": end_ms,
-            "chunkDays": chunk_days,
-            "symbolScope": scope,
-            "maxSymbols": max_symbols,
-            "intervals": params.get("intervals") or _PREFETCH_INTERVALS,
-        },
+        params=job_params,
         progress={"phase": "queued", "current": "任务已启动，正在连接行情源…"},
     )
 

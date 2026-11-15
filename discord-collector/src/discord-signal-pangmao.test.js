@@ -75,6 +75,31 @@ describe("胖猫社区 parser + 频道配置", () => {
     assert.equal(r.stopLoss, "2450");
   });
 
+  const oral = [
+    ["init给我多进去，速度，拉盘了牛来了", "INIT", "做多"],
+    ["ake轻仓空进去", "AKE", "做空"],
+    ["tac多进去，止损放在0.01263", "TAC", "做多"],
+    ["蚂蚁仓空evaa", "EVAA", "做空"],
+    ["1837接个空", "ETH", "做空"],
+    ["1795附近多  止损1780", "ETH", "做多"],
+  ];
+
+  for (const [text, symbol, direction] of oral) {
+    it(`口语开仓: ${text}`, () => {
+      const r = parsePangmao(text);
+      assert.ok(r, `should parse: ${text}`);
+      assert.equal(r.symbol, symbol);
+      assert.equal(r.direction, direction);
+      assert.equal(r.signalPhase, "open");
+    });
+  }
+
+  it("tac 口语附带绝对止损", () => {
+    const r = parsePangmao("tac多进去，止损放在0.01263");
+    assert.equal(r.stopLoss, "0.01263");
+    assert.equal(r.signalPhase, "open");
+  });
+
   it("拒绝长文策略/复盘", () => {
     assert.equal(parsePangmao("闪迪策略：① 回踩1262 止损1255"), null);
     assert.equal(parsePangmao("兄弟们，复盘整理好了🐱 MAGMA多单"), null);

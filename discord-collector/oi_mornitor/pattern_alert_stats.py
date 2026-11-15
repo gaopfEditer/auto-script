@@ -830,20 +830,18 @@ def list_alert_stats_page(
     mcap_tier_filter: str | None = None,
     confluence_exact: bool = True,
     decision_group: str | None = None,
+    context_filter: str | None = None,
 ) -> dict[str, Any]:
-    """分页列表；各筛选项独立 AND；type/interval/session/daytype Options 联动。
+    """分页列表；各筛选项独立 AND；下拉统计与表头同口径（已选组合）。
 
     confluence_exact 默认 True：综合评分按 A/B/C/D 精确匹配（与回测 min 档区分）。
+    context_filter 已弃用（忽略）。
     """
+    del context_filter
     page = max(1, int(page or 1))
     size = min(100, max(1, int(page_size or _PAGE_SIZE_DEFAULT)))
     conf_tier = str(confluence_min_tier or "all").strip() or "all"
     mcap_f = str(mcap_tier_filter or "all").strip() or "all"
-    tier_active = (
-        mtf_resonance_only
-        or conf_tier.lower() != "all"
-        or mcap_f.lower() != "all"
-    )
     # 共振 peer 池：不按周期/形态收窄，保留同币异周期 peer；
     # 仍尊重 asset/symbol，避免跨市场误配。
     mtf_peer_pool = filter_alert_stats(
@@ -856,27 +854,19 @@ def list_alert_stats_page(
         asset_class=asset_class,
     )
 
-    def _tier_rows(
-        base: list[dict[str, Any]],
-        *,
-        skip_mcap: bool = False,
-        skip_confluence: bool = False,
-    ) -> list[dict[str, Any]]:
-        if not tier_active:
-            return base
-        return _apply_tier_filters(
-            base,
-            confluence_min_tier=conf_tier,
-            mtf_resonance_only=mtf_resonance_only,
-            mcap_tier_filter=mcap_f,
-            skip_mcap=skip_mcap,
-            skip_confluence=skip_confluence,
-            mtf_peer_rows=mtf_peer_pool,
-            confluence_exact=confluence_exact,
-        )
+    tl = (type_label or "").strip()
+    iv = (interval or "").strip()
+    if tl == "all":
+        tl = ""
+    if iv == "all":
+        iv = ""
 
-    # 基础时间窗（不含时段/日期类型，供下拉联动）
-    time_base = filter_alert_stats(
+    from oi_mornitor.mcap_tier import MCAP_TIER_ORDER, attach_mcap_tier, filter_by_mcap_tier, mcap_tier_label
+    from oi_mornitor.pattern_mtf_resonance import attach_mtf_resonance, has_mtf_resonance
+    from oi_mornitor.signal_confluence import _TIER_ORDER, attach_signal_confluence, filter_items_by_confluence
+
+    _UNSET = object()
+    attached_pool = filter_alert_stats(
         time_filter=time_filter,
         session_filter=None,
         daytype_filter=None,
@@ -885,98 +875,130 @@ def list_alert_stats_page(
         symbol=symbol,
         asset_class=asset_class,
     )
-    # 叠加时段 + 工作日/周末（供 type/interval 联动）
-    scoped = filter_alert_stats(
-        time_base,
-        session_filter=session_filter,
-        daytype_filter=daytype_filter,
-        type_label=None,
-        interval=None,
-    )
+    attach_mtf_resonance(attached_pool, peer_records=mtf_peer_pool)
+    attach_signal_confluence(attached_pool)
+    attach_mcap_tier(attached_pool)
 
-    tl = (type_label or "").strip()
-    iv = (interval or "").strip()
-    if tl == "all":
-        tl = ""
-    if iv == "all":
-        iv = ""
+    def _slice_rows(
+        *,
+        session_filter_v: Any = _UNSET,
+        daytype_filter_v: Any = _UNSET,
+        type_label_v: Any = _UNSET,
+        interval_v: Any = _UNSET,
+        mcap_tier_v: Any = _UNSET,
+        confluence_tier_v: Any = _UNSET,
+    ) -> list[dict[str, Any]]:
+        """在单次附着池上做内存切片（避免每下拉重复 MTF/综合分）。"""
+        sf = session_filter if session_filter_v is _UNSET else session_filter_v
+        df = daytype_filter if daytype_filter_v is _UNSET else daytype_filter_v
+        if type_label_v is _UNSET:
+            tlv = tl or None
+        else:
+            tlv = (type_label_v or "").strip() or None
+        if interval_v is _UNSET:
+            ivv = iv or None
+        else:
+            ivv = (interval_v or "").strip() or None
+        mcap_use = mcap_f if mcap_tier_v is _UNSET else str(mcap_tier_v or "all").strip() or "all"
+        conf_use = conf_tier if confluence_tier_v is _UNSET else str(confluence_tier_v or "all").strip() or "all"
 
-    session_opts = list_session_options(
-        _tier_rows(
-            filter_alert_stats(
-                time_base,
-                session_filter=None,
-                daytype_filter=daytype_filter,
-                type_label=tl or None,
-                interval=iv or None,
-            )
+        rows = filter_alert_stats(
+            attached_pool,
+            session_filter=sf,
+            daytype_filter=df,
+            type_label=tlv,
+            interval=ivv,
         )
-    )
-    daytype_opts = list_daytype_options(
-        _tier_rows(
-            filter_alert_stats(
-                time_base,
-                daytype_filter=None,
-                session_filter=session_filter,
-                type_label=tl or None,
-                interval=iv or None,
-            )
-        )
-    )
-    interval_opts = list_interval_options(
-        _tier_rows(
-            filter_alert_stats(
-                scoped,
-                type_label=tl or None,
-                interval=None,
-            )
-        )
-    )
-    type_opts = list_type_options(
-        _tier_rows(
-            filter_alert_stats(
-                scoped,
-                type_label=None,
-                interval=iv or None,
-            )
-        )
-    )
+        if mtf_resonance_only:
+            rows = [r for r in rows if has_mtf_resonance(r)]
+        rows = filter_by_mcap_tier(rows, mcap_tier=mcap_use)
+        if conf_use.lower() != "all":
+            if confluence_exact:
+                rows = filter_items_by_confluence(rows, exact_tier=conf_use)
+            else:
+                rows = filter_items_by_confluence(rows, min_tier=conf_use)
+        rows.sort(key=lambda r: int(r.get("signalAt") or 0), reverse=True)
+        return _filter_decision_group(rows, decision_group)
 
-    filtered = _tier_rows(
-        filter_alert_stats(
-            scoped,
-            type_label=tl or None,
-            interval=iv or None,
+    session_opts: list[dict[str, Any]] = [
+        {
+            "id": "all",
+            "label": SESSION_LABELS["all"],
+            **_facet_option_stats(_slice_rows(session_filter_v="all")),
+        }
+    ]
+    for sid in SESSION_ORDER:
+        session_opts.append(
+            {
+                "id": sid,
+                "label": SESSION_LABELS[sid],
+                **_facet_option_stats(_slice_rows(session_filter_v=sid)),
+            }
         )
-    )
-    filtered = _filter_decision_group(filtered, decision_group)
-    if not tier_active:
-        from oi_mornitor.signal_confluence import attach_signal_confluence
 
-        attach_mtf_resonance(filtered, peer_records=mtf_peer_pool)
-        attach_signal_confluence(filtered)
-        # 默认列表按日期最新在前（勿按共振分重排，否则旧高分会盖住新信号）
-        filtered.sort(key=lambda r: int(r.get("signalAt") or 0), reverse=True)
-    mcap_opts = list_mcap_tier_options(
-        _tier_rows(
-            filter_alert_stats(
-                scoped,
-                type_label=tl or None,
-                interval=iv or None,
-            ),
-            skip_mcap=True,
+    daytype_opts: list[dict[str, Any]] = [
+        {
+            "id": "all",
+            "label": DAYTYPE_LABELS["all"],
+            **_facet_option_stats(_slice_rows(daytype_filter_v="all")),
+        }
+    ]
+    for did in DAYTYPE_ORDER:
+        daytype_opts.append(
+            {
+                "id": did,
+                "label": DAYTYPE_LABELS[did],
+                **_facet_option_stats(_slice_rows(daytype_filter_v=did)),
+            }
         )
-    )
-    confluence_opts = list_confluence_options(
-        _tier_rows(
-            filter_alert_stats(
-                scoped,
-                type_label=tl or None,
-                interval=iv or None,
-            ),
-            skip_confluence=True,
+
+    interval_opts: list[dict[str, Any]] = []
+    for ivopt in FIXED_INTERVALS:
+        bucket = _slice_rows(interval_v=ivopt)
+        if not bucket:
+            continue
+        interval_opts.append({"label": ivopt, **_facet_option_stats(bucket)})
+
+    type_probe = _slice_rows(type_label_v="")
+    type_labels = sorted({_type_label_of(r) for r in type_probe})
+    type_opts = [
+        {"label": lab, **_facet_option_stats(_slice_rows(type_label_v=lab))}
+        for lab in type_labels
+    ]
+
+    filtered = _slice_rows()
+
+    mcap_opts: list[dict[str, Any]] = [
+        {
+            "id": "all",
+            "label": "全部梯队",
+            **_facet_option_stats(_slice_rows(mcap_tier_v="all")),
+        }
+    ]
+    for tid in MCAP_TIER_ORDER:
+        mcap_opts.append(
+            {
+                "id": tid,
+                "label": mcap_tier_label(tid),
+                **_facet_option_stats(_slice_rows(mcap_tier_v=tid)),
+            }
         )
-    )
+
+    confluence_opts: list[dict[str, Any]] = [
+        {
+            "id": "all",
+            "label": "全部",
+            **_facet_option_stats(_slice_rows(confluence_tier_v="all")),
+        }
+    ]
+    for cid in _TIER_ORDER:
+        confluence_opts.append(
+            {
+                "id": cid,
+                "label": cid,
+                **_facet_option_stats(_slice_rows(confluence_tier_v=cid)),
+            }
+        )
     page_summary = summarize(filtered)
     total = len(filtered)
     pages = max(1, (total + size - 1) // size) if total else 1
@@ -984,8 +1006,11 @@ def list_alert_stats_page(
         page = pages
     start = (page - 1) * size
     chunk = filtered[start : start + size]
+    items_out: list[dict[str, Any]] = []
+    for row in chunk:
+        items_out.append(dict(row))
     return {
-        "items": chunk,
+        "items": items_out,
         "total": total,
         "page": page,
         "pageSize": size,
@@ -997,6 +1022,7 @@ def list_alert_stats_page(
         "daytypeOptions": daytype_opts,
         "mcapTierOptions": mcap_opts,
         "confluenceOptions": confluence_opts,
+        "contextOptions": [],
         # 兼容旧前端
         "typeLabels": [x["label"] for x in type_opts],
     }

@@ -239,6 +239,7 @@ export function buildChartFromCandles(
       vegasB1: new Map(vegas.b1.map((p) => [p.time, p.value])),
       vegasB2: new Map(vegas.b2.map((p) => [p.time, p.value])),
       oiByTime: opts?.oiByTime,
+      barDurationMs: opts?.barDurationMs,
     }),
   );
   markers.push(
@@ -271,8 +272,7 @@ export function buildChartFromCandles(
     trigger_price: trigger || undefined,
     hh_price: hh || undefined,
     last_price: candles.length ? candles[candles.length - 1].close : undefined,
-    oi_anomaly: lastMarkers.some((m) => m.oi_anomaly || m.kind === "oi_anomaly"),
-    oi_anomaly_only: lastMarkers.some((m) => m.kind === "oi_anomaly"),
+    oi_anomaly: lastMarkers.some((m) => m.oi_anomaly && m.kind !== "oi_anomaly"),
   };
 
   const sweep = evaluateSweepMomentum(candles, {

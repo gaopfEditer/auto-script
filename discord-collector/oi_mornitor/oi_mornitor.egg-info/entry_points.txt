@@ -1,0 +1,2 @@
+[console_scripts]
+oi-mornitor = oi_mornitor.__main__:main

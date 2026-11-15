@@ -109,9 +109,32 @@ _TIER_BY_BASKET = {
 }
 
 
+def _extra_tradfi_alias_pairs() -> dict[str, tuple[str, ...]]:
+    path = Path(__file__).resolve().parent / "data" / "equity_tradfi_expand_aliases.json"
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    aliases = raw.get("aliases") if isinstance(raw, dict) else None
+    if not isinstance(aliases, dict):
+        return {}
+    out: dict[str, tuple[str, ...]] = {}
+    for base, syms in aliases.items():
+        bu = str(base or "").strip().upper()
+        if not bu:
+            continue
+        seq = tuple(str(s).strip().upper() for s in (syms or []) if str(s).strip())
+        if seq:
+            out[bu] = seq
+    return out
+
+
 def _build_symbol_index() -> dict[str, str]:
     out: dict[str, str] = {}
-    for base, aliases in EQUITY_SYMBOL_ALIASES.items():
+    merged_aliases = {**EQUITY_SYMBOL_ALIASES, **_extra_tradfi_alias_pairs()}
+    for base, aliases in merged_aliases.items():
         bu = base.upper()
         for a in aliases:
             n = normalize_usdt_symbol(str(a))
