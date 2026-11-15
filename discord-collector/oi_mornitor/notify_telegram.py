@@ -487,6 +487,10 @@ def _mirror_to_main_card(alert: dict[str, Any], text: str) -> bool:
         return False
     if not is_main_card_mirror_eligible(alert):
         return False
+    from oi_mornitor.main_card_policy import main_card_agreed_push_enabled, is_main_card_agreed_push_eligible
+
+    if main_card_agreed_push_enabled() and not is_main_card_agreed_push_eligible(alert):
+        return False
     return _send_card_text_with_fallback(alert, text, MAIN_CARD_TELEGRAM_CHAT_ID)
 
 

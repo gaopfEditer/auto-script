@@ -11,7 +11,13 @@ from oi_mornitor.config import (
     MAIN_CARD_TYPE_PREFIXES,
 )
 from oi_mornitor.focus_symbols import normalize_focus_symbol
+from oi_mornitor.env_parse import env_bool
 from oi_mornitor.signal_policy import is_blocked_ticker_alert, normalize_type_label
+
+
+def main_card_agreed_push_enabled() -> bool:
+    """MAIN 群按约定收窄：仅 15m + 第一/二梯队 + 综合 A + 多周期共振≥2。"""
+    return env_bool("OI_MAIN_CARD_AGREED_PUSH", True)
 
 # MAIN 群 TG 镜像：仅射击之星 / 倒锤子（不含结构、量价）
 _MAIN_CANDLE_TYPE_PREFIXES: tuple[str, ...] = (
@@ -133,6 +139,21 @@ def is_volume_price_card(alert: dict[str, Any]) -> bool:
     return lab.startswith("量价确认") or lab.startswith("量价推进")
 
 
+def is_main_card_agreed_push_eligible(alert: dict[str, Any]) -> bool:
+    """
+    约定口径（与 main_tier_mtf_highlight 一致）：
+    周期 15m · 市值梯队 t1/t2 · 综合评分 A · 多周期共振 ≥2。
+    """
+    if not isinstance(alert, dict):
+        return False
+    iv = str(alert.get("interval") or "").strip().lower()
+    if iv != "15m":
+        return False
+    from oi_mornitor.main_tier_mtf_highlight import main_tier_mtf_highlight_meta
+
+    return main_tier_mtf_highlight_meta(alert) is not None
+
+
 def is_main_card_mirror_eligible(alert: dict[str, Any]) -> bool:
     """MAIN 镜像：白名单币 + 分档周期；射击之星/倒锤子/NLV 末端放量。"""
     if not isinstance(alert, dict):
@@ -154,6 +175,8 @@ def is_main_card_mirror_eligible(alert: dict[str, Any]) -> bool:
     if alert.get("main_mirror_vol_ok") is False:
         return False
     if is_blocked_ticker_alert(alert):
+        return False
+    if main_card_agreed_push_enabled() and not is_main_card_agreed_push_eligible(alert):
         return False
     return True
 
