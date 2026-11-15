@@ -1,7 +1,13 @@
-"""短线策略 V1 锁定默认参数。研究起点，不是已验证的最优参数或盈利承诺。"""
+"""短线策略 V1 锁定默认参数。研究起点，不是已验证的最优参数或盈利承诺。
+
+本文件与 `strategy/short_term_v1` 即「现有形态信号列表 / 信号产生策略」的 V1 基准。
+V2 在 `strategy/short_term_v2`，并行产出，默认不叠加。
+"""
 from __future__ import annotations
 
 from typing import Any
+
+STRATEGY_VERSION = "v1"
 
 # 场地与持仓：合约优先，灵活短线 5 分钟–4 小时。
 VENUE = "usdt_m_futures"
@@ -136,6 +142,7 @@ def atr_cap_for(tier: str, *, per_tier: bool = True) -> float | None:
 
 def defaults_dict() -> dict[str, Any]:
     return {
+        "strategyVersion": STRATEGY_VERSION,
         "venue": VENUE,
         "venueLabel": VENUE_LABEL,
         "horizon": HORIZON,
