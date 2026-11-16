@@ -154,7 +154,7 @@ async function main() {
     baseUrl: config.contentBoardBaseUrl,
     log: createLogger("content-proxy"),
   });
-  // 必须在 express.json 与静态 SPA 之前，把 /news/index.html、/static、/api/v1 转到 :8770
+  // 必须在 express.json 与静态 SPA 之前，把 /news/index.html、/static、news 子集 /api/v1/* 转到 :8770（不抢 /api/v1/cards）
   registerNewsMornitorProxy(app, {
     baseUrl: config.newsWebBaseUrl,
     log: createLogger("news-proxy"),

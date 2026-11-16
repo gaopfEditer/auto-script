@@ -6,9 +6,29 @@
  * 映射：
  *   /news/index.html → /
  *   /static/*        → /static/*
- *   /api/v1/*        → /api/v1/*
+ *   /api/v1/{macro,hotlists,events,…} → news 子路径（勿抢 /api/v1/cards）
  */
 import http from "node:http";
+
+/** news_mornitor 自有 API；不得包含 discord-collector 的 /api/v1/cards 等 */
+const NEWS_API_PREFIXES = [
+  "/api/v1/health",
+  "/api/v1/macro",
+  "/api/v1/hotlists",
+  "/api/v1/events",
+  "/api/v1/refresh",
+  "/api/v1/boards",
+  "/api/v1/tickers",
+  "/api/v1/fetch",
+];
+
+/**
+ * @param {string} pathname
+ */
+function isNewsMornitorApiPath(pathname) {
+  const p = String(pathname || "").trim() || "/";
+  return NEWS_API_PREFIXES.some((prefix) => p === prefix || p.startsWith(`${prefix}/`));
+}
 
 /**
  * @param {import('express').Express} app
@@ -92,6 +112,9 @@ export function registerNewsMornitorProxy(app, opts = {}) {
   app.all("/news/index.html", proxy);
   app.all("/static", proxy);
   app.all("/static/*", proxy);
-  app.all("/api/v1", proxy);
-  app.all("/api/v1/*", proxy);
+  app.use((req, res, next) => {
+    const url = new URL(String(req.originalUrl || req.url || "/"), "http://127.0.0.1");
+    if (!isNewsMornitorApiPath(url.pathname)) return next();
+    return proxy(req, res);
+  });
 }
