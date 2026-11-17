@@ -53,7 +53,8 @@ export async function ocrImageBuffer(buffer, opts = {}) {
     if (res.ok && data.success !== false) return data;
     lastErr = { success: false, error: data.error || `HTTP ${res.status}` };
   } catch (e) {
-    lastErr = { success: false, error: String(/** @type {Error} */ (e).message ?? e) };
+    const msg = String(/** @type {Error} */ (e).message ?? e);
+    lastErr = { success: false, error: `PaddleOCR 不可达或超时 base=${root}: ${msg}` };
   }
 
   try {
@@ -68,9 +69,10 @@ export async function ocrImageBuffer(buffer, opts = {}) {
     if (res.ok && data.success !== false) return data;
     lastErr = { success: false, error: data.error || lastErr.error || `HTTP ${res.status}` };
   } catch (e) {
+    const msg = String(/** @type {Error} */ (e).message ?? e);
     lastErr = {
       success: false,
-      error: lastErr.error || String(/** @type {Error} */ (e).message ?? e),
+      error: lastErr.error || `PaddleOCR 不可达或超时 base=${root}: ${msg}`,
     };
   }
 
@@ -113,7 +115,9 @@ export async function ocrDiscordImageUrl(url, opts = {}) {
   const fn = opts.filename || "discord.jpg";
   const ocr = await ocrImageBuffer(buffer, { filename: fn, mimeType: ct });
   if (ocr.success === false && !ocr.text) {
-    opts.log?.warn?.(`OCR 服务失败: ${ocr.error || "unknown"} url=${pick.slice(0, 80)}`);
+    opts.log?.warn?.(
+      `PaddleOCR 未识别（监听继续）: ${ocr.error || "unknown"} url=${pick.slice(0, 80)}`,
+    );
   }
   return ocr;
 }

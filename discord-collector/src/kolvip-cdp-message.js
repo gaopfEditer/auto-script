@@ -33,6 +33,7 @@ export function parseKolvipMessageTimeMs(timeText, titleAttr) {
  *   timeText: string,
  *   timeTitle: string,
  *   imageUrl: string,
+ *   imageUrls?: string[],
  * }} KolvipDomMessage
  */
 
@@ -47,14 +48,25 @@ export function kolvipMessageToDiscordRow(msg, map) {
   const source = String(map.source ?? "kolvip_cdp").trim() || "kolvip_cdp";
   /** @type {Array<{ url: string, filename: string, content_type: string }>} */
   const attachments = [];
-  const imageUrl = resolveKolvipAssetUrl(String(msg.imageUrl ?? "").trim());
-  if (imageUrl) {
+  const seen = new Set();
+  /** @type {string[]} */
+  const urls = [];
+  const pushUrl = (raw) => {
+    const imageUrl = resolveKolvipAssetUrl(String(raw ?? "").trim());
+    if (!imageUrl || seen.has(imageUrl)) return;
+    seen.add(imageUrl);
+    urls.push(imageUrl);
+  };
+  const listed = Array.isArray(msg.imageUrls) ? msg.imageUrls : [];
+  for (const u of listed) pushUrl(u);
+  if (!urls.length) pushUrl(msg.imageUrl);
+  urls.forEach((url, i) => {
     attachments.push({
-      url: imageUrl,
-      filename: "kolvip-image.jpg",
+      url,
+      filename: urls.length === 1 ? "kolvip-image.jpg" : `kolvip-image-${i + 1}.jpg`,
       content_type: "image/jpeg",
     });
-  }
+  });
   return {
     messageId,
     guildId: "",
