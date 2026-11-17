@@ -149,6 +149,8 @@ kolvip 频道 16（胖猫社区）的消息进现有信号卡管道。**带配�
 
 出卡之后（文字卡，以及过了上面门槛的 OCR 卡）向 `POST {PRIORITY_QUEUE_BASE_URL}/queue/priority` 入队，`source` 固定 `pangmao`。`PRIORITY_QUEUE_BASE_URL` 或 `PRIORITY_QUEUE_SECRET` 为空则跳过并只记一次日志；队列不可达不影响出卡。
 
+文字信号允许币种和「开多 / 开空 / 做多 / 做空 / 反抽做空 / 空进去」之间夹口语（例如 `btw小心了…反抽做空` → BTW 做空）。有这些交易意图、但币种解析不出来时，仍入队一张 `signalPhase=incomplete`、`displayOnly` 的展示卡，币种留空，不编造 ticker，也不下 Bitget/WEEX。纯聊天、返佣/邀请不入队。单图 OCR 门槛不变。
+
 合并后在跑采集的那台 Mac 上：确认 PaddleOCR 仍监听 `0.0.0.0:8866`；若 `.env` 里还写着 `DISCORD_SIGNAL_OCR_OPEN_MAX_PROFIT_PCT=66`，改成 `40` 或删掉该行。优先队列地址和 secret 配好后重启 `pnpm run collect:ui`。不要把 secret 写进仓库。
 
 ## 8. 模块索引

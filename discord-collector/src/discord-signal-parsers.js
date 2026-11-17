@@ -844,6 +844,177 @@ export function parseJunzhangSignals(text) {
   return one ? [one] : [];
 }
 
+/** 明显不是币种的英文（the/this/can 以及常见虚词）。ORDER/ALT/BTW 等不在此列。 */
+const PANGMAO_TICKER_STOPWORDS = new Set([
+  "THE", "THIS", "CAN", "AND", "BUT", "YOU", "ARE", "NOT", "WITH", "THAT",
+  "FROM", "HAVE", "JUST", "WHAT", "WHEN", "YOUR", "THEY", "WILL", "WAS",
+  "ITS", "OUR", "HOW", "WHO", "WHY", "YES", "HEY", "PLS", "PLEASE", "INTO",
+  "THAN", "THEN", "THEM", "BEEN", "WERE", "ALSO", "ONLY", "VERY", "MUCH",
+  "SOME", "SUCH", "HERE", "THERE", "ABOUT", "WOULD", "COULD", "SHOULD",
+  "THESE", "THOSE", "COIN", "TOKEN", "HTTP", "HTTPS", "WWW", "COM", "OK",
+  "IMO", "FYI", "TBH", "LOL", "OMG", "USD", "USDC", "USDT", "THINK", "GOING",
+  "REALLY", "MAYBE", "STILL", "WANT", "NEED", "MAKE", "TAKE", "LOOK", "KNOW",
+  "SURE", "WELL", "BACK", "GOOD", "MORE", "BECAUSE", "SOMETHING", "ANYONE",
+  "THANKS", "THANK", "HELLO", "HAHA", "UPDATE",
+]);
+
+const PANGMAO_TRADE_INTENT_RE =
+  /做多|做空|开多|开空|反抽做空|反抽做多|空进去|多进去|接个[多空]|蚂蚁仓空/;
+const PANGMAO_REFERRAL_RE =
+  /返佣|邀请码|邀请链接|注册链接|推荐码|手续费返还|referral|rebate/i;
+const PANGMAO_CHAT_NOISE_RE = /滚仓|吃肉|拿住|保护|千万不要学/;
+const PANGMAO_LONG_RE = /开多|做多|多进去|接个多|反抽做多/;
+const PANGMAO_SHORT_RE = /开空|做空|空进去|接个空|反抽做空|蚂蚁仓空/;
+const PANGMAO_OPEN_BRIDGE = "也值得|现价格?|现在价格?|现在|现价|低位|继续|反抽";
+
+/** @param {unknown} symbol */
+function isPangmaoTickerStopword(symbol) {
+  return PANGMAO_TICKER_STOPWORDS.has(String(symbol ?? "").trim().toUpperCase());
+}
+
+/**
+ * 缺币种的胖猫展示卡：只进优先队列，不作为可下单信号。
+ * @param {unknown} parsed
+ */
+export function isPangmaoDisplayOnly(parsed) {
+  if (!parsed || typeof parsed !== "object") return false;
+  const p = /** @type {Record<string, unknown>} */ (parsed);
+  return p.displayOnly === true || String(p.signalPhase ?? "") === "incomplete";
+}
+
+/** @param {string} text */
+function pangmaoExclusiveDirection(text) {
+  const t = String(text ?? "");
+  const hasLong = PANGMAO_LONG_RE.test(t);
+  const hasShort = PANGMAO_SHORT_RE.test(t);
+  if (hasLong && hasShort) return "";
+  if (hasShort) return "做空";
+  if (hasLong) return "做多";
+  return "";
+}
+
+/** @param {string} text */
+function pangmaoHasDisplayTradeIntent(text) {
+  const t = String(text ?? "");
+  if (!PANGMAO_TRADE_INTENT_RE.test(t)) return false;
+  if (PANGMAO_REFERRAL_RE.test(t)) return false;
+  if (/[①②③]/.test(t) || /策略[：:]/.test(t) || /复盘整理/.test(t)) return false;
+  if (PANGMAO_CHAT_NOISE_RE.test(t)) return false;
+  return true;
+}
+
+/**
+ * @param {string} raw
+ * @param {string} [originalText]
+ */
+function normalizePangmaoTicker(raw, originalText) {
+  const rawStr = String(raw ?? "").trim();
+  if (!rawStr) return "";
+  if (rawStr === "闪迪") return "SNDK";
+  if (/^以太/.test(rawStr)) return "ETH";
+  if (rawStr === "比特币") return "BTC";
+  let symbol = matchSymbolFromText(rawStr) || rawStr.toUpperCase();
+  if (symbol === "闪迪") symbol = "SNDK";
+  symbol = String(symbol).toUpperCase().replace(/USDT$/i, "");
+  if (!/^[A-Z][A-Z0-9]{1,11}$/.test(symbol)) return "";
+  if (isPangmaoTickerStopword(symbol)) return "";
+  if (/^[A-Za-z0-9]+$/.test(rawStr) && originalText) {
+    const esc = rawStr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(?:^|[^A-Za-z0-9])${esc}(?![A-Za-z0-9])`, "i");
+    if (!re.test(originalText)) return "";
+  }
+  return symbol;
+}
+
+/** @param {string} text */
+function leadingPangmaoTicker(text) {
+  const m = String(text).match(/^\s*([A-Za-z][A-Za-z0-9]{1,11})(?![A-Za-z0-9])/);
+  if (!m) return "";
+  return normalizePangmaoTicker(m[1], text);
+}
+
+/** 全文只有一个非虚词 ticker 时才采用，避免把英语句子里的词当成币。 */
+function solePangmaoTicker(text) {
+  const re = /(?:^|[^A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,11})(?![A-Za-z0-9])/gi;
+  /** @type {string[]} */
+  const found = [];
+  for (const m of String(text).matchAll(re)) {
+    const sym = normalizePangmaoTicker(m[1], text);
+    if (sym) found.push(sym);
+  }
+  const unique = [...new Set(found)];
+  return unique.length === 1 ? unique[0] : "";
+}
+
+/** @param {string} text */
+function pangmaoCnAlias(text) {
+  const t = String(text ?? "");
+  if (t.includes("比特币")) return "BTC";
+  if (t.includes("以太")) return "ETH";
+  if (t.includes("闪迪")) return "SNDK";
+  return "";
+}
+
+/**
+ * 币种和开多/开空/做多/做空可以隔着口语（btw小心了…反抽做空）。
+ * @param {string} text
+ */
+function matchPangmaoLooseOpen(text) {
+  const direction = pangmaoExclusiveDirection(text);
+  if (!direction) return { symbol: "", direction: "" };
+  const leading = leadingPangmaoTicker(text);
+  if (leading) return { symbol: leading, direction };
+  const cn = pangmaoCnAlias(text);
+  if (cn) return { symbol: cn, direction };
+  const sole = solePangmaoTicker(text);
+  if (sole) return { symbol: sole, direction };
+  return { symbol: "", direction: "" };
+}
+
+/**
+ * 有交易意图但解析不出币种时的展示卡。不设 orderMode，避免走市价开仓。
+ * @param {string} text
+ * @param {{ stopLoss?: string, takeProfits?: string[], note?: string }} [extra]
+ */
+function pangmaoIncompleteDisplayCard(text, extra = {}) {
+  const direction = pangmaoExclusiveDirection(text);
+  const takeProfits = Array.isArray(extra.takeProfits) ? extra.takeProfits : [];
+  return {
+    parser: "pangmao",
+    symbol: "",
+    asset: "",
+    direction,
+    entry: "",
+    stopLoss: extra.stopLoss || "",
+    takeProfits,
+    targets: takeProfits,
+    signalPhase: "incomplete",
+    displayOnly: true,
+    awaitingTpsl: false,
+    note: extra.note || "",
+    title: direction ? `胖猫 · ${direction}（待补币种）` : "胖猫 · 待补币种",
+  };
+}
+
+/**
+ * parse 失败（或只得到展示卡）时，供优先队列使用的展示体。
+ * 完整开仓卡返回 null，由已入库卡片入队。
+ * @param {string} text
+ * @param {{ messageId?: string, channelId?: string }} [meta]
+ */
+export function buildPangmaoPriorityDisplayCard(text, meta = {}) {
+  const parsed = parsePangmao(text);
+  if (!isPangmaoDisplayOnly(parsed)) return null;
+  const messageId = String(meta.messageId ?? "").trim();
+  const channelId = String(meta.channelId ?? "").trim();
+  return {
+    .../** @type {Record<string, unknown>} */ (parsed),
+    rawContent: lines(text).join("\n"),
+    ...(messageId ? { messageId } : {}),
+    ...(channelId ? { channelId } : {}),
+  };
+}
+
 export function parsePangmao(text) {
   const joined = lines(text).join("\n");
   const compact = joined.replace(/\s+/g, "");
@@ -852,8 +1023,13 @@ export function parsePangmao(text) {
   if (/[①②③]/.test(joined) || /策略[：:]/.test(joined) || /复盘整理/.test(joined)) {
     return null;
   }
-  // 纯聊天关键词
-  if (/滚仓|吃肉|拿住|保护|千万不要学|兄弟们/.test(joined) && !/(做多|做空)/.test(joined)) {
+  // 返佣/邀请不是交易卡，也不进展示队列
+  if (PANGMAO_REFERRAL_RE.test(joined)) return null;
+  // 纯聊天关键词（开多/开空/做多/做空等仍继续）
+  if (PANGMAO_CHAT_NOISE_RE.test(joined) && !PANGMAO_TRADE_INTENT_RE.test(joined)) {
+    return null;
+  }
+  if (/兄弟们/.test(joined) && !PANGMAO_TRADE_INTENT_RE.test(joined)) {
     return null;
   }
 
@@ -871,8 +1047,8 @@ export function parsePangmao(text) {
     matchLine(joined, /([一二三四五六七八九十\d]+个?点\s*止损)/) ||
     matchLine(joined, /(止损上方[^，。\n]+)/);
 
-  // 仅止损 / 仅目标
-  const hasOpenKeyword = /(做多|做空|多进去|空进去|现价|低位|继续|附近|接个[多空]|蚂蚁仓空)/.test(
+  // 仅止损 / 仅目标。开多/开空/反抽也算开仓，避免被收成纯 TP/SL 卡。
+  const hasOpenKeyword = /(做多|做空|开多|开空|多进去|空进去|反抽|现价|低位|继续|附近|接个[多空]|蚂蚁仓空)/.test(
     joined,
   );
   if ((stopLossAbs || takeProfitAbs) && !hasOpenKeyword) {
@@ -925,20 +1101,21 @@ export function parsePangmao(text) {
   }
 
   if (!direction) {
-    const openM =
-      compact.match(
-        /([A-Za-z][A-Za-z0-9]{1,14}|闪迪|以太坊?|比特币)(?:也值得|现价格?|现在价格?|现在|现价|低位|继续)?(做多|做空)/i
-      ) ||
-      joined.match(
-        /([A-Za-z][A-Za-z0-9]{1,14}|闪迪|以太坊?|比特币)\s*(?:也值得|现价格?|现在价格?|现在|现价|低位|继续)?\s*(做多|做空)/i
-      );
+    const openRe = new RegExp(
+      `([A-Za-z][A-Za-z0-9]{1,14}|闪迪|以太坊?|比特币)(?:${PANGMAO_OPEN_BRIDGE})?(做多|做空|开多|开空)`,
+      "i",
+    );
+    const openReSpaced = new RegExp(
+      `([A-Za-z][A-Za-z0-9]{1,14}|闪迪|以太坊?|比特币)\\s*(?:${PANGMAO_OPEN_BRIDGE})?\\s*(做多|做空|开多|开空)`,
+      "i",
+    );
+    const openM = compact.match(openRe) || joined.match(openReSpaced);
     if (openM) {
-      const rawSym = String(openM[1]);
-      symbol = matchSymbolFromText(rawSym) || rawSym.toUpperCase();
-      if (symbol === "闪迪") symbol = "SNDK";
-      if (/^以太/.test(rawSym)) symbol = "ETH";
-      if (rawSym === "比特币") symbol = "BTC";
-      direction = /空/.test(openM[2]) ? "做空" : "做多";
+      const accepted = normalizePangmaoTicker(openM[1], joined);
+      if (accepted) {
+        symbol = accepted;
+        direction = /空/.test(openM[2]) ? "做空" : "做多";
+      }
     }
   }
 
@@ -949,16 +1126,22 @@ export function parsePangmao(text) {
       ) ||
       compact.match(/([A-Za-z][A-Za-z0-9]{1,14})(?:给我|轻仓)?(多进去|空进去)/i);
     if (injM) {
-      symbol = matchSymbolFromText(injM[1]) || String(injM[1]).toUpperCase();
-      direction = /空/.test(injM[2]) ? "做空" : "做多";
+      const accepted = normalizePangmaoTicker(injM[1], joined);
+      if (accepted) {
+        symbol = accepted;
+        direction = /空/.test(injM[2]) ? "做空" : "做多";
+      }
     }
   }
 
   if (!direction) {
     const antM = joined.match(/蚂蚁仓空\s*([A-Za-z][A-Za-z0-9]{1,14})/i);
     if (antM) {
-      symbol = matchSymbolFromText(antM[1]) || String(antM[1]).toUpperCase();
-      direction = "做空";
+      const accepted = normalizePangmaoTicker(antM[1], joined);
+      if (accepted) {
+        symbol = accepted;
+        direction = "做空";
+      }
     }
   }
 
@@ -973,13 +1156,30 @@ export function parsePangmao(text) {
     }
   }
 
-  if (!symbol || !direction) return null;
-  symbol = String(symbol).toUpperCase().replace(/USDT$/i, "");
+  if (!direction || !symbol || isPangmaoTickerStopword(symbol)) {
+    const loose = matchPangmaoLooseOpen(joined);
+    if (loose.symbol && loose.direction) {
+      symbol = loose.symbol;
+      direction = loose.direction;
+    }
+  }
 
   const takeProfits = takeProfitAbs ? [takeProfitAbs] : [];
   const stopLoss = stopLossAbs || "";
   const noteParts = [];
   if (relativeSlNote && !stopLoss) noteParts.push(relativeSlNote);
+
+  if (!symbol || !direction || isPangmaoTickerStopword(symbol)) {
+    if (pangmaoHasDisplayTradeIntent(joined)) {
+      return pangmaoIncompleteDisplayCard(joined, {
+        stopLoss,
+        takeProfits,
+        note: noteParts.join("；"),
+      });
+    }
+    return null;
+  }
+  symbol = String(symbol).toUpperCase().replace(/USDT$/i, "");
   const hasTpsl = takeProfits.length > 0 && Boolean(stopLoss);
 
   return {

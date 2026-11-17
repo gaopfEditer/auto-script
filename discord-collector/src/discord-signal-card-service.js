@@ -16,7 +16,7 @@ import {
   resolveSignalContentFromRow,
 } from "./discord-reply-content.js";
 import { generateCardsByStyles, extractSignalWithAi } from "./discord-signal-ai.js";
-import { JUNZHANG_SL_LINK_MS, parseSignalText } from "./discord-signal-parsers.js";
+import { JUNZHANG_SL_LINK_MS, isPangmaoDisplayOnly, parseSignalText } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
 import { executionFromParsed, formatManualRawContent, normalizeExecution } from "./discord-signal-execution.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
@@ -893,7 +893,11 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     const cardsByStyle = await generateCardsByStyles(parsed, chCfg.styles, content, {
       debug: (s) => log.debug(s),
       // 军长 TP/SL 由规则算出，固定简体卡片格式，不走 Ollama（避免 Telegram 收到 JSON）
-      fastFallback: opts.debugSimulate || String(parsed.parser ?? "") === "junzhang",
+      // 胖猫缺币种展示卡同样只走模板，避免补全出假币种
+      fastFallback:
+        opts.debugSimulate ||
+        String(parsed.parser ?? "") === "junzhang" ||
+        isPangmaoDisplayOnly(parsed),
     });
 
     const executionJson = executionFromParsed(parsed);
@@ -1121,7 +1125,13 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     });
 
     const skipMajor = isAutoTradeExcludedMajorSymbol(symbol);
-    if (skipMajor && isAutoTradeChannel(channelId)) {
+    if (isPangmaoDisplayOnly(parsed)) {
+      bitgetResult = { skipped: "display_only" };
+      weexResult = { skipped: "display_only" };
+      log.info(
+        `胖猫展示卡不下单 card=#${cardId} phase=${parsed.signalPhase ?? "-"} symbol=${symbol || "-"}`,
+      );
+    } else if (skipMajor && isAutoTradeChannel(channelId)) {
       bitgetResult = { skipped: "major_symbol_excluded", symbol };
       weexResult = { skipped: "major_symbol_excluded", symbol };
       log.info(`自动交易跳过主流币 symbol=${symbol} card=#${cardId}（BTC/ETH 不自动下单）`);
