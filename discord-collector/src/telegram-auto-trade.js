@@ -1,7 +1,8 @@
 /**
  * channel_profiles.json `placeAnOrder` 白名单 Telegram 群 → Debug 勾选平台自动开单。
  * `send` 只控制转发/CDP，不能单独授权下单。
- * 默认 20x、保证金 orderSizeUsdt（Debug 可调，默认 1U）、市价开仓 + 完整 TP/SL（5% SL + 5/8/12% 三档）。
+ * 默认 20x、保证金 orderSizeUsdt（Debug 可调，默认 1U）、市价开仓。
+ * 信号里的止损优先；没有止损时按参考价 5%。有止盈就附带，没有止盈也允许下单。
  */
 import { fetchFuturesPrice, parseEntryPrice } from "./card-price-fetch.js";
 import { isShortDirection } from "./card-direction.js";
@@ -102,7 +103,7 @@ export async function enrichTelegramMarketEntry(parsed, execution, symbol, opts 
 }
 
 /**
- * 自动下单口径：以参考价（通常为拉取的实时价）按 5% SL + 5/8/12% TP，不用信号里的止损止盈。
+ * 按参考价生成默认 5% 止损。止盈列表仅在调用方需要时使用，开仓不会据此发明止盈。
  * @param {number} refPrice
  * @param {string} direction
  */
@@ -126,7 +127,7 @@ function isTelegramTradeParser(parsed) {
 }
 
 /**
- * 用参考价补缺失的 TP/SL（保留信号里已有的止损止盈）。
+ * 用参考价补缺失的止损。已有止损、止盈保持不变，不补造止盈。
  * @param {Record<string, unknown>} parsed
  * @param {ReturnType<typeof normalizeExecution>} execution
  * @param {number} refPrice
@@ -151,21 +152,11 @@ export function fillMissingAutoTradeTpslAtMark(parsed, execution, refPrice) {
   }
 
   const hasSl = parseSlNum(next.stopLoss) != null || parseSlNum(ex.planned?.stopLossPrice) != null;
-  const plannedTps = Array.isArray(ex.planned?.takeProfitPrices) ? ex.planned.takeProfitPrices : [];
-  const parsedTps = Array.isArray(next.takeProfits) ? next.takeProfits : [];
-  const hasTp = (plannedTps.length ? plannedTps : parsedTps).filter(Boolean).length > 0;
 
-  if (!hasSl || !hasTp) {
+  if (!hasSl) {
     const markTpsl = buildTelegramMarkTpsl(refPrice, direction);
-    if (!hasSl) {
-      next.stopLoss = markTpsl.stopLoss;
-      ex.planned.stopLossPrice = markTpsl.stopLoss;
-    }
-    if (!hasTp) {
-      next.takeProfits = markTpsl.takeProfits;
-      ex.planned.takeProfitPrices = markTpsl.takeProfits;
-      if (!next.exitPlan) next.exitPlan = markTpsl.exitPlan;
-    }
+    next.stopLoss = markTpsl.stopLoss;
+    ex.planned.stopLossPrice = markTpsl.stopLoss;
   }
 
   if (telegramTradeRequiresTpsl(ex)) {
@@ -208,25 +199,10 @@ export function prepareTelegramTradeParsed(parsed, execution) {
     tps = execution.planned.takeProfitPrices.map((x) => String(x ?? "").trim()).filter(Boolean);
   }
 
-  if (entryNum && entryNum > 0) {
-    if (isTelegram) {
-      const markTpsl = buildTelegramMarkTpsl(entryNum, direction);
-      tps = markTpsl.takeProfits;
-      slRaw = markTpsl.stopLoss;
-      next.tradeTpslFromMark = true;
-      next.exitPlan = markTpsl.exitPlan;
-    } else {
-      const hasSl = parseSlNum(slRaw) != null;
-      const hasTp = tps.length > 0;
-      if (!hasSl || !hasTp) {
-        const markTpsl = buildTelegramMarkTpsl(entryNum, direction);
-        if (!hasSl) slRaw = markTpsl.stopLoss;
-        if (!hasTp) {
-          tps = markTpsl.takeProfits;
-          if (!next.exitPlan) next.exitPlan = markTpsl.exitPlan;
-        }
-      }
-    }
+  if (entryNum && entryNum > 0 && parseSlNum(slRaw) == null) {
+    const markTpsl = buildTelegramMarkTpsl(entryNum, direction);
+    slRaw = markTpsl.stopLoss;
+    next.defaultStopApplied = true;
   }
 
   next.takeProfits = tps;

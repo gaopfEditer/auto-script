@@ -4,10 +4,9 @@
 import { normalizeHumanSymbol } from "./card-fields.js";
 import { isShortDirection, resolveTradeDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
-import { applyDefaultTpSl } from "./card-liquidation-engine.js";
 import { detectSymbolTier } from "./card-backtest-policy.js";
 import { config } from "./config.js";
-import { priceStr } from "./bitget-tpsl-guard.js";
+import { isValidStopLoss, resolveOpenTpslPrices } from "./bitget-tpsl-guard.js";
 
 /**
  * @typedef {{
@@ -36,7 +35,8 @@ export function resolveBitgetLeverage(symbol) {
 }
 
 /**
- * 信号/分阶段下单杠杆：仅按币种 tier（BTC/ETH=主流，其它=山寨），不读 channel 占位 30。
+ * 未指定频道杠杆时的回退：主流/山寨默认都是 20x，可用 BITGET_MAJOR_LEVERAGE / BITGET_ALTCOIN_LEVERAGE 覆盖。
+ * 自动下单优先用频道配置里的杠杆（默认 20）。
  * @param {unknown} symbol
  */
 export function resolveOrderLeverage(symbol) {
@@ -248,15 +248,17 @@ export function buildBitgetOrderPlan(input) {
   if (!side) return { ok: false, reason: "direction_unsupported" };
 
   const entryRaw = String(ex.planned?.entryPrice ?? parsed.entry ?? "").trim();
-  const price = input.channelTrade.orderType === "market" ? null : parseEntryPriceForOrder(entryRaw, direction);
-  if (input.channelTrade.orderType === "limit" && price == null) {
-    return { ok: false, reason: "entry_price_invalid" };
-  }
-
-  const refPrice = price ?? parseEntryPriceForOrder(entryRaw, direction);
+  const refPrice = parseEntryPriceForOrder(entryRaw, direction);
   if (refPrice == null || refPrice <= 0) return { ok: false, reason: "price_reference_invalid" };
 
-  const leverage = resolveOrderLeverage(symbol);
+  const channelLev = Number(input.channelTrade.leverage);
+  const leverage = channelLev > 0 ? channelLev : resolveOrderLeverage(symbol);
+  const slPct =
+    Number(input.channelTrade.initialSlPct) > 0
+      ? Number(input.channelTrade.initialSlPct)
+      : Number(config.bitgetInitialSlPct) > 0
+        ? Number(config.bitgetInitialSlPct)
+        : 5;
 
   const sizeResult = resolveBitgetOrderSize(input.channelTrade.orderSizeUsdt, refPrice, undefined, {
     dryRun: false,
@@ -265,31 +267,18 @@ export function buildBitgetOrderPlan(input) {
   if (!sizeResult.ok) return { ok: false, reason: sizeResult.error ?? "size_too_small" };
   const size = sizeResult.size;
 
-  let tps = (ex.planned?.takeProfitPrices ?? [])
-    .map((p) => String(p ?? "").trim())
-    .filter(Boolean);
-  let slRaw = String(ex.planned?.stopLossPrice ?? parsed.stopLoss ?? parsed.stop_loss ?? "").trim();
-  const tpNums = tps
-    .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
-    .filter((n) => Number.isFinite(n) && n > 0);
-  let slNum = slRaw ? Number(slRaw.replace(/[^\d.]/g, "")) : null;
-  if (!Number.isFinite(slNum) || slNum <= 0) slNum = null;
-
-  if ((!tpNums.length || slNum == null) && refPrice > 0) {
-    const applied = applyDefaultTpSl(refPrice, isShortDirection(direction), tpNums, slNum);
-    tps = applied.tps.map((p) => priceStr(p));
-    slRaw = priceStr(applied.sl);
-    slNum = applied.sl;
-    ex.planned.takeProfitPrices = tps;
-    ex.planned.stopLossPrice = slRaw;
-    parsed.takeProfits = tps;
-    parsed.stopLoss = slRaw;
-  }
-
-  const tp = tps.length ? String(tps[0]).replace(/[^\d.]/g, "") : null;
-  const sl = slRaw ? slRaw.replace(/[^\d.]/g, "") : null;
-  if (!tp || !sl) {
-    return { ok: false, reason: "missing_tpsl" };
+  const holdSide = side === "buy" ? "long" : "short";
+  const tpsl = resolveOpenTpslPrices({
+    parsed,
+    executionJson: input.executionJson,
+    fillPrice: refPrice,
+    direction,
+    initialSlPct: slPct,
+    preserveSignalStop: true,
+    allowMissingTakeProfit: true,
+  });
+  if (!tpsl.stopLossStr || !isValidStopLoss(refPrice, Number(tpsl.stopLossPrice), holdSide)) {
+    return { ok: false, reason: "missing_stop_loss" };
   }
 
   /** @type {BitgetOrderPlan} */
@@ -297,15 +286,15 @@ export function buildBitgetOrderPlan(input) {
     symbol,
     side,
     tradeSide: "open",
-    orderType: input.channelTrade.orderType,
-    price,
+    orderType: "market",
+    price: null,
     size,
     leverage,
     marginMode: input.channelTrade.marginMode,
     marginCoin: "USDT",
     productType: input.channelTrade.productType,
-    takeProfitPrice: tp || null,
-    stopLossPrice: sl || null,
+    takeProfitPrice: tpsl.takeProfitStr || null,
+    stopLossPrice: tpsl.stopLossStr,
     clientOid: `dc-${input.cardId}-${Date.now()}`,
     direction,
     entryRaw,

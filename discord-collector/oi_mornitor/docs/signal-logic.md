@@ -245,7 +245,7 @@ at_lower（近布林下轨）时必须收阴，其它位置阴阳皆可
 | `OI_SETTLE_ATR_K_T1` / `T2` / `T3` | `1.5` / `2.0` / `2.5` | `config.py` → `pattern_settle_profile.build_settle_plan` |
 | `OI_SETTLE_CAP_T1` / `T2` / `T3` | `0.02` / `0.03` / `0.04` | `config.py` → `pattern_settle_profile.build_settle_plan` |
 | `BITGET_REQUIRE_TPSL` | `1`（开） | `bitget-tpsl-guard.js` |
-| `BITGET_NAKED_POSITION_ACTION` | `close` | `bitget-tpsl-guard.js` |
+| `BITGET_NAKED_POSITION_ACTION` | `skip`（无止损不下单；不再开仓后平仓。旧值 `close` 同 `skip`） | `bitget-tpsl-guard.js` |
 | `BITGET_TPSL_VERIFY_SEC` | `8` | `bitget-tpsl-guard.js` |
 | `BITGET_TPSL_REPAIR_RETRIES` | `3` | `bitget-tpsl-guard.js` |
 | `BITGET_SKIP_TELEGRAM_ALERT` | 未设（会发 TG） | `bitget-tpsl-guard.js` |

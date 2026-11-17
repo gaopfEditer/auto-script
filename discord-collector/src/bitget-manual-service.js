@@ -244,7 +244,7 @@ export function createBitgetManualService(log) {
         parsed: { stopLoss: slIn, takeProfits: [tpIn], direction },
         fillPrice: refPrice,
         direction,
-        initialSlPct: tradeCfg.default?.initialSlPct ?? 4.3,
+        initialSlPct: tradeCfg.default?.initialSlPct ?? 5,
       });
 
       const verify = await ensureBitgetPositionTpslAfterOpen(

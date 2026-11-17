@@ -592,10 +592,10 @@ export const config = {
    * Telegram 群（`-100…`）不看此列表，只看 channel_profiles.json 的 placeAnOrder。
    */
   bitgetAutoTradeChannelIds: parseIdList(process.env.BITGET_AUTO_TRADE_CHANNEL_IDS ?? ""),
-  bitgetDefaultLeverage: Number(process.env.BITGET_DEFAULT_LEVERAGE ?? 30),
+  bitgetDefaultLeverage: Number(process.env.BITGET_DEFAULT_LEVERAGE ?? 20),
   bitgetOrderSizeUsdt: Number(process.env.BITGET_ORDER_SIZE_USDT ?? 1),
-  bitgetMajorLeverage: Number(process.env.BITGET_MAJOR_LEVERAGE ?? 100),
-  bitgetAltcoinLeverage: Number(process.env.BITGET_ALTCOIN_LEVERAGE ?? 30),
+  bitgetMajorLeverage: Number(process.env.BITGET_MAJOR_LEVERAGE ?? 20),
+  bitgetAltcoinLeverage: Number(process.env.BITGET_ALTCOIN_LEVERAGE ?? 20),
   bitgetInitialSlPct: Number(process.env.BITGET_INITIAL_SL_PCT ?? 5),
   bitgetTradeConfigFile: (process.env.BITGET_TRADE_CONFIG_FILE ?? "").trim()
     ? path.resolve(process.env.BITGET_TRADE_CONFIG_FILE.trim())

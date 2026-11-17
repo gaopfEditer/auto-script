@@ -1,5 +1,6 @@
 /**
- * Bitget 开仓 TP/SL 强制：预设价、校验、补挂与裸仓处置。
+ * Bitget 开仓止损：止损必须写在市价开仓请求上。
+ * 算不出或挂不上止损则不下单。成交后的补挂只是兜底，不再把刚开的仓市价平掉。
  */
 import { isLongDirection, isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
@@ -121,10 +122,14 @@ export function bitgetRequireTpslEnabled() {
   return envBool("BITGET_REQUIRE_TPSL", true);
 }
 
-/** @returns {"close"|"alert"} */
+/**
+ * 止损挂不上时的策略。默认 skip：拒绝无止损开仓。
+ * 旧值 close 不再表示「先开仓再平掉」；与 skip 相同。
+ * @returns {"skip"|"alert"}
+ */
 export function bitgetNakedPositionAction() {
-  const v = envStr("BITGET_NAKED_POSITION_ACTION", "close", ["close", "alert"]).toLowerCase();
-  return v === "alert" ? "alert" : "close";
+  const v = envStr("BITGET_NAKED_POSITION_ACTION", "skip", ["skip", "alert", "close"]).toLowerCase();
+  return v === "alert" ? "alert" : "skip";
 }
 
 export function bitgetTpslVerifyWindowMs() {
@@ -419,6 +424,7 @@ export function resolveRepairTpslLevels(input) {
     fillPrice: mark,
     direction: input.direction,
     initialSlPct: input.initialSlPct,
+    allowMissingTakeProfit: true,
   });
 
   if (useSignalSl) {
@@ -489,7 +495,7 @@ export async function repairBitgetPositionTpsl(client, ctx, record) {
   );
   const direction =
     ctx.direction ?? (holdSide === "short" ? "做空" : "做多");
-  const initialSlPct = Number(ctx.initialSlPct) > 0 ? Number(ctx.initialSlPct) : 4.3;
+  const initialSlPct = Number(ctx.initialSlPct) > 0 ? Number(ctx.initialSlPct) : 5;
 
   let sizeStr = ctx.size;
 
@@ -558,6 +564,9 @@ export async function repairBitgetPositionTpsl(client, ctx, record) {
     };
 
     try {
+      const tpStr = levels.takeProfitStr;
+      const tpNum = Number(tpStr);
+      const includeTp = Boolean(tpStr) && isValidTakeProfit(lastMark, tpNum, holdSide);
       const posResp = await client.withHoldSideFallback(
         (hs) =>
           client.placePosTpsl({
@@ -567,11 +576,15 @@ export async function repairBitgetPositionTpsl(client, ctx, record) {
             holdSide: hs,
             stopLossTriggerPrice: levels.stopLossStr,
             stopLossExecutePrice: levels.stopLossStr,
-            stopSurplusTriggerPrice: levels.takeProfitStr,
-            stopSurplusExecutePrice: levels.takeProfitStr,
-            stopSurplusSize: sizeStr,
+            ...(includeTp
+              ? {
+                  stopSurplusTriggerPrice: tpStr,
+                  stopSurplusExecutePrice: tpStr,
+                  stopSurplusSize: sizeStr,
+                  stopSurplusClientOid: `dc-tp-verify-${ctx.cardId}-${Date.now()}-a${attempt}`,
+                }
+              : {}),
             stopLossClientOid: `dc-sl-verify-${ctx.cardId}-${Date.now()}-a${attempt}`,
-            stopSurplusClientOid: `dc-tp-verify-${ctx.cardId}-${Date.now()}-a${attempt}`,
           }),
         ctx.holdSide
       );
@@ -671,6 +684,9 @@ export function formatBitgetNakedPositionAlert(details) {
  *   direction: string;
  *   initialSlPct: number;
  *   contractMeta?: ReturnType<typeof enrichBitgetContractMeta> | null;
+ *   preserveSignalStop?: boolean;
+ *   allowMissingTakeProfit?: boolean;
+ *   markOnlyTpsl?: boolean;
  * }} input
  */
 function usesMarkOnlyTpsl(input) {
@@ -681,44 +697,61 @@ function usesMarkOnlyTpsl(input) {
   );
 }
 
+/** 空字符串、0 不算有效止损，避免 planned.stopLossPrice="" 盖掉信号里的止损。 */
+function firstPositivePrice(...vals) {
+  for (const v of vals) {
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (!s || s === "0") continue;
+    const n = Number(s.replace(/[^\d.]/g, ""));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
+/** @param {unknown[]} raw */
+function positivePrices(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .map((p) => Number(String(p ?? "").replace(/[^\d.]/g, "")))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
 export function resolveOpenTpslPrices(input) {
   const ex = normalizeExecution(input.executionJson ?? null, input.parsed);
   const direction = input.direction;
   const fillPrice = input.fillPrice;
   const isShort = isShortDirection(direction);
   const markOnly = usesMarkOnlyTpsl(input);
+  const preserveSignalStop = input.preserveSignalStop === true;
+  const allowMissingTp = input.allowMissingTakeProfit === true || preserveSignalStop;
+  const slPct = Number(input.initialSlPct) > 0 ? Number(input.initialSlPct) : 5;
 
-  let slNum;
-  let tpNums;
+  let signalSl = null;
+  /** @type {number[]} */
+  let tpNums = [];
 
-  if (markOnly) {
-    const applied = applyDefaultTpSl(fillPrice, isShort, [], null);
-    slNum = calcInitialStopLoss(fillPrice, direction, input.initialSlPct) ?? applied.sl;
-    tpNums = applied.tps;
-    slNum = widenStopLossToMinPct(fillPrice, slNum, isShort, input.initialSlPct);
-  } else {
-    slNum = Number(
-      String(ex.planned?.stopLossPrice ?? input.parsed.stopLoss ?? "")
-        .replace(/[^\d.]/g, "")
+  if (!markOnly || preserveSignalStop) {
+    signalSl = firstPositivePrice(
+      ex.planned?.stopLossPrice,
+      input.parsed?.stopLoss,
+      input.parsed?.stop_loss
     );
-    if (!Number.isFinite(slNum) || slNum <= 0) {
-      slNum = calcInitialStopLoss(fillPrice, direction, input.initialSlPct) ?? 0;
-    }
+    const plannedTps = positivePrices(ex.planned?.takeProfitPrices);
+    const parsedTps = positivePrices(input.parsed?.takeProfits);
+    tpNums = plannedTps.length ? plannedTps : parsedTps;
+  }
 
-    tpNums = (ex.planned?.takeProfitPrices ?? [])
-      .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    if (!tpNums.length && Array.isArray(input.parsed.takeProfits)) {
-      tpNums = input.parsed.takeProfits
-        .map((p) => Number(String(p).replace(/[^\d.]/g, "")))
-        .filter((n) => Number.isFinite(n) && n > 0);
-    }
+  let slNum = signalSl;
+  if (!(slNum > 0)) {
+    slNum = calcInitialStopLoss(fillPrice, direction, slPct);
+  } else if (!preserveSignalStop) {
+    slNum = widenStopLossToMinPct(fillPrice, slNum, isShort, slPct);
+  }
 
-    const slForDefault = Number.isFinite(slNum) && slNum > 0 ? slNum : null;
-    const applied = applyDefaultTpSl(fillPrice, isShort, tpNums, slForDefault);
-    slNum = applied.sl;
+  if (!allowMissingTp && !tpNums.length) {
+    const applied = applyDefaultTpSl(fillPrice, isShort, [], slNum);
     tpNums = applied.tps;
-    slNum = widenStopLossToMinPct(fillPrice, slNum, isShort, input.initialSlPct);
+    if (!(slNum > 0)) slNum = applied.sl;
   }
 
   const takeProfits = tpNums.map((n) => priceStr(n)).filter(Boolean);
@@ -832,11 +865,12 @@ export async function inspectBitgetPositionTpsl(client, p) {
     }
   }
 
-  return { hasSl, hasTp, ok: hasSl && hasTp };
+  return { hasSl, hasTp, ok: hasSl };
 }
 
 /**
- * 市价开仓：必须同时带 preset TP/SL；预设被拒则按最新标记价重算后重试，禁止裸开仓。
+ * 市价开仓：请求本身必须带 preset 止损。信号有止盈才附带。
+ * 止损无效时不调用 placeOrder。交易所拒绝时只重试仍带止损的同一路径。
  * @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client
  * @param {{
  *   openBase: Record<string, unknown>;
@@ -847,8 +881,8 @@ export async function inspectBitgetPositionTpsl(client, p) {
  *   direction: string;
  *   size: string;
  *   initialSlPct: number;
- *   stopLossStr: string;
- *   takeProfitStr: string;
+ *   stopLossStr?: string;
+ *   takeProfitStr?: string;
  *   fetchMark: () => Promise<number | null>;
  *   parsed?: Record<string, unknown>;
  *   executionJson?: unknown;
@@ -861,6 +895,8 @@ export async function placeBitgetOpenWithPresets(client, p) {
   /** @type {string[]} */
   const presetErrors = [];
   let forcedTick = 0;
+  let placeAttempted = false;
+  const slPct = Number(p.initialSlPct) > 0 ? Number(p.initialSlPct) : 5;
 
   for (let presetAttempt = 1; presetAttempt <= maxPresetAttempts; presetAttempt++) {
     const contractMeta = await loadBitgetContractPriceMeta(client, {
@@ -869,7 +905,9 @@ export async function placeBitgetOpenWithPresets(client, p) {
     });
     const mark = (await p.fetchMark()) ?? 0;
     if (!(mark > 0)) {
-      return { ok: false, reason: "no_market_price", presetErrors };
+      presetErrors.push(`preset ${presetAttempt}: no mark price`);
+      if (presetAttempt < maxPresetAttempts) await sleep(300 * presetAttempt);
+      continue;
     }
 
     const resolved = resolveOpenTpslPrices({
@@ -877,61 +915,48 @@ export async function placeBitgetOpenWithPresets(client, p) {
       executionJson: p.executionJson,
       fillPrice: mark,
       direction: p.direction,
-      initialSlPct: p.initialSlPct,
+      initialSlPct: slPct,
       contractMeta,
+      preserveSignalStop: true,
+      allowMissingTakeProfit: true,
     });
-    // 每轮用当前标记价重算 TP/SL，避免预计算价与实盘偏离导致止损过近或 sl_breached 裸平
-    let slStr = resolved.stopLossStr;
-    let tpStr = resolved.takeProfitStr;
     const presetPrices = sanitizeBitgetOpenPresetPrices({
-      stopLossRaw: slStr,
-      takeProfitRaw: tpStr,
+      stopLossRaw: resolved.stopLossStr,
+      takeProfitRaw: resolved.takeProfitStr,
       meta: contractMeta,
       holdSide,
       forcedTick,
     });
-    slStr = presetPrices.stopLossStr;
-    tpStr = presetPrices.takeProfitStr;
-    let slNum = Number(slStr);
-    let tpNum = Number(tpStr);
-
-    if (!isValidStopLoss(mark, slNum, holdSide) || !isValidTakeProfit(mark, tpNum, holdSide)) {
-      const markResolved = resolveOpenTpslPrices({
-        parsed: p.parsed ?? {},
-        executionJson: p.executionJson,
-        fillPrice: mark,
-        direction: p.direction,
-        initialSlPct: p.initialSlPct,
-        contractMeta,
-        markOnlyTpsl: true,
-      });
-      const fallback = sanitizeBitgetOpenPresetPrices({
-        stopLossRaw: markResolved.stopLossStr,
-        takeProfitRaw: markResolved.takeProfitStr,
-        meta: contractMeta,
-        holdSide,
-        forcedTick,
-      });
-      slStr = fallback.stopLossStr;
-      tpStr = fallback.takeProfitStr;
-      slNum = Number(slStr);
-      tpNum = Number(tpStr);
+    const slStr = presetPrices.stopLossStr;
+    let tpStr = presetPrices.takeProfitStr;
+    const slNum = Number(slStr);
+    if (tpStr && !isValidTakeProfit(mark, Number(tpStr), holdSide)) {
+      presetErrors.push(`preset ${presetAttempt}: drop invalid tp ${tpStr} vs mark ${mark}`);
+      tpStr = "";
     }
 
-    if (!slStr || !tpStr || !isValidStopLoss(mark, slNum, holdSide) || !isValidTakeProfit(mark, tpNum, holdSide)) {
-      presetErrors.push(`preset ${presetAttempt}: invalid tp/sl vs mark ${mark} sl=${slStr} tp=${tpStr}`);
-      await sleep(300 * presetAttempt);
+    if (!slStr || !isValidStopLoss(mark, slNum, holdSide)) {
+      presetErrors.push(`preset ${presetAttempt}: stop unavailable vs mark ${mark} sl=${slStr || "—"}`);
+      if (presetAttempt < maxPresetAttempts) await sleep(300 * presetAttempt);
       continue;
     }
 
+    /** @type {Record<string, unknown>} */
+    const order = {
+      ...p.openBase,
+      orderType: "market",
+      presetStopLossPrice: slStr,
+      presetStopLossExecutePrice: slStr,
+    };
+    delete order.price;
+    if (tpStr) {
+      order.presetStopSurplusPrice = tpStr;
+      order.presetStopSurplusExecutePrice = tpStr;
+    }
+
+    placeAttempted = true;
     try {
-      const openResp = await client.placeOrder({
-        ...p.openBase,
-        presetStopLossPrice: slStr,
-        presetStopSurplusPrice: tpStr,
-        presetStopLossExecutePrice: slStr,
-        presetStopSurplusExecutePrice: tpStr,
-      });
+      const openResp = await client.placeOrder(order);
       return {
         ok: true,
         openResp,
@@ -939,6 +964,7 @@ export async function placeBitgetOpenWithPresets(client, p) {
         presetStopSurplusPrice: tpStr,
         markUsed: mark,
         presetAttempt,
+        orderSent: true,
       };
     } catch (e) {
       const msg = String(/** @type {Error} */ (e).message ?? e);
@@ -948,11 +974,16 @@ export async function placeBitgetOpenWithPresets(client, p) {
       if (classifyBitgetTpslRepairError(msg, holdSide) === "precision") {
         bitgetContractMetaCache.delete(`${p.productType}:${String(p.symbol).toUpperCase()}`);
       }
-      await sleep(350 * presetAttempt);
+      if (presetAttempt < maxPresetAttempts) await sleep(350 * presetAttempt);
     }
   }
 
-  return { ok: false, reason: "preset_open_failed", presetErrors };
+  return {
+    ok: false,
+    reason: placeAttempted ? "preset_open_failed" : "stop_loss_unavailable",
+    presetErrors,
+    orderSent: false,
+  };
 }
 
 /**
@@ -1059,7 +1090,8 @@ export async function sendBitgetTradeTelegramAlert(_log, _text) {
 }
 
 /**
- * 开仓后校验 TP/SL；缺失则 place-pos-tpsl；仍失败则按策略平仓或告警。
+ * 开仓后确认止损是否可见。缺失时才补挂（兜底，不是止损的首次创建）。
+ * 不再因为校验失败把刚开的仓市价平掉。
  * @param {ReturnType<typeof import("./bitget-api.js").createBitgetClient>} client
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
  * @param {{
@@ -1120,44 +1152,15 @@ export async function ensureBitgetPositionTpslAfterOpen(client, log, ctx, record
     lastError: repairResult.lastError ?? "",
     mark: repairResult.mark ?? 0,
     attempts: repair.attempts ?? [],
-    closeImmediately: Boolean(repairResult.closeImmediately),
+    closeImmediately: false,
     action,
   };
   const alertText = formatBitgetNakedPositionAlert(alertDetails);
-
-  const hadSlBreached = (repair.attempts ?? []).some((a) => a.category === "sl_breached");
-  const shouldClose =
-    action === "close" &&
-    !repairResult.closeImmediately &&
-    category === "retries_exhausted" &&
-    !hadSlBreached;
-
-  if (shouldClose) {
-    try {
-      const closeResp = await client.closePositions({
-        symbol: ctx.symbol,
-        productType: ctx.productType,
-        holdSide: /** @type {"long"|"short"} */ (ctx.holdSide),
-      });
-      record.nakedPositionClosed = true;
-      record.closeResponse = closeResp;
-      record.status = "naked_closed";
-      record.nakedCloseCategory = category;
-      await sendBitgetTradeTelegramAlert(log, alertText);
-      log.warn(`${alertText}`);
-    } catch (e) {
-      record.nakedPositionCloseError = String(/** @type {Error} */ (e).message ?? e);
-      await sendBitgetTradeTelegramAlert(
-        log,
-        `${alertText}\n平仓失败: ${record.nakedPositionCloseError}`
-      );
-      log.warn(`Bitget 裸仓平仓失败 card=#${ctx.cardId}: ${record.nakedPositionCloseError}`);
-      return { ok: false, record, reason: "naked_close_failed" };
-    }
-    return { ok: false, record, reason: "naked_closed" };
-  }
-
-  await sendBitgetTradeTelegramAlert(log, alertText);
-  log.warn(`${alertText}（BITGET_NAKED_POSITION_ACTION=alert）`);
-  return { ok: false, record, reason: "naked_alert_only" };
+  record.nakedPositionClosed = false;
+  record.tpslVerifyDeferred = true;
+  record.stopUnconfirmed = true;
+  log.warn(
+    `${alertText}（开仓请求已带止损；校验未确认，不平仓。BITGET_NAKED_POSITION_ACTION=${action}）`
+  );
+  return { ok: true, record, reason: "stop_unconfirmed_kept", deferred: true };
 }

@@ -39,7 +39,7 @@ import { normalizeExecution } from "./discord-signal-execution.js";
 import {
   fillMissingAutoTradeTpslAtMark,
   prepareAutoTradeForOrder,
-  telegramTradeRequiresTpsl,
+  telegramTradeRequiresStopLoss,
 } from "./telegram-auto-trade.js";
 import { normalizeSymbol } from "./card-fields.js";
 
@@ -393,7 +393,7 @@ export function createBitgetOrderService(store, log) {
 
     const isStaged = isStagedTradeSignal(parsed) || resolved.channel.stagedTrade;
     let exAfterPrepare = normalizeExecution(executionJson, parsed);
-    if (!telegramTradeRequiresTpsl(exAfterPrepare)) {
+    if (!telegramTradeRequiresStopLoss(exAfterPrepare)) {
       const credsForMark = credentials();
       if (credsForMark) {
         const sym = normalizeSymbol(autoTradeSym || String(parsed.symbol ?? ""));
@@ -418,16 +418,16 @@ export function createBitgetOrderService(store, log) {
         }
       }
     }
-    if (!telegramTradeRequiresTpsl(exAfterPrepare) && !isStaged) {
+    if (!telegramTradeRequiresStopLoss(exAfterPrepare) && !isStaged) {
       log.warn(
-        `Bitget 跳过 card=#${input.cardId}：务必设置止盈止损（已试默认 TP/SL 仍缺有效入场）`
+        `Bitget 跳过 card=#${input.cardId}：无法计算止损（默认 5%），未发送市价单`
       );
       await persistOrderResult(input.cardId, parsed, {
         status: "skipped",
-        reason: "missing_tpsl",
+        reason: "missing_stop_loss",
         at: new Date().toISOString(),
       });
-      return { skipped: "missing_tpsl" };
+      return { skipped: "missing_stop_loss" };
     }
 
     if (isStaged) {
@@ -708,7 +708,11 @@ export function createBitgetOrderService(store, log) {
 
             direction: plan.direction ?? String(input.parsed?.direction ?? ""),
 
-            initialSlPct: Number(resolved.channel.initialSlPct ?? tradeCfg.default?.initialSlPct ?? 4.3),
+            initialSlPct: Number(resolved.channel.initialSlPct ?? tradeCfg.default?.initialSlPct ?? 5),
+
+            preserveSignalStop: true,
+
+            allowMissingTakeProfit: true,
 
           });
 
@@ -728,7 +732,7 @@ export function createBitgetOrderService(store, log) {
 
             size: plan.size,
 
-            initialSlPct: Number(resolved.channel.initialSlPct ?? 4.3),
+            initialSlPct: Number(resolved.channel.initialSlPct ?? 5),
 
             stopLossStr: plan.stopLossPrice ?? tpslResolved.stopLossStr,
 
@@ -874,7 +878,7 @@ export function createBitgetOrderService(store, log) {
 
           direction: String(plan.direction ?? input.parsed?.direction ?? ""),
 
-          initialSlPct: Number(resolved.channel.initialSlPct ?? 4.3),
+          initialSlPct: Number(resolved.channel.initialSlPct ?? 5),
 
           parsed: input.parsed,
 
