@@ -7,7 +7,7 @@ import {
 } from "./telegram-auto-trade.js";
 
 describe("prepareAutoTradeForOrder", () => {
-  it("有数字入场时用该价按 5% SL / 默认 TP 下单（不用信号止损）", async () => {
+  it("有数字入场且信号带止损时保留信号止损和止盈", async () => {
     const parsed = {
       parser: "telegram",
       symbol: "RUNE",
@@ -26,11 +26,12 @@ describe("prepareAutoTradeForOrder", () => {
       },
     });
     assert.equal(telegramTradeRequiresStopLoss(out.execution), true);
-    assert.equal(out.parsed.tradeTpslFromMark, true);
-    assert.ok(Math.abs(Number(out.parsed.stopLoss) - 0.041 * 0.95) < 1e-8);
+    assert.notEqual(out.parsed.tradeTpslFromMark, true);
+    assert.equal(String(out.parsed.stopLoss), "0.0394");
+    assert.deepEqual(out.parsed.takeProfits, ["0.04258", "0.0451"]);
   });
 
-  it("市价且有方向时用注入价格补默认止损", async () => {
+  it("市价且没有止损时用注入价格补 5% 止损，不发明止盈", async () => {
     const parsed = { parser: "telegram", symbol: "WLD", direction: "long", entry: "市价" };
     const execution = normalizeExecution(null, parsed);
     const out = await prepareAutoTradeForOrder(parsed, execution, "WLD", {
@@ -39,10 +40,10 @@ describe("prepareAutoTradeForOrder", () => {
     assert.equal(telegramTradeRequiresStopLoss(out.execution), true);
     const sl = Number(out.parsed.stopLoss);
     assert.ok(Math.abs(sl - 2.5 * 0.95) < 1e-8);
-    assert.ok(out.parsed.takeProfits.length >= 1);
+    assert.equal((out.parsed.takeProfits ?? []).length, 0);
   });
 
-  it("正文有止损也会被实时价规则覆盖", async () => {
+  it("正文里的止损优先于默认 5%", async () => {
     const parsed = {
       parser: "telegram",
       symbol: "RUNE",
@@ -59,8 +60,8 @@ describe("prepareAutoTradeForOrder", () => {
         throw new Error("no network");
       },
     });
-    assert.equal(out.parsed.tradeTpslFromMark, true);
-    assert.ok(Math.abs(Number(out.parsed.stopLoss) - 0.041 * 0.95) < 1e-8);
+    assert.notEqual(out.parsed.tradeTpslFromMark, true);
+    assert.equal(String(out.parsed.stopLoss), "0.0394");
     assert.equal(telegramTradeRequiresStopLoss(out.execution), true);
   });
 });

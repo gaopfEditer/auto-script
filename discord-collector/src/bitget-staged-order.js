@@ -224,7 +224,7 @@ export async function executeStagedMarketOpen(client, input) {
   const contractMeta = input.dryRun ? parseBitgetContractMeta(null) : await fetchContractMeta(client, symbol, productType);
   const priceMeta = input.dryRun ? enrichBitgetContractMeta(null) : await loadBitgetContractPriceMeta(client, { symbol, productType });
 
-  const sizeResult = resolveBitgetOrderSize(Number(channelTrade.orderSizeUsdt ?? 50), refPrice, contractMeta, {
+  const sizeResult = resolveBitgetOrderSize(Number(channelTrade.orderSizeUsdt ?? 1), refPrice, contractMeta, {
     dryRun: input.dryRun,
     leverage,
   });
@@ -240,18 +240,25 @@ export async function executeStagedMarketOpen(client, input) {
     direction,
     initialSlPct,
     contractMeta: priceMeta,
+    preserveSignalStop: true,
+    allowMissingTakeProfit: true,
   });
   const initialSl = tpslResolved.stopLossPrice;
-  const initialTp = tpslResolved.takeProfitPrice;
-  if (!initialSl || !initialTp) {
-    return { ok: false, reason: "missing_initial_tpsl", error: "无法计算初始止盈止损价" };
-  }
-  if (!isValidStopLoss(fillPrice, initialSl, holdSide) || !isValidTakeProfit(fillPrice, initialTp, holdSide)) {
+  if (!initialSl || !tpslResolved.stopLossStr || !isValidStopLoss(fillPrice, initialSl, holdSide)) {
     return {
       ok: false,
-      reason: "invalid_initial_tpsl",
-      error: `TP/SL 相对市价 ${fillPrice} 方向无效（${holdSide}） sl=${initialSl} tp=${initialTp}`,
+      reason: "stop_loss_unavailable",
+      error: `无法附上止损，未发送市价单（${holdSide} mark=${fillPrice} sl=${initialSl || "—"}）`,
     };
+  }
+  const initialTp =
+    tpslResolved.takeProfitPrice && isValidTakeProfit(fillPrice, tpslResolved.takeProfitPrice, holdSide)
+      ? tpslResolved.takeProfitPrice
+      : 0;
+  if (!initialTp) {
+    tpslResolved.takeProfitStr = "";
+    tpslResolved.takeProfitPrice = 0;
+    tpslResolved.takeProfits = [];
   }
 
   /** @type {Record<string, unknown>} */
@@ -280,7 +287,7 @@ export async function executeStagedMarketOpen(client, input) {
 
   if (input.dryRun) {
     record.slPlan = { planType: "loss_plan", triggerPrice: initialSl, size };
-    record.tpPlan = { planType: "profit_plan", triggerPrice: initialTp, size };
+    if (initialTp) record.tpPlan = { planType: "profit_plan", triggerPrice: initialTp, size };
     return { ok: true, record, dryRun: true };
   }
 
@@ -410,16 +417,11 @@ export async function executeStagedMarketOpen(client, input) {
 
   if (attemptErrors.length) record.openRetryErrors = attemptErrors;
 
-  const tpslAttached = Boolean(
-    record.presetStopLossPrice &&
-      record.presetStopSurplusPrice &&
-      (record.slOrderId || record.tpOrderId)
-  );
-  if (!tpslAttached) {
+  if (!record.presetStopLossPrice) {
     return {
       ok: false,
-      reason: "tpsl_not_attached",
-      error: String(record.slError ?? record.openPresetSlError ?? "开仓未附带完整 TP/SL"),
+      reason: "stop_loss_not_attached",
+      error: String(record.slError ?? record.openPresetSlError ?? "市价单未带止损，未保留无保护仓位"),
       record,
     };
   }

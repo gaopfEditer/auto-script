@@ -104,34 +104,57 @@ describe("resolveRepairTpslLevels", () => {
 });
 
 describe("resolveOpenTpslPrices", () => {
-  it("分阶段信号无 TP 时按默认规则生成止盈", () => {
+  it("信号没有止损时按 5% 计算，且不发明止盈", () => {
     const r = resolveOpenTpslPrices({
       parsed: { direction: "做多", signalPhase: "open" },
       fillPrice: 100,
       direction: "做多",
-      initialSlPct: 4.3,
+      initialSlPct: 5,
+      preserveSignalStop: true,
+      allowMissingTakeProfit: true,
     });
-    assert.ok(r.takeProfitStr, "应有默认 TP");
-    assert.ok(r.stopLossStr, "应有 SL");
+    assert.equal(r.takeProfitStr, "");
+    assert.equal(r.stopLossStr, "95");
     assert.ok(isValidStopLoss(100, r.stopLossPrice, "long"));
-    assert.ok(isValidTakeProfit(100, r.takeProfitPrice, "long"));
-    assert.ok(r.takeProfits.length >= 1);
+  });
+
+  it("空的 planned.stopLossPrice 不会盖掉信号止损", () => {
+    const r = resolveOpenTpslPrices({
+      parsed: { direction: "做多", stopLoss: "97", entry: "100" },
+      executionJson: { planned: { stopLossPrice: "", entryPrice: "100", takeProfitPrices: [] } },
+      fillPrice: 100,
+      direction: "做多",
+      initialSlPct: 5,
+      preserveSignalStop: true,
+      allowMissingTakeProfit: true,
+    });
+    assert.equal(r.stopLossStr, "97");
+  });
+
+  it("信号止损比 5% 更紧时仍用信号价", () => {
+    const r = resolveOpenTpslPrices({
+      parsed: { direction: "做多", stopLoss: "99" },
+      fillPrice: 100,
+      direction: "做多",
+      initialSlPct: 5,
+      preserveSignalStop: true,
+      allowMissingTakeProfit: true,
+    });
+    assert.equal(r.stopLossStr, "99");
   });
 });
 
 describe("placeBitgetOpenWithPresets", () => {
-  it("预设被拒后按新标记价重试，且从不裸开仓", async () => {
-    /** @type {string[]} */
+  it("预设被拒后仍只重试带止损的市价单", async () => {
+    /** @type {Record<string, unknown>[]} */
     const placeCalls = [];
     let mark = 100;
     let failOnce = true;
 
     const client = {
       placeOrder: async (body) => {
-        placeCalls.push(JSON.stringify({ sl: body.presetStopLossPrice, tp: body.presetStopSurplusPrice }));
-        if (!body.presetStopLossPrice || !body.presetStopSurplusPrice) {
-          throw new Error("must have presets");
-        }
+        placeCalls.push(body);
+        if (!body.presetStopLossPrice) throw new Error("must have stop");
         if (failOnce) {
           failOnce = false;
           mark = 102;
@@ -142,26 +165,110 @@ describe("placeBitgetOpenWithPresets", () => {
     };
 
     const result = await placeBitgetOpenWithPresets(client, {
-      openBase: { symbol: "BTCUSDT", side: "buy", size: "1" },
-      symbol: "BTCUSDT",
+      openBase: { symbol: "SOLUSDT", side: "buy", size: "1", orderType: "limit", price: "100" },
+      symbol: "SOLUSDT",
       productType: "USDT-FUTURES",
       marginCoin: "USDT",
       holdSide: "long",
       direction: "做多",
       size: "1",
-      initialSlPct: 4.3,
-      stopLossStr: "95",
-      takeProfitStr: "110",
-      parsed: {},
+      initialSlPct: 5,
+      parsed: { direction: "做多", stopLoss: "90", takeProfits: ["110"] },
       fetchMark: async () => mark,
+      maxPresetAttempts: 2,
     });
 
     assert.equal(result.ok, true);
     assert.equal(placeCalls.length, 2);
-    for (const c of placeCalls) {
-      const o = JSON.parse(c);
-      assert.ok(o.sl && o.tp, "每次下单都必须带 TP/SL");
+    for (const body of placeCalls) {
+      assert.equal(body.orderType, "market");
+      assert.equal(body.price, undefined);
+      assert.equal(body.presetStopLossPrice, "90");
+      assert.equal(body.presetStopSurplusPrice, "110");
+      assert.equal(body.presetStopLossExecutePrice, "90");
     }
+  });
+
+  it("信号没有止盈时仍下市价单，且只带 5% 止损", async () => {
+    /** @type {Record<string, unknown> | null} */
+    let body = null;
+    const client = {
+      placeOrder: async (b) => {
+        body = b;
+        return { data: { orderId: "oid-sl-only" } };
+      },
+    };
+    const result = await placeBitgetOpenWithPresets(client, {
+      openBase: { symbol: "SOLUSDT", side: "buy", size: "0.2", orderType: "limit", price: "100" },
+      symbol: "SOLUSDT",
+      productType: "USDT-FUTURES",
+      marginCoin: "USDT",
+      holdSide: "long",
+      direction: "做多",
+      size: "0.2",
+      initialSlPct: 5,
+      parsed: { direction: "做多" },
+      fetchMark: async () => 100,
+      maxPresetAttempts: 1,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(body?.orderType, "market");
+    assert.equal(body?.presetStopLossPrice, "95");
+    assert.equal(body?.presetStopSurplusPrice, undefined);
+    assert.equal(body?.presetStopLossExecutePrice, "95");
+  });
+
+  it("止损相对标记价无效时不发送市价单", async () => {
+    let calls = 0;
+    const client = {
+      placeOrder: async () => {
+        calls += 1;
+        return { data: { orderId: "should-not" } };
+      },
+    };
+    const result = await placeBitgetOpenWithPresets(client, {
+      openBase: { symbol: "SOLUSDT", side: "buy", size: "1" },
+      symbol: "SOLUSDT",
+      productType: "USDT-FUTURES",
+      marginCoin: "USDT",
+      holdSide: "long",
+      direction: "做多",
+      size: "1",
+      initialSlPct: 5,
+      parsed: { direction: "做多", stopLoss: "110" },
+      fetchMark: async () => 100,
+      maxPresetAttempts: 1,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "stop_loss_unavailable");
+    assert.equal(result.orderSent, false);
+    assert.equal(calls, 0);
+  });
+
+  it("没有标记价时不发送市价单", async () => {
+    let calls = 0;
+    const client = {
+      placeOrder: async () => {
+        calls += 1;
+        return { data: { orderId: "should-not" } };
+      },
+    };
+    const result = await placeBitgetOpenWithPresets(client, {
+      openBase: { symbol: "SOLUSDT", side: "buy", size: "1" },
+      symbol: "SOLUSDT",
+      productType: "USDT-FUTURES",
+      marginCoin: "USDT",
+      holdSide: "long",
+      direction: "做多",
+      size: "1",
+      initialSlPct: 5,
+      parsed: { direction: "做多" },
+      fetchMark: async () => null,
+      maxPresetAttempts: 1,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "stop_loss_unavailable");
+    assert.equal(calls, 0);
   });
 });
 
@@ -314,9 +421,10 @@ describe("repairBitgetPositionTpsl", () => {
     const log = { warn: () => {} };
     const record = {};
     const result = await ensureBitgetPositionTpslAfterOpen(client, log, baseCtx, record);
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, "naked_alert_only");
+    assert.equal(result.ok, true);
+    assert.equal(result.reason, "stop_unconfirmed_kept");
     assert.equal(closed, false);
+    assert.notEqual(record.nakedPositionClosed, true);
     assert.equal(record.tpslRepair?.closeReason, "request_param_exhausted");
   });
 
@@ -347,13 +455,13 @@ describe("repairBitgetPositionTpsl", () => {
 });
 
 describe("ensureBitgetPositionTpslAfterOpen", () => {
-  it("校验失败且补挂重试用尽时市价平仓并记录 attempts", async () => {
+  it("校验失败且补挂重试用尽时不平仓", async () => {
     process.env.BITGET_REQUIRE_TPSL = "1";
     process.env.BITGET_NAKED_POSITION_ACTION = "close";
     process.env.BITGET_TPSL_VERIFY_SEC = "2";
     process.env.BITGET_TPSL_REPAIR_RETRIES = "1";
 
-    let closed = false;
+    let closed = 0;
     /** @type {string[]} */
     const alerts = [];
 
@@ -365,7 +473,7 @@ describe("ensureBitgetPositionTpslAfterOpen", () => {
         throw new Error("place-pos-tpsl rejected unknown");
       },
       closePositions: async () => {
-        closed = true;
+        closed += 1;
         return { data: { ok: true } };
       },
     };
@@ -374,15 +482,17 @@ describe("ensureBitgetPositionTpslAfterOpen", () => {
       warn: (msg) => alerts.push(String(msg)),
     };
 
-    const record = {};
+    const record = { presetStopLossPrice: "3000" };
     const result = await ensureBitgetPositionTpslAfterOpen(client, log, baseCtx, record);
 
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, "naked_closed");
-    assert.equal(closed, true);
-    assert.equal(record.nakedPositionClosed, true);
+    assert.equal(result.ok, true);
+    assert.equal(result.reason, "stop_unconfirmed_kept");
+    assert.equal(closed, 0);
+    assert.notEqual(record.nakedPositionClosed, true);
+    assert.notEqual(record.status, "naked_closed");
     assert.ok(Array.isArray(record.tpslRepair?.attempts));
     assert.equal(record.tpslRepair.attempts.length, 1);
+    assert.ok(alerts.some((m) => m.includes("不平仓")));
   });
 
   it("sl_breached 补挂失败时不因穿越止损立即市价平仓", async () => {
@@ -414,8 +524,9 @@ describe("ensureBitgetPositionTpslAfterOpen", () => {
     const result = await ensureBitgetPositionTpslAfterOpen(client, log, baseCtx, record);
 
     assert.equal(closed, false);
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, "naked_alert_only");
+    assert.equal(result.ok, true);
+    assert.equal(result.reason, "stop_unconfirmed_kept");
+    assert.notEqual(record.nakedPositionClosed, true);
   });
 });
 
@@ -438,7 +549,9 @@ describe("bitget tpsl env defaults", () => {
     process.env.BITGET_NAKED_POSITION_ACTION = "bogus";
 
     assert.equal(bitgetRequireTpslEnabled(), true);
-    assert.equal(bitgetNakedPositionAction(), "close");
+    assert.equal(bitgetNakedPositionAction(), "skip");
+    process.env.BITGET_NAKED_POSITION_ACTION = "close";
+    assert.equal(bitgetNakedPositionAction(), "skip");
     assert.equal(bitgetTpslVerifyWindowMs(), 8000);
     assert.equal(bitgetTpslRepairRetries(), 3);
 
@@ -530,7 +643,7 @@ describe("live regression float tails (VVV/HOT/PYTH)", () => {
 });
 
 describe("placeBitgetOpenWithPresets tick", () => {
-  it("开仓 preset 在送出前按合约 tick 取整", async () => {
+  it("没有信号止损时 5% 止损按 tick 取整，且不附带发明的止盈", async () => {
     /** @type {string[]} */
     const bodies = [];
     const client = {
@@ -548,18 +661,56 @@ describe("placeBitgetOpenWithPresets tick", () => {
       holdSide: "long",
       direction: "做多",
       size: "2",
-      stopLossStr: "0.40015500000000004",
-      takeProfitStr: "0.451234567",
+      initialSlPct: 5,
+      parsed: { direction: "做多" },
       fetchMark: async () => 0.42,
     });
     assert.equal(result.ok, true);
     assert.equal(bodies.length, 1);
     const body = JSON.parse(bodies[0]);
+    assert.equal(body.orderType, "market");
     assert.equal(body.presetStopLossPrice, "0.399");
-    assert.equal(body.presetStopSurplusPrice, "0.441");
+    assert.equal(body.presetStopSurplusPrice, undefined);
     assert.equal(body.presetStopLossExecutePrice, "0.399");
-    assert.equal(body.presetStopSurplusExecutePrice, "0.441");
     assert.ok(Number(body.presetStopLossExecutePrice) > 0);
+  });
+
+  it("信号止损和止盈按 tick 取整后跟市价单一起送出", async () => {
+    /** @type {Record<string, unknown>[]} */
+    const bodies = [];
+    const client = {
+      getMixContract: async () => ({ pricePlace: "4", priceEndStep: "1" }),
+      placeOrder: async (body) => {
+        bodies.push(body);
+        return { data: { orderId: "1" } };
+      },
+    };
+    const result = await placeBitgetOpenWithPresets(client, {
+      openBase: { symbol: "WLDUSDT", side: "buy", size: "2", orderType: "limit", price: "0.42" },
+      symbol: "WLDUSDT",
+      productType: "USDT-FUTURES",
+      marginCoin: "USDT",
+      holdSide: "long",
+      direction: "做多",
+      size: "2",
+      initialSlPct: 5,
+      parsed: {
+        direction: "做多",
+        stopLoss: "0.40015500000000004",
+        takeProfits: ["0.451234567"],
+      },
+      executionJson: { planned: { stopLossPrice: "", takeProfitPrices: [], entryPrice: "" } },
+      fetchMark: async () => 0.42,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(bodies.length, 1);
+    const body = bodies[0];
+    assert.equal(body.orderType, "market");
+    assert.equal(body.price, undefined);
+    assert.equal(body.presetStopLossPrice, "0.4001");
+    assert.equal(body.presetStopSurplusPrice, "0.4513");
+    assert.equal(body.presetStopLossExecutePrice, "0.4001");
+    assert.equal(body.presetStopSurplusExecutePrice, "0.4513");
   });
 });
 

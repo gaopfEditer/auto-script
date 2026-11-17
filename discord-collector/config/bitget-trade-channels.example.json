@@ -8,7 +8,7 @@
     "orderType": "market",
     "productType": "USDT-FUTURES",
     "stagedTrade": false,
-    "initialSlPct": 4.3,
+    "initialSlPct": 5,
     "tpPartialRatios": [0.3, 0.3, 1]
   },
   "channels": {
@@ -19,7 +19,7 @@
       "stagedTrade": true,
       "leverage": 20,
       "orderSizeUsdt": 1,
-      "initialSlPct": 4.3,
+      "initialSlPct": 5,
       "tpPartialRatios": [0.3, 0.3, 1]
     },
     "1444963372134301827": {
@@ -29,7 +29,7 @@
       "stagedTrade": true,
       "leverage": 20,
       "orderSizeUsdt": 1,
-      "initialSlPct": 4.3,
+      "initialSlPct": 5,
       "tpPartialRatios": [0.3, 0.3, 1]
     },
     "1444963405185159238": {
@@ -37,7 +37,7 @@
       "name": "币圈所长",
       "leverage": 10,
       "orderSizeUsdt": 100,
-      "orderType": "limit"
+      "orderType": "market"
     }
   }
 }
