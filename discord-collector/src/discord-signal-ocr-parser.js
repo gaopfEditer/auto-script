@@ -2,10 +2,19 @@
  * 从交易所晒单 OCR 文本解析盈利率、交易对、方向、杠杆、开仓价等。
  */
 
+/**
+ * 胖猫单图 OCR 出卡门槛：收益率（有符号）小于该值才发信号。
+ * 负数始终出卡（例如 -5）；等于或高于该值不出卡。
+ */
+export const PANGMAO_OCR_YIELD_EMIT_BELOW_PCT = 40;
+
 /** @param {string} raw */
 export function normalizeOcrText(raw) {
   let t = String(raw ?? "")
     .replace(/\u200b/g, "")
+    .replace(/[＋]/g, "+")
+    .replace(/[−–—]/g, "-")
+    .replace(/[％]/g, "%")
     .replace(/[，]/g, ",");
   while (/(\d),(\d{3})/.test(t)) {
     t = t.replace(/(\d),(\d{3})/g, "$1$2");
@@ -14,22 +23,64 @@ export function normalizeOcrText(raw) {
 }
 
 /**
- * 提取晒单盈利率（百分比数值，不含 %）。取 OCR 中最显著的一条 ROI。
+ * 同一绝对值时保留负数，避免把亏损晒单收成正收益。
+ * @param {number[]} nums
+ * @returns {number | null}
+ */
+function mostProminentSignedPct(nums) {
+  if (!nums.length) return null;
+  let best = nums[0];
+  for (const n of nums.slice(1)) {
+    const absN = Math.abs(n);
+    const absBest = Math.abs(best);
+    if (absN > absBest || (absN === absBest && n < best)) best = n;
+  }
+  return best;
+}
+
+/**
+ * 提取晒单收益率（有符号百分比，不含 %）。
+ * 优先「收益率 / 盈亏 / ROI / PnL」旁边的数字；否则取绝对值最大的一条并保留符号。
  * @param {string} text
  * @returns {number | null}
  */
 export function extractProfitRatePct(text) {
-  const t = String(text ?? "");
-  if (!t.trim()) return null;
+  const t = normalizeOcrText(text);
+  if (!t) return null;
+
+  /** @type {number[]} */
+  const labeled = [];
+  const labelRe =
+    /(?:收益率|盈亏率|盈虧率|盈亏|盈虧|ROI|PnL|PNL|收益)\s*[:：]?\s*([+-]?\d+(?:\.\d+)?)\s*%/gi;
+  for (const m of t.matchAll(labelRe)) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n)) labeled.push(n);
+  }
+  if (labeled.length) return mostProminentSignedPct(labeled);
 
   /** @type {number[]} */
   const hits = [];
-  for (const m of t.matchAll(/([+-]?\d+(?:\.\d+)?)\s*[%％]/g)) {
+  for (const m of t.matchAll(/([+-]?\d+(?:\.\d+)?)\s*%/g)) {
     const n = Number(m[1]);
-    if (Number.isFinite(n)) hits.push(Math.abs(n));
+    if (Number.isFinite(n)) hits.push(n);
   }
-  if (!hits.length) return null;
-  return Math.max(...hits);
+  return mostProminentSignedPct(hits);
+}
+
+/**
+ * 单图 OCR 是否出交易信号。
+ * 收益率缺失 → 否；负数 → 是；否则仅当 yield < threshold（默认 40，40 本身不出）。
+ * @param {number | null | undefined} yieldPct
+ * @param {number} [threshold]
+ */
+export function shouldEmitPangmaoOcrYield(yieldPct, threshold = PANGMAO_OCR_YIELD_EMIT_BELOW_PCT) {
+  if (yieldPct == null || yieldPct === "") return false;
+  const y = typeof yieldPct === "number" ? yieldPct : Number(yieldPct);
+  if (!Number.isFinite(y)) return false;
+  if (y < 0) return true;
+  const max = Number(threshold);
+  const limit = Number.isFinite(max) ? max : PANGMAO_OCR_YIELD_EMIT_BELOW_PCT;
+  return y < limit;
 }
 
 /** @param {string} num */
@@ -117,14 +168,33 @@ export function buildOcrSignalFingerprint(parsed) {
 }
 
 /**
+ * 胖猫单图 OCR 判定。
+ * reason:
+ * - ok：币种、方向、收益率齐全，且收益率 < 门槛或为负
+ * - missing_yield / missing_fields：不出卡
+ * - yield_gate：收益率 ≥ 门槛且非负（晒单），不出卡
  * @param {string} ocrText
- * @param {number} showOffMinProfitPct  ≥ 该值视为晒单
+ * @param {number} showOffMinProfitPct  收益率 ≥ 该值且非负则不出卡（默认 40）
  */
 export function classifyOcrPoster(ocrText, showOffMinProfitPct) {
-  const profitRatePct = extractProfitRatePct(ocrText);
+  const joined = normalizeOcrText(ocrText);
+  const profitRatePct = extractProfitRatePct(joined);
   const threshold = Number(showOffMinProfitPct);
-  const isShowOff =
-    profitRatePct != null && Number.isFinite(threshold) && profitRatePct >= threshold;
-  const parsed = !isShowOff ? parseExchangePosterOcr(ocrText) : null;
-  return { profitRatePct, isShowOff, parsed };
+  const parsedAttempt = joined ? parseExchangePosterOcr(joined) : null;
+  /** @type {"ok"|"missing_yield"|"missing_fields"|"yield_gate"} */
+  let reason = "ok";
+  if (profitRatePct == null) reason = "missing_yield";
+  else if (!shouldEmitPangmaoOcrYield(profitRatePct, threshold)) reason = "yield_gate";
+  else if (!parsedAttempt) reason = "missing_fields";
+  const parsed =
+    reason === "ok" && parsedAttempt
+      ? { ...parsedAttempt, profitRatePct }
+      : null;
+  return {
+    profitRatePct,
+    isShowOff: reason === "yield_gate",
+    emit: reason === "ok",
+    reason,
+    parsed,
+  };
 }

@@ -160,6 +160,29 @@ describe("kolvip API 消息行", () => {
     assert.equal(dom.imageUrl, "https://cdn.example/a.jpg");
   });
 
+  it("多图相册保留全部 URL，单图旁边的非图片文件不算相册", () => {
+    const album = kolvipApiRawToDomMessage({
+      id: 7,
+      text: "",
+      images: [{ url: "https://cdn.example/a.jpg" }, { url: "https://cdn.example/b.jpg" }],
+    });
+    assert.deepEqual(album.imageUrls, ["https://cdn.example/a.jpg", "https://cdn.example/b.jpg"]);
+    const row = kolvipMessageToDiscordRow(album, {
+      kolvipChannelId: "16",
+      discordChannelId: "1562351038277619783",
+      source: "kolvip_api",
+    });
+    assert.equal(row.rawJson.attachments.length, 2);
+
+    const single = kolvipApiRawToDomMessage({
+      id: 8,
+      text: "",
+      images: [{ url: "https://cdn.example/only.jpg" }],
+      files: [{ url: "https://cdn.example/note.pdf", content_type: "application/pdf" }],
+    });
+    assert.deepEqual(single.imageUrls, ["https://cdn.example/only.jpg"]);
+  });
+
   it("API 相对路径 images 拼绝对 URL", () => {
     const dom = kolvipApiRawToDomMessage({
       id: 1,

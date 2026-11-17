@@ -130,18 +130,26 @@ export async function scrapeKolvipChannelFeed(page, kolvipChannelId, maxMessages
       const who = article.querySelector(".who");
       const paras = bubble ? [...bubble.querySelectorAll("p.ft")] : [];
       const text = paras.map((p) => p.textContent?.trim() || "").filter(Boolean).join("\n");
-      const frame = article.querySelector(".frame[data-src], .frame[data-full]");
-      const imageUrl =
-        frame?.getAttribute("data-full")?.trim() ||
-        frame?.getAttribute("data-src")?.trim() ||
-        "";
+      const frames = [...article.querySelectorAll(".frame[data-src], .frame[data-full]")];
+      const imageUrls = [];
+      const seenImg = new Set();
+      for (const frame of frames) {
+        const one =
+          frame.getAttribute("data-full")?.trim() ||
+          frame.getAttribute("data-src")?.trim() ||
+          "";
+        if (!one || seenImg.has(one)) continue;
+        seenImg.add(one);
+        imageUrls.push(one);
+      }
       out.push({
         dataId,
         text,
         author: who?.textContent?.trim() || "",
         timeText: timeEl?.textContent?.trim() || "",
         timeTitle: bubble?.getAttribute("title")?.trim() || "",
-        imageUrl,
+        imageUrl: imageUrls[0] || "",
+        imageUrls,
       });
     }
     return out;
@@ -155,6 +163,9 @@ export async function scrapeKolvipChannelFeed(page, kolvipChannelId, maxMessages
     timeText: String(d.timeText ?? ""),
     timeTitle: String(d.timeTitle ?? ""),
     imageUrl: String(d.imageUrl ?? ""),
+    imageUrls: Array.isArray(d.imageUrls)
+      ? d.imageUrls.map((u) => String(u ?? "").trim()).filter(Boolean)
+      : [],
   }));
 }
 

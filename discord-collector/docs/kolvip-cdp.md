@@ -141,7 +141,17 @@ done
 
 ---
 
-## 7. 模块索引
+## 7. 胖猫单图 OCR 与优先队列
+
+kolvip 频道 16（胖猫社区）的消息进现有信号卡管道。**带配文的消息仍走原来的文字解析。** 只有「一张图、没有配文、不是多图相册」才调用本机 PaddleOCR（`http://127.0.0.1:8866` 的 `POST /ocr`，失败再试 `POST /ocr/base64`）。图是文字截图，只从 OCR 文本里取币种、方向、收益率，不调用 Ollama。
+
+出卡规则：币种和方向都能解析，且收益率 **小于 40** 或为负数（`-5%` 出卡，`40%` / `41%` 不出，`0%` 出）。缺任一字段只打日志。服务宕机或超时同样只打日志。
+
+出卡之后（文字卡，以及过了上面门槛的 OCR 卡）向 `POST {PRIORITY_QUEUE_BASE_URL}/queue/priority` 入队，`source` 固定 `pangmao`。`PRIORITY_QUEUE_BASE_URL` 或 `PRIORITY_QUEUE_SECRET` 为空则跳过并只记一次日志；队列不可达不影响出卡。
+
+合并后在跑采集的那台 Mac 上：确认 PaddleOCR 仍监听 `0.0.0.0:8866`；若 `.env` 里还写着 `DISCORD_SIGNAL_OCR_OPEN_MAX_PROFIT_PCT=66`，改成 `40` 或删掉该行。优先队列地址和 secret 配好后重启 `pnpm run collect:ui`。不要把 secret 写进仓库。
+
+## 8. 模块索引
 
 | 文件 | 说明 |
 |------|------|

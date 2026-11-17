@@ -2,7 +2,7 @@
  * 信号频道消息 → 卡片服务（Gateway / REST / kolvip 共用）。
  */
 import { resolveSignalContentFromRow } from "./discord-reply-content.js";
-import { isSignalChannel } from "./discord-signal-config.js";
+import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
 import { shouldTelegramPushSignalChannelComment } from "./discord-telegram-push-config.js";
 import { resolveSignalFromRowWithOcr } from "./discord-signal-image-ocr.js";
 import { isDiscordSignalOcrChannel } from "./discord-signal-ocr-config.js";
@@ -11,6 +11,19 @@ import {
   isKolvipIngestSource,
   upgradeKolvipSignalCardSourceFromRow,
 } from "./discord-signal-card-source.js";
+import {
+  buildPangmaoPriorityEnqueueBody,
+  enqueuePriorityCard,
+} from "./priority-queue-client.js";
+
+/** 单图 OCR 已判定不出卡：不要再把 OCR 文本交给正文 parser。 */
+const OCR_TERMINAL_SKIPS = new Set([
+  "ocr_show_off",
+  "ocr_yield_gate",
+  "ocr_fingerprint_dedup",
+  "ocr_missing_yield",
+  "ocr_missing_fields",
+]);
 
 /**
  * @typedef {{
@@ -21,6 +34,8 @@ import {
  *   respectKolvipBypass?: boolean,
  *   skipTelegram?: boolean,
  *   skipOllamaFallback?: boolean,
+ *   ocrImage?: import("./discord-signal-ocr-client.js").ocrDiscordImageUrl,
+ *   enqueuePriority?: typeof enqueuePriorityCard,
  * }} SignalPipelineDeps
  */
 
@@ -52,6 +67,8 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     respectKolvipBypass = true,
     skipTelegram = false,
     skipOllamaFallback = false,
+    ocrImage,
+    enqueuePriority = enqueuePriorityCard,
   } = deps;
   /** @type {Record<string, number>} */
   const skipCounts = {};
@@ -93,8 +110,8 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     const ocrEligible = isSignalIngestOcrEligible(cid);
 
     if (ocrEligible) {
-      const ocrResolved = await resolveSignalFromRowWithOcr(r, { log });
-      if (ocrResolved?.skipped === "ocr_show_off" || ocrResolved?.skipped === "ocr_fingerprint_dedup") {
+      const ocrResolved = await resolveSignalFromRowWithOcr(r, { log, ocrImage });
+      if (ocrResolved?.skipped && OCR_TERMINAL_SKIPS.has(String(ocrResolved.skipped))) {
         bump(String(ocrResolved.skipped));
         continue;
       }
@@ -163,7 +180,7 @@ export async function runSignalCardPipelineForRows(rows, deps) {
       cardResult = await signalCards.onMessage(r, {
         skipDedup: true,
         skipTelegram: skipTelegram,
-        skipAiFallback: skipOllamaFallback,
+        skipAiFallback: skipOllamaFallback || Boolean(ocrPreParsed),
         contentOverride: content,
         preParsed: ocrPreParsed,
         ocrFingerprint,
@@ -189,6 +206,22 @@ export async function runSignalCardPipelineForRows(rows, deps) {
     }
     if (cardResult?.card || cardResult?.merged || skipped !== "parse_failed") {
       await signalCards.dedup.remember(cid, content);
+    }
+
+    const enqueueBody = buildPangmaoPriorityEnqueueBody({
+      parser: getSignalChannelConfig(cid)?.parser,
+      card: cardResult?.card,
+      skipped,
+      via: ocrPreParsed?.ocrPoster ? "ocr" : "text",
+      yieldPct: ocrPreParsed?.profitRatePct,
+    });
+    if (enqueueBody) {
+      // 不 await：队列超时或不可达不能挡住已经发出的信号卡。
+      void Promise.resolve(enqueuePriority(enqueueBody, { log })).catch((e) => {
+        log.warn(
+          `胖猫优先队列入队异常（出卡不受影响）: ${/** @type {Error} */ (e).message ?? e}`,
+        );
+      });
     }
 
     if (

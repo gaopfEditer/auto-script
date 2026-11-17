@@ -4,6 +4,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildShowSidebarChannelGroups } from "./discord-show-channels.js";
+import { PANGMAO_OCR_YIELD_EMIT_BELOW_PCT } from "./discord-signal-ocr-parser.js";
 import { parseKolvipChannelIdsEnv } from "./kolvip-cdp-config.js";
 
 const _repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -311,8 +312,10 @@ export const config = {
   discordSignalOcrBaseUrl: (process.env.DISCORD_SIGNAL_OCR_BASE_URL ?? "http://127.0.0.1:8866")
     .trim()
     .replace(/\/$/, ""),
-  /** OCR 晒单：盈利率 ≥ 该值视为晒单，不出开仓卡（默认 66） */
-  discordSignalOcrOpenMaxProfitPct: Number(process.env.DISCORD_SIGNAL_OCR_OPEN_MAX_PROFIT_PCT ?? 66),
+  /** 胖猫单图 OCR：收益率 ≥ 该值且非负则不出卡（默认 40；负数始终出卡） */
+  discordSignalOcrOpenMaxProfitPct: Number(
+    process.env.DISCORD_SIGNAL_OCR_OPEN_MAX_PROFIT_PCT ?? PANGMAO_OCR_YIELD_EMIT_BELOW_PCT,
+  ),
   /** OCR 开仓指纹去重窗口（毫秒，默认 5 分钟） */
   discordSignalOcrDedupWindowMs: Math.max(
     60_000,
@@ -321,6 +324,16 @@ export const config = {
   discordSignalOcrTimeoutMs: Math.max(
     5_000,
     Number(process.env.DISCORD_SIGNAL_OCR_TIMEOUT_MS ?? 30_000),
+  ),
+  /**
+   * 胖猫卡片优先队列（msg-relay-service）。两者都空则跳过入队。
+   * 不要在仓库里写真实 secret。
+   */
+  priorityQueueBaseUrl: (process.env.PRIORITY_QUEUE_BASE_URL ?? "").trim().replace(/\/$/, ""),
+  priorityQueueSecret: (process.env.PRIORITY_QUEUE_SECRET ?? "").trim(),
+  priorityQueueTimeoutMs: Math.max(
+    1_000,
+    Number(process.env.PRIORITY_QUEUE_TIMEOUT_MS ?? 8_000),
   ),
   /** Telegram 推送频道（空=内置 8 个） */
   discordTelegramPushChannelIds: parseIdList(process.env.DISCORD_TELEGRAM_PUSH_CHANNEL_IDS ?? ""),
