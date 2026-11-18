@@ -844,6 +844,29 @@ async function main() {
     }
   }
 
+  app.get("/api/oi/report-queue", async (req, res) => {
+    const q = new URLSearchParams();
+    if (req.query?.limit != null) q.set("limit", String(req.query.limit));
+    if (req.query?.items != null) q.set("items", String(req.query.items));
+    const suffix = q.toString() ? `?${q}` : "";
+    const { status, data, online } = await proxyOiJson(`/api/report-queue${suffix}`);
+    res.status(online ? status : 503).json({
+      ...(data && typeof data === "object" ? data : { ok: false, error: "无效响应" }),
+      oiOnline: online,
+    });
+  });
+
+  app.get("/api/oi/report-queue/:reportId", async (req, res) => {
+    const raw = String(req.params.reportId || "").trim().replace(/ /g, "+");
+    const { status, data, online } = await proxyOiJson(
+      `/api/report-queue/${encodeURIComponent(raw)}`
+    );
+    res.status(online ? status : 503).json({
+      ...(data && typeof data === "object" ? data : { ok: false, error: "无效响应" }),
+      oiOnline: online,
+    });
+  });
+
   app.get("/api/debug/oi-telegram-push", async (_req, res) => {
     const { status, data, online } = await proxyOiJson("/api/telegram-push-toggles");
     res.status(online ? status : 200).json({

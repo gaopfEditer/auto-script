@@ -2,6 +2,7 @@
 import { ref, reactive, computed, shallowRef, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { RouterLink } from "vue-router";
 import ShowMessagePane from "../components/ShowMessagePane.vue";
+import OiReportQueuePane from "../components/OiReportQueuePane.vue";
 import SignalCardRail from "../components/SignalCardRail.vue";
 import KolvipEvalPanel from "../components/KolvipEvalPanel.vue";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
@@ -46,6 +47,7 @@ import {
   newChannelGroupId,
 } from "../lib/discordShow.js";
 import { resetAttachmentImgDeadCache } from "../lib/showAttachmentImages.js";
+import { fetchOiReportQueue } from "../lib/oiReportQueueApi.js";
 
 defineOptions({ name: "ShowView" });
 
@@ -86,6 +88,15 @@ const unreadCountByChannelId = reactive(/** @type {Record<string, number>} */ ({
 const selectedGuildId = ref(DEFAULT_SHOW_GUILD_ID);
 /** @type {import('vue').Ref<ChannelItem | null>} */
 const selectedChannel = ref(null);
+/** 形态/OI 5 分钟报告队列：排在频道列表最上方，点击后在主栏打开 */
+const reportQueueOpen = ref(false);
+const reportQueueLoading = ref(false);
+const reportQueuePreview = ref("");
+const reportQueueCount = ref(0);
+const reportQueueError = ref("");
+const reportQueueReloadToken = ref(0);
+/** @type {ReturnType<typeof setInterval> | null} */
+let reportQueueTimer = null;
 /** CDP Discord 页签当前频道（由 meta / WS 推送同步） */
 const cdpActiveChannelId = ref("");
 const cdpActiveGuildId = ref("");
@@ -205,6 +216,7 @@ const selectedMessages = computed(() => {
 });
 
 const showSignalCards = computed(() => {
+  if (reportQueueOpen.value) return false;
   const cid = selectedChannel.value?.channelId;
   if (!cid || !signalConfig.value) return false;
   return isSignalChannelId(cid, signalConfig.value);
@@ -1153,7 +1165,39 @@ async function syncChannelAfterSelect(ch, seq, gid, cid, skipInitialDb) {
  * 向上翻页见 onMsgsScroll → scrollDiscordChannelHistory。
  * @param {ChannelItem} ch
  */
+function reportQueueBadge() {
+  if (reportQueueCount.value > 99) return "99+";
+  return reportQueueCount.value > 0 ? String(reportQueueCount.value) : "";
+}
+
+async function refreshReportQueueSummary() {
+  reportQueueLoading.value = !reportQueuePreview.value && !reportQueueCount.value;
+  try {
+    const data = await fetchOiReportQueue({ limit: 8 });
+    const pending = data.pending;
+    const reports = data.reports || [];
+    reportQueueCount.value = (pending ? 1 : 0) + reports.length;
+    const latest = pending || reports[0] || null;
+    reportQueuePreview.value = latest
+      ? `${latest.pending ? "进行中 " : ""}${latest.windowLabel} · ${latest.preview || `${latest.itemCount} 条`}`
+      : "近窗暂无形态或 OI 异常";
+    reportQueueError.value = data.oiOnline === false ? " /oi 暂不可达" : "";
+  } catch (e) {
+    reportQueueError.value = e instanceof Error ? e.message : String(e);
+    if (!reportQueuePreview.value) reportQueuePreview.value = "报告队列暂不可用";
+  } finally {
+    reportQueueLoading.value = false;
+  }
+}
+
+function openReportQueue() {
+  reportQueueOpen.value = true;
+  reportQueueReloadToken.value += 1;
+  void refreshReportQueueSummary();
+}
+
 async function selectChannel(ch) {
+  reportQueueOpen.value = false;
   if (renamingChannelId.value && renamingChannelId.value !== ch.channelId) {
     commitRename();
   }
@@ -1953,6 +1997,8 @@ onMounted(async () => {
   }
   void loadChannelStripStats();
   channelStripTimer = setInterval(() => void loadChannelStripStats(), 60_000);
+  void refreshReportQueueSummary();
+  reportQueueTimer = setInterval(() => void refreshReportQueueSummary(), 30_000);
   syncPaneMessagesFromStore();
   if (selectedChannel.value) {
     channelStickBottom.value = true;
@@ -1970,6 +2016,10 @@ onUnmounted(() => {
   if (channelStripTimer) {
     clearInterval(channelStripTimer);
     channelStripTimer = null;
+  }
+  if (reportQueueTimer) {
+    clearInterval(reportQueueTimer);
+    reportQueueTimer = null;
   }
 });
 </script>
@@ -2007,6 +2057,20 @@ onUnmounted(() => {
         <button type="button" class="channel-group-add-btn" title="新建分组" @click="createChannelGroup">+ 分组</button>
       </div>
       <div class="guild-channel-scroll">
+        <button
+          type="button"
+          class="channel-row report-queue-row"
+          :class="{ active: reportQueueOpen }"
+          title="每 5 分钟形态 / OI 持仓量异常报告"
+          @click="openReportQueue"
+        >
+          <span class="title-line">
+            <span class="hash">▣</span>
+            <span class="channel-name">形态/OI 报告队列</span>
+            <span v-if="reportQueueBadge()" class="channel-unread-badge">{{ reportQueueBadge() }}</span>
+          </span>
+          <span class="preview">{{ reportQueueLoading ? "加载中…" : (reportQueuePreview || "点击查看 5 分钟报告") }}{{ reportQueueError ? " · " + reportQueueError : "" }}</span>
+        </button>
         <p v-if="loadingChannels" class="kook-wait">加载频道…</p>
         <p v-else-if="selectedGuildId && !currentGuildChannels.length" class="kook-wait">
           暂无文本频道；请在 Discord 网页打开该服务器以同步频道列表。
@@ -2066,7 +2130,7 @@ onUnmounted(() => {
             class="channel-row"
             draggable="true"
             :class="{
-              active: selectedChannel?.channelId === item.ch.channelId,
+              active: !reportQueueOpen && selectedChannel?.channelId === item.ch.channelId,
               renaming: renamingChannelId === item.ch.channelId,
               pinned: item.pinned,
               unread: channelUnreadCount(item.ch.channelId) > 0 && selectedChannel?.channelId !== item.ch.channelId,
@@ -2158,7 +2222,12 @@ onUnmounted(() => {
 
     <section class="main" data-onboard="show-messages">
       <header class="main-header">
-        <template v-if="selectedChannel">
+        <template v-if="reportQueueOpen">
+          <span class="main-hash">▣</span>
+          <span class="main-title">形态/OI 报告队列</span>
+          <span class="main-sub">每 5 分钟 · 周期最低 5m · 形态 / 是否放量 / OI 异常</span>
+        </template>
+        <template v-else-if="selectedChannel">
           <span class="main-hash">#</span>
           <template v-if="renamingChannelId === selectedChannel.channelId">
             <input
@@ -2217,8 +2286,13 @@ onUnmounted(() => {
         @scroll="onMsgsScroll"
         @wheel="bumpShowUserActivity"
       >
+        <OiReportQueuePane
+          v-if="reportQueueOpen"
+          :reload-token="reportQueueReloadToken"
+          @loaded="refreshReportQueueSummary"
+        />
         <ShowMessagePane
-          v-if="selectedChannel"
+          v-else-if="selectedChannel"
           :key="selectedChannel.channelId"
           :messages="paneMessages"
           :loading="channelMessagesLoading"

@@ -1345,6 +1345,29 @@ async def handle_tv_alert(_request: web.Request) -> web.Response:
     return _json_response({"ok": True, **get_service().tv_alert_sync.get_payload()})
 
 
+async def handle_report_queue(request: web.Request) -> web.Response:
+    """5 分钟形态/OI 异常报告队列（供 collector Show 页读取）。"""
+    from oi_mornitor.report_queue import list_report_queue_payload
+
+    try:
+        limit = int(request.query.get("limit") or "96")
+    except (TypeError, ValueError):
+        limit = 96
+    items_raw = str(request.query.get("items") or "1").strip().lower()
+    include_items = items_raw not in ("0", "false", "no")
+    return _json_response(list_report_queue_payload(limit=limit, include_items=include_items))
+
+
+async def handle_report_queue_one(request: web.Request) -> web.Response:
+    from oi_mornitor.report_queue import get_report_payload
+
+    report_id = str(request.match_info.get("report_id") or "").strip()
+    data = get_report_payload(report_id)
+    if data is None:
+        return _json_response({"ok": False, "error": "报告不存在"}, status=404)
+    return _json_response(data)
+
+
 async def handle_scan_status(_request: web.Request) -> web.Response:
     """返回雷达扫描运行状态。"""
     svc = get_service()
@@ -1960,6 +1983,8 @@ def create_app() -> web.Application:
     app.router.add_get("/api/tv-alert", handle_tv_alert)
 
     app.router.add_get("/api/stream", handle_stream)
+    app.router.add_get("/api/report-queue", handle_report_queue)
+    app.router.add_get("/api/report-queue/{report_id}", handle_report_queue_one)
     app.router.add_get("/api/scan/status", handle_scan_status)
     app.router.add_get("/api/ai-judge/health", handle_ai_judge_health)
     app.router.add_get("/api/ai-judge/snapshot", handle_ai_judge_snapshot)

@@ -157,6 +157,20 @@
   background: #35373c;
   color: var(--text);
 }
+.channel-row.report-queue-row {
+  margin: 0 0 0.35rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid #2b2d31;
+  border-radius: 4px;
+  color: var(--text);
+}
+.channel-row.report-queue-row .hash {
+  color: #faa61a;
+}
+.channel-row.report-queue-row.active {
+  background: #3f4248;
+  color: var(--text);
+}
 .channel-row.active {
   background: #3f4248;
   color: var(--text);

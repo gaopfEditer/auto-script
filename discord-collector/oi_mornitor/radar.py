@@ -1371,6 +1371,7 @@ class RadarService:
         self._equity_states: list[dict[str, Any]] = []
         self._equity_scan_ts: float = 0.0
         self._running = False
+        self._report_queue_task: asyncio.Task[None] | None = None
 
     async def _reset_session(self) -> None:
         if self._session is not None and not self._session.closed:
@@ -1496,7 +1497,24 @@ class RadarService:
                 return None
             raise
 
+    def _ingest_report_queue(self, *, include_oi: bool = True, include_patterns: bool = True) -> None:
+        """把本轮形态 / OI 异常写入 5 分钟报告队列；失败不影响主扫描。"""
+        try:
+            from oi_mornitor.report_queue import ingest_scan
+
+            ingest_scan(
+                pattern_alerts=self.pattern_engine.last_alerts() if include_patterns else None,
+                oi_rows=self.radar.last_all_rows if include_oi else None,
+                equity_alerts=self._equity_alerts,
+                now_ts=self.radar.last_scan_ts or time.time(),
+                usd_limit=self.radar.oi_usd_limit,
+                pct_limit=self.radar.oi_pct_limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("报告队列写入失败: %s", exc)
+
     async def scan_once(self) -> list[dict[str, Any]]:
+
         session = await self._ensure_session()
         hot = await self._await_radar_scan(session)
         if hot is None:
@@ -1570,6 +1588,7 @@ class RadarService:
                 )
             except asyncio.TimeoutError:
                 logger.error("回踩扫描超时（120s），跳过本轮")
+        self._ingest_report_queue()
         # 多榜共振 → TradingView BB-Wicks 信号监听（CDP；同时只跑一个任务）
         task = getattr(self, "_tv_alert_task", None)
         if task is None or task.done():
@@ -1616,6 +1635,15 @@ class RadarService:
             self._equity_states = states
             self._equity_scan_ts = time.time()
             if alerts:
+                try:
+                    from oi_mornitor.report_queue import ingest_scan
+
+                    ingest_scan(
+                        equity_alerts=alerts,
+                        now_ts=self._equity_scan_ts,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("报告队列写入币股形态失败: %s", exc)
                 from oi_mornitor.pattern_alert_stats import record_equity_alert_from_scan
 
                 for a in alerts:
@@ -1748,6 +1776,12 @@ class RadarService:
             run_settle_report_loop(lambda: self._running),
             name="oi-stats-settle-report",
         )
+        from oi_mornitor.report_queue import run_report_queue_loop
+
+        self._report_queue_task = asyncio.create_task(
+            run_report_queue_loop(lambda: self._running),
+            name="oi-report-queue-loop",
+        )
         from oi_mornitor.moonshot_funnel import run_moonshot_a_loop
 
         self._moonshot_task = asyncio.create_task(
@@ -1854,6 +1888,7 @@ class RadarService:
             "_equity_task",
             "_card_price_task",
             "_settle_report_task",
+            "_report_queue_task",
             "_moonshot_task",
             "_dormant_ignition_task",
             "_potential_discovery_task",
