@@ -20,6 +20,8 @@ export type ChartLayers = {
   vpCascade: boolean;
   /** 小周期放量 + 大周期射星/倒锤放量（如 15m1h加强） */
   mtfReinforce: boolean;
+  /** ST 5m POP 逢高试空（仅 5m 主图） */
+  stPopShort: boolean;
 };
 
 export const DEFAULT_CHART_LAYERS: ChartLayers = {
@@ -35,6 +37,7 @@ export const DEFAULT_CHART_LAYERS: ChartLayers = {
   viewportHl: true,
   vpCascade: true,
   mtfReinforce: true,
+  stPopShort: true,
 };
 
 /** 主图 EMA 均线（close 上的 ewm） */
@@ -61,6 +64,7 @@ export const TRAIN_CHART_LAYER_TOGGLES: { key: keyof ChartLayers; label: string 
   { key: "viewportHl", label: "视口高低" },
   { key: "vpCascade", label: "量价级联" },
   { key: "mtfReinforce", label: "多周期加强" },
+  { key: "stPopShort", label: "ST短空(5m)" },
 ];
 
 export const STRUCTURE_LINE_KINDS = new Set(["h_max", "lh", "l1", "hl", "trigger"]);
@@ -86,6 +90,7 @@ export const COMPACT_MARKER_KINDS = new Set([
   "vol_pin_spike",
   "mtf_parent_reversal_bear",
   "mtf_parent_reversal_bull",
+  "st_pop_short",
 ]);
 
 export const STRUCTURE_MARKER_KINDS = new Set([
@@ -108,3 +113,4 @@ export {
   VP_CASCADE_ENTRY_KINDS,
 } from "./vpCascadeChartMarkers";
 export { MTF_REINFORCE_MARKER_KINDS } from "./mtfVolPatternReinforceMarkers";
+export { ST_POP_SHORT_MARKER_KINDS } from "./stPopShortChartMarkers";

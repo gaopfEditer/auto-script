@@ -70,8 +70,10 @@ import {
   VP_VOL_SPIKE_MARKER_KINDS,
   VP_CASCADE_ENTRY_KINDS,
   MTF_REINFORCE_MARKER_KINDS,
+  ST_POP_SHORT_MARKER_KINDS,
   type ChartEmaKey,
 } from "../utils/chartLayers";
+import { buildStPopShortMarkers } from "../utils/stPopShortChartMarkers";
 import {
   buildVpCascadeMarkers,
   buildVpChaseOnlyMarkers,
@@ -274,6 +276,7 @@ const MARKER_LEGEND = [
   { kind: "vol_pin_spike", label: "放量插针 ≥1.5×（巨≥2.5×）", color: "#ff9800" },
   { kind: "mtf_parent_reversal_bear", label: "MTF反转·空（如15m1h反转，钉住不冲掉）", color: "#e91e63" },
   { kind: "mtf_parent_reversal_bull", label: "MTF反转·多（如15m1h反转，钉住不冲掉）", color: "#00acc1" },
+  { kind: "st_pop_short", label: "ST短空·5m POP", color: "#ff1744" },
   { kind: "alert_entry_focus", label: "形态信号入场", color: "#b8ff3c" },
 ];
 
@@ -421,6 +424,16 @@ function rebuildChartMarkers(
     if (mtfFresh.length) {
       markers = [...markers, ...mtfFresh];
     }
+    if (chartTf === "5m") {
+      markers = [
+        ...markers,
+        ...buildStPopShortMarkers(
+          candles,
+          parentCandlesByTf?.["15m"],
+          parentCandlesByTf?.["1h"],
+        ),
+      ];
+    }
   }
   return markers;
 }
@@ -434,6 +447,7 @@ function toCandleMarkers(
   showRevVol: boolean = true,
   showVpCascade: boolean = true,
   showMtfReinforce: boolean = true,
+  showStPopShort: boolean = true,
 ): SeriesMarker<UTCTimestamp>[] {
   const candleTimes = (candles ?? []).map((c) => c.time).sort((a, b) => a - b);
   const candleTimeSet = new Set(candleTimes);
@@ -452,6 +466,7 @@ function toCandleMarkers(
         return showVpCascade;
       }
       if (MTF_REINFORCE_MARKER_KINDS.has(kind)) return showMtfReinforce;
+      if (ST_POP_SHORT_MARKER_KINDS.has(kind)) return showStPopShort;
       if (WICK_OI_VOL_MARKER_KINDS.has(kind)) return showCandlePattern;
       if (!showCandlePattern && COMPACT_MARKER_KINDS.has(kind)) return false;
       if (!showStructure && STRUCTURE_MARKER_KINDS.has(kind)) return false;
@@ -938,6 +953,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           showRevVol,
           layersRef.current.vpCascade,
           layersRef.current.mtfReinforce,
+          layersRef.current.stPopShort,
         );
         if (markers.length) {
           series.setMarkers(markers);
@@ -1302,6 +1318,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           next.revVol,
           next.vpCascade,
           next.mtfReinforce,
+          next.stPopShort,
         ),
       );
     }
@@ -1407,6 +1424,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
           layersRef.current.revVol,
           layersRef.current.vpCascade,
           layersRef.current.mtfReinforce,
+          layersRef.current.stPopShort,
         ),
       );
       applyAlertEntryPriceLine(candles);
@@ -1632,6 +1650,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
             layersRef.current.revVol,
             layersRef.current.vpCascade,
             layersRef.current.mtfReinforce,
+            layersRef.current.stPopShort,
           ),
         );
       } catch {
@@ -1686,6 +1705,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
             layersRef.current.revVol,
             layersRef.current.vpCascade,
             layersRef.current.mtfReinforce,
+            layersRef.current.stPopShort,
           ),
         );
       } catch {
@@ -2193,6 +2213,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
             layersRef.current.revVol,
             layersRef.current.vpCascade,
             layersRef.current.mtfReinforce,
+            layersRef.current.stPopShort,
           ),
         );
       }
@@ -2692,6 +2713,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                 layersRef.current.revVol,
                 layersRef.current.vpCascade,
                 layersRef.current.mtfReinforce,
+                layersRef.current.stPopShort,
               ),
             );
           }
@@ -2877,6 +2899,7 @@ export const PatternChartPanel = memo(function PatternChartPanel({
                     (layers.structure || !STRUCTURE_MARKER_KINDS.has(m.kind)) &&
                     (layers.td9 || !TD9_MARKER_KINDS.has(m.kind)) &&
                     (layers.revVol || !REV_VOL_MARKER_KINDS.has(m.kind)) &&
+                    (layers.stPopShort || !ST_POP_SHORT_MARKER_KINDS.has(m.kind)) &&
                     (layers.candlePattern ||
                       STRUCTURE_MARKER_KINDS.has(m.kind) ||
                       TD9_MARKER_KINDS.has(m.kind) ||

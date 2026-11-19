@@ -40,6 +40,7 @@ export function parentTfsForChart(tf: ChartTimeframe): ChartTimeframe[] {
   const imm = VP_CASCADE_IMMEDIATE_PARENT[tf];
   if (imm) out.push(imm);
   if (tf === "15m") out.push("4h");
+  if (tf === "5m") out.push("1h");
   return out;
 }
 
