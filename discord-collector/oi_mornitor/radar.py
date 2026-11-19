@@ -1372,6 +1372,7 @@ class RadarService:
         self._equity_scan_ts: float = 0.0
         self._running = False
         self._report_queue_task: asyncio.Task[None] | None = None
+        self._st_pop_short_task: asyncio.Task[None] | None = None
 
     async def _reset_session(self) -> None:
         if self._session is not None and not self._session.closed:
@@ -1782,6 +1783,16 @@ class RadarService:
             run_report_queue_loop(lambda: self._running),
             name="oi-report-queue-loop",
         )
+        from oi_mornitor.strategy.st_5m_pop.live_queue import run_st_pop_short_queue_loop
+
+        self._st_pop_short_task = asyncio.create_task(
+            run_st_pop_short_queue_loop(
+                lambda: self._running,
+                get_session=self._ensure_session,
+                base_url=self.radar.base_url,
+            ),
+            name="oi-st-pop-short-queue",
+        )
         from oi_mornitor.moonshot_funnel import run_moonshot_a_loop
 
         self._moonshot_task = asyncio.create_task(
@@ -1889,6 +1900,7 @@ class RadarService:
             "_card_price_task",
             "_settle_report_task",
             "_report_queue_task",
+            "_st_pop_short_task",
             "_moonshot_task",
             "_dormant_ignition_task",
             "_potential_discovery_task",

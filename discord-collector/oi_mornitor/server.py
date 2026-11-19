@@ -1346,7 +1346,7 @@ async def handle_tv_alert(_request: web.Request) -> web.Response:
 
 
 async def handle_report_queue(request: web.Request) -> web.Response:
-    """5 分钟形态/OI 异常报告队列（供 collector Show 页读取）。"""
+    """5 分钟报告队列。kind/symbols 可过滤；气泡默认只要 BTC/ETH 5m POP 试空。"""
     from oi_mornitor.report_queue import list_report_queue_payload
 
     try:
@@ -1355,7 +1355,16 @@ async def handle_report_queue(request: web.Request) -> web.Response:
         limit = 96
     items_raw = str(request.query.get("items") or "1").strip().lower()
     include_items = items_raw not in ("0", "false", "no")
-    return _json_response(list_report_queue_payload(limit=limit, include_items=include_items))
+    kinds = request.query.get("kind") or request.query.get("kinds")
+    symbols = request.query.get("symbols") or request.query.get("symbol")
+    return _json_response(
+        list_report_queue_payload(
+            limit=limit,
+            include_items=include_items,
+            kinds=kinds,
+            symbols=symbols,
+        )
+    )
 
 
 async def handle_report_queue_one(request: web.Request) -> web.Response:

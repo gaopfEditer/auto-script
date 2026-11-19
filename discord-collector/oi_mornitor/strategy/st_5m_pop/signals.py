@@ -34,8 +34,9 @@ def klines_to_df(rows: list[list[Any]]) -> pd.DataFrame:
 
 
 def _prep(df: pd.DataFrame) -> pd.DataFrame:
-    if len(df) < 200:
-        return df
+    # 5m 入场仍要求 200 根；15m/1h 趋势否决只要算得出 ema72。
+    if df is None or len(df) < 2:
+        return df if df is not None else pd.DataFrame()
     df = df.copy()
     c, h, l, v = df["close"], df["high"], df["low"], df["volume"]
     df["ret_1"] = c.pct_change() * 100.0
@@ -75,7 +76,14 @@ def _trend_veto(df15: pd.DataFrame, df1h: pd.DataFrame, ts: int) -> bool:
     if i15 < 8 or i1h < 1:
         return True
     r15, r1h = df15.iloc[i15], df1h.iloc[i1h]
-    if not (float(r15["close"]) > float(r15["ema72"]) and float(r1h["close"]) > float(r1h["ema72"])):
+    try:
+        e15 = float(r15["ema72"])
+        e1h = float(r1h["ema72"])
+    except (KeyError, TypeError, ValueError):
+        return True
+    if math.isnan(e15) or math.isnan(e1h):
+        return True
+    if not (float(r15["close"]) > e15 and float(r1h["close"]) > e1h):
         return False
     lows = df15.iloc[i15 - 7 : i15 + 1]["low"].astype(float)
     return int((lows.diff() < 0).sum()) == 0

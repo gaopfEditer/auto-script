@@ -48,6 +48,9 @@ _INTERVAL_UNIT_SEC = {
 _BULL_SIDES = {"bull", "long", "buy", "pump", "多", "做多", "多头"}
 _BEAR_SIDES = {"bear", "short", "sell", "dump", "空", "做空", "空头"}
 _DEFAULT_WINDOW_SEC = 300
+ST_POP_SHORT_KIND = "st_pop_short"
+ST_POP_SHORT_SYMBOLS = frozenset({"BTCUSDT", "ETHUSDT"})
+ST_POP_SHORT_PATTERN = "短空"
 _DEFAULT_MIN_INTERVAL_SEC = 300
 _DEFAULT_RETENTION_DAYS = 7
 _SCHEMA = """
@@ -254,6 +257,58 @@ def _pattern_label(rec: dict[str, Any]) -> str:
 
 def _symbol(rec: dict[str, Any]) -> str:
     return str(rec.get("symbol") or rec.get("base") or "").strip().upper()
+
+
+def normalize_pop_symbol(raw: Any) -> str:
+    s = str(raw or "").strip().upper().replace("/", "").replace("-", "")
+    if s.endswith(".P"):
+        s = s[:-2]
+    if s in {"BTC", "ETH"}:
+        return s + "USDT"
+    return s
+
+
+def _parse_filter_set(raw: Any) -> set[str]:
+    if raw is None:
+        return set()
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, (list, tuple, set, frozenset)):
+        values = list(raw)
+    else:
+        values = [raw]
+    return {str(v).strip() for v in values if str(v).strip()}
+
+
+def _item_matches_filters(item: dict[str, Any], *, kinds: set[str], symbols: set[str]) -> bool:
+    if kinds and str(item.get("kind") or "").strip() not in kinds:
+        return False
+    if symbols and normalize_pop_symbol(item.get("symbol")) not in symbols:
+        return False
+    return True
+
+
+def _filter_report(
+    report: dict[str, Any] | None,
+    *,
+    kinds: set[str],
+    symbols: set[str],
+    include_items: bool,
+) -> dict[str, Any] | None:
+    if not report:
+        return None
+    items = [
+        it
+        for it in (report.get("items") or [])
+        if _item_matches_filters(it, kinds=kinds, symbols=symbols)
+    ]
+    if not items:
+        return None
+    out = dict(report)
+    out["items"] = items if include_items else []
+    out["itemCount"] = len(items)
+    out["preview"] = _preview_from_items(items, len(items))
+    return out
 
 
 def window_start(now: datetime | float | int, window_sec: int) -> datetime:
@@ -509,9 +564,39 @@ class ReportQueue:
         limit: int = 96,
         include_items: bool = True,
         now: datetime | float | int | None = None,
+        kinds: Any = None,
+        symbols: Any = None,
     ) -> dict[str, Any]:
-        reports = self.list_reports(limit=limit, include_items=include_items, now=now)
+        kinds_set = _parse_filter_set(kinds)
+        symbols_set = {normalize_pop_symbol(s) for s in _parse_filter_set(symbols)}
+        symbols_set.discard("")
+        need_filter = bool(kinds_set or symbols_set)
+        reports = self.list_reports(
+            limit=limit,
+            include_items=include_items or need_filter,
+            now=now,
+        )
         pending = self.pending_report(now=now)
+        if need_filter:
+            reports = [
+                rec
+                for rec in (
+                    _filter_report(
+                        row,
+                        kinds=kinds_set,
+                        symbols=symbols_set,
+                        include_items=include_items,
+                    )
+                    for row in reports
+                )
+                if rec
+            ]
+            pending = _filter_report(
+                pending,
+                kinds=kinds_set,
+                symbols=symbols_set,
+                include_items=True,
+            )
         return {
             "ok": True,
             "timezone": "UTC+8",
@@ -520,7 +605,63 @@ class ReportQueue:
             "pending": pending,
             "reports": reports,
             "count": len(reports),
+            "filter": {
+                "kinds": sorted(kinds_set),
+                "symbols": sorted(symbols_set),
+            },
         }
+
+    def ingest_st_pop_signals(
+        self,
+        events: Iterable[dict[str, Any]] | None,
+        *,
+        now: datetime | float | int | None = None,
+    ) -> int:
+        """只写入 BTC/ETH 已触发的 5m POP 试空（v0：score>=3 且无趋势否决）。"""
+        now_dt = _now_cn(now)
+        now_ts = now_dt.timestamp()
+        n = 0
+        for ev in events or []:
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("trendVeto") is True:
+                continue
+            try:
+                score = int(ev.get("score") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ev.get("triggered") is not True or score < 3:
+                continue
+            sym = normalize_pop_symbol(ev.get("symbol"))
+            if sym not in ST_POP_SHORT_SYMBOLS:
+                continue
+            time_ms = _event_time_ms(
+                {
+                    "time_ms": ev.get("signalTs") or ev.get("barOpenTime") or ev.get("time_ms"),
+                    "kline_open_time": ev.get("barOpenTime") or ev.get("signalTs"),
+                },
+                now_ts,
+            )
+            checks = ev.get("checks") if isinstance(ev.get("checks"), dict) else {}
+            vol = "yes" if checks.get("vol_z") else "no"
+            event = {
+                "event_id": f"{ST_POP_SHORT_KIND}:{sym}:5m:{time_ms}",
+                "kind": ST_POP_SHORT_KIND,
+                "symbol": sym,
+                "interval": "5m",
+                "side": "bear",
+                "pattern": ST_POP_SHORT_PATTERN,
+                "volume_surge": vol,
+                "volume_ratio": None,
+                "oi_anomaly": 0,
+                "oi_historic": 0,
+                "oi_windows": [],
+                "time_ms": time_ms,
+                "payload": ev,
+            }
+            if self._insert_event(event, now=now_dt):
+                n += 1
+        return n
 
     def _pattern_event(self, rec: dict[str, Any], *, now_ts: float) -> dict[str, Any] | None:
         symbol = _symbol(rec)
@@ -867,9 +1008,26 @@ def list_report_queue_payload(
     limit: int = 96,
     include_items: bool = True,
     now: datetime | float | int | None = None,
+    kinds: Any = None,
+    symbols: Any = None,
     queue: ReportQueue | None = None,
 ) -> dict[str, Any]:
-    return (queue or get_queue()).payload(limit=limit, include_items=include_items, now=now)
+    return (queue or get_queue()).payload(
+        limit=limit,
+        include_items=include_items,
+        now=now,
+        kinds=kinds,
+        symbols=symbols,
+    )
+
+
+def ingest_st_pop_signals(
+    events: Iterable[dict[str, Any]] | None,
+    *,
+    now: datetime | float | int | None = None,
+    queue: ReportQueue | None = None,
+) -> int:
+    return (queue or get_queue()).ingest_st_pop_signals(events, now=now)
 
 
 def get_report_payload(
