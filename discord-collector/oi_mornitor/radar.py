@@ -1373,6 +1373,7 @@ class RadarService:
         self._running = False
         self._report_queue_task: asyncio.Task[None] | None = None
         self._st_pop_short_task: asyncio.Task[None] | None = None
+        self._st_vol_wick_task: asyncio.Task[None] | None = None
 
     async def _reset_session(self) -> None:
         if self._session is not None and not self._session.closed:
@@ -1783,15 +1784,15 @@ class RadarService:
             run_report_queue_loop(lambda: self._running),
             name="oi-report-queue-loop",
         )
-        from oi_mornitor.strategy.st_5m_pop.live_queue import run_st_pop_short_queue_loop
+        from oi_mornitor.strategy.st_5m_vol_wick.live_queue import run_st_vol_wick_queue_loop
 
-        self._st_pop_short_task = asyncio.create_task(
-            run_st_pop_short_queue_loop(
+        self._st_vol_wick_task = asyncio.create_task(
+            run_st_vol_wick_queue_loop(
                 lambda: self._running,
                 get_session=self._ensure_session,
                 base_url=self.radar.base_url,
             ),
-            name="oi-st-pop-short-queue",
+            name="oi-st-vol-wick-queue",
         )
         from oi_mornitor.moonshot_funnel import run_moonshot_a_loop
 
@@ -1901,6 +1902,7 @@ class RadarService:
             "_settle_report_task",
             "_report_queue_task",
             "_st_pop_short_task",
+            "_st_vol_wick_task",
             "_moonshot_task",
             "_dormant_ignition_task",
             "_potential_discovery_task",

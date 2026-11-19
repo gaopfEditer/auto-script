@@ -51,6 +51,8 @@ _DEFAULT_WINDOW_SEC = 300
 ST_POP_SHORT_KIND = "st_pop_short"
 ST_POP_SHORT_SYMBOLS = frozenset({"BTCUSDT", "ETHUSDT"})
 ST_POP_SHORT_PATTERN = "短空"
+ST_VOL_WICK_KIND = "st_vol_wick"
+ST_VOL_WICK_SYMBOLS = frozenset({"BTCUSDT", "ETHUSDT"})
 _DEFAULT_MIN_INTERVAL_SEC = 300
 _DEFAULT_RETENTION_DAYS = 7
 _SCHEMA = """
@@ -663,6 +665,65 @@ class ReportQueue:
                 n += 1
         return n
 
+    def ingest_st_vol_wick_signals(
+        self,
+        events: Iterable[dict[str, Any]] | None,
+        *,
+        now: datetime | float | int | None = None,
+    ) -> int:
+        """只写入 BTC/ETH 已触发的已收盘 5m 放量影线（多空）。"""
+        now_dt = _now_cn(now)
+        now_ts = now_dt.timestamp()
+        n = 0
+        for ev in events or []:
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("triggered") is not True:
+                continue
+            sym = normalize_pop_symbol(ev.get("symbol"))
+            if sym not in ST_VOL_WICK_SYMBOLS:
+                continue
+            raw_side = ev.get("side")
+            side = normalize_side(raw_side)
+            if side not in {"bull", "bear"}:
+                if str(raw_side or "").strip().lower() in {"long", "short"}:
+                    side = "bull" if str(raw_side).lower() == "long" else "bear"
+                else:
+                    continue
+            time_ms = _event_time_ms(
+                {
+                    "time_ms": ev.get("signalTs") or ev.get("barOpenTime") or ev.get("time_ms"),
+                    "kline_open_time": ev.get("barOpenTime") or ev.get("signalTs"),
+                },
+                now_ts,
+            )
+            pattern = str(ev.get("pattern") or "").strip() or (
+                "放量下影" if side == "bull" else "放量上影"
+            )
+            ratio = ev.get("volumeRatio")
+            try:
+                ratio_f = float(ratio) if ratio is not None else None
+            except (TypeError, ValueError):
+                ratio_f = None
+            event = {
+                "event_id": f"{ST_VOL_WICK_KIND}:{sym}:5m:{time_ms}",
+                "kind": ST_VOL_WICK_KIND,
+                "symbol": sym,
+                "interval": "5m",
+                "side": side,
+                "pattern": pattern,
+                "volume_surge": "yes",
+                "volume_ratio": ratio_f,
+                "oi_anomaly": 0,
+                "oi_historic": 0,
+                "oi_windows": [],
+                "time_ms": time_ms,
+                "payload": ev,
+            }
+            if self._insert_event(event, now=now_dt):
+                n += 1
+        return n
+
     def _pattern_event(self, rec: dict[str, Any], *, now_ts: float) -> dict[str, Any] | None:
         symbol = _symbol(rec)
         interval = normalize_interval_label(rec.get("interval") or rec.get("tf") or rec.get("timeframe"))
@@ -1028,6 +1089,16 @@ def ingest_st_pop_signals(
     queue: ReportQueue | None = None,
 ) -> int:
     return (queue or get_queue()).ingest_st_pop_signals(events, now=now)
+
+def ingest_st_vol_wick_signals(
+    events: Iterable[dict[str, Any]] | None,
+    *,
+    now: datetime | float | int | None = None,
+    queue: ReportQueue | None = None,
+) -> int:
+    return (queue or get_queue()).ingest_st_vol_wick_signals(events, now=now)
+
+
 
 
 def get_report_payload(

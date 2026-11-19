@@ -33,6 +33,9 @@ VOL_CLIMAX_MA_HARD = 3.5
 
 SHOOT_WICK_RATIO = 1.5
 SHOOT_WICK_MAX = 20
+# 宽口径影线（非官方射星/倒锤时）：主导影线 >= 1.05×实体 且 >= 32% 振幅
+LOOSE_PIN_WICK_BODY = 1.05
+LOOSE_PIN_WICK_RANGE = 0.32
 
 REVERSAL_LABEL_RANK = {"射星": 5, "倒锤": 5, "新低弱放量": 4, "新高弱放量": 4, "TD9": 1}
 
@@ -102,11 +105,16 @@ def _pin_side(row: pd.Series) -> Literal["short", "long"] | None:
         return None
     upper = h - max(o, c)
     lower = min(o, c) - l
-    if upper >= body * 1.05 and upper >= rng * 0.32:
+    if upper >= body * LOOSE_PIN_WICK_BODY and upper >= rng * LOOSE_PIN_WICK_RANGE:
         return "short"
-    if lower >= body * 1.05 and lower >= rng * 0.32:
+    if lower >= body * LOOSE_PIN_WICK_BODY and lower >= rng * LOOSE_PIN_WICK_RANGE:
         return "long"
     return None
+
+
+def pin_side(row: pd.Series) -> Literal["short", "long"] | None:
+    """主导影线方向：射击之星/倒锤子，否则宽口径上/下影。5m 放量影线与研究应复用此函数。"""
+    return _pin_side(row)
 
 
 def vol_pin_spike(vol: float, vol_ma: float) -> bool:
