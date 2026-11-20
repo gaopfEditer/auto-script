@@ -58,8 +58,19 @@ def candle_card_watch_symbols() -> FrozenSet[str]:
 
 
 def is_candle_card_push_symbol(symbol: str) -> bool:
-    """形态群 TG：配置了 LONG/OTHER 时仅推送并集内币种；未配置则保持原行为（不按名单挡）。"""
-    if not candle_card_watch_configured():
-        return True
+    """形态群 TG：优先用 LONG/OTHER 名单；未配置时回退到 MAIN_CARD_DEFAULT_SYMBOLS。
+    
+    修复说明：原先未配置名单时返回 True 放行所有币种，导致 VVV 等非预期币种推送。
+    现改为回退到 MAIN 群白名单，避免筛选失效扩大到全市场。
+    """
     n = normalize_focus_symbol(symbol)
-    return bool(n) and n in candle_card_watch_symbols()
+    if not n:
+        return False
+    
+    # 优先使用形态群专属名单
+    if candle_card_watch_configured():
+        return n in candle_card_watch_symbols()
+    
+    # 回退：未配置时使用 MAIN 群白名单（不放行全市场）
+    from oi_mornitor.main_card_policy import is_main_card_symbol
+    return is_main_card_symbol(n)
