@@ -142,7 +142,7 @@ function enrichTemplate(p) {
 }
 
 /**
- * 单笔保证金 USDT：优先卡片/频道已解析值，否则频道 policy.orderSizeUsdt（女王=2，FX/熬鹰=5，其余=2）。
+ * 单笔保证金 USDT：优先卡片/频道已解析值，否则频道 policy.orderSizeUsdt（统一默认 2）。
  * @param {Record<string, unknown> | null | undefined} parsed
  * @param {Record<string, unknown> | null | undefined} channelTrade
  */

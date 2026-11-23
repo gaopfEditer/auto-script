@@ -9,6 +9,7 @@ import { config } from "./config.js";
 import { isTelegramGroupChatId } from "./telegram-channel-profiles.js";
 import { isTelegramAutoTradeChannel } from "./telegram-auto-trade.js";
 import { loadBitgetTradeConfig, resolveChannelBitgetTrade } from "./bitget-trade-config.js";
+import { listKolvipAutotradeChannelIds, loadKolvipBitgetAutotrade } from "./kolvip-bitget-autotrade.js";
 
 const _dir = path.dirname(fileURLToPath(import.meta.url));
 const _envPath = path.join(_dir, "..", ".env");
@@ -55,7 +56,10 @@ export function classifyWeexAutoTradeChannel(channelId, envList, profilesFile) {
     return isTelegramAutoTradeChannel(cid, profilesFile) ? "telegram" : "reject";
   }
   const ids = (Array.isArray(envList) ? envList : []).map((id) => String(id ?? "").trim()).filter(Boolean);
-  if (ids.length && !ids.includes(cid)) return "reject";
+  if (ids.includes(cid)) return "discord";
+  const kolvip = loadKolvipBitgetAutotrade();
+  if (kolvip.enabled && listKolvipAutotradeChannelIds().map(String).includes(cid)) return "discord";
+  if (ids.length) return "reject";
   return "discord";
 }
 

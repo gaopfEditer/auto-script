@@ -1,10 +1,9 @@
 {
   "enabled": true,
-  "dryRun": true,
   "default": {
     "marginMode": "isolated",
     "leverage": 20,
-    "orderSizeUsdt": 3,
+    "orderSizeUsdt": 2,
     "orderType": "market",
     "productType": "USDT-FUTURES",
     "stagedTrade": false,

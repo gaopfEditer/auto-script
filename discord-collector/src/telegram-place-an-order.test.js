@@ -132,8 +132,8 @@ describe("telegram placeAnOrder gate", { concurrency: 1 }, () => {
   });
 
   it("Bitget / WEEX 的 Discord 白名单不放行、也不拦截 placeAnOrder 群", () => {
-    setTradeOrderSizeUsdt(1);
-    assert.equal(getTradeOrderSizeUsdt(), 1);
+    setTradeOrderSizeUsdt(2);
+    assert.equal(getTradeOrderSizeUsdt(), 2);
 
     const prevBitget = config.bitgetAutoTradeChannelIds;
     config.bitgetAutoTradeChannelIds = [SEND_ONLY, ...DISCORD_ENV];
@@ -141,7 +141,7 @@ describe("telegram placeAnOrder gate", { concurrency: 1 }, () => {
       const allowed = resolveChannelBitgetTrade("-1001720924085", tradeCfg(), EXAMPLE);
       assert.ok(allowed);
       assert.equal(allowed.channel.leverage, TELEGRAM_TRADE_LEVERAGE);
-      assert.equal(allowed.channel.orderSizeUsdt, 1);
+      assert.equal(allowed.channel.orderSizeUsdt, 2);
       assert.equal(allowed.channel.initialSlPct, TELEGRAM_TRADE_INITIAL_SL_PCT);
       assert.equal(allowed.channel.orderType, "market");
       assert.equal(allowed.channel.stagedTrade, true);
