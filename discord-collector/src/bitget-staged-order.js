@@ -22,6 +22,7 @@ import {
   resolveOpenTpslPrices,
   sanitizeBitgetTriggerPrice,
 } from "./bitget-tpsl-guard.js";
+import { resolveKolvipMarginUsdt } from "./kolvip-bitget-autotrade.js";
 
 /** @param {number} ms */
 function sleep(ms) {
@@ -224,7 +225,8 @@ export async function executeStagedMarketOpen(client, input) {
   const contractMeta = input.dryRun ? parseBitgetContractMeta(null) : await fetchContractMeta(client, symbol, productType);
   const priceMeta = input.dryRun ? enrichBitgetContractMeta(null) : await loadBitgetContractPriceMeta(client, { symbol, productType });
 
-  const sizeResult = resolveBitgetOrderSize(Number(channelTrade.orderSizeUsdt ?? 1), refPrice, contractMeta, {
+  const marginUsdt = resolveKolvipMarginUsdt(parsed, channelTrade);
+  const sizeResult = resolveBitgetOrderSize(marginUsdt, refPrice, contractMeta, {
     dryRun: input.dryRun,
     leverage,
   });
@@ -232,6 +234,27 @@ export async function executeStagedMarketOpen(client, input) {
   const size = sizeResult.size;
 
   const holdSide = side === "buy" ? "long" : "short";
+
+  if (!input.dryRun) {
+    try {
+      if (
+        await hasBitgetSymbolExposure(client, {
+          symbol,
+          productType,
+          holdSide,
+          marginCoin,
+        })
+      ) {
+        return {
+          ok: false,
+          reason: "duplicate_position",
+          error: `Bitget 已有 ${symbol} ${holdSide} 仓位，跳过重复开仓`,
+        };
+      }
+    } catch {
+      /* ignore */
+    }
+  }
   const fillPrice = refPrice;
   const tpslResolved = resolveOpenTpslPrices({
     parsed,

@@ -104,9 +104,9 @@ export function createDiscordTelegramMessagePush(log) {
 
   /** @param {DiscordMessageRow} row */
   function enqueue(row) {
-    if (!telegram.enabled) return;
     const channelId = String(row.channelId ?? "").trim();
     const content = String(row.content ?? "").trim();
+    if (!telegram.enabled) return;
     if (!channelId || !content || !isTelegramPushChannel(channelId)) return;
     // 过滤"引导私聊/转账"类垃圾消息
     if (isSpamMessage(content)) {

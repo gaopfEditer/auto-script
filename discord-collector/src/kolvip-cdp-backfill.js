@@ -155,7 +155,7 @@ export function createKolvipBackfillService(store, log, deps = {}) {
   }
 
   async function syncCatalog() {
-    const saved = await syncKolvipChannelCatalog(log);
+    const saved = await syncKolvipChannelCatalog(log, store);
     const state = await loadState();
     state.catalogSyncedAt = saved.updatedAt;
     await ensureCatalogJobs(state);

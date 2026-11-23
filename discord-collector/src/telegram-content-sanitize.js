@@ -26,6 +26,9 @@ export function stripCdpPlatformHeader(text) {
   return s.replace(CDP_HEADER_LINE_RE, "").trimStart();
 }
 
+const SIGNAL_FIELD_LINE =
+  /^(币种|方向|入场|建仓|目标|止盈|止损|杠杆|coin|direction|entry|entries|target|targets|stop\s*loss|stoploss|leverage|signal)\s*[:：#]/i;
+
 /** CDP 发布：去首行频道名 + 删引流行 + 去重复行 */
 export function dedupeCdpTextLines(text) {
   /** @type {string[]} */
@@ -35,6 +38,10 @@ export function dedupeCdpTextLines(text) {
   for (const line of String(text ?? "").split(/\r?\n/)) {
     const chunk = line.replace(/\s+$/, "");
     if (!chunk.trim()) continue;
+    if (SIGNAL_FIELD_LINE.test(chunk.trim())) {
+      kept.push(chunk);
+      continue;
+    }
     const key = chunk
       .replace(/止損/g, "止损")
       .replace(/\s+/g, " ")

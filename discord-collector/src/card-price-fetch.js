@@ -565,6 +565,25 @@ export function parseEntryPrice(v) {
   return first ? parsePrice(first[1]) : null;
 }
 
+/** @param {unknown} v */
+export function parseEntryRangeBounds(v) {
+  const s = String(v ?? "")
+    .replace(/\$/g, " ")
+    .trim();
+  if (!s) return null;
+  const range = s.match(/([\d.]+)\s*[-~–—]\s*([\d.]+)/);
+  if (!range) return null;
+  const a = parsePrice(range[1]);
+  const b = parsePrice(range[2]);
+  if (a == null || b == null) return null;
+  return { low: Math.min(a, b), high: Math.max(a, b) };
+}
+
+/** 入场为「3560 - 3568」这类区间，不能按±0.5% 偷跑市价入场。 */
+export function plannedEntryIsRange(v) {
+  return parseEntryRangeBounds(v) != null;
+}
+
 /**
  * @param {number} price
  * @param {number} level

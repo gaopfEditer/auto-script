@@ -1,5 +1,9 @@
 import { isPlaceholderDiscordChannelName } from "../../../src/discord-channel-name.js";
 export { isolateShowChannelMessages } from "../../../src/kolvip-show-messages.js";
+import {
+  formatMessageTextForDisplay,
+  splitBilingualMessageText,
+} from "../../../src/message-text-format.js";
 
 /** @param {string} userId */
 export function defaultAvatarUrl(userId) {
@@ -11,10 +15,31 @@ export function defaultAvatarUrl(userId) {
   }
 }
 
-/** @param {Record<string, unknown>} m */
-export function msgAvatarUrl(m) {
-  const url = String(m.authorAvatar ?? m.author_avatar ?? "").trim();
+/** @param {unknown} url */
+export function normalizeShowAvatarUrl(url) {
+  const u = String(url ?? "").trim();
+  if (!u) return "";
+  if (u.startsWith("/kolvip-avatars/")) return u.split("?")[0];
+  try {
+    if (/^https?:\/\//i.test(u)) {
+      const path = new URL(u).pathname;
+      const idx = path.indexOf("/kolvip-avatars/");
+      if (idx >= 0) return path.slice(idx);
+    }
+  } catch {
+    /* ignore */
+  }
+  const idx = u.indexOf("/kolvip-avatars/");
+  if (idx >= 0) return u.slice(idx).split("?")[0];
+  return u;
+}
+
+/** @param {Record<string, unknown>} m @param {string} [channelIconUrl] */
+export function msgAvatarUrl(m, channelIconUrl) {
+  const url = normalizeShowAvatarUrl(m.authorAvatar ?? m.author_avatar ?? "");
   if (url) return url;
+  const chIcon = normalizeShowAvatarUrl(channelIconUrl);
+  if (chIcon) return chIcon;
   const uid = String(m.authorId ?? m.author_id ?? "");
   return uid ? defaultAvatarUrl(uid) : "";
 }
@@ -30,6 +55,62 @@ export function msgDisplayName(m) {
     m.author_id ??
     "?"
   );
+}
+
+const CHANNEL_PREVIEW_TZ = "Asia/Shanghai";
+const YEARS_AGO_ZH = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+
+/**
+ * @param {Date} date
+ */
+function shanghaiCalendarParts(date) {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: CHANNEL_PREVIEW_TZ,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const pick = (type) => Number(parts.find((p) => p.type === type)?.value ?? NaN);
+  return {
+    y: pick("year"),
+    m: pick("month"),
+    d: pick("day"),
+    h: pick("hour"),
+    min: pick("minute"),
+  };
+}
+
+/**
+ * Show 侧栏 channel-row 预览行右侧时间：当日=时分，同年=月日，更早=N年前。
+ * @param {number | string | null | undefined} ms
+ * @param {number} [nowMs]
+ */
+export function formatChannelPreviewTime(ms, nowMs = Date.now()) {
+  const t = Number(ms);
+  if (!Number.isFinite(t) || t <= 0) return "";
+  const nowP = shanghaiCalendarParts(new Date(nowMs));
+  const msgP = shanghaiCalendarParts(new Date(t));
+  if (![nowP.y, msgP.y, msgP.m, msgP.d].every(Number.isFinite)) return "";
+
+  if (nowP.y === msgP.y && nowP.m === msgP.m && nowP.d === msgP.d) {
+    const hh = String(msgP.h).padStart(2, "0");
+    const mm = String(msgP.min).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+
+  if (nowP.y === msgP.y) {
+    return `${msgP.m}月${msgP.d}日`;
+  }
+
+  const yearsAgo = nowP.y - msgP.y;
+  if (yearsAgo >= 1) {
+    if (yearsAgo <= 10) return `${YEARS_AGO_ZH[yearsAgo]}年前`;
+    return `${yearsAgo}年前`;
+  }
+  return `${msgP.y}年${msgP.m}月`;
 }
 
 /** @param {number | string | null | undefined} ms */
@@ -157,22 +238,7 @@ export function guildRowToClient(row) {
 
 /** @param {string} raw @param {{ preserveLines?: boolean }} [opts] */
 export function normalizeMessageContent(raw, { preserveLines = true } = {}) {
-  let text = String(raw ?? "");
-  if (!text) return "";
-  text = text
-    .replace(/\\r\\n/g, "\n")
-    .replace(/\\n/g, "\n")
-    .replace(/\\r/g, "")
-    .replace(/\\t/g, "\t");
-  if (!preserveLines) {
-    return text.replace(/\s+/g, " ").trim();
-  }
-  return text
-    .split("\n")
-    .map((line) => line.replace(/[^\S\n]+/g, " ").trimEnd())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return formatMessageTextForDisplay(raw, { preserveLines });
 }
 
 /** @param {Record<string, unknown>} m */
@@ -369,6 +435,25 @@ export function messageTextContent(m) {
 }
 
 /** @param {Record<string, unknown>} m */
+export function messageHasBilingualTranslation(m) {
+  return Boolean(splitBilingualMessageText(messageTextContent(m)));
+}
+
+/**
+ * @param {Record<string, unknown>} m
+ * @param {Record<string, "en" | "zh">} langByMessageId
+ * @param {"en" | "zh"} [defaultLang]
+ */
+export function messageDisplayText(m, langByMessageId, defaultLang = "zh") {
+  const full = messageTextContent(m);
+  const parts = splitBilingualMessageText(full);
+  if (!parts) return full;
+  const id = String(m.messageId ?? m.message_id ?? "").trim();
+  const lang = (id && langByMessageId[id]) || defaultLang;
+  return lang === "zh" ? parts.chinese : parts.english;
+}
+
+/** @param {Record<string, unknown>} m */
 export function msgAuthorId(m) {
   return String(m.authorId ?? m.author_id ?? "");
 }
@@ -453,13 +538,18 @@ export function upsertChannelItem(list, ch) {
     const prevPreview = String(prev.lastMessagePreview ?? "");
     const nextName = ch.name || prev.name;
     const nextGuild = ch.guildId || prev.guildId;
+    const nextIcon = normalizeShowAvatarUrl(ch.iconUrl ?? "") || normalizeShowAvatarUrl(prev.iconUrl ?? "");
     const settledMs = Number.isFinite(nextMs) && nextMs > 0 ? nextMs : prevMs;
     if (
       nextPreview === prevPreview &&
       settledMs <= prevMs + 500 &&
       nextName === prev.name &&
-      nextGuild === prev.guildId
+      nextGuild === prev.guildId &&
+      nextIcon === normalizeShowAvatarUrl(prev.iconUrl ?? "")
     ) {
+      if (nextIcon && nextIcon !== normalizeShowAvatarUrl(prev.iconUrl ?? "")) {
+        list[idx] = { ...prev, iconUrl: nextIcon };
+      }
       return;
     }
     list[idx] = {
@@ -467,6 +557,7 @@ export function upsertChannelItem(list, ch) {
       ...ch,
       name: nextName,
       guildId: nextGuild,
+      iconUrl: nextIcon,
       lastMessageAtMs: settledMs,
       lastMessagePreview: nextPreview,
     };
@@ -493,6 +584,7 @@ export function channelRowToClient(row) {
     channelId: String(row.channelId ?? row.channel_id ?? ""),
     guildId: String(row.guildId ?? row.guild_id ?? ""),
     name: String(row.name ?? ""),
+    iconUrl: normalizeShowAvatarUrl(row.iconUrl ?? row.icon_url ?? ""),
     lastMessagePreview: String(row.lastMessagePreview ?? row.last_message_preview ?? ""),
     lastMessageAtMs: Number(row.lastMessageAtMs ?? row.last_message_at_ms ?? 0),
   };

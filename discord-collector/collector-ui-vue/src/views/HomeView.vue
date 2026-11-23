@@ -10,7 +10,7 @@ import { RouterLink } from "vue-router";
       请打开 Vite 提示的地址（如 <code>http://localhost:5178/show</code>），顶部应显示 <strong>WS 已连接</strong>。
     </p>
     <div class="actions">
-      <RouterLink class="btn primary" to="/show">Show（群组 / 频道 / 消息）</RouterLink>
+      <RouterLink class="btn primary" to="/show/rank">Show（博主胜率 / 频道消息）</RouterLink>
       <RouterLink class="btn" to="/eval">卡片评估</RouterLink>
       <RouterLink class="btn" to="/cards">统一卡片归档</RouterLink>
       <RouterLink class="btn primary" to="/community">社区</RouterLink>

@@ -18,6 +18,11 @@ import { signalCardToClient } from "./discord-signal-card-service.js";
 import { createCardArchiveListCache } from "./card-archive-list-cache.js";
 import { requireLocalRequest } from "./local-request.js";
 import { formatPipelineLog } from "./signal-pipeline-log.js";
+import {
+  buildKolvipEvalChannelOptions,
+  filterKolvipEvalCards,
+  isKolvipEvalSourceFilter,
+} from "./kolvip-eval-channels.js";
 
 /**
  * 卡片正文：优先 body / content / 原文 / 正文，兼容 rawContent / description。
@@ -275,6 +280,7 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
     try {
       const { fromMs, toMs } = parseArchiveRangeMs(req);
       const sourceTypes = resolveArchiveListSourceTypes(req);
+      const kolvipScope = isKolvipEvalSourceFilter(sourceTypes);
       const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
       const status = String(req.query.status ?? "").trim();
       const limit = Number(req.query.limit) || 200;
@@ -285,24 +291,34 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
       );
 
       const result = await listCache.list(
-        { channelId, status, limit, fromMs, toMs, sourceTypes, symbol },
+        {
+          channelId,
+          status,
+          limit: kolvipScope ? 500 : limit,
+          fromMs,
+          toMs,
+          sourceTypes: kolvipScope ? [] : sourceTypes,
+          symbol,
+        },
         { sinceId: Number.isFinite(sinceId) && sinceId > 0 ? sinceId : undefined, force }
       );
       const safe =
         result && typeof result === "object"
           ? result
           : { cards: [], maxId: 0, total: 0, incremental: false, cached: false };
+      let cards = safe.cards ?? [];
+      if (kolvipScope) cards = filterKolvipEvalCards(cards);
 
       res.json({
         ok: true,
         fromMs,
         toMs,
-        filters: { sourceTypes, symbol, status, channelId },
-        total: safe.total ?? safe.cards?.length ?? 0,
+        filters: { sourceTypes, symbol, status, channelId, kolvipScope },
+        total: cards.length,
         maxId: safe.maxId ?? 0,
         cached: Boolean(safe.cached),
         incremental: Boolean(safe.incremental),
-        cards: safe.cards ?? [],
+        cards,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -318,19 +334,43 @@ export function registerCardArchiveRoutes(app, store, archiveService, broadcast)
       const force = ["1", "true", "yes", "on"].includes(
         String(req.query.refresh ?? req.query.force ?? "").toLowerCase()
       );
-      const result = await listCache.listChannels(
-        { status, fromMs, toMs, sourceTypes, symbol },
-        { force }
-      );
+      const kolvipScope = isKolvipEvalSourceFilter(sourceTypes);
+      const listFilters = kolvipScope
+        ? { status, fromMs, toMs, sourceTypes: [], symbol }
+        : { status, fromMs, toMs, sourceTypes, symbol };
+      const result = await listCache.listChannels(listFilters, { force });
       const safe =
         result && typeof result === "object"
           ? result
           : { channels: [], cached: false };
-      const channels = (safe.channels ?? []).map((c) => ({
+      const countBy = new Map(
+        (safe.channels ?? []).map((c) => [String(c.channelId), Number(c.count) || 0]),
+      );
+      let channels = (safe.channels ?? []).map((c) => ({
         channelId: c.channelId,
         channelName: resolveCardChannelName(c.channelId, c.channelName),
         count: c.count,
       }));
+      if (kolvipScope) {
+        const { ensureKolvipEvalRankFromSig } = await import("./kolvip-eval-rank.js");
+        await ensureKolvipEvalRankFromSig();
+        const listResult = await listCache.list(
+          { status, fromMs, toMs, sourceTypes: [], symbol, limit: 500 },
+          { force },
+        );
+        const scoped = filterKolvipEvalCards(listResult?.cards ?? []);
+        const scopedCount = new Map();
+        for (const c of scoped) {
+          const id = String(c.channelId ?? "");
+          if (!id) continue;
+          scopedCount.set(id, (scopedCount.get(id) || 0) + 1);
+        }
+        channels = buildKolvipEvalChannelOptions().map((c) => ({
+          channelId: c.channelId,
+          channelName: c.channelName,
+          count: scopedCount.get(String(c.channelId)) ?? countBy.get(String(c.channelId)) ?? 0,
+        }));
+      }
       res.json({
         ok: true,
         fromMs,

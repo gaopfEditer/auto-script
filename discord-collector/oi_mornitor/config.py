@@ -200,9 +200,14 @@ CANDLE_CARD_TELEGRAM = os.getenv(
     "OI_CANDLE_CARD_TELEGRAM", "1"
 ).strip().lower() in ("1", "true", "yes", "on")
 # 卡片推送群（默认指定形态卡片群；可改 OI_CANDLE_CARD_TELEGRAM_CHAT_ID）
-CANDLE_CARD_TELEGRAM_CHAT_ID = os.getenv(
-    "OI_CANDLE_CARD_TELEGRAM_CHAT_ID", "-1004364826383"
-).strip()
+CANDLE_CARD_TELEGRAM_CHAT_ID = (
+    os.getenv("OI_CANDLE_CARD_TELEGRAM_CHAT_ID", "").strip()
+    or os.getenv("MAIN_CARD_TELEGRAM_CHAT_ID", "").strip()
+    or os.getenv("OI_MAIN_CARD_TELEGRAM_CHAT_ID", "").strip()
+    or "-1003860925903"
+)
+# 巨鲸博主信号卡专群（OI/形态/NLV 不得推送至此）
+KOLVIP_TOP10_TELEGRAM_CHAT_ID = os.getenv("KOLVIP_TOP10_TELEGRAM_CHAT_ID", "").strip()
 # 新高/新低末端+放量（NLV/revVol）→ 形态群 + MAIN（独立于射击之星开关；默认开）
 REV_VOL_CARD_TELEGRAM = os.getenv(
     "OI_REV_VOL_CARD_TELEGRAM", "1"

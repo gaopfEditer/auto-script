@@ -30,10 +30,12 @@ export function parseKolvipMessageTimeMs(timeText, titleAttr) {
  *   dataId: string,
  *   text: string,
  *   author: string,
+ *   authorAvatar?: string,
  *   timeText: string,
  *   timeTitle: string,
  *   imageUrl: string,
  *   imageUrls?: string[],
+ *   coin?: string,
  * }} KolvipDomMessage
  */
 
@@ -76,7 +78,7 @@ export function kolvipMessageToDiscordRow(msg, map) {
     content,
     authorUsername: String(msg.author ?? "").trim() || null,
     authorGlobalName: null,
-    authorAvatar: null,
+    authorAvatar: String(msg.authorAvatar ?? "").trim() || null,
     eventType: "MESSAGE_CREATE",
     source,
     rawJson: {
@@ -88,6 +90,7 @@ export function kolvipMessageToDiscordRow(msg, map) {
         channelId: map.kolvipChannelId,
         dataId: msg.dataId,
         ingest: source,
+        coin: String(msg.coin ?? "").trim() || undefined,
       },
     },
   };

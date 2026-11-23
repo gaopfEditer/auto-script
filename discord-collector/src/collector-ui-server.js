@@ -75,6 +75,8 @@ import { createTwitterCdpService } from "./twitter-cdp-service.js";
 import { createKolvipCdpService } from "./kolvip-cdp-service.js";
 import { createKolvipBackfillService } from "./kolvip-cdp-backfill.js";
 import { registerKolvipCdpRoutes } from "./kolvip-cdp-api.js";
+import { registerKolvipSigRoutes } from "./kolvip-sig-api.js";
+import { startKolvipSigPeriodicSync } from "./kolvip-sig-sync.js";
 import { registerKolvipManualBackfillRoutes } from "./kolvip-backfill-manual-api.js";
 import { registerTwitterCdpRoutes } from "./twitter-cdp-api.js";
 import {
@@ -91,6 +93,12 @@ import {
   kolvipShowIsolationPayload,
   syncKolvipMappedDiscordMessageVisibility,
 } from "./discord-message-source-isolation.js";
+import { resolveKolvipChannelIdForShow } from "./kolvip-channel-catchup.js";
+import {
+  kolvipCatalogIconForShowChannel,
+  loadKolvipCatalogCache,
+} from "./kolvip-api-catalog.js";
+import { normalizeKolvipAvatarClientUrl } from "./kolvip-avatar-cache.js";
 
 /** 慢客户端：超过 soft 跳过 diag/frame；超过 hard 断开（防 WS 发送队列撑爆堆） */
 const showHistoryWarmInflight = new Map();
@@ -322,6 +330,12 @@ async function main() {
   registerTelegramBackfillRoutes(app);
   registerTwitterCdpRoutes(app, twitterCdp);
   registerKolvipCdpRoutes(app, kolvipCdp, store, kolvipBackfill);
+  registerKolvipSigRoutes(app);
+  if (config.kolvipSigSyncIntervalMs > 0) {
+    startKolvipSigPeriodicSync(config.kolvipSigSyncIntervalMs);
+    void import("./kolvip-eval-rank.js").then((m) => m.ensureKolvipEvalRankFromSig());
+    void import("./kolvip-api-catalog.js").then((m) => m.loadKolvipCatalogCache());
+  }
   registerKolvipManualBackfillRoutes(app, { store, signalCards });
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
@@ -1093,13 +1107,13 @@ async function main() {
   });
 
   app.get("/api/show/discord-groups", (_req, res) => {
-    const { channelIds, namesByChannelId } = config.discordShowSidebar;
+    const { channelIds, namesByChannelId, source } = config.discordShowSidebar;
     res.json({
       ok: true,
       filterEnabled: channelIds.length > 0,
       channelIds,
       namesByChannelId,
-      source: "discord-show-channels",
+      source: source ?? "discord-show-channels",
     });
   });
 
@@ -1137,11 +1151,27 @@ async function main() {
         guildId: row.guild_id,
         name: row.name,
         type: row.channel_type,
+        iconUrl: row.icon_url ? String(row.icon_url) : "",
         lastMessagePreview: row.last_message_preview,
         lastMessageAtMs: row.last_message_at_ms,
         updatedAt: row.updated_at,
       }));
       channels = applyDiscordGroupsChannelList(channels, guildId, config.discordShowSidebar);
+      const catalog = await loadKolvipCatalogCache();
+      const iconMap =
+        typeof store.listDiscordChannelIcons === "function"
+          ? await store.listDiscordChannelIcons(channels.map((c) => c.channelId))
+          : new Map();
+      for (const c of channels) {
+        const fromDb = iconMap.get(c.channelId) || "";
+        const fromCatalog = await kolvipCatalogIconForShowChannel(c.channelId, catalog);
+        const iconUrl = [fromDb, fromCatalog, c.iconUrl]
+          .map((u) => String(u ?? "").trim())
+          .find((u) => u.startsWith("/kolvip-avatars/")) ||
+          [fromDb, fromCatalog, c.iconUrl].map((u) => String(u ?? "").trim()).find(Boolean) ||
+          "";
+        c.iconUrl = normalizeKolvipAvatarClientUrl(iconUrl);
+      }
       res.json({ ok: true, guildId, channels });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
@@ -1182,7 +1212,7 @@ async function main() {
       const n = Number(fromRaw);
       if (Number.isFinite(n) && n > 0) return n;
     }
-    return undefined;
+    return Date.now() - config.discordShowSnapshotDays * 86400000;
   }
 
   /**
@@ -1470,7 +1500,36 @@ async function main() {
       8,
       Math.max(1, Number(req.body?.maxPages) || config.discordShowHistoryWarmPages)
     );
-    if (!guildId || !channelId) {
+    if (!channelId) {
+      res.status(400).json({ ok: false, error: "缺少 channelId" });
+      return;
+    }
+    const kolvipKid = resolveKolvipChannelIdForShow(channelId);
+    if (kolvipKid && config.kolvipSignalEnabled) {
+      try {
+        const showHistory = await showHistoryCachePayload(channelId);
+        const limit = Math.min(150, maxPages * 40);
+        const force = Boolean(req.body?.force);
+        const out = await kolvipCdp.catchupShowChannel(channelId, { limit, force });
+        const showHistoryAfter = await showHistoryCachePayload(channelId);
+        res.json({
+          ok: Boolean(out.ok),
+          source: "kolvip_api",
+          kolvipChannelId: kolvipKid,
+          skipped: Boolean(out.skipped),
+          reason: out.skipped ? "cache_fresh" : "kolvip_catchup",
+          pagesDone: out.skipped ? 0 : out.ok ? 1 : 0,
+          fetched: out.fetched ?? 0,
+          showHistory: showHistoryAfter ?? showHistory,
+          catchupTtlMs: config.kolvipShowCatchupTtlMs,
+          ...out,
+        });
+      } catch (e) {
+        res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+      }
+      return;
+    }
+    if (!guildId) {
       res.status(400).json({ ok: false, error: "缺少 guildId 或 channelId" });
       return;
     }
@@ -1583,21 +1642,42 @@ async function main() {
   // Telegram 频道头像：仓库 telegram/avatar/{chatId}.png → GET /telegram-avatars/...
   const telegramAvatarsDir = path.join(__dirname, "..", "..", "telegram", "avatar");
   app.use("/telegram-avatars", express.static(telegramAvatarsDir, { fallthrough: false, index: false }));
+  const kolvipAvatarsDir = path.join(__dirname, "..", "public", "kolvip-avatars");
+  fs.mkdirSync(kolvipAvatarsDir, { recursive: true });
+  app.use("/kolvip-avatars", express.static(kolvipAvatarsDir, { fallthrough: false, index: false }));
 
   // Telegram 消息图片：telegram/media/{chatId}_{msgId}.jpg → GET /telegram-media/...
   const telegramMediaDir = path.join(__dirname, "..", "..", "telegram", "media");
   fs.mkdirSync(telegramMediaDir, { recursive: true });
   app.use("/telegram-media", express.static(telegramMediaDir, { fallthrough: false, index: false }));
 
-  app.use(express.static(publicDir));
+  const UI_HTML_CACHE = "no-cache, no-store, must-revalidate";
+  const UI_ASSET_CACHE = "public, max-age=31536000, immutable";
+
+  app.use(
+    express.static(publicDir, {
+      setHeaders(res, filePath) {
+        const base = path.basename(filePath);
+        if (base === "index.html") {
+          res.setHeader("Cache-Control", UI_HTML_CACHE);
+          res.setHeader("Pragma", "no-cache");
+        } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader("Cache-Control", UI_ASSET_CACHE);
+        }
+      },
+    })
+  );
 
   app.use((req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     if (req.path.startsWith("/api")) return next();
     if (req.path.startsWith("/community-avatars")) return next();
     if (req.path.startsWith("/telegram-avatars")) return next();
+    if (req.path.startsWith("/kolvip-avatars")) return next();
     if (req.path.startsWith("/telegram-media")) return next();
     if (/\.\w+$/.test(req.path)) return next();
+    res.setHeader("Cache-Control", UI_HTML_CACHE);
+    res.setHeader("Pragma", "no-cache");
     res.sendFile(path.join(publicDir, "index.html"), (err) => (err ? next(err) : undefined));
   });
 
@@ -1733,7 +1813,15 @@ async function main() {
   log.info(
     `[api] /api/cards /api/v1/cards /api/discord/signal-cards（debugMode=${isDebugMode()}）`
   );
-  log.info(`信号卡片监听 ${getSignalChannelIds().size} 个 Discord 频道（DISCORD_SIGNAL_CHANNEL_IDS 非空则覆盖内置列表）`);
+  if (config.signalIngestSource === "kolvip") {
+    log.info(
+      `跟单信号源=kolvip（SIGNAL_INGEST_SOURCE）；Discord 信号频道 ${getSignalChannelIds().size} 个仅入库/Show，不建卡`
+    );
+  } else {
+    log.info(
+      `跟单信号源=discord；信号卡片监听 ${getSignalChannelIds().size} 个 Discord 频道（DISCORD_SIGNAL_CHANNEL_IDS 非空则覆盖内置列表）`
+    );
+  }
   const cdpMonitorOpts = {
     startUrl: config.startUrl,
     cdpDiscordUrl: config.cdpDiscordUrl,

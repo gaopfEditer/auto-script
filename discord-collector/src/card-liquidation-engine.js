@@ -6,6 +6,8 @@ import {
   calcLeveragePnl,
   fetchKlinesForCard,
   parseEntryPrice,
+  parseEntryRangeBounds,
+  plannedEntryIsRange,
   parsePrice,
 } from "./card-price-fetch.js";
 import { isShortDirection } from "./card-direction.js";
@@ -15,7 +17,7 @@ import {
   parseProgressJson,
   resolveCardExecution,
 } from "./card-level-progress.js";
-import { hasEvaluatedYield, normalizeExecution } from "./discord-signal-execution.js";
+import { hasEvaluatedYield, normalizeExecution, normalizePriceList } from "./discord-signal-execution.js";
 import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { archiveCardToClient, normalizeCardSourceType } from "./card-archive-service.js";
 import { archiveCardMatchesSourceTypes } from "./card-archive-list-cache.js";
@@ -30,37 +32,15 @@ export const LIQUIDATION_DEFAULT_TP_SIZE_PCTS = [0.3, 0.3, 0.4];
 /** 限价入场最长等待：超时未触及则判未入场，且不再重复匹配 */
 export const LIQUIDATION_ENTRY_WINDOW_MS = 12 * 60 * 60 * 1000;
 
-const LEV_100_BASES = new Set([
-  "BTC",
-  "ETH",
-  "SOL",
-  "XAU",
-  "XAG",
-  "GOLD",
-  "PAXG",
-  "OIL",
-  "WTI",
-  "USOIL",
-  "CL",
-  "BRENT",
-  "USO",
-]);
+import { resolveStatsLeverage } from "./card-symbol-leverage.js";
 
 /**
- * 主流 BTC/ETH/SOL、黄金、原油 100x；其余山寨 20x。
+ * 统计/清算杠杆：XAU 50x · BTC/ETH 100x · 其余 20x。
  * @param {unknown} symbol
  * @param {unknown} [assetClass]
  */
 export function resolveLiquidationLeverage(symbol, assetClass) {
-  const bare = String(symbol ?? "")
-    .toUpperCase()
-    .trim()
-    .replace(/(USDT|USDC|BUSD)$/, "");
-  if (LEV_100_BASES.has(bare)) return 100;
-  if (/^(XAU|XAG|GOLD|PAXG|OIL|WTI|USOIL|CL|BRENT|USO)/i.test(bare)) return 100;
-  const ac = String(assetClass ?? "").toLowerCase();
-  if (ac === "stock") return 20;
-  return 20;
+  return resolveStatsLeverage(symbol, assetClass);
 }
 
 /** @param {unknown} v */
@@ -396,11 +376,12 @@ export function evaluateLiquidation(card, klines, opts) {
     entryHitAt = new Date(signalMs).toISOString();
     entryPriceUsed = marketAtSignal;
   } else {
-    const diffPct = (Math.abs(marketAtSignal - plannedEntry) / plannedEntry) * 100;
-    if (diffPct <= entryTolerancePct) {
-      entryHitAt = new Date(signalMs).toISOString();
-      entryPriceUsed = marketAtSignal;
-    } else {
+    const entryRange = plannedEntryIsRange(plannedEntryRaw)
+      ? parseEntryRangeBounds(plannedEntryRaw)
+      : null;
+  if (entryRange) {
+      const touch = isShort ? entryRange.low : entryRange.high;
+      const fill = isShort ? entryRange.high : entryRange.low;
       for (const k of sorted) {
         const kTs = k.ts ?? 0;
         if (kTs < signalMs) continue;
@@ -408,10 +389,30 @@ export function evaluateLiquidation(card, klines, opts) {
         const high = Number(k.high);
         const low = Number(k.low);
         if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
-        if (touchesLevel(isShort, high, low, plannedEntry, "entry")) {
+        if (touchesLevel(isShort, high, low, touch, "entry")) {
           entryHitAt = k.ts ? new Date(k.ts).toISOString() : nowIso;
-          entryPriceUsed = plannedEntry;
+          entryPriceUsed = fill;
           break;
+        }
+      }
+    } else {
+      const diffPct = (Math.abs(marketAtSignal - plannedEntry) / plannedEntry) * 100;
+      if (diffPct <= entryTolerancePct) {
+        entryHitAt = new Date(signalMs).toISOString();
+        entryPriceUsed = marketAtSignal;
+      } else {
+        for (const k of sorted) {
+          const kTs = k.ts ?? 0;
+          if (kTs < signalMs) continue;
+          if (kTs > entryDeadline) break;
+          const high = Number(k.high);
+          const low = Number(k.low);
+          if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+          if (touchesLevel(isShort, high, low, plannedEntry, "entry")) {
+            entryHitAt = k.ts ? new Date(k.ts).toISOString() : nowIso;
+            entryPriceUsed = plannedEntry;
+            break;
+          }
         }
       }
     }
@@ -528,22 +529,16 @@ export function evaluateLiquidation(card, klines, opts) {
     }
 
     if (slTouch && pendingTpIdx.length > 0) {
-      const pendingTpPrices = pendingTpIdx.map((i) => tps[i]);
-      if (isTpHitBeforeSl(open, isShort, sl, pendingTpPrices)) {
-        applyTakeProfitTouches(hitAt, high, low);
-        if (hitIdx.size >= tps.length && tps.length > 0) {
-          const lastTp = tpHits[tpHits.length - 1];
-          settlementPrice = lastTp?.price ?? tps[tps.length - 1];
-          settlementAt = lastTp?.hitAt ?? hitAt;
-          outcome = "take_profit";
-          break;
-        }
-        const rem2 = Math.max(0, 1 - tpHits.reduce((s, h) => s + (h.sizePct || 0), 0));
-        if (applyStopLoss(hitAt, high, low, rem2)) break;
-      } else if (applyStopLoss(hitAt, high, low, remaining)) {
+      if (applyStopLoss(hitAt, high, low, remaining)) {
         break;
-      } else {
-        applyTakeProfitTouches(hitAt, high, low);
+      }
+      applyTakeProfitTouches(hitAt, high, low);
+      if (hitIdx.size >= tps.length && tps.length > 0) {
+        const lastTp = tpHits[tpHits.length - 1];
+        settlementPrice = lastTp?.price ?? tps[tps.length - 1];
+        settlementAt = lastTp?.hitAt ?? hitAt;
+        outcome = "take_profit";
+        break;
       }
     } else if (slTouch && applyStopLoss(hitAt, high, low, remaining)) {
       break;
@@ -711,18 +706,30 @@ function formatPriceLevel(n) {
  * @param {ReturnType<typeof evaluateLiquidation>} result
  */
 export function buildLiquidationPatch(card, result) {
-  const ex = normalizeExecution(card.execution);
+  const ex = normalizeExecution(card.execution, card.parsedJson ?? card.parsed_json);
+  const parsed =
+    card.parsedJson && typeof card.parsedJson === "object"
+      ? card.parsedJson
+      : card.parsed_json && typeof card.parsed_json === "object"
+        ? card.parsed_json
+        : {};
   const entry = result.entryPriceUsed;
   const tps = Array.isArray(result.takeProfits) ? result.takeProfits : [];
   const sl = result.stopLoss;
-  const plannedTpStrings = tps.map((p) => formatPriceLevel(Number(p)));
-  const plannedSlString = sl != null ? formatPriceLevel(Number(sl)) : "";
+  const parsedTp = normalizePriceList(parsed.takeProfits ?? parsed.targets);
+  const parsedSl = String(parsed.stopLoss ?? "").trim();
+  const parsedEntry = String(parsed.entry ?? "").trim();
+  const plannedTpStrings = (parsedTp.length > tps.length ? parsedTp : tps).map((p) =>
+    /[-~–—]/.test(String(p)) ? String(p) : formatPriceLevel(Number(p))
+  );
+  const plannedSlString = parsedSl || (sl != null ? formatPriceLevel(Number(sl)) : "");
+  const preserveEntryRange = plannedEntryIsRange(ex.planned?.entryPrice) || plannedEntryIsRange(parsedEntry);
   const entryString = entry != null ? formatPriceLevel(Number(entry)) : String(ex.planned?.entryPrice ?? "");
 
   const plannedPatch = {
     ...ex.planned,
-    entryPrice: entryString,
-    takeProfitPrices: plannedTpStrings,
+    entryPrice: preserveEntryRange ? String(ex.planned?.entryPrice || parsedEntry) : entryString,
+    takeProfitPrices: plannedTpStrings.map((p) => String(p).replace(/\$/g, "")),
     stopLossPrice: plannedSlString,
   };
 

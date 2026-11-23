@@ -3,6 +3,14 @@
  */
 import { config } from "./config.js";
 import { DEFAULT_SIGNAL_CHANNELS } from "./discord-signal-config.js";
+import { getKolvipChannelMappings } from "./kolvip-cdp-config.js";
+import { resolveKolvipChannelIdForShow } from "./kolvip-channel-catchup.js";
+import { getKolvipEvalRankedChannelIds } from "./kolvip-eval-rank.js";
+import { kolvipScanVirtualChannelId, parseKolvipScanVirtualChannelId } from "./kolvip-scan-config.js";
+import {
+  listKolvipAutotradeChannelIds,
+  loadKolvipBitgetAutotrade,
+} from "./kolvip-bitget-autotrade.js";
 
 /** 默认推送频道（可被环境变量覆盖） */
 export const DEFAULT_TELEGRAM_PUSH_CHANNEL_IDS = [
@@ -31,6 +39,58 @@ export function shouldTelegramPushSignalChannelComment(channelId, content) {
   const text = String(content ?? "").trim();
   if (cid !== DABIAOKE_SIGNAL_CHANNEL_ID || !text) return false;
   return /时间太久/.test(text);
+}
+
+const KOLVIP_TOP10_DEFAULT_COUNT = 10;
+
+/**
+ * 巨鲸博主信号卡 TG 专群频道白名单。
+ * 默认与 /eval 胜率榜同源（kolvip-sig，通常前 20），避免榜内 11–20 名（如胖猫）漏推。
+ */
+export function getKolvipTop10TelegramChannelIds() {
+  const fromEnv = config.kolvipTop10TelegramChannelIds;
+  if (fromEnv.length) return new Set(fromEnv.map(String));
+  const ranked = getKolvipEvalRankedChannelIds();
+  if (ranked.length) return new Set(ranked.map(String));
+  const ids = new Set();
+  const fromShow = config.discordShowSidebar?.channelIds ?? [];
+  for (const id of fromShow.slice(0, KOLVIP_TOP10_DEFAULT_COUNT)) ids.add(String(id));
+  for (const m of getKolvipChannelMappings()) {
+    if (m.discordChannelId) ids.add(String(m.discordChannelId));
+    ids.add(kolvipScanVirtualChannelId(m.kolvipChannelId));
+  }
+  if (loadKolvipBitgetAutotrade().enabled) {
+    for (const cid of listKolvipAutotradeChannelIds()) {
+      const id = String(cid ?? "").trim();
+      if (!id) continue;
+      ids.add(id);
+      const kid =
+        parseKolvipScanVirtualChannelId(id) || resolveKolvipChannelIdForShow(id);
+      if (kid) {
+        ids.add(kolvipScanVirtualChannelId(kid));
+        for (const m of getKolvipChannelMappings()) {
+          if (String(m.kolvipChannelId) === String(kid) && m.discordChannelId) {
+            ids.add(String(m.discordChannelId));
+          }
+        }
+      }
+    }
+  }
+  return ids;
+}
+
+/** @param {string} channelId */
+export function isKolvipTop10TelegramCardChannel(channelId) {
+  const id = String(channelId ?? "").trim();
+  if (!id) return false;
+  const top = getKolvipTop10TelegramChannelIds();
+  if (top.has(id)) return true;
+  const scanKid = parseKolvipScanVirtualChannelId(id);
+  if (!scanKid) return false;
+  for (const showId of top) {
+    if (resolveKolvipChannelIdForShow(showId) === scanKid) return true;
+  }
+  return false;
 }
 
 /** @returns {Set<string>} */

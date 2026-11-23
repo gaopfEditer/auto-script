@@ -24,6 +24,12 @@
 .show-app.has-signal-cards.has-kolvip-panel {
   grid-template-columns: 72px 390px 1fr 280px 200px;
 }
+.show-app.has-kolvip-sig-detail {
+  grid-template-columns: 72px 390px 1fr minmax(260px, 320px);
+}
+.show-app.has-signal-cards.has-kolvip-sig-detail {
+  grid-template-columns: 72px 390px 1fr 280px minmax(260px, 320px);
+}
 .show-app.no-guild-rail {
   grid-template-columns: 390px 1fr;
 }
@@ -36,11 +42,18 @@
 .show-app.no-guild-rail.has-signal-cards.has-kolvip-panel {
   grid-template-columns: 390px 1fr 280px 200px;
 }
+.show-app.no-guild-rail.has-kolvip-sig-detail {
+  grid-template-columns: 390px 1fr minmax(260px, 320px);
+}
+.show-app.no-guild-rail.has-signal-cards.has-kolvip-sig-detail {
+  grid-template-columns: 390px 1fr 280px minmax(260px, 320px);
+}
 .show-app > .guild-rail,
 .show-app > .channel-panel,
 .show-app > .main,
 .show-app > .signal-card-rail,
-.show-app > .kolvip-eval-panel {
+.show-app > .kolvip-eval-panel,
+.show-app > .kolvip-sig-detail-panel {
   min-height: 0;
 }
 .guild-rail {
@@ -127,7 +140,8 @@
 }
 .channel-row {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: flex-start;
   width: 100%;
   text-align: left;
   border: none;
@@ -137,7 +151,33 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.85rem;
+  gap: 0.45rem;
+}
+.channel-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   gap: 0.12rem;
+  margin: 0;
+}
+.channel-av {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  margin-top: 0.05rem;
+  background: #2b2d31;
+}
+.channel-av.ph {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 0.05rem;
+  background: linear-gradient(145deg, #4f545c 0%, #2b2d31 100%);
 }
 .channel-strip-stats {
   display: flex;
@@ -314,14 +354,28 @@
   color: #949ba4;
   flex-shrink: 0;
 }
-.channel-row .preview {
-  display: block;
-  font-size: 0.72rem;
-  color: #6d7480;
+.channel-row .preview-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+  min-width: 0;
+}
+.channel-row .preview-text {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: #6d7480;
+}
+.channel-row .preview-time {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: #727884;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .channel-row .channel-name {
   overflow: hidden;
@@ -555,6 +609,29 @@
   color: #6d7480;
   margin-left: auto;
 }
+.msg-lang-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.12rem;
+}
+.msg-lang-toggle {
+  flex-shrink: 0;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid #4e5058;
+  background: #2b2d31;
+  color: #b5bac1;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.msg-lang-toggle:hover {
+  background: #3f4248;
+  color: #f2f3f5;
+  border-color: #6d7480;
+}
 .msg-content {
   font-size: 0.92rem;
   line-height: 1.45;
@@ -577,6 +654,11 @@
 .msg-image-link {
   display: inline-block;
   max-width: min(420px, 100%);
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  text-align: left;
 }
 .msg-scroll-loadable {
   position: relative;
@@ -608,6 +690,42 @@
   background: #1e1f22;
   cursor: zoom-in;
 }
+.show-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+  background: rgba(0, 0, 0, 0.88);
+}
+.show-image-lightbox-img {
+  max-width: min(96vw, 1200px);
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
+}
+.show-image-lightbox-close {
+  position: fixed;
+  top: 1rem;
+  right: 1.25rem;
+  z-index: 1;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: none;
+  border-radius: 999px;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: #fff;
+  background: rgba(40, 42, 48, 0.9);
+  cursor: pointer;
+}
+.show-image-lightbox-close:hover {
+  background: #5865f2;
+}
+
 .msg-file-link {
   color: #00a8fc;
   font-size: 0.85rem;

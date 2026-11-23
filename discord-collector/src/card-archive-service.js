@@ -17,6 +17,10 @@ import {
 import { resolveTradeDirection } from "./card-direction.js";
 import { signalCardToClient, resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { getSignalChannelConfig, COIN_ACTION_SIGNAL_CHANNEL_ID, isSignalChannel } from "./discord-signal-config.js";
+import {
+  isTechnicalChannelLabel,
+  resolveKolvipChannelDisplayName,
+} from "./kolvip-channel-display.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
 import { buildCardSinkPayload, pickCardSinkText } from "./card-external-sink.js";
@@ -36,6 +40,7 @@ import {
   resolveAuthorKey,
 } from "./card-signal-merge.js";
 import { notifyTradeSignalAiPublish } from "./trade-signal-ai-publish.js";
+import { notifyKolvipOperateCdpPublish } from "./kolvip-operate-cdp.js";
 import {
   isTelegramPushBypassMessage,
   markTelegramCardPushSent,
@@ -44,8 +49,13 @@ import {
 } from "./telegram-card-push-dedup.js";
 import { isCdpSendChannel } from "./telegram-channel-profiles.js";
 import { sanitizeTelegramPushText } from "./telegram-content-sanitize.js";
+import { preferSingleLanguageSignalText } from "./message-text-format.js";
 import { recordTelegramCardAlertStats } from "./telegram-card-alert-stats.js";
 import { formatPipelineLog, formatSendCdpLog } from "./signal-pipeline-log.js";
+import {
+  createKolvipTop10CardTelegramPush,
+  mirrorKolvipTop10SignalCardTelegram,
+} from "./kolvip-top10-telegram.js";
 import {
   isTelegramAutoTradeChannel,
   prepareAutoTradeForOrder,
@@ -119,11 +129,17 @@ export function formatCardAsChannelMessage(card) {
 export function resolveCardChannelName(channelId, dbName) {
   const id = String(channelId ?? "").trim();
   if (!id) return "";
-  const cfgName = getSignalChannelConfig(id)?.name;
-  if (cfgName) return cfgName;
   const dn = String(dbName ?? "").trim();
+  if (dn && !isTechnicalChannelLabel(dn)) return dn;
+
+  const kolvipName = resolveKolvipChannelDisplayName(id);
+  if (kolvipName) return kolvipName;
+
+  const cfgName = getSignalChannelConfig(id)?.name;
+  if (cfgName && !isTechnicalChannelLabel(cfgName)) return cfgName;
+
   if (dn) return dn;
-  return id;
+  return kolvipName || cfgName || "";
 }
 
 export const SOURCE_TYPES = /** @type {const} */ ([
@@ -381,6 +397,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
   const cardSink = deps.cardSink ?? null;
   const communityFeed = deps.communityFeed ?? null;
   const telegram = deps.telegram ?? null;
+  const kolvipTop10Telegram = createKolvipTop10CardTelegramPush(log);
   const bitgetOrder = deps.bitgetOrder ?? null;
   const weexOrder = deps.weexOrder ?? null;
 
@@ -409,11 +426,17 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       String(opts.narrativeOverride ?? "").trim() ||
       pickCardSinkText(clientCard) ||
       formatCardAsChannelMessage(clientCard);
+    const publishEvent = String(opts.publishEvent || "entry").trim() || "entry";
     notifyTradeSignalAiPublish(clientCard, {
-      event: String(opts.publishEvent || "entry").trim() || "entry",
+      event: publishEvent,
       log,
       narrativeOverride: text,
       ingestSourceRef: opts.ingestSourceRef,
+    });
+    notifyKolvipOperateCdpPublish(clientCard, {
+      event: publishEvent,
+      log,
+      bodyText: text,
     });
   }
 
@@ -610,6 +633,7 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
     const platform = resolveSourcePlatform(sourceType);
     let text = pickCardSinkText(clientCard) || formatCardAsChannelMessage(clientCard);
     if (platform === "telegram") {
+      text = preferSingleLanguageSignalText(text, "zh");
       text = sanitizeTelegramPushText(text);
     }
     if (!String(text ?? "").trim()) {
@@ -708,6 +732,12 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
         }),
       );
       await telegram.send(bodyText, {
+        channelId,
+        channelName,
+        cardId: cardId ?? undefined,
+        skipChannelLabel,
+      });
+      await mirrorKolvipTop10SignalCardTelegram(log, kolvipTop10Telegram, channelId, bodyText, {
         channelId,
         channelName,
         cardId: cardId ?? undefined,

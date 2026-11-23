@@ -11,6 +11,7 @@ import { config } from "./config.js";
 import { isTelegramGroupChatId } from "./telegram-channel-profiles.js";
 import { isTelegramAutoTradeChannel, TELEGRAM_TRADE_INITIAL_SL_PCT, TELEGRAM_TRADE_LEVERAGE } from "./telegram-auto-trade.js";
 import { getTradeOrderSizeUsdt } from "./trade-platform-toggles.js";
+import { resolveKolvipBitgetPolicy } from "./kolvip-bitget-autotrade.js";
 
 const _dir = path.dirname(fileURLToPath(import.meta.url));
 const _envPath = path.join(_dir, "..", ".env");
@@ -41,6 +42,8 @@ function readBitgetEnabledFromEnv() {
  *   stagedTrade?: boolean;
  *   initialSlPct?: number;
  *   tpPartialRatios?: number[];
+ *   tpSkipFirstLevel?: boolean;
+ *   executionTemplate?: string;
  * }} BitgetTradeDefaults
  *
  * @typedef {BitgetTradeDefaults & {
@@ -87,6 +90,8 @@ function normalizeTradeConfig(raw) {
     tpPartialRatios: Array.isArray(defRaw.tpPartialRatios)
       ? defRaw.tpPartialRatios.map(Number).filter((n) => Number.isFinite(n) && n > 0)
       : [0.3, 0.3, 1],
+    tpSkipFirstLevel: defRaw.tpSkipFirstLevel === true,
+    executionTemplate: defRaw.executionTemplate != null ? String(defRaw.executionTemplate) : "",
   };
 
   /** @type {Record<string, BitgetChannelTradeConfig>} */
@@ -112,6 +117,8 @@ function normalizeTradeConfig(raw) {
       tpPartialRatios: Array.isArray(o.tpPartialRatios)
         ? o.tpPartialRatios.map(Number).filter((n) => Number.isFinite(n) && n > 0)
         : undefined,
+      tpSkipFirstLevel: o.tpSkipFirstLevel === true ? true : o.tpSkipFirstLevel === false ? false : undefined,
+      executionTemplate: o.executionTemplate != null ? String(o.executionTemplate) : undefined,
     };
   }
 
@@ -148,9 +155,10 @@ export function loadBitgetTradeConfig(filePath = config.bitgetTradeConfigFile) {
  * @param {string} channelId
  * @param {BitgetTradeConfig} cfg
  * @param {string} [profilesFile] 测试注入 channel_profiles.json；生产不传
- * @returns {{ enabled: boolean; dryRun: boolean; channel: Required<BitgetTradeDefaults> & { name?: string } } | null}
+ * @param {string} [channelName] 用于巨鲸榜策略匹配
+ * @returns {{ enabled: boolean; dryRun: boolean; channel: Required<BitgetTradeDefaults> & { name?: string; kolvipPolicyKey?: string } } | null}
  */
-export function resolveChannelBitgetTrade(channelId, cfg, profilesFile) {
+export function resolveChannelBitgetTrade(channelId, cfg, profilesFile, channelName) {
   const cid = String(channelId ?? "").trim();
   if (!cid || !cfg?.enabled) return null;
 
@@ -168,18 +176,24 @@ export function resolveChannelBitgetTrade(channelId, cfg, profilesFile) {
         stagedTrade: true,
         initialSlPct: TELEGRAM_TRADE_INITIAL_SL_PCT,
         tpPartialRatios: [0.3, 0.3, 1],
+        tpSkipFirstLevel: false,
+        executionTemplate: "",
         name: "telegram",
       },
     };
   }
 
+  const kolvipPolicy = resolveKolvipBitgetPolicy(cid, channelName);
+
   const envList = config.bitgetAutoTradeChannelIds;
   const ch = cfg.channels[cid];
-  if (envList.length && !envList.includes(cid)) return null;
+  const envOk = !envList.length || envList.includes(cid);
+  const policyOk = Boolean(kolvipPolicy);
+  if (!envOk && !policyOk) return null;
   if (ch && ch.enabled === false) return null;
-  if (!ch && envList.length === 0) return null;
+  if (!ch && !policyOk && envList.length === 0) return null;
 
-  /** @type {Required<BitgetTradeDefaults> & { name?: string }} */
+  /** @type {Required<BitgetTradeDefaults> & { name?: string; kolvipPolicyKey?: string }} */
   const merged = {
     marginMode: ch?.marginMode ?? cfg.default.marginMode,
     leverage: ch?.leverage ?? cfg.default.leverage,
@@ -189,8 +203,22 @@ export function resolveChannelBitgetTrade(channelId, cfg, profilesFile) {
     stagedTrade: ch?.stagedTrade ?? cfg.default.stagedTrade,
     initialSlPct: ch?.initialSlPct ?? cfg.default.initialSlPct,
     tpPartialRatios: ch?.tpPartialRatios ?? cfg.default.tpPartialRatios,
-    name: ch?.name,
+    tpSkipFirstLevel: ch?.tpSkipFirstLevel ?? cfg.default.tpSkipFirstLevel ?? false,
+    executionTemplate: ch?.executionTemplate ?? cfg.default.executionTemplate ?? "",
+    name: ch?.name ?? kolvipPolicy?.name,
+    kolvipPolicyKey: kolvipPolicy?.key,
   };
+
+  if (kolvipPolicy) {
+    merged.orderSizeUsdt = numOr(kolvipPolicy.orderSizeUsdt, merged.orderSizeUsdt);
+    merged.tpPartialRatios = kolvipPolicy.tpPartialRatios ?? merged.tpPartialRatios;
+    merged.tpSkipFirstLevel = kolvipPolicy.tpSkipFirstLevel ?? merged.tpSkipFirstLevel;
+    merged.executionTemplate = kolvipPolicy.executionTemplate;
+    merged.name = kolvipPolicy.name ?? merged.name;
+    merged.orderType = "market";
+    merged.stagedTrade = kolvipPolicy.executionTemplate !== "tp1_all";
+    merged.initialSlPct = merged.initialSlPct > 0 ? merged.initialSlPct : config.bitgetInitialSlPct;
+  }
 
   return { enabled: true, dryRun: cfg.dryRun, channel: merged };
 }

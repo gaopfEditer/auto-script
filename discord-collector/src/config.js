@@ -4,11 +4,29 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildShowSidebarChannelGroups } from "./discord-show-channels.js";
+import { loadDiscordGroupsFromFile } from "./discord-groups-file.js";
 import { PANGMAO_OCR_YIELD_EMIT_BELOW_PCT } from "./discord-signal-ocr-parser.js";
 import { parseKolvipChannelIdsEnv } from "./kolvip-cdp-config.js";
+import { envTruthy, signalIngestSourceFromEnv } from "./signal-ingest-source.js";
 
 const _repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const _collectorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/** @returns {{ channelIds: string[], namesByChannelId: Record<string, string>, source?: string }} */
+function resolveDiscordShowSidebar() {
+  const envShow = String(process.env.DISCORD_SHOW_CHANNEL_IDS ?? "").trim();
+  if (envShow) {
+    return { ...buildShowSidebarChannelGroups(envShow, process.env.DISCORD_GROUPS ?? ""), source: "env" };
+  }
+  const fromFile = loadDiscordGroupsFromFile();
+  if (fromFile.showChannels.length) {
+    return { ...fromFile.discordGroups, source: "discord_groups.json" };
+  }
+  return {
+    ...buildShowSidebarChannelGroups("", process.env.DISCORD_GROUPS ?? ""),
+    source: "discord-show-channels-default",
+  };
+}
 
 /** @typedef {{ host: string; port: number; user: string; password: string; database: string }} MysqlConfig */
 
@@ -219,6 +237,47 @@ export const config = {
     14,
     Math.max(1, Number(process.env.DISCORD_SHOW_SNAPSHOT_DAYS) || 7)
   ),
+  /** 巨鲸卡片拉取 /eval / Show 补拉窗口（与 kolvip-sig 30 天榜对齐） */
+  kolvipCardIngestDays: Math.min(
+    90,
+    Math.max(7, Number(process.env.KOLVIP_CARD_INGEST_DAYS ?? 30) || 30)
+  ),
+  kolvipShowSnapshotDays: Math.min(
+    90,
+    Math.max(
+      7,
+      Number(
+        process.env.KOLVIP_SHOW_SNAPSHOT_DAYS ??
+          process.env.KOLVIP_CARD_INGEST_DAYS ??
+          30
+      ) || 30
+    )
+  ),
+  kolvipEvalDefaultDays: Math.min(
+    90,
+    Math.max(1, Number(process.env.KOLVIP_EVAL_DEFAULT_DAYS ?? 30) || 30)
+  ),
+  /** kolvip HTTP 补拉（切频道/榜单轮转）：期内只读 MySQL，不重复请求 kolvip（默认=近 30 天） */
+  kolvipShowCatchupTtlMs: (() => {
+    const hours = Number(process.env.KOLVIP_SHOW_CATCHUP_TTL_HOURS);
+    if (Number.isFinite(hours) && hours > 0) {
+      return Math.max(300_000, hours * 3_600_000);
+    }
+    const days = Math.min(90, Math.max(1, Number(process.env.KOLVIP_SHOW_SNAPSHOT_DAYS)));
+    const fallback = Math.min(
+      90,
+      Math.max(
+        7,
+        Number(
+          process.env.KOLVIP_CARD_INGEST_DAYS ??
+            process.env.KOLVIP_SHOW_SNAPSHOT_DAYS ??
+            30
+        ) || 30
+      )
+    );
+    const windowDays = Number.isFinite(days) && days > 0 ? days : fallback;
+    return Math.max(300_000, windowDays * 24 * 3_600_000);
+  })(),
   discordShowSnapshotPerChannel: Math.min(
     300,
     Math.max(20, Number(process.env.DISCORD_SHOW_SNAPSHOT_PER_CHANNEL) || 120)
@@ -297,11 +356,8 @@ export const config = {
     .filter(Boolean),
   /** 非空时仅入库/展示这些 guild 的消息 */
   monitoredGuildIds: parseIdList(process.env.DISCORD_MONITORED_GUILD_IDS ?? ""),
-  /** Show /show 左侧频道白名单（默认 discord-show-channels.js；DISCORD_SHOW_CHANNEL_IDS 覆盖） */
-  discordShowSidebar: buildShowSidebarChannelGroups(
-    process.env.DISCORD_SHOW_CHANNEL_IDS ?? "",
-    process.env.DISCORD_GROUPS ?? "",
-  ),
+  /** Show /show 左侧频道白名单（DISCORD_SHOW_CHANNEL_IDS → data/discord_groups.json showChannels → 内置默认） */
+  discordShowSidebar: resolveDiscordShowSidebar(),
   /** 旧 Show 白名单 env（未设 DISCORD_SHOW_CHANNEL_IDS 时仍可读 DISCORD_GROUPS） */
   discordGroups: parseDiscordGroups(process.env.DISCORD_GROUPS ?? ""),
   /** 信号卡片监听频道（默认内置 4 个） */
@@ -371,6 +427,45 @@ export const config = {
     const n = Number(v);
     return Number.isFinite(n) ? n : v;
   })(),
+  /** kolvip Show 胜率榜前 10 频道信号卡片 → 独立 TG 群 */
+  kolvipTop10TelegramChatId: (() => {
+    const v = String(
+      process.env.KOLVIP_TOP10_TELEGRAM_CHAT_ID ?? process.env.KOLVIP_TOP5_TELEGRAM_CHAT_ID ?? "",
+    ).trim();
+    if (!v) return "";
+    const n = Number(v);
+    return Number.isFinite(n) ? n : v;
+  })(),
+  kolvipTop10TelegramChannelIds: parseIdList(
+    process.env.KOLVIP_TOP10_TELEGRAM_CHANNEL_IDS ??
+      process.env.KOLVIP_TOP5_TELEGRAM_CHANNEL_IDS ??
+      "",
+  ),
+  /** Show 前 N 频道 · 按发单顺序筛单 → operate CDP（四行 + 优化入场） */
+  kolvipOperateCdpEnabled: ["1", "true", "yes", "on"].includes(
+    String(process.env.KOLVIP_OPERATE_CDP_ENABLED ?? "0").toLowerCase(),
+  ),
+  kolvipOperateCdpTopChannels: Math.max(
+    1,
+    Number(process.env.KOLVIP_OPERATE_CDP_TOP_CHANNELS ?? 5) || 5,
+  ),
+  kolvipOperateCdpChannelIds: parseIdList(process.env.KOLVIP_OPERATE_CDP_CHANNEL_IDS ?? ""),
+  /**
+   * 全局发单顺序槽位：仅 `999` = 全部；`1,3,5,6` = 只取这些序号（08:00 复位）
+   */
+  kolvipOperateCdpOrderSlots: (() => {
+    const raw = process.env.KOLVIP_OPERATE_CDP_ORDER_SLOTS ?? "1,3,5,6";
+    return raw
+      .split(/[,;\s]+/)
+      .map((x) => Number(String(x).trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  })(),
+  /** 列表复位时刻（Asia/Shanghai，默认 8 点） */
+  kolvipOperateCdpResetHour: Math.max(
+    0,
+    Math.min(23, Number(process.env.KOLVIP_OPERATE_CDP_RESET_HOUR ?? 8) || 8),
+  ),
+  kolvipEvalChannelIds: parseIdList(process.env.KOLVIP_EVAL_CHANNEL_IDS ?? ""),
   telegramSendTimeoutMs: Number(process.env.TELEGRAM_SEND_TIMEOUT_MS ?? 15_000),
   /** 默认 true：全量 WS/API 日志与 UI；设 DISCORD_DEBUG_MODE=0 为精简模式 */
   debugMode: ["0", "false", "no", "off"].includes(
@@ -511,6 +606,12 @@ export const config = {
   cardEvalMajorLeverage: Number(process.env.CARD_EVAL_MAJOR_LEVERAGE ?? 100),
   /** 评价表单：山寨默认杠杆 */
   cardEvalAltcoinLeverage: Number(process.env.CARD_EVAL_ALTCOIN_LEVERAGE ?? 20),
+  /** 统计/清算：黄金 XAU 等 */
+  cardStatsLeverageGold: Number(process.env.CARD_STATS_LEVERAGE_GOLD ?? 50),
+  /** 统计/清算：BTC/ETH */
+  cardStatsLeverageMajor: Number(process.env.CARD_STATS_LEVERAGE_MAJOR ?? 100),
+  /** 统计/清算：其余币种 */
+  cardStatsLeverageAltcoin: Number(process.env.CARD_STATS_LEVERAGE_ALTCOIN ?? 20),
   /** 卡片外送（外部评估服务）：默认开，WS 优先、HTTP 回退 */
   cardSinkEnabled: !["0", "false", "no", "off"].includes(
     String(process.env.CARD_SINK_ENABLED ?? "1").toLowerCase()
@@ -593,6 +694,7 @@ export const config = {
    */
   bitgetAutoTradeChannelIds: parseIdList(process.env.BITGET_AUTO_TRADE_CHANNEL_IDS ?? ""),
   bitgetDefaultLeverage: Number(process.env.BITGET_DEFAULT_LEVERAGE ?? 20),
+  bitgetGoldLeverage: Number(process.env.BITGET_GOLD_LEVERAGE ?? 50),
   bitgetOrderSizeUsdt: Number(process.env.BITGET_ORDER_SIZE_USDT ?? 1),
   bitgetMajorLeverage: Number(process.env.BITGET_MAJOR_LEVERAGE ?? 20),
   bitgetAltcoinLeverage: Number(process.env.BITGET_ALTCOIN_LEVERAGE ?? 20),
@@ -676,19 +778,31 @@ export const config = {
   ),
   twitterCdpLists: parseIdList(process.env.TWITTER_CDP_LISTS ?? ""),
   twitterCdpMaxPerList: Math.min(50, Math.max(5, Number(process.env.TWITTER_CDP_MAX_PER_LIST ?? 20) || 20)),
+  /** 跟单建卡互斥源：`kolvip`（默认）| `discord`（`SIGNAL_INGEST_SOURCE`） */
+  signalIngestSource: signalIngestSourceFromEnv(),
   /**
-   * 巨鲸 kolvip.vip **临时**信号源；默认关。优先 HTTP API（KOLVIP_FETCH_MODE），CDP DOM 可关或作兜底。
-   * 切回 Discord：`KOLVIP_ENABLED=0` 且 `KOLVIP_API_ENABLED=0` 且 `KOLVIP_CDP_ENABLED=0`。
+   * 巨鲸 kolvip.vip 信号源。`SIGNAL_INGEST_SOURCE=kolvip` 时默认开 API；切 Discord 建卡：`SIGNAL_INGEST_SOURCE=discord`。
    */
-  kolvipApiEnabled: ["1", "true", "yes", "on"].includes(
-    String(process.env.KOLVIP_API_ENABLED ?? "0").toLowerCase()
-  ),
-  kolvipCdpEnabled: ["1", "true", "yes", "on"].includes(
-    String(process.env.KOLVIP_CDP_ENABLED ?? "0").toLowerCase()
-  ),
+  kolvipApiEnabled: (() => {
+    const raw = process.env.KOLVIP_API_ENABLED;
+    if (raw != null && String(raw).trim() !== "") return envTruthy(raw);
+    return signalIngestSourceFromEnv() === "kolvip";
+  })(),
+  kolvipCdpEnabled: (() => {
+    const raw = process.env.KOLVIP_CDP_ENABLED;
+    if (raw != null && String(raw).trim() !== "") return envTruthy(raw);
+    return false;
+  })(),
   kolvipSignalEnabled: (() => {
-    const on = (k) => ["1", "true", "yes", "on"].includes(String(process.env[k] ?? "0").toLowerCase());
-    return on("KOLVIP_ENABLED") || on("KOLVIP_API_ENABLED") || on("KOLVIP_CDP_ENABLED");
+    const on = (k) => envTruthy(process.env[k]);
+    if (on("KOLVIP_ENABLED") || on("KOLVIP_API_ENABLED") || on("KOLVIP_CDP_ENABLED")) return true;
+    if (String(process.env.KOLVIP_ENABLED ?? "").trim().toLowerCase() === "0") return false;
+    if (signalIngestSourceFromEnv() !== "kolvip") return false;
+    const apiRaw = process.env.KOLVIP_API_ENABLED;
+    const cdpRaw = process.env.KOLVIP_CDP_ENABLED;
+    const apiOn = apiRaw != null && String(apiRaw).trim() !== "" ? envTruthy(apiRaw) : true;
+    const cdpOn = cdpRaw != null && String(cdpRaw).trim() !== "" ? envTruthy(cdpRaw) : false;
+    return apiOn || cdpOn;
   })(),
   /** api | cdp | auto — auto 优先 HTTP，失败且 CDP 开则回退 DOM */
   kolvipFetchMode: (() => {
@@ -705,6 +819,14 @@ export const config = {
   kolvipApiCdpTokenSync: !["0", "false", "no", "off"].includes(
     String(process.env.KOLVIP_API_CDP_TOKEN_SYNC ?? "1").toLowerCase()
   ),
+  /** file-first（默认）| cdp-first — CDP 优先时用 KOLVIP_CDP_CONNECT_URL（如 :9223），文件作兜底 */
+  kolvipApiWtokenPriority: (() => {
+    const raw = String(process.env.KOLVIP_API_WTOKEN_PRIORITY ?? "file-first")
+      .trim()
+      .toLowerCase();
+    if (raw === "cdp-first" || raw === "cdp") return "cdp-first";
+    return "file-first";
+  })(),
   kolvipApiTimeoutMs: Math.max(
     3000,
     Number(process.env.KOLVIP_API_TIMEOUT_MS ?? 15_000) || 15_000
@@ -726,6 +848,21 @@ export const config = {
         90_000
     ) || 90_000
   ),
+  kolvipWsEnabled: !["0", "false", "no", "off"].includes(
+    String(process.env.KOLVIP_WS_ENABLED ?? "1").toLowerCase()
+  ),
+  kolvipWsReconnectMs: Math.max(
+    1000,
+    Number(process.env.KOLVIP_WS_RECONNECT_MS ?? 5_000) || 5_000
+  ),
+  /** WS 已连接时 HTTP 轮询降为兜底（漏消息、断线补偿） */
+  kolvipPollDeferWhenWs: !["0", "false", "no", "off"].includes(
+    String(process.env.KOLVIP_POLL_DEFER_WHEN_WS ?? "1").toLowerCase()
+  ),
+  kolvipPollFallbackMs: Math.max(
+    60_000,
+    Number(process.env.KOLVIP_POLL_FALLBACK_MS ?? 600_000) || 600_000
+  ),
   /** 留空则沿用 CDP_CONNECT_URL（同一 Chrome :9222，需已登录 kolvip.vip/web） */
   kolvipCdpConnectUrl: (process.env.KOLVIP_CDP_CONNECT_URL ?? "").trim(),
   kolvipWebUrl: (process.env.KOLVIP_WEB_URL ?? "https://kolvip.vip/web").trim(),
@@ -745,11 +882,8 @@ export const config = {
       process.env.KOLVIP_CDP_BYPASS_DISCORD_SIGNALS ??
       ""
     ).trim();
-    if (explicit) {
-      return !["0", "false", "no", "off"].includes(explicit.toLowerCase());
-    }
-    const on = (k) => ["1", "true", "yes", "on"].includes(String(process.env[k] ?? "0").toLowerCase());
-    return on("KOLVIP_ENABLED") || on("KOLVIP_API_ENABLED") || on("KOLVIP_CDP_ENABLED");
+    if (explicit) return envTruthy(explicit);
+    return signalIngestSourceFromEnv() === "kolvip";
   })(),
   /** 非精选频道建卡扫描（虚拟 channelId，不推 TG） */
   kolvipScanEvalEnabled: !["0", "false", "no", "off"].includes(
@@ -795,6 +929,11 @@ export const config = {
   kolvipBackfillMaxRetries: Math.min(
     8,
     Math.max(0, Number(process.env.KOLVIP_BACKFILL_MAX_RETRIES ?? 3) || 3)
+  ),
+  /** 博主胜率本地镜像定时同步（0=关）；默认 2 分钟，与线上面板 refresh 同级 */
+  kolvipSigSyncIntervalMs: Math.max(
+    0,
+    Number(process.env.KOLVIP_SIG_SYNC_INTERVAL_MS ?? 120_000) || 0
   ),
   /** OI → Telegram 形态卡片回测（validate backtestPolicy=telegram_oi） */
   tgSignalBacktestMajorStepPct: Number(process.env.TG_SIGNAL_BACKTEST_MAJOR_STEP_PCT ?? 0.5),

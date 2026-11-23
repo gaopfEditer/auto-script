@@ -10,6 +10,7 @@ const CRYPTO_BASES = new Set([
   "BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "ADA", "AVAX", "DOT", "MATIC",
   "LINK", "UNI", "LTC", "BCH", "ETC", "FIL", "APT", "ARB", "OP", "SUI",
   "SEI", "TIA", "INJ", "NEAR", "ATOM", "TRX", "SHIB", "PEPE", "WIF",
+  "XAU", "XAG", "GOLD", "PAXG",
 ]);
 
 /**

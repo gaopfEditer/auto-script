@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "enabled": true,
+  "exchanges": ["bitget", "weex"],
+  "comment": "巨鲸榜跟单唯一配置：频道 id、模板、保证金。改此文件后重启 collect:ui。",
+  "executionPolicyVersion": "2026-11-21",
+  "executionPolicy": {
+    "common": "跟信号原止损，不缩小；R=-1 按整笔止损",
+    "gold_track2": "FX-黄金/女王：跳过TP1全平；TP2约30%→TP5约50%→余仓末档；TP2成交后SL=开仓价，TP5减仓后SL=TP2价",
+    "crypto_track2": "零下二度：轨2从TP2分批，TP2后保本；币安杀手：止损宽(~10%)，TP3后再保本",
+    "kacang_tp1": "100%@TP1全平，不推连锁止损",
+    "aoying_mirror": "熬鹰带单镜像：5U 市价开仓；无止盈档时仅挂止损（强平/保底）"
+  },
+  "marginDefaultUsdt": { "queen": 2, "others": 2 },
+  "leverage": { "gold": 50, "crypto": 20 },
+  "autoTradeChannelIds": [
+    "kolvip-scan-39",
+    "1444967575858581545",
+    "kolvip-scan-13",
+    "1559133861617602630",
+    "kolvip-scan-33",
+    "kolvip-scan-37",
+    "1444967547169669160",
+    "kolvip-scan-31",
+    "kolvip-scan-27"
+  ],
+  "channels": [
+    {
+      "key": "huajie",
+      "name": "华尔街女王",
+      "namePatterns": ["华尔街女王"],
+      "kolvipChannelId": "39",
+      "channelIds": ["kolvip-scan-39", "1444967575858581545"],
+      "executionTemplate": "track2",
+      "templateLabel": "B 轨2",
+      "orderSizeUsdt": 2,
+      "leverageGold": 50,
+      "leverageCrypto": 20,
+      "backtestNote": "路径30d 2U 口径约+3.1U（原5U +7.87U）"
+    },
+    {
+      "key": "lingxia",
+      "name": "零下二度VIP禁言群",
+      "namePatterns": ["零下二度"],
+      "kolvipChannelId": "13",
+      "channelIds": ["kolvip-scan-13", "1559133861617602630"],
+      "executionTemplate": "track2",
+      "templateLabel": "B 轨2",
+      "orderSizeUsdt": 2,
+      "leverageGold": 50,
+      "leverageCrypto": 20,
+      "backtestNote": "路径30d约+27U"
+    },
+    {
+      "key": "kacang",
+      "name": "kacang-团队",
+      "namePatterns": ["kacang"],
+      "kolvipChannelId": "33",
+      "channelIds": ["kolvip-scan-33"],
+      "executionTemplate": "tp1_all",
+      "templateLabel": "A TP1",
+      "orderSizeUsdt": 2,
+      "leverageGold": 50,
+      "leverageCrypto": 20,
+      "backtestNote": "路径30d约+84U，最大连亏6笔"
+    },
+    {
+      "key": "fx_gold",
+      "name": "FX-黄金信号",
+      "namePatterns": ["FX-黄金", "黄金信号"],
+      "kolvipChannelId": "31",
+      "channelIds": ["kolvip-scan-31"],
+      "executionTemplate": "track2",
+      "templateLabel": "B 轨2",
+      "orderSizeUsdt": 5,
+      "leverageGold": 50,
+      "leverageCrypto": 20,
+      "backtestNote": "与女王同为5U；站30d多档止盈，轨2对齐分批"
+    },
+    {
+      "key": "binance_killer",
+      "name": "币安杀手",
+      "namePatterns": ["币安杀手"],
+      "kolvipChannelId": "37",
+      "channelIds": ["kolvip-scan-37", "1444967547169669160"],
+      "executionTemplate": "track2",
+      "templateLabel": "B 轨2",
+      "orderSizeUsdt": 2,
+      "leverageGold": 50,
+      "leverageCrypto": 20,
+      "backtestNote": "路径30d高波动，样本仅10笔"
+    },
+    {
+      "key": "aoying",
+      "name": "熬鹰",
+      "namePatterns": ["熬鹰"],
+      "kolvipChannelId": "27",
+      "channelIds": ["kolvip-scan-27"],
+      "executionTemplate": "tp1_all",
+      "templateLabel": "镜像开仓",
+      "orderSizeUsdt": 5,
+      "leverageGold": 50,
+      "leverageCrypto": 20,
+      "backtestNote": "带单新开仓镜像；无止盈档仅止损"
+    }
+  ]
+}

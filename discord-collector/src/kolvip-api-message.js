@@ -1,4 +1,5 @@
 import { resolveKolvipAssetUrl } from "./kolvip-cdp-config.js";
+import { kolvipMessageTextFromApiRaw } from "./kolvip-message-text.js";
 
 /** @param {unknown} im */
 function imageUrlFromApiMedia(im) {
@@ -62,10 +63,14 @@ export function kolvipApiRawToDomMessage(raw) {
   const imageUrls = kolvipImageUrlsFromRaw(raw);
   const timeMs = Number(raw.time);
   const timeTitle = Number.isFinite(timeMs) ? new Date(timeMs).toISOString() : "";
+  const avatarRaw = String(raw.avatar ?? "").trim();
+  const coin = String(raw.coin ?? raw.symbol ?? "").trim().replace(/\/USDT$/i, "");
   return {
     dataId,
-    text: String(raw.text ?? "").trim(),
+    text: kolvipMessageTextFromApiRaw(raw),
+    coin,
     author: String(raw.author ?? "").trim(),
+    authorAvatar: avatarRaw ? resolveKolvipAssetUrl(avatarRaw) : "",
     timeText: "",
     timeTitle,
     imageUrl: imageUrls[0] || "",

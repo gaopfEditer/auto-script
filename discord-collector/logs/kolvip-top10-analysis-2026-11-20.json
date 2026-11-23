@@ -1,0 +1,1279 @@
+{
+  "generated_at": "2026-11-20T18:41:18.892742+08:00",
+  "data_sync_at": "2026-11-20T10:41:05.521Z",
+  "min_count": 5,
+  "detail_snapshots_local": 0,
+  "detail_api_note": "kolvip /webu/sig/detail 需鲸享权限，本地 detail 目录为空；止损方向用 Binance 5m K 线近似复检",
+  "top10": [
+    {
+      "name": "华尔街女王",
+      "win_rate_pct": 91.7,
+      "count": 12,
+      "wins": 11,
+      "losses": 1,
+      "be": 0,
+      "open": 0,
+      "pl_ratio": 1.35,
+      "total_r": 13.8,
+      "max_lose_streak": 1,
+      "last_call_ms": 1795090100000
+    },
+    {
+      "name": "三马哥合约VIP",
+      "win_rate_pct": 88.2,
+      "count": 17,
+      "wins": 15,
+      "losses": 2,
+      "be": 0,
+      "open": 1,
+      "pl_ratio": 0.51,
+      "total_r": 4.71,
+      "max_lose_streak": 2,
+      "last_call_ms": 1795136055000
+    },
+    {
+      "name": "FX-黄金信号",
+      "win_rate_pct": 87.5,
+      "count": 40,
+      "wins": 35,
+      "losses": 5,
+      "be": 0,
+      "open": 0,
+      "pl_ratio": 1.33,
+      "total_r": 41.62,
+      "max_lose_streak": 2,
+      "last_call_ms": 1795164166000
+    },
+    {
+      "name": "熬鹰",
+      "win_rate_pct": 84.2,
+      "count": 19,
+      "wins": 16,
+      "losses": 3,
+      "be": 0,
+      "open": 0,
+      "pl_ratio": 1.04,
+      "total_r": 100.84,
+      "max_lose_streak": 1,
+      "last_call_ms": 1795014913000
+    },
+    {
+      "name": "Trader-Nero",
+      "win_rate_pct": 76.5,
+      "count": 17,
+      "wins": 13,
+      "losses": 4,
+      "be": 0,
+      "open": 0,
+      "pl_ratio": 2.12,
+      "total_r": 18.97,
+      "max_lose_streak": 2,
+      "last_call_ms": 1794997697000
+    },
+    {
+      "name": "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员",
+      "win_rate_pct": 68.2,
+      "count": 22,
+      "wins": 15,
+      "losses": 7,
+      "be": 0,
+      "open": 1,
+      "pl_ratio": 1.78,
+      "total_r": 19.66,
+      "max_lose_streak": 1,
+      "last_call_ms": 1795168701000
+    },
+    {
+      "name": "黄金帝国gold-empire",
+      "win_rate_pct": 66.7,
+      "count": 6,
+      "wins": 4,
+      "losses": 2,
+      "be": 0,
+      "open": 0,
+      "pl_ratio": 2.13,
+      "total_r": 6.06,
+      "max_lose_streak": 2,
+      "last_call_ms": 1794827107000
+    },
+    {
+      "name": "大镖客VIP禁言群",
+      "win_rate_pct": 63.2,
+      "count": 19,
+      "wins": 12,
+      "losses": 7,
+      "be": 0,
+      "open": 2,
+      "pl_ratio": 0.5,
+      "total_r": -0.94,
+      "max_lose_streak": 3,
+      "last_call_ms": 1795143352000
+    },
+    {
+      "name": "kacang-团队",
+      "win_rate_pct": 61.4,
+      "count": 44,
+      "wins": 27,
+      "losses": 17,
+      "be": 0,
+      "open": 0,
+      "pl_ratio": 1.6,
+      "total_r": 24.68,
+      "max_lose_streak": 4,
+      "last_call_ms": 1795095634000
+    },
+    {
+      "name": "零下二度VIP禁言群",
+      "win_rate_pct": 61.1,
+      "count": 18,
+      "wins": 11,
+      "losses": 7,
+      "be": 0,
+      "open": 0,
+      "pl_ratio": 3.12,
+      "total_r": 27.3,
+      "max_lose_streak": 4,
+      "last_call_ms": 1795061450000
+    }
+  ],
+  "settled_in_top10_histories": 214,
+  "sl_loss_count": 47,
+  "sl_kline_class_summary": {
+    "介于中间，缺 kolvip 点位详情（/webu/sig/detail 权限）": 3,
+    "方向偏误（持仓内几乎无顺势，离场后也不顺）": 4,
+    "止损后价格才沿信号走（扫损/止损位或入场问题）": 5,
+    "持仓内曾有顺势波动但被止损；离场后未明显延续": 3,
+    "方向可能对、止损偏紧（持仓内曾顺势，扫损后 6h 仍沿信号方向）": 3
+  },
+  "sl_loss_analyses": [
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": -1,
+      "mfe_hold_pct": 0.154,
+      "mae_hold_pct": 0.745,
+      "post_dir_6h_pct": 0.276,
+      "class": "介于中间，缺 kolvip 点位详情（/webu/sig/detail 权限）",
+      "hold_bars": 32,
+      "post_bars": 72,
+      "id": 1206,
+      "blogger": "华尔街女王",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 0.138,
+      "mae_hold_pct": 4.154,
+      "post_dir_6h_pct": -2.066,
+      "class": "方向偏误（持仓内几乎无顺势，离场后也不顺）",
+      "hold_bars": 174,
+      "post_bars": 72,
+      "id": 1399,
+      "blogger": "三马哥合约VIP",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1736,
+      "blogger": "FX-黄金信号",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1728,
+      "blogger": "FX-黄金信号",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1647,
+      "blogger": "FX-黄金信号",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1530,
+      "blogger": "FX-黄金信号",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1286,
+      "blogger": "FX-黄金信号",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "ETHUSDT",
+      "coin": "ETH",
+      "side": 1,
+      "mfe_hold_pct": 0.093,
+      "mae_hold_pct": 0.983,
+      "post_dir_6h_pct": 1.355,
+      "class": "止损后价格才沿信号走（扫损/止损位或入场问题）",
+      "hold_bars": 4,
+      "post_bars": 72,
+      "id": 1548,
+      "blogger": "Trader-Nero",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 0.398,
+      "mae_hold_pct": 1.03,
+      "post_dir_6h_pct": -1.93,
+      "class": "持仓内曾有顺势波动但被止损；离场后未明显延续",
+      "hold_bars": 54,
+      "post_bars": 72,
+      "id": 1456,
+      "blogger": "Trader-Nero",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "ETHUSDT",
+      "coin": "ETH",
+      "side": -1,
+      "mfe_hold_pct": 0.211,
+      "mae_hold_pct": 1.041,
+      "post_dir_6h_pct": 2.329,
+      "class": "介于中间，缺 kolvip 点位详情（/webu/sig/detail 权限）",
+      "hold_bars": 8,
+      "post_bars": 72,
+      "id": 1371,
+      "blogger": "Trader-Nero",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1708,
+      "blogger": "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1667,
+      "blogger": "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1621,
+      "blogger": "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1531,
+      "blogger": "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1524,
+      "blogger": "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1420,
+      "blogger": "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1236,
+      "blogger": "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1227,
+      "blogger": "黄金帝国gold-empire",
+      "coin": "XAU",
+      "r": -0.86
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1223,
+      "blogger": "黄金帝国gold-empire",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 0.072,
+      "mae_hold_pct": 1.462,
+      "post_dir_6h_pct": 0.997,
+      "class": "止损后价格才沿信号走（扫损/止损位或入场问题）",
+      "hold_bars": 44,
+      "post_bars": 72,
+      "id": 860,
+      "blogger": "大镖客VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "ETHUSDT",
+      "coin": "ETH",
+      "side": -1,
+      "mfe_hold_pct": 0.096,
+      "mae_hold_pct": 2.585,
+      "post_dir_6h_pct": -0.5,
+      "class": "方向偏误（持仓内几乎无顺势，离场后也不顺）",
+      "hold_bars": 45,
+      "post_bars": 72,
+      "id": 835,
+      "blogger": "大镖客VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "ETHUSDT",
+      "coin": "ETH",
+      "side": -1,
+      "mfe_hold_pct": 0.058,
+      "mae_hold_pct": 2.542,
+      "post_dir_6h_pct": 0.595,
+      "class": "止损后价格才沿信号走（扫损/止损位或入场问题）",
+      "hold_bars": 75,
+      "post_bars": 72,
+      "id": 830,
+      "blogger": "大镖客VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 0.079,
+      "mae_hold_pct": 0.438,
+      "post_dir_6h_pct": 0.974,
+      "class": "止损后价格才沿信号走（扫损/止损位或入场问题）",
+      "hold_bars": 9,
+      "post_bars": 72,
+      "id": 828,
+      "blogger": "大镖客VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 0.0,
+      "mae_hold_pct": 1.812,
+      "post_dir_6h_pct": -0.515,
+      "class": "方向偏误（持仓内几乎无顺势，离场后也不顺）",
+      "hold_bars": 155,
+      "post_bars": 72,
+      "id": 819,
+      "blogger": "大镖客VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 1.175,
+      "mae_hold_pct": 1.227,
+      "post_dir_6h_pct": 0.633,
+      "class": "方向可能对、止损偏紧（持仓内曾顺势，扫损后 6h 仍沿信号方向）",
+      "hold_bars": 37,
+      "post_bars": 72,
+      "id": 808,
+      "blogger": "大镖客VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1709,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1699,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1700,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1592,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1407,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1301,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1298,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1293,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1285,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1278,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1263,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1260,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1257,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1253,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": true,
+      "reason": "XAU 无币安 USDT 永续对照，未做 K 线复检",
+      "id": 1245,
+      "blogger": "kacang-团队",
+      "coin": "XAU",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "SOLUSDT",
+      "coin": "SOL",
+      "side": -1,
+      "mfe_hold_pct": 0.133,
+      "mae_hold_pct": 0.477,
+      "post_dir_6h_pct": 0.451,
+      "class": "止损后价格才沿信号走（扫损/止损位或入场问题）",
+      "hold_bars": 1,
+      "post_bars": 72,
+      "id": 1577,
+      "blogger": "零下二度VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "ETHUSDT",
+      "coin": "ETH",
+      "side": -1,
+      "mfe_hold_pct": 0.416,
+      "mae_hold_pct": 3.2,
+      "post_dir_6h_pct": 1.475,
+      "class": "方向可能对、止损偏紧（持仓内曾顺势，扫损后 6h 仍沿信号方向）",
+      "hold_bars": 64,
+      "post_bars": 72,
+      "id": 1541,
+      "blogger": "零下二度VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "ETHUSDT",
+      "coin": "ETH",
+      "side": 1,
+      "mfe_hold_pct": 0.394,
+      "mae_hold_pct": 5.888,
+      "post_dir_6h_pct": 3.416,
+      "class": "方向可能对、止损偏紧（持仓内曾顺势，扫损后 6h 仍沿信号方向）",
+      "hold_bars": 46,
+      "post_bars": 72,
+      "id": 1486,
+      "blogger": "零下二度VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 1.062,
+      "mae_hold_pct": 0.423,
+      "post_dir_6h_pct": -2.881,
+      "class": "持仓内曾有顺势波动但被止损；离场后未明显延续",
+      "hold_bars": 18,
+      "post_bars": 72,
+      "id": 1469,
+      "blogger": "零下二度VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 0.048,
+      "mae_hold_pct": 1.219,
+      "post_dir_6h_pct": -0.516,
+      "class": "方向偏误（持仓内几乎无顺势，离场后也不顺）",
+      "hold_bars": 2,
+      "post_bars": 72,
+      "id": 1413,
+      "blogger": "零下二度VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "BTCUSDT",
+      "coin": "BTC",
+      "side": 1,
+      "mfe_hold_pct": 0.459,
+      "mae_hold_pct": 0.605,
+      "post_dir_6h_pct": -2.61,
+      "class": "持仓内曾有顺势波动但被止损；离场后未明显延续",
+      "hold_bars": 95,
+      "post_bars": 72,
+      "id": 1344,
+      "blogger": "零下二度VIP禁言群",
+      "r": -1
+    },
+    {
+      "skip": false,
+      "symbol": "ETHUSDT",
+      "coin": "ETH",
+      "side": 1,
+      "mfe_hold_pct": 0.199,
+      "mae_hold_pct": 1.383,
+      "post_dir_6h_pct": 1.781,
+      "class": "介于中间，缺 kolvip 点位详情（/webu/sig/detail 权限）",
+      "hold_bars": 1,
+      "post_bars": 72,
+      "id": 1002,
+      "blogger": "零下二度VIP禁言群",
+      "r": -1
+    }
+  ],
+  "aggregate": {
+    "coins": [
+      [
+        "XAU",
+        118
+      ],
+      [
+        "BTC",
+        52
+      ],
+      [
+        "ETH",
+        27
+      ],
+      [
+        "NVDA",
+        3
+      ],
+      [
+        "SOL",
+        3
+      ],
+      [
+        "MU",
+        2
+      ],
+      [
+        "SKHYNIX",
+        2
+      ],
+      [
+        "ZEC",
+        2
+      ],
+      [
+        "VVV",
+        1
+      ],
+      [
+        "RSR",
+        1
+      ],
+      [
+        "ARKM",
+        1
+      ],
+      [
+        "SPCX",
+        1
+      ]
+    ],
+    "side": {
+      "空": 99,
+      "多": 115
+    },
+    "how_settled": [
+      [
+        "sl",
+        47
+      ],
+      [
+        "tp1",
+        40
+      ],
+      [
+        "closed",
+        34
+      ],
+      [
+        "blogger",
+        31
+      ],
+      [
+        "tp2",
+        23
+      ],
+      [
+        "tp5",
+        11
+      ],
+      [
+        "tp3",
+        9
+      ],
+      [
+        "tp4",
+        7
+      ],
+      [
+        "timeout",
+        6
+      ],
+      [
+        "tp6",
+        6
+      ]
+    ],
+    "status_including_noentry": {
+      "win": 159,
+      "noentry": 21,
+      "loss": 55,
+      "cancel": 14
+    },
+    "hold_h_median": 0.99,
+    "hold_h_mean": 7.77,
+    "r_list_sum_from_histories": 256.7
+  },
+  "per_blogger": {
+    "华尔街女王": {
+      "coins_top": [
+        [
+          "XAU",
+          6
+        ],
+        [
+          "BTC",
+          2
+        ],
+        [
+          "VVV",
+          1
+        ],
+        [
+          "RSR",
+          1
+        ],
+        [
+          "ARKM",
+          1
+        ],
+        [
+          "ETH",
+          1
+        ]
+      ],
+      "long_pct": 33.3,
+      "exit_how": [
+        [
+          "tp1",
+          4
+        ],
+        [
+          "tp3",
+          3
+        ],
+        [
+          "tp2",
+          3
+        ],
+        [
+          "tp4",
+          1
+        ],
+        [
+          "sl",
+          1
+        ]
+      ],
+      "avg_hold_h": 9.26,
+      "median_hold_h": 5.58,
+      "max_win_streak": 5,
+      "max_loss_streak": 1,
+      "noentry_cancel": 1,
+      "sl_losses": 1,
+      "loss_how": [
+        [
+          "sl",
+          1
+        ]
+      ]
+    },
+    "三马哥合约VIP": {
+      "coins_top": [
+        [
+          "BTC",
+          13
+        ],
+        [
+          "ETH",
+          4
+        ]
+      ],
+      "long_pct": 94.1,
+      "exit_how": [
+        [
+          "blogger",
+          6
+        ],
+        [
+          "tp1",
+          5
+        ],
+        [
+          "closed",
+          2
+        ],
+        [
+          "tp2",
+          2
+        ],
+        [
+          "sl",
+          1
+        ],
+        [
+          "timeout",
+          1
+        ]
+      ],
+      "avg_hold_h": 13.54,
+      "median_hold_h": 6.48,
+      "max_win_streak": 6,
+      "max_loss_streak": 1,
+      "noentry_cancel": 15,
+      "sl_losses": 1,
+      "loss_how": [
+        [
+          "sl",
+          1
+        ],
+        [
+          "timeout",
+          1
+        ]
+      ]
+    },
+    "FX-黄金信号": {
+      "coins_top": [
+        [
+          "XAU",
+          40
+        ]
+      ],
+      "long_pct": 50.0,
+      "exit_how": [
+        [
+          "tp5",
+          8
+        ],
+        [
+          "tp1",
+          8
+        ],
+        [
+          "tp6",
+          6
+        ],
+        [
+          "sl",
+          5
+        ],
+        [
+          "tp2",
+          5
+        ],
+        [
+          "tp3",
+          4
+        ],
+        [
+          "blogger",
+          3
+        ],
+        [
+          "tp4",
+          1
+        ]
+      ],
+      "avg_hold_h": 1.15,
+      "median_hold_h": 0.31,
+      "max_win_streak": 14,
+      "max_loss_streak": 2,
+      "noentry_cancel": 0,
+      "sl_losses": 5,
+      "loss_how": [
+        [
+          "sl",
+          5
+        ]
+      ]
+    },
+    "熬鹰": {
+      "coins_top": [
+        [
+          "BTC",
+          5
+        ],
+        [
+          "ETH",
+          4
+        ],
+        [
+          "NVDA",
+          3
+        ],
+        [
+          "MU",
+          2
+        ],
+        [
+          "SKHYNIX",
+          2
+        ],
+        [
+          "ZEC",
+          2
+        ]
+      ],
+      "long_pct": 57.9,
+      "exit_how": [
+        [
+          "closed",
+          19
+        ]
+      ],
+      "avg_hold_h": 21.01,
+      "median_hold_h": 13.04,
+      "max_win_streak": 10,
+      "max_loss_streak": 1,
+      "noentry_cancel": 0,
+      "sl_losses": 0,
+      "loss_how": [
+        [
+          "closed",
+          3
+        ]
+      ]
+    },
+    "Trader-Nero": {
+      "coins_top": [
+        [
+          "BTC",
+          8
+        ],
+        [
+          "ETH",
+          7
+        ],
+        [
+          "DOGE",
+          1
+        ],
+        [
+          "SOL",
+          1
+        ]
+      ],
+      "long_pct": 47.1,
+      "exit_how": [
+        [
+          "blogger",
+          7
+        ],
+        [
+          "tp1",
+          4
+        ],
+        [
+          "sl",
+          3
+        ],
+        [
+          "closed",
+          3
+        ]
+      ],
+      "avg_hold_h": 4.15,
+      "median_hold_h": 1.93,
+      "max_win_streak": 3,
+      "max_loss_streak": 2,
+      "noentry_cancel": 3,
+      "sl_losses": 3,
+      "loss_how": [
+        [
+          "sl",
+          3
+        ],
+        [
+          "closed",
+          1
+        ]
+      ]
+    },
+    "𝗠𝗿𝗚𝗼𝗹𝗱𝗲𝗻𝗪𝗮𝘆-交易员": {
+      "coins_top": [
+        [
+          "XAU",
+          22
+        ]
+      ],
+      "long_pct": 77.3,
+      "exit_how": [
+        [
+          "sl",
+          7
+        ],
+        [
+          "tp4",
+          5
+        ],
+        [
+          "tp2",
+          3
+        ],
+        [
+          "tp5",
+          3
+        ],
+        [
+          "tp1",
+          3
+        ],
+        [
+          "tp3",
+          1
+        ]
+      ],
+      "avg_hold_h": 1.1,
+      "median_hold_h": 0.48,
+      "max_win_streak": 5,
+      "max_loss_streak": 2,
+      "noentry_cancel": 1,
+      "sl_losses": 7,
+      "loss_how": [
+        [
+          "sl",
+          7
+        ]
+      ]
+    },
+    "黄金帝国gold-empire": {
+      "coins_top": [
+        [
+          "XAU",
+          6
+        ]
+      ],
+      "long_pct": 0.0,
+      "exit_how": [
+        [
+          "tp2",
+          2
+        ],
+        [
+          "sl",
+          2
+        ],
+        [
+          "tp1",
+          1
+        ],
+        [
+          "blogger",
+          1
+        ]
+      ],
+      "avg_hold_h": 9.9,
+      "median_hold_h": 2.27,
+      "max_win_streak": 3,
+      "max_loss_streak": 2,
+      "noentry_cancel": 0,
+      "sl_losses": 2,
+      "loss_how": [
+        [
+          "sl",
+          2
+        ]
+      ]
+    },
+    "大镖客VIP禁言群": {
+      "coins_top": [
+        [
+          "BTC",
+          16
+        ],
+        [
+          "ETH",
+          3
+        ]
+      ],
+      "long_pct": 52.6,
+      "exit_how": [
+        [
+          "sl",
+          6
+        ],
+        [
+          "blogger",
+          5
+        ],
+        [
+          "tp1",
+          5
+        ],
+        [
+          "closed",
+          2
+        ],
+        [
+          "tp2",
+          1
+        ]
+      ],
+      "avg_hold_h": 4.82,
+      "median_hold_h": 2.02,
+      "max_win_streak": 3,
+      "max_loss_streak": 4,
+      "noentry_cancel": 3,
+      "sl_losses": 6,
+      "loss_how": [
+        [
+          "sl",
+          6
+        ],
+        [
+          "closed",
+          1
+        ]
+      ]
+    },
+    "kacang-团队": {
+      "coins_top": [
+        [
+          "XAU",
+          44
+        ]
+      ],
+      "long_pct": 47.7,
+      "exit_how": [
+        [
+          "sl",
+          15
+        ],
+        [
+          "tp1",
+          8
+        ],
+        [
+          "closed",
+          8
+        ],
+        [
+          "blogger",
+          7
+        ],
+        [
+          "tp2",
+          5
+        ],
+        [
+          "timeout",
+          1
+        ]
+      ],
+      "avg_hold_h": 5.98,
+      "median_hold_h": 0.26,
+      "max_win_streak": 4,
+      "max_loss_streak": 3,
+      "noentry_cancel": 3,
+      "sl_losses": 15,
+      "loss_how": [
+        [
+          "sl",
+          15
+        ],
+        [
+          "closed",
+          2
+        ]
+      ]
+    },
+    "零下二度VIP禁言群": {
+      "coins_top": [
+        [
+          "ETH",
+          8
+        ],
+        [
+          "BTC",
+          8
+        ],
+        [
+          "SOL",
+          2
+        ]
+      ],
+      "long_pct": 44.4,
+      "exit_how": [
+        [
+          "sl",
+          7
+        ],
+        [
+          "timeout",
+          4
+        ],
+        [
+          "tp1",
+          2
+        ],
+        [
+          "tp2",
+          2
+        ],
+        [
+          "blogger",
+          2
+        ],
+        [
+          "tp3",
+          1
+        ]
+      ],
+      "avg_hold_h": 20.43,
+      "median_hold_h": 6.66,
+      "max_win_streak": 3,
+      "max_loss_streak": 2,
+      "noentry_cancel": 9,
+      "sl_losses": 7,
+      "loss_how": [
+        [
+          "sl",
+          7
+        ]
+      ]
+    }
+  }
+}

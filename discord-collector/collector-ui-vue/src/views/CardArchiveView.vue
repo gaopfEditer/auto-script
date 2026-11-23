@@ -618,7 +618,7 @@ onUnmounted(() => {
     <aside class="filters" data-onboard="cards-filters">
       <div class="head">
         <h2>卡片归档</h2>
-        <RouterLink to="/eval" class="link">Discord 信号频道 →</RouterLink>
+        <RouterLink to="/eval" class="link">巨鲸信号频道 →</RouterLink>
       </div>
       <p class="hint">
         默认包含 Discord、Telegram 实时建卡与 python-ai-operate 抓取的推特/币安信号；可取消勾选隐藏；支持按博主、币种、时间筛选。

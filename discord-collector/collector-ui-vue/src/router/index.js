@@ -42,11 +42,18 @@ function buildRoutes() {
   }
 
   if (__UI_PAGE_SHOW__) {
+    routes.push({ path: "/show", redirect: "/show/rank" });
     routes.push({
-      path: "/show",
-      name: "show",
+      path: "/show/rank",
+      name: "show-rank",
       component: () => import("../views/ShowView.vue"),
     });
+    routes.push({
+      path: "/show/messages",
+      name: "show-messages",
+      component: () => import("../views/ShowView.vue"),
+    });
+    routes.push({ path: "/show/kolvip-sig", redirect: "/show/rank" });
   }
   if (__UI_PAGE_OI__) {
     routes.push({
@@ -118,9 +125,19 @@ function buildRoutes() {
           name: "manual-stats-kolvip-backfill",
           component: () => import("../components/KolvipBackfillPanel.vue"),
         },
+        {
+          path: "kolvip-sig",
+          name: "manual-stats-kolvip-sig",
+          component: () => import("../views/KolvipSigView.vue"),
+        },
       ],
     });
     routes.push({ path: "/local", redirect: "/local/manual-stats" });
+    routes.push({
+      path: "/local/membership",
+      name: "membership",
+      component: () => import("../views/MembershipCenterView.vue"),
+    });
   }
   if (__UI_PAGE_FETCH__) {
     routes.push({
@@ -152,7 +169,7 @@ function buildRoutes() {
   }
 
   if (__UI_PAGE_SHOW__) {
-    routes.push({ path: "/messages", redirect: "/show" });
+    routes.push({ path: "/messages", redirect: "/show/messages" });
   }
 
   routes.push({
@@ -166,6 +183,30 @@ function buildRoutes() {
 const router = createRouter({
   history: createWebHistory("/"),
   routes: buildRoutes(),
+});
+
+/** build 后 index 已更新但浏览器仍缓存旧 index/chunk 映射时，懒加载会 404；自动刷新一次 */
+const CHUNK_RELOAD_KEY = "collector-ui-chunk-reload";
+
+router.onError((error, to) => {
+  const msg = String(error?.message ?? error ?? "");
+  const chunkLoadFail =
+    msg.includes("Failed to fetch dynamically imported module") ||
+    msg.includes("Importing a module script failed") ||
+    (error instanceof TypeError && msg.includes("fetch"));
+  if (!chunkLoadFail || typeof window === "undefined") return;
+  try {
+    if (!sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
+      sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+      const target = to?.fullPath && to.fullPath !== "/" ? to.fullPath : window.location.pathname;
+      window.location.assign(target + window.location.search + window.location.hash);
+      return;
+    }
+    sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+  } catch {
+    sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+  }
+  console.error("[router] chunk load failed after reload", error);
 });
 
 export default router;

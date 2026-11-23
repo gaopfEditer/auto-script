@@ -40,6 +40,11 @@ export function resolveBitgetLeverage(symbol) {
  * @param {unknown} symbol
  */
 export function resolveOrderLeverage(symbol) {
+  const s = String(symbol ?? "").toUpperCase();
+  if (s.includes("XAU")) {
+    const gold = Number(config.bitgetGoldLeverage);
+    return Number.isFinite(gold) && gold > 0 ? gold : 50;
+  }
   return resolveBitgetLeverage(symbol);
 }
 

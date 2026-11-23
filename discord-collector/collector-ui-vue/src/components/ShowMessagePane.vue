@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import PageLoadingBlock from "./PageLoadingBlock.vue";
 import {
   attachmentDisplayUrl,
@@ -9,6 +9,8 @@ import {
   groupChannelMessages,
   isImageAttachment,
   messageTextContent,
+  messageDisplayText,
+  messageHasBilingualTranslation,
   messageAttachmentsMemoKey,
   msgAttachments,
   msgAvatarUrl,
@@ -29,6 +31,7 @@ const props = defineProps({
   snapshotWarming: { type: Boolean, default: false },
   highlightMessageId: { type: String, default: "" },
   emptyHint: { type: String, default: "" },
+  channelIconUrl: { type: String, default: "" },
 });
 
 defineExpose({ scrollRoot: null });
@@ -36,8 +39,59 @@ defineExpose({ scrollRoot: null });
 const groupedMessages = computed(() => groupChannelMessages(props.messages));
 
 const avatarFailed = reactive(/** @type {Record<string, true>} */ ({}));
+/** @type {Record<string, "en" | "zh">} */
+const msgLangById = reactive({});
+
+/** @param {Record<string, unknown>} m */
+function hasBilingual(m) {
+  return messageHasBilingualTranslation(m);
+}
+
+/** @param {string} id */
+function msgLangToggleLabel(id) {
+  const lang = msgLangById[id] ?? "zh";
+  return lang === "zh" ? "EN" : "中文";
+}
+
+/** @param {string} id */
+function toggleMsgLang(id) {
+  if (!id) return;
+  const cur = msgLangById[id] ?? "zh";
+  msgLangById[id] = cur === "zh" ? "en" : "zh";
+}
+
+/** @param {Record<string, unknown>} m */
+function displayText(m) {
+  return messageDisplayText(m, msgLangById);
+}
 /** 触发模板在 markAttachmentImgDead 后更新 */
 const attachmentFailEpoch = ref(0);
+
+/** @type {import('vue').Ref<{ url: string, alt: string } | null>} */
+const imageLightbox = ref(null);
+
+/** @param {string} url @param {string} [alt] */
+function openImageLightbox(url, alt = "") {
+  const u = String(url ?? "").trim();
+  if (!u) return;
+  imageLightbox.value = { url: u, alt: String(alt ?? "") };
+}
+
+function closeImageLightbox() {
+  imageLightbox.value = null;
+}
+
+/** @param {KeyboardEvent} e */
+function onLightboxKeydown(e) {
+  if (e.key === "Escape" && imageLightbox.value) closeImageLightbox();
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onLightboxKeydown);
+});
+onUnmounted(() => {
+  window.removeEventListener("keydown", onLightboxKeydown);
+});
 
 /** @param {Record<string, unknown>} att @param {number} i @param {Record<string, unknown>} msg */
 function attachmentImgDead(att, i, msg) {
@@ -145,7 +199,7 @@ async function onAttachmentImgError(att, i, msg, e) {
 
 <template>
   <div class="msg-scroll-inner">
-    <p v-if="loadingOlder" class="msg-older-hint">正在加载更早消息（同步 CDP 网页上滚）…</p>
+    <p v-if="loadingOlder" class="msg-older-hint">正在加载更早消息…</p>
     <PageLoadingBlock
       v-if="loading && !messages.length"
       message="加载频道消息…"
@@ -169,8 +223,8 @@ async function onAttachmentImgError(att, i, msg, e) {
     >
       <div class="msg-row msg-row-head">
         <img
-          v-if="msgAvatarUrl(g.head) && !avatarFailed[avatarErrorKey(g.head)]"
-          :src="msgAvatarUrl(g.head)"
+          v-if="msgAvatarUrl(g.head, channelIconUrl) && !avatarFailed[avatarErrorKey(g.head)]"
+          :src="msgAvatarUrl(g.head, channelIconUrl)"
           class="msg-av"
           width="40"
           height="40"
@@ -188,16 +242,25 @@ async function onAttachmentImgError(att, i, msg, e) {
               class="msg-user"
             >@{{ g.head.authorUsername ?? g.head.author_username }}</span>
             <span class="msg-time">{{ fmtMsgTime(g.head.createdAtMs ?? g.head.created_at_ms) }}</span>
+            <button
+              v-if="hasBilingual(g.head)"
+              type="button"
+              class="msg-lang-toggle"
+              :title="msgLangById[messageDomId(g.head)] === 'en' ? '显示中文' : 'Show English'"
+              @click.stop="toggleMsgLang(messageDomId(g.head))"
+            >
+              {{ msgLangToggleLabel(messageDomId(g.head)) }}
+            </button>
           </div>
-          <div v-if="messageTextContent(g.head)" class="msg-content">{{ messageTextContent(g.head) }}</div>
+          <div v-if="messageTextContent(g.head)" class="msg-content">{{ displayText(g.head) }}</div>
           <div v-if="msgAttachments(g.head).length" class="msg-attachments">
             <template v-for="(att, i) in msgAttachments(g.head)" :key="`${g.head.messageId ?? g.head.message_id}-${i}`">
-              <a
-                    v-if="isImageAttachment(att) && !attachmentImgSkipped(att, i, g.head)"
-                :href="attachmentDisplayUrl(att)"
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                v-if="isImageAttachment(att) && !attachmentImgSkipped(att, i, g.head)"
+                type="button"
                 class="msg-image-link"
+                :aria-label="att.filename || '查看大图'"
+                @click="openImageLightbox(attachmentDisplayUrl(att), att.filename || '图片')"
               >
                 <img
                   :src="attachmentDisplayUrl(att)"
@@ -206,9 +269,9 @@ async function onAttachmentImgError(att, i, msg, e) {
                   loading="lazy"
                   decoding="async"
                   referrerpolicy="no-referrer"
-                        @error="onAttachmentImgError(att, i, g.head, $event)"
+                  @error="onAttachmentImgError(att, i, g.head, $event)"
                 />
-              </a>
+              </button>
               <span v-else-if="isImageAttachment(att)" class="msg-image-placeholder">{{
                 attachmentLinksExpired(att) ? "图片链接已过期" : "图片加载失败"
               }}</span>
@@ -236,15 +299,25 @@ async function onAttachmentImgError(att, i, msg, e) {
       >
         <div class="msg-av-gap" aria-hidden="true" />
         <div class="msg-body">
-          <div v-if="messageTextContent(m)" class="msg-content">{{ messageTextContent(m) }}</div>
+          <div v-if="hasBilingual(m)" class="msg-lang-row">
+            <button
+              type="button"
+              class="msg-lang-toggle"
+              :title="msgLangById[messageDomId(m)] === 'en' ? '显示中文' : 'Show English'"
+              @click.stop="toggleMsgLang(messageDomId(m))"
+            >
+              {{ msgLangToggleLabel(messageDomId(m)) }}
+            </button>
+          </div>
+          <div v-if="messageTextContent(m)" class="msg-content">{{ displayText(m) }}</div>
           <div v-if="msgAttachments(m).length" class="msg-attachments">
             <template v-for="(att, i) in msgAttachments(m)" :key="`${m.messageId ?? m.message_id}-${i}`">
-              <a
-                      v-if="isImageAttachment(att) && !attachmentImgSkipped(att, i, m)"
-                :href="attachmentDisplayUrl(att)"
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                v-if="isImageAttachment(att) && !attachmentImgSkipped(att, i, m)"
+                type="button"
                 class="msg-image-link"
+                :aria-label="att.filename || '查看大图'"
+                @click="openImageLightbox(attachmentDisplayUrl(att), att.filename || '图片')"
               >
                 <img
                   :src="attachmentDisplayUrl(att)"
@@ -253,9 +326,9 @@ async function onAttachmentImgError(att, i, msg, e) {
                   loading="lazy"
                   decoding="async"
                   referrerpolicy="no-referrer"
-                        @error="onAttachmentImgError(att, i, m, $event)"
+                  @error="onAttachmentImgError(att, i, m, $event)"
                 />
-              </a>
+              </button>
               <span v-else-if="isImageAttachment(att)" class="msg-image-placeholder">{{
                 attachmentLinksExpired(att) ? "图片链接已过期" : "图片加载失败"
               }}</span>
@@ -278,6 +351,22 @@ async function onAttachmentImgError(att, i, msg, e) {
     <p v-if="!messages.length && !loading && !snapshotWarming && emptyHint" class="kook-wait">
       {{ emptyHint }}
     </p>
+
+    <Teleport to="body">
+      <div
+        v-if="imageLightbox"
+        class="show-image-lightbox"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="imageLightbox.alt || '图片预览'"
+        @click.self="closeImageLightbox"
+      >
+        <button type="button" class="show-image-lightbox-close" aria-label="关闭" @click="closeImageLightbox">
+          ×
+        </button>
+        <img :src="imageLightbox.url" :alt="imageLightbox.alt" class="show-image-lightbox-img" referrerpolicy="no-referrer" />
+      </div>
+    </Teleport>
   </div>
 </template>
 

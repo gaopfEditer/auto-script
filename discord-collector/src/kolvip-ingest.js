@@ -11,6 +11,7 @@ import { archiveCardToClient } from "./card-archive-service.js";
 import { summarizeKolvipChannelEval } from "./kolvip-cdp-eval.js";
 import { messageRowToClientForPush } from "./discord-message-format.js";
 import { messageVisibleForKolvipShow } from "./discord-message-source-isolation.js";
+import { cacheKolvipMessageAuthorAvatars } from "./kolvip-avatar-cache.js";
 
 export async function loadKolvipSeen(fs, seenPath) {
   try {
@@ -111,6 +112,7 @@ export async function ingestKolvipMessageBatch(opts) {
         : "kolvip_api_scan";
 
   const messages = opts.messages ?? [];
+  await cacheKolvipMessageAuthorAvatars(messages, opts.log);
   const allIds = messages.map((m) => m.dataId).filter(Boolean);
 
   let toProcess = messages;
@@ -179,7 +181,9 @@ export async function ingestKolvipMessageBatch(opts) {
       log: opts.log,
       telegramPush: null,
       respectKolvipBypass: false,
-      skipTelegram: opts.mode === "backfill" || !curated,
+      skipTelegram: true,
+      kolvipIngest: opts.mode === "live",
+      skipKolvipTop10Mirror: opts.mode !== "live",
       skipOllamaFallback: opts.mode === "backfill",
     });
     pipelineCreated = pipe.created;

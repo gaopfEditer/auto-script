@@ -8,6 +8,7 @@ import {
   isSpamMessage,
 } from "./discord-telegram-push-config.js";
 import { formatPipelineLog } from "./signal-pipeline-log.js";
+import { preferSingleLanguageSignalText } from "./message-text-format.js";
 
 /**
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
@@ -39,11 +40,22 @@ async function sendViaBotApi(chatId, text, botToken, timeoutMs, log) {
   }
 }
 
-export function createDiscordSignalTelegramPush(log) {
-  const chatId = config.telegramPushChatId;
+/**
+ * @param {ReturnType<typeof import("./logger.js").createLogger>} log
+ * @param {{ chatId?: string | number, label?: string }} [opts]
+ */
+export function createDiscordSignalTelegramPush(log, opts = {}) {
+  const override = opts.chatId != null && String(opts.chatId).trim() !== "";
+  const chatId = override ? opts.chatId : config.telegramPushChatId;
   const sendUrl = config.telegramSendUrl;
   const botToken = config.telegramBotToken;
   const enabled = Boolean(chatId && (sendUrl || botToken));
+  const label = String(opts.label ?? "").trim();
+  const kolvipTop10Chat =
+    label === "kolvip-top10-cards" ||
+    (config.kolvipTop10TelegramChatId != null &&
+      String(config.kolvipTop10TelegramChatId) !== "" &&
+      String(chatId) === String(config.kolvipTop10TelegramChatId));
 
   /**
    * @param {string} text
@@ -51,9 +63,10 @@ export function createDiscordSignalTelegramPush(log) {
    */
   async function send(text, meta = {}) {
     if (!enabled) return { skipped: "telegram_disabled" };
+    const deduped = preferSingleLanguageSignalText(String(text ?? "").trim(), "zh");
     let body = meta.skipChannelLabel
-      ? stripTelegramAtUsernameMentions(String(text ?? "").trim())
-      : formatTelegramWithChannelLabel(text, meta.channelId, meta.channelName);
+      ? stripTelegramAtUsernameMentions(deduped)
+      : formatTelegramWithChannelLabel(deduped, meta.channelId, meta.channelName);
     body = stripTelegramAtUsernameMentions(body);
     // 过滤"引导私聊/转账"类垃圾消息
     if (isSpamMessage(body)) {
@@ -72,6 +85,28 @@ export function createDiscordSignalTelegramPush(log) {
     log.info(`[telegram] content:\n${body}`);
 
     const timeoutMs = config.telegramSendTimeoutMs;
+    /** 巨鲸 top10 专群：Bot 直发（网关常用另一 token，易 chat not found） */
+    if (kolvipTop10Chat && botToken) {
+      try {
+        await sendViaBotApi(chatId, body, botToken, timeoutMs, log);
+        log.info(
+          formatPipelineLog("tg_http_ok", {
+            cardId: meta.cardId ?? "?",
+            channelId: meta.channelId ?? "?",
+            chatId,
+            detail: "bot_api_first",
+          }),
+        );
+        return { ok: true };
+      } catch (e) {
+        log.warn(
+          `[telegram] top10 群 Bot API 失败: ${/** @type {Error} */ (e).message}${
+            sendUrl ? "，尝试 HTTP 网关" : ""
+          }`,
+        );
+        if (!sendUrl) throw e;
+      }
+    }
     if (sendUrl) {
       log.info(
         formatPipelineLog("tg_http_post", {
@@ -132,8 +167,9 @@ export function createDiscordSignalTelegramPush(log) {
   }
 
   if (enabled) {
+    const tag = label ? ` label=${label}` : "";
     log.info(
-      `Discord 信号 Telegram 推送已启用 chat=${chatId} transport=${sendUrl ? "gateway" : "bot"}${sendUrl && botToken ? "+bot_fallback" : ""}`,
+      `Discord 信号 Telegram 推送已启用 chat=${chatId}${tag} transport=${sendUrl ? "gateway" : "bot"}${sendUrl && botToken ? "+bot_fallback" : ""}`,
     );
   }
 

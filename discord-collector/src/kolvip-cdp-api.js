@@ -30,6 +30,24 @@ export function registerKolvipCdpRoutes(app, kolvipCdp, store, backfill) {
     }
   });
 
+  /** Show 切频道 / 向上翻页：HTTP 拉 kolvip 历史（补 WS 漏消息） */
+  app.post("/api/kolvip/channels/catchup", async (req, res) => {
+    try {
+      const channelId = String(req.body?.channelId ?? "").trim();
+      res.json(
+        await kolvipCdp.catchupShowChannel(channelId, {
+          kolvipChannelId: req.body?.kolvipChannelId,
+          beforeId: req.body?.beforeId,
+          beforeMessageId: req.body?.beforeMessageId,
+          limit: req.body?.limit,
+          force: req.body?.force,
+        })
+      );
+    } catch (e) {
+      res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
+    }
+  });
+
   app.get("/api/kolvip/mappings", (_req, res) => {
     res.json({ ok: true, channels: getKolvipChannelMappings() });
   });
@@ -53,7 +71,10 @@ export function registerKolvipCdpRoutes(app, kolvipCdp, store, backfill) {
 
   app.get("/api/kolvip/eval-summary", async (req, res) => {
     try {
-      const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
+      const days = Math.min(
+        90,
+        Math.max(1, Number(req.query.days) || config.kolvipEvalDefaultDays || 30)
+      );
       const toMs = Date.now();
       const fromMs = toMs - days * 86400000;
       const summary = await buildKolvipEvalSummary(store, { fromMs, toMs });

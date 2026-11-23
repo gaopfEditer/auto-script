@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import { config } from "./config.js";
 import { formatCardUid } from "./card-uid.js";
 import { signalChannelDisplayName } from "./discord-signal-config.js";
+import { formatCardFallback } from "./discord-signal-parsers.js";
 
 /**
  * @param {unknown} v
@@ -464,6 +465,70 @@ export function createCardExternalSink(log) {
   };
 }
 
+/** @param {string} text */
+export function isParsedJsonStyleBlob(text) {
+  const t = String(text ?? "").trim();
+  return t.startsWith("{") && /"parser"\s*:/.test(t);
+}
+
+/**
+ * 历史误存为 JSON 的 cn_brief → 多行可读卡；无则原样返回。
+ * @param {Record<string, unknown>} card
+ * @param {string} text
+ * @param {string} [preferredStyle]
+ */
+function coerceReadableCardText(card, text, preferredStyle = "") {
+  const style = preferredStyle || "cn_brief";
+  const raw = String(text ?? "").trim();
+  if (raw && !isParsedJsonStyleBlob(raw)) return raw;
+
+  /** @type {Record<string, unknown> | null} */
+  let parsed = null;
+  if (isParsedJsonStyleBlob(raw)) {
+    try {
+      parsed = /** @type {Record<string, unknown>} */ (JSON.parse(raw));
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!parsed) {
+    const pj = card.parsedJson ?? card.parsed_json;
+    if (pj && typeof pj === "object") parsed = /** @type {Record<string, unknown>} */ (pj);
+    else if (typeof pj === "string") {
+      try {
+        parsed = /** @type {Record<string, unknown>} */ (JSON.parse(pj));
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+  if (parsed && typeof parsed === "object") {
+    const brief = formatCardFallback(parsed, style).trim();
+    if (brief && !isParsedJsonStyleBlob(brief)) return brief;
+  }
+  return raw;
+}
+
+/**
+ * API/页面展示用：把误存为 JSON 的 cardsByStyle 转成简报（不修改库）。
+ * @param {Record<string, unknown>} card
+ * @param {Record<string, string>} styles
+ */
+export function coerceCardsByStyleForClient(card, styles) {
+  if (!styles || typeof styles !== "object") return {};
+  /** @type {Record<string, string>} */
+  const out = {};
+  const base = {
+    parsedJson: card.parsedJson ?? card.parsed_json,
+    parsed_json: card.parsedJson ?? card.parsed_json,
+    rawContent: card.rawContent ?? card.raw_content,
+  };
+  for (const [k, v] of Object.entries(styles)) {
+    out[k] = coerceReadableCardText(base, String(v ?? ""), k);
+  }
+  return out;
+}
+
 /**
  * 从卡片对象取外送正文（优先 telegram/首个风格）。
  * @param {Record<string, unknown>} card
@@ -474,8 +539,18 @@ export function pickCardSinkText(card, preferredStyle = "") {
     card.cardsByStyle && typeof card.cardsByStyle === "object"
       ? /** @type {Record<string, string>} */ (card.cardsByStyle)
       : {};
-  if (preferredStyle && styles[preferredStyle]) return String(styles[preferredStyle]);
-  const first = Object.values(styles).find((v) => String(v ?? "").trim());
-  if (first) return String(first);
-  return String(card.rawContent ?? "").trim();
+  const styleKey =
+    preferredStyle && styles[preferredStyle]
+      ? preferredStyle
+      : styles.cn_brief
+        ? "cn_brief"
+        : Object.keys(styles)[0] ?? "";
+  let text = "";
+  if (styleKey && styles[styleKey]) text = String(styles[styleKey]);
+  if (!text.trim()) {
+    const first = Object.values(styles).find((v) => String(v ?? "").trim());
+    if (first) text = String(first);
+  }
+  if (!text.trim()) text = String(card.rawContent ?? "").trim();
+  return coerceReadableCardText(card, text, styleKey || preferredStyle || "cn_brief");
 }

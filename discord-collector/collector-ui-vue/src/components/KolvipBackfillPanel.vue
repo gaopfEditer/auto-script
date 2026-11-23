@@ -22,7 +22,7 @@ import {
 defineOptions({ name: "KolvipBackfillPanel" });
 
 /** @type {import("vue").Ref<import("../lib/kolvipBackfillApi.js").BackfillPeriod>} */
-const period = ref("week");
+const period = ref("month1");
 const configGroups = ref(
   /** @type {Array<{ channelId: string, name: string, enabled?: boolean, note?: string }>} */ ([]),
 );

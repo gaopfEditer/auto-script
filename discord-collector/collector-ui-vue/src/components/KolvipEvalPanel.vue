@@ -1,6 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from "vue";
+import { RouterLink } from "vue-router";
 import { fetchKolvipEvalSummary } from "../lib/kolvipApi.js";
+
+/* global __UI_PAGE_MANUAL_STATS__ */
+const showSigLink = typeof __UI_PAGE_MANUAL_STATS__ !== "undefined" && __UI_PAGE_MANUAL_STATS__;
 
 const props = defineProps({
   activeChannelId: { type: String, default: "" },
@@ -72,6 +76,16 @@ onUnmounted(() => {
       <span class="kolvip-eval-title">kolvip</span>
       <span class="kolvip-eval-range">近 {{ days }} 天</span>
     </header>
+    <p
+      v-if="showSigLink"
+      class="kolvip-eval-note"
+      style="border-bottom: 1px solid rgba(0, 0, 0, 0.35); padding-bottom: 0.35rem"
+    >
+      以下为自建卡清算胜率；站内「博主胜率分析」见
+      <RouterLink to="/show/rank">博主胜率（Show）</RouterLink>
+      ·
+      <RouterLink to="/local/manual-stats/kolvip-sig">手动统计</RouterLink>
+    </p>
     <p v-if="error" class="kolvip-eval-err">{{ error }}</p>
     <p v-else-if="loading && !curated.length && !candidates.length" class="kolvip-eval-muted">加载中…</p>
     <div v-else class="kolvip-eval-scroll">

@@ -12,6 +12,14 @@ import {
 } from "./weex-staged-order.js";
 import { isStagedTradeSignal } from "./discord-signal-staged-trade.js";
 import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
+import { appendBitgetTradeAudit } from "./bitget-trade-audit-log.js";
+import {
+  leverageForKolvipSymbol,
+  resolveKolvipBitgetPolicy,
+  resolveKolvipMarginUsdt,
+} from "./kolvip-bitget-autotrade.js";
+import { normalizeExecution } from "./discord-signal-execution.js";
+import { prepareAutoTradeForOrder } from "./telegram-auto-trade.js";
 
 /** @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store @param {ReturnType<typeof import("./logger.js").createLogger>} log */
 export function createWeexOrderService(store, log) {
@@ -36,7 +44,28 @@ export function createWeexOrderService(store, log) {
     };
   }
 
-  async function persistOrderResult(cardId, parsed, weexOrder) {
+  /**
+   * @param {number} cardId
+   * @param {Record<string, unknown>} parsed
+   * @param {Record<string, unknown>} weexOrder
+   * @param {{ channelId?: string; channelName?: string; event?: string; dryRun?: boolean }} [audit]
+   */
+  async function persistOrderResult(cardId, parsed, weexOrder, audit = {}) {
+    appendBitgetTradeAudit({
+      exchange: "weex",
+      event: audit.event ?? "order_persist",
+      cardId,
+      channelId: audit.channelId,
+      channelName: audit.channelName,
+      dryRun: audit.dryRun,
+      executionTemplate: String(parsed.kolvipBitgetTemplate ?? ""),
+      orderSizeUsdt: Number(parsed.kolvipOrderSizeUsdt ?? weexOrder.orderSizeUsdt ?? 0) || undefined,
+      leverage: Number(weexOrder.leverage ?? 0) || undefined,
+      symbol: String(parsed.symbol ?? weexOrder.symbol ?? ""),
+      direction: String(parsed.direction ?? ""),
+      bitgetOrder: weexOrder,
+      meta: { status: weexOrder.status, orderId: weexOrder.orderId, kolvipPolicyKey: parsed.kolvipPolicyKey },
+    });
     if (!store?.updateSignalCard) return;
     let base = parsed;
     try {
@@ -149,15 +178,38 @@ export function createWeexOrderService(store, log) {
 
   async function onSignalCardCreated(input) {
     reloadConfig();
-    const resolved = resolveChannelWeexTrade(input.channelId, tradeCfg);
+    const resolved = resolveChannelWeexTrade(input.channelId, tradeCfg, input.channelName);
     if (!resolved) return { skipped: "channel_not_configured" };
-    const autoTradeSym = String(input.parsed?.symbol ?? "").trim();
+
+    const kolvipPolicy = resolveKolvipBitgetPolicy(input.channelId, input.channelName);
+    const autoTradeSym = String(input.symbol ?? input.parsed?.symbol ?? "").trim();
+    let parsed = { ...(input.parsed ?? {}) };
+    let executionJson = input.executionJson ?? parsed.execution ?? null;
+    if (kolvipPolicy) {
+      resolved.channel.leverage = leverageForKolvipSymbol(autoTradeSym, kolvipPolicy);
+      resolved.channel.orderSizeUsdt = kolvipPolicy.orderSizeUsdt;
+      parsed.kolvipBitgetTemplate = resolved.channel.executionTemplate;
+      parsed.kolvipOrderSizeUsdt = resolveKolvipMarginUsdt(parsed, resolved.channel);
+      parsed.kolvipPolicyKey = resolved.channel.kolvipPolicyKey;
+      const ex0 = normalizeExecution(executionJson, parsed);
+      const prepared = await prepareAutoTradeForOrder(parsed, ex0, autoTradeSym);
+      parsed = prepared.parsed;
+      executionJson = prepared.execution;
+      input = { ...input, parsed, executionJson };
+    }
+
     if (isAutoTradeExcludedMajorSymbol(autoTradeSym)) {
       log.info(`WEEX 跳过主流币自动交易 symbol=${autoTradeSym} card=#${input.cardId}`);
       return { skipped: "major_symbol_excluded", symbol: autoTradeSym };
     }
-    if (!isStagedTradeSignal(input.parsed) && !resolved.channel.stagedTrade) {
+    const kolvipFull =
+      Boolean(kolvipPolicy) && !isStagedTradeSignal(parsed) && resolved.channel.stagedTrade !== true;
+    if (!isStagedTradeSignal(parsed) && !resolved.channel.stagedTrade && !kolvipPolicy) {
       return { skipped: "not_staged_signal" };
+    }
+    if (kolvipFull) {
+      parsed = { ...parsed, signalPhase: "full", orderMode: "market" };
+      input = { ...input, parsed };
     }
     return runStagedTrade({
       cardId: input.cardId,
@@ -172,7 +224,7 @@ export function createWeexOrderService(store, log) {
 
   async function onTpslUpdate(input) {
     reloadConfig();
-    const resolved = resolveChannelWeexTrade(input.channelId, tradeCfg);
+    const resolved = resolveChannelWeexTrade(input.channelId, tradeCfg, input.channelName);
     if (!resolved) return { skipped: "channel_not_configured" };
 
     let prevWeex = input.prevWeexOrder ?? null;

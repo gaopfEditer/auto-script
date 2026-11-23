@@ -4,6 +4,7 @@
 import { isDebugMode, stringifyForLog } from "./discord-debug.js";
 import { isDiscordNoiseApiUrl } from "./discord-gateway.js";
 import { isBlockedWsPayload } from "./ws-noise-filter.js";
+import { normalizeKolvipAvatarClientUrl } from "./kolvip-avatar-cache.js";
 
 /**
  * @param {{
@@ -189,7 +190,8 @@ export function messageRowToClient(row) {
     authorId: row.author_id ?? row.authorId ?? "",
     authorUsername: row.author_username ?? row.authorUsername ?? null,
     authorGlobalName: row.author_global_name ?? row.authorGlobalName ?? null,
-    authorAvatar: row.author_avatar ?? row.authorAvatar ?? null,
+    authorAvatar:
+      normalizeKolvipAvatarClientUrl(row.author_avatar ?? row.authorAvatar ?? "") || null,
     content: row.content ?? "",
     eventType: row.event_type ?? row.eventType ?? "",
     source: row.source ?? "",

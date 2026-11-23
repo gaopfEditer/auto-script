@@ -1,7 +1,7 @@
 /**
- * 卡片评价默认杠杆：主流 BTC/ETH、黄金、原油 100x；山寨 / 美股 20x。
+ * 卡片评价默认杠杆：XAU 50x · BTC/ETH 100x · 其余 20x。
  */
-import { resolveLiquidationLeverage } from "./card-liquidation-engine.js";
+import { resolveStatsLeverage } from "./card-symbol-leverage.js";
 
 /**
  * @param {unknown} symbol
@@ -9,13 +9,14 @@ import { resolveLiquidationLeverage } from "./card-liquidation-engine.js";
  * @returns {number}
  */
 export function resolveEvalLeverage(symbol, assetClass) {
-  return resolveLiquidationLeverage(symbol, assetClass);
+  return resolveStatsLeverage(symbol, assetClass);
 }
 
-/** @returns {{ major: number, altcoin: number }} */
+/** @returns {{ major: number, gold: number, altcoin: number }} */
 export function getEvalLeverageConfig() {
   return {
-    major: resolveLiquidationLeverage("BTC"),
-    altcoin: resolveLiquidationLeverage("DOGE"),
+    major: resolveStatsLeverage("BTC"),
+    gold: resolveStatsLeverage("XAU"),
+    altcoin: resolveStatsLeverage("DOGE"),
   };
 }

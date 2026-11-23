@@ -6,7 +6,7 @@
 import { config } from "./config.js";
 import { resolveKolvipScanSignalConfig } from "./kolvip-scan-config.js";
 
-/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"biquan_suozhang"|"unknown_trader"|"altcoin_king"|"junzhang"|"pangmao"|"generic"} ParserKind */
+/** @typedef {"binance_killers"|"btc_cn"|"streak_cn"|"tw_opg"|"dabiaoke"|"feiyang"|"fengge"|"yanchi"|"biquan_suozhang"|"unknown_trader"|"altcoin_king"|"junzhang"|"pangmao"|"aoying_position"|"generic"} ParserKind */
 
 /**
  * @typedef {{

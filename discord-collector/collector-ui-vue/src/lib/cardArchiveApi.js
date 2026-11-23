@@ -127,12 +127,13 @@ export async function fetchCardSources() {
 /** @param {{ source?: string, sources?: string[], symbol?: string, status?: string, days?: number, from?: string, to?: string, refresh?: boolean }} [opts] */
 export async function fetchCardChannels(opts = {}) {
   const q = new URLSearchParams();
-  const sources = opts.sources?.length
-    ? normalizeArchiveSourceList(opts.sources)
-    : opts.source
-      ? normalizeArchiveSourceList([opts.source])
-      : [];
-  if (sources.length) q.set("sources", sources.join(","));
+  const exclusive = String(opts.source ?? "").trim();
+  if (exclusive && !opts.sources?.length) {
+    q.set("source", exclusive);
+  } else {
+    const sources = opts.sources?.length ? normalizeArchiveSourceList(opts.sources) : [];
+    if (sources.length) q.set("sources", sources.join(","));
+  }
   if (opts.symbol) q.set("symbol", opts.symbol);
   if (opts.status) q.set("status", opts.status);
   if (opts.days) q.set("days", String(opts.days));

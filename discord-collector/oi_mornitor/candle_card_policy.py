@@ -29,7 +29,15 @@ def _env_symbol_csv(name: str) -> list[str]:
     return _split_symbols(os.environ.get(name, ""))
 
 
+def _dedicated_candle_symbols() -> list[str]:
+    """形态群专用名单（优先于 OI_MAIN_CARD_LONG/OTHER）。"""
+    return _env_symbol_csv("OI_CANDLE_CARD_SYMBOLS")
+
+
 def _configured_lists() -> tuple[list[str], list[str]]:
+    dedicated = _dedicated_candle_symbols()
+    if dedicated:
+        return dedicated, []
     long_list: list[str] = []
     other_list: list[str] = []
     if _CFG_LONG is not None:
@@ -44,6 +52,8 @@ def _configured_lists() -> tuple[list[str], list[str]]:
 
 
 def candle_card_watch_configured() -> bool:
+    if _dedicated_candle_symbols():
+        return True
     long_list, other_list = _configured_lists()
     return bool(long_list or other_list)
 

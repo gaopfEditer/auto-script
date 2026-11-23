@@ -1,10 +1,12 @@
 <script setup>
-import { ref, reactive, computed, shallowRef, onMounted, onUnmounted, watch, nextTick } from "vue";
-import { RouterLink } from "vue-router";
+import { ref, reactive, computed, shallowRef, onMounted, onUnmounted, watch, nextTick, provide } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import ShowMessagePane from "../components/ShowMessagePane.vue";
 import OiReportQueuePane from "../components/OiReportQueuePane.vue";
 import SignalCardRail from "../components/SignalCardRail.vue";
-import KolvipEvalPanel from "../components/KolvipEvalPanel.vue";
+import KolvipSigRankPane from "../components/KolvipSigRankPane.vue";
+import KolvipSigBloggerDetailPane from "../components/KolvipSigBloggerDetailPane.vue";
+import { useKolvipSig, normalizeBloggerLabel } from "../composables/useKolvipSig.js";
 import { useCollectorSocket } from "../composables/useCollectorSocket.js";
 import {
   fetchGuilds,
@@ -17,6 +19,7 @@ import {
   navigateDiscordChannel,
   scrollDiscordChannelHistory,
   warmChannelShowHistory,
+  kolvipChannelCatchup,
 } from "../lib/discordApi.js";
 import { fetchSignalConfig, isSignalChannelId } from "../lib/discordSignalApi.js";
 import { fetchChannelStripStats } from "../lib/cardEvalApi.js";
@@ -41,6 +44,8 @@ import {
   filterMessagesForChannel,
   isolateShowChannelMessages,
   messageContentPreview,
+  formatChannelPreviewTime,
+  normalizeShowAvatarUrl,
   upsertChannelItem,
   buildChannelListSections,
   normalizeChannelGroups,
@@ -48,12 +53,20 @@ import {
 } from "../lib/discordShow.js";
 import { resetAttachmentImgDeadCache } from "../lib/showAttachmentImages.js";
 import { fetchOiReportQueue } from "../lib/oiReportQueueApi.js";
+import MemberLockOverlay from "../components/MemberLockOverlay.vue";
+import { memberLockedChannelIds, useMembership } from "../composables/useMembership.js";
 
 defineOptions({ name: "ShowView" });
 
+const kolvipSig = useKolvipSig();
+const route = useRoute();
+const { isMember } = useMembership();
+const router = useRouter();
+provide("kolvipSig", kolvipSig);
+
 const SHOW_CACHE_KEY = "discord-collector.show.v1";
 const SHOW_LAYOUT_KEY = "discord-collector.show.layout.v1";
-const SHOW_CACHE_VERSION = 5;
+const SHOW_CACHE_VERSION = 8;
 const MAX_MSGS_PER_CHANNEL = 400;
 const SHOW_RETENTION_DAYS = 7;
 const SHOW_RETENTION_MS = SHOW_RETENTION_DAYS * 86400000;
@@ -67,7 +80,7 @@ const DEFAULT_SHOW_GUILD_ID = "1444959079209504831";
 const SHOW_GUILD_RAIL = false;
 
 /** @typedef {{ guildId: string, name: string, iconUrl: string, channelCount: number }} GuildItem */
-/** @typedef {{ channelId: string, guildId: string, name: string, lastMessagePreview: string, lastMessageAtMs: number }} ChannelItem */
+/** @typedef {{ channelId: string, guildId: string, name: string, iconUrl?: string, lastMessagePreview: string, lastMessageAtMs: number }} ChannelItem */
 
 const guilds = ref(/** @type {GuildItem[]} */ ([]));
 /** @type {Record<string, ChannelItem[]>} */
@@ -175,16 +188,20 @@ function listVisibleChannelsForGuild(guildId) {
       const ch = byId.get(id);
       if (ch) {
         const name = showGroupsNames[id];
-        return name ? { ...ch, name } : ch;
+        const iconUrl = normalizeShowAvatarUrl(ch.iconUrl ?? "");
+        const base = iconUrl ? { ...ch, iconUrl } : ch;
+        return name ? { ...base, name } : base;
       }
       const name = showGroupsNames[id];
       if (!name) return null;
+      const hit = list.find((c) => c.channelId === id);
       return {
         channelId: id,
         guildId: gid,
         name,
-        lastMessagePreview: "",
-        lastMessageAtMs: 0,
+        iconUrl: String(hit?.iconUrl ?? ""),
+        lastMessagePreview: hit?.lastMessagePreview ?? "",
+        lastMessageAtMs: Number(hit?.lastMessageAtMs ?? 0),
       };
     })
     .filter(Boolean);
@@ -209,6 +226,33 @@ const channelSections = computed(() => {
     ungroupedOrderByGuild[gid] ?? []
   );
 });
+
+/**
+ * 会员频道锁定用的默认顺序：Show 白名单（discord_groups.json）原序。
+ * 不用置顶 / 分组 / 拖拽后的可视顺序，避免一改排序就换锁。
+ */
+const membershipDefaultChannelIds = computed(() => {
+  if (showGroupsFilterEnabled.value && showGroupsChannelIds.value.length) {
+    return showGroupsChannelIds.value;
+  }
+  return (currentGuildChannels.value || []).map((c) => c.channelId);
+});
+
+const memberLockedChannelSet = computed(
+  () => new Set(memberLockedChannelIds(membershipDefaultChannelIds.value)),
+);
+
+/** @param {string} [channelId] */
+function isChannelMemberLocked(channelId) {
+  if (isMember.value) return false;
+  const cid = String(channelId ?? "").trim();
+  return Boolean(cid && memberLockedChannelSet.value.has(cid));
+}
+
+const showChannelMessageLock = computed(() => {
+  if (isMember.value || reportQueueOpen.value) return false;
+  return isChannelMemberLocked(selectedChannel.value?.channelId);
+});
 const selectedMessages = computed(() => {
   const ch = selectedChannel.value?.channelId;
   if (!ch) return [];
@@ -220,6 +264,18 @@ const showSignalCards = computed(() => {
   const cid = selectedChannel.value?.channelId;
   if (!cid || !signalConfig.value) return false;
   return isSignalChannelId(cid, signalConfig.value);
+});
+
+const showKolvipRankHome = computed(() => {
+  if (reportQueueOpen.value) return false;
+  if (route.name === "show-messages") return false;
+  if (route.name === "show-rank") return true;
+  return !selectedChannel.value;
+});
+
+const kolvipDetailChannelLabel = computed(() => {
+  if (!selectedChannel.value) return "";
+  return displayChannelName(selectedChannel.value);
 });
 
 /** @param {{ channelId: string, name: string }} ch */
@@ -814,7 +870,7 @@ function loadCache() {
     const raw = localStorage.getItem(SHOW_CACHE_KEY);
     if (!raw) return false;
     const o = JSON.parse(raw);
-    if (Number(o.v) !== SHOW_CACHE_VERSION && Number(o.v) !== 4 && Number(o.v) !== 3 && Number(o.v) !== 2) return false;
+    if (Number(o.v) !== SHOW_CACHE_VERSION) return false;
     if (Array.isArray(o.guilds) && o.guilds.length) guilds.value = o.guilds;
     if (o.channelsByGuild && typeof o.channelsByGuild === "object") {
       for (const [k, v] of Object.entries(o.channelsByGuild)) {
@@ -914,6 +970,34 @@ function pruneChannelsToShowGroups() {
   const allowed = new Set(showGroupsChannelIds.value);
   for (const [gid, list] of Object.entries(channelsByGuild)) {
     channelsByGuild[gid] = list.filter((c) => allowed.has(c.channelId));
+  }
+}
+
+/** @param {string} guildId — 仅刷新 iconUrl，不整表替换侧栏顺序 */
+async function refreshChannelIconsForGuild(guildId) {
+  const gid = String(guildId ?? "").trim();
+  if (!gid) return;
+  try {
+    const rows = await fetchChannels(gid);
+    for (const r of rows) {
+      const { channelId, iconUrl } = channelRowToClient(r);
+      const url = String(iconUrl ?? "").trim();
+      if (!channelId || !url) continue;
+      const bucket = resolveGuildBucket(channelId, gid);
+      if (!bucket) continue;
+      if (!channelsByGuild[bucket]) channelsByGuild[bucket] = [];
+      const idx = channelsByGuild[bucket].findIndex((c) => c.channelId === channelId);
+      if (idx >= 0) channelsByGuild[bucket][idx] = { ...channelsByGuild[bucket][idx], iconUrl: url };
+      else upsertChannelItem(channelsByGuild[bucket], { channelId, guildId: gid, name: r.name ?? "", iconUrl: url, lastMessagePreview: "", lastMessageAtMs: 0 });
+      delete channelAvatarFailed[channelId];
+    }
+    if (selectedChannel.value?.channelId) {
+      const cid = selectedChannel.value.channelId;
+      const ch = (channelsByGuild[gid] ?? []).find((c) => c.channelId === cid);
+      if (ch?.iconUrl) selectedChannel.value = { ...selectedChannel.value, iconUrl: ch.iconUrl };
+    }
+  } catch {
+    /* ignore */
   }
 }
 
@@ -1114,6 +1198,42 @@ const DB_RELOAD_SAME_CHANNEL_MS = 2_000;
 let lastSelectChannelId = "";
 let lastDbReloadAt = 0;
 
+const kolvipMappedDiscordIds = ref(/** @type {Set<string>} */ (new Set()));
+const channelAvatarFailed = reactive(/** @type {Record<string, true>} */ ({}));
+
+/** @param {string} cid */
+function onChannelAvatarError(cid) {
+  const id = String(cid ?? "").trim();
+  if (id) channelAvatarFailed[id] = true;
+}
+
+const selectedChannelIconUrl = computed(() =>
+  String(selectedChannel.value?.iconUrl ?? "").trim()
+);
+
+/** @param {ChannelItem | { channelId?: string } | null | undefined} ch */
+function channelUsesKolvipCatchup(ch) {
+  const cid = String(ch?.channelId ?? "").trim();
+  if (!cid) return false;
+  if (cid.startsWith("kolvip-scan-")) return true;
+  return kolvipMappedDiscordIds.value.has(cid);
+}
+
+/** kolvip 虚拟频道等：只读库，不碰 Discord CDP */
+function channelNeedsDiscordCdp(ch) {
+  const cid = String(ch?.channelId ?? "").trim();
+  if (!cid || cid.startsWith("kolvip-scan-")) return false;
+  const gid = String(ch?.guildId ?? "").trim();
+  return gid.length > 0;
+}
+
+/** CDP 不可用时不打断浏览：历史仍以 MySQL 为准 */
+function setNavErrorUnlessCdpUnavailable(err) {
+  const msg = String(/** @type {Error} */ (err).message ?? err);
+  if (/503|CDP|尚未就绪|未就绪/i.test(msg)) return;
+  navError.value = msg;
+}
+
 /**
  * CDP + 二次拉库在后台跑，不阻塞侧栏/卡片点击后的首屏。
  * @param {ChannelItem} ch
@@ -1129,16 +1249,13 @@ async function syncChannelAfterSelect(ch, seq, gid, cid, skipInitialDb) {
       await loadMessagesForChannel(ch, { stickBottom: true });
       lastDbReloadAt = Date.now();
     }
-    try {
-      await navigateDiscordChannel(gid, cid);
-      if (seq !== selectChannelSeq) return;
-      updateCdpActive(cid, gid);
-    } catch (cdpErr) {
-      if (seq === selectChannelSeq) {
-        const msg = String(/** @type {Error} */ (cdpErr).message ?? cdpErr);
-        navError.value = msg.includes("503") || msg.includes("CDP")
-          ? `CDP 未就绪（线上服务器常无 Chrome）：${msg}。仍尝试从数据库拉历史。`
-          : msg;
+    if (channelNeedsDiscordCdp(ch)) {
+      try {
+        await navigateDiscordChannel(gid, cid);
+        if (seq !== selectChannelSeq) return;
+        updateCdpActive(cid, gid);
+      } catch {
+        /* 无 Chrome/CDP 时静默，下方仍从 MySQL 拉历史 */
       }
     }
     if (seq !== selectChannelSeq) return;
@@ -1196,8 +1313,24 @@ function openReportQueue() {
   void refreshReportQueueSummary();
 }
 
-async function selectChannel(ch) {
+function showBloggerRankHome() {
   reportQueueOpen.value = false;
+  selectedChannel.value = null;
+  if (route.name !== "show-rank") {
+    void router.push({ name: "show-rank" });
+  }
+}
+
+function ensureShowMessagesRoute() {
+  if (route.name !== "show-messages") {
+    void router.push({ name: "show-messages" });
+  }
+}
+
+async function selectChannel(ch) {
+  ensureShowMessagesRoute();
+  reportQueueOpen.value = false;
+  kolvipSig.pickBlogger(normalizeBloggerLabel(displayChannelName(ch)));
   if (renamingChannelId.value && renamingChannelId.value !== ch.channelId) {
     commitRename();
   }
@@ -1233,12 +1366,9 @@ async function selectChannel(ch) {
   const skipDb =
     sameChannel && cached.length > 0 && now - lastDbReloadAt < DB_RELOAD_SAME_CHANNEL_MS;
 
-  const gid = String(ch.guildId || selectedGuildId.value || DEFAULT_SHOW_GUILD_ID).trim();
   const cid = String(ch.channelId ?? "").trim();
-  if (!cid || !gid) {
-    navError.value = "缺少 guildId 或 channelId，无法 CDP 打开频道";
-    return;
-  }
+  if (!cid) return;
+  const gid = String(ch.guildId || selectedGuildId.value || DEFAULT_SHOW_GUILD_ID).trim();
 
   void syncChannelAfterSelect(ch, seq, gid, cid, skipDb);
   if (seq === selectChannelSeq) {
@@ -1434,7 +1564,16 @@ async function loadOlderMessagesForChannel(ch, opts = {}) {
   const gid = String(ch.guildId || selectedGuildId.value || "").trim();
 
   try {
-    const cdpTask = scrollDiscordChannelHistory(gid, cid, { beforeMessageId: beforeId }).catch(() => {});
+    const kolvipTask = channelUsesKolvipCatchup(ch)
+      ? kolvipChannelCatchup(cid, { beforeMessageId: beforeId, limit: LOAD_OLDER_PAGE_SIZE }).catch(
+          () => {}
+        )
+      : Promise.resolve();
+    const cdpTask =
+      channelNeedsDiscordCdp(ch) && gid && !channelUsesKolvipCatchup(ch)
+        ? scrollDiscordChannelHistory(gid, cid, { beforeMessageId: beforeId }).catch(() => {})
+        : Promise.resolve();
+    await Promise.all([kolvipTask, cdpTask]);
     const { rows, kolvipShowIsolation: isolation } = await fetchChannelMessages({
       channelId: cid,
       guildId: gid,
@@ -1442,8 +1581,6 @@ async function loadOlderMessagesForChannel(ch, opts = {}) {
       before: beforeId,
     });
     noteKolvipShowIsolation(isolation);
-    await cdpTask;
-
     if (rows.length > 0 && rows.length < LOAD_OLDER_PAGE_SIZE) {
       channelHasMoreOlder[cid] = false;
     }
@@ -1458,7 +1595,7 @@ async function loadOlderMessagesForChannel(ch, opts = {}) {
     }
     return false;
   } catch (e) {
-    if (!background) navError.value = String(/** @type {Error} */ (e).message ?? e);
+    if (!background) setNavErrorUnlessCdpUnavailable(e);
     return false;
   } finally {
     if (!background) channelOlderLoading.value = false;
@@ -1473,7 +1610,7 @@ async function loadOlderMessagesForChannel(ch, opts = {}) {
 async function warmupChannelHistoryAfterSelect(ch, seq) {
   const cid = String(ch.channelId ?? "").trim();
   const gid = String(ch.guildId || selectedGuildId.value || DEFAULT_SHOW_GUILD_ID).trim();
-  if (!cid || !gid) return;
+  if (!cid) return;
   if (channelHistoryWarmupInflight.get(cid)) return;
 
   channelHistoryWarmupInflight.set(cid, true);
@@ -1481,7 +1618,11 @@ async function warmupChannelHistoryAfterSelect(ch, seq) {
     await new Promise((r) => setTimeout(r, CHANNEL_HISTORY_WARMUP_START_DELAY_MS));
     if (seq !== selectChannelSeq || selectedChannel.value?.channelId !== cid) return;
 
-    await warmChannelShowHistory(gid, cid).catch(() => null);
+    if (channelUsesKolvipCatchup(ch)) {
+      await warmChannelShowHistory(gid, cid).catch(() => null);
+    } else if (channelNeedsDiscordCdp(ch) && gid) {
+      await warmChannelShowHistory(gid, cid).catch(() => null);
+    }
     if (seq !== selectChannelSeq || selectedChannel.value?.channelId !== cid) return;
 
     await loadMessagesForChannel(ch, { silent: true, force: true, stickBottom: true });
@@ -1546,6 +1687,7 @@ function applyChannelUpdate(row) {
     channelId: cid,
     guildId: gid,
     name: resolveChannelName(row, cid),
+    iconUrl: normalizeShowAvatarUrl(row.iconUrl ?? row.icon_url ?? ""),
     lastMessagePreview: preview,
     lastMessageAtMs: Number(row.lastMessageAtMs ?? row.last_message_at_ms ?? 0),
   };
@@ -1955,6 +2097,19 @@ watch(selectedChannel, (ch, prev) => {
 });
 
 onMounted(async () => {
+  void kolvipSig.init();
+  try {
+    const res = await fetch("/api/kolvip/mappings");
+    const j = await res.json();
+    const set = new Set();
+    for (const row of j.channels ?? []) {
+      const id = String(row.discordChannelId ?? "").trim();
+      if (id) set.add(id);
+    }
+    kolvipMappedDiscordIds.value = set;
+  } catch {
+    /* ignore */
+  }
   try {
     signalConfig.value = await fetchSignalConfig();
   } catch {
@@ -1963,23 +2118,38 @@ onMounted(async () => {
   await loadShowDiscordGroupsConfig();
   const hadCache = loadCache();
   pruneChannelsToShowGroups();
+  if (hadCache) {
+    for (const list of Object.values(channelsByGuild)) {
+      if (!Array.isArray(list)) continue;
+      for (const ch of list) {
+        if (ch?.iconUrl) ch.iconUrl = normalizeShowAvatarUrl(ch.iconUrl);
+      }
+    }
+  }
   await initShowLayout();
+  if (route.name === "show-rank") {
+    selectedChannel.value = null;
+    reportQueueOpen.value = false;
+  }
   if (!SHOW_GUILD_RAIL) selectedGuildId.value = DEFAULT_SHOW_GUILD_ID;
   await reloadGuilds();
   if (selectedGuildId.value) {
-    await loadChannelsForGuild(selectedGuildId.value, { force: !hadCache });
+    await loadChannelsForGuild(selectedGuildId.value, { force: true });
+    await refreshChannelIconsForGuild(selectedGuildId.value);
     await warmGuildMessageSnapshot(selectedGuildId.value);
   }
   try {
     const cdp = await fetchCdpActiveChannel();
-    if (cdp.cdpChannelId && !selectedChannel.value) {
+    if (cdp.cdpChannelId) {
       updateCdpActive(cdp.cdpChannelId, cdp.cdpGuildId);
-      const cdpGid = String(cdp.cdpGuildId ?? "");
-      if (SHOW_GUILD_RAIL || !cdpGid || cdpGid === DEFAULT_SHOW_GUILD_ID) {
-        await syncViewToIncomingMessage({
-          channelId: cdp.cdpChannelId,
-          guildId: cdp.cdpGuildId,
-        });
+      if (selectedChannel.value) {
+        const cdpGid = String(cdp.cdpGuildId ?? "");
+        if (SHOW_GUILD_RAIL || !cdpGid || cdpGid === DEFAULT_SHOW_GUILD_ID) {
+          await syncViewToIncomingMessage({
+            channelId: cdp.cdpChannelId,
+            guildId: cdp.cdpGuildId,
+          });
+        }
       }
     }
   } catch {
@@ -1997,8 +2167,6 @@ onMounted(async () => {
   }
   void loadChannelStripStats();
   channelStripTimer = setInterval(() => void loadChannelStripStats(), 60_000);
-  void refreshReportQueueSummary();
-  reportQueueTimer = setInterval(() => void refreshReportQueueSummary(), 30_000);
   syncPaneMessagesFromStore();
   if (selectedChannel.value) {
     channelStickBottom.value = true;
@@ -2006,6 +2174,16 @@ onMounted(async () => {
   }
   bumpShowUserActivity();
 });
+
+watch(
+  () => route.name,
+  (name) => {
+    if (name === "show-rank") {
+      reportQueueOpen.value = false;
+      selectedChannel.value = null;
+    }
+  },
+);
 
 onUnmounted(() => {
   flushPendingDiscordBatchesImmediate();
@@ -2017,17 +2195,17 @@ onUnmounted(() => {
     clearInterval(channelStripTimer);
     channelStripTimer = null;
   }
-  if (reportQueueTimer) {
-    clearInterval(reportQueueTimer);
-    reportQueueTimer = null;
-  }
 });
 </script>
 
 <template>
   <div
     class="show-app"
-    :class="{ 'has-signal-cards': showSignalCards, 'no-guild-rail': !SHOW_GUILD_RAIL, 'has-kolvip-panel': true }"
+    :class="{
+      'has-signal-cards': showSignalCards,
+      'no-guild-rail': !SHOW_GUILD_RAIL,
+      'has-kolvip-sig-detail': true,
+    }"
     @pointerdown="bumpShowUserActivity"
     @keydown="bumpShowUserActivity"
   >
@@ -2057,20 +2235,6 @@ onUnmounted(() => {
         <button type="button" class="channel-group-add-btn" title="新建分组" @click="createChannelGroup">+ 分组</button>
       </div>
       <div class="guild-channel-scroll">
-        <button
-          type="button"
-          class="channel-row report-queue-row"
-          :class="{ active: reportQueueOpen }"
-          title="每 5 分钟形态 / OI 持仓量异常报告"
-          @click="openReportQueue"
-        >
-          <span class="title-line">
-            <span class="hash">▣</span>
-            <span class="channel-name">形态/OI 报告队列</span>
-            <span v-if="reportQueueBadge()" class="channel-unread-badge">{{ reportQueueBadge() }}</span>
-          </span>
-          <span class="preview">{{ reportQueueLoading ? "加载中…" : (reportQueuePreview || "点击查看 5 分钟报告") }}{{ reportQueueError ? " · " + reportQueueError : "" }}</span>
-        </button>
         <p v-if="loadingChannels" class="kook-wait">加载频道…</p>
         <p v-else-if="selectedGuildId && !currentGuildChannels.length" class="kook-wait">
           暂无文本频道；请在 Discord 网页打开该服务器以同步频道列表。
@@ -2129,6 +2293,8 @@ onUnmounted(() => {
             type="button"
             class="channel-row"
             draggable="true"
+            :data-channel-id="item.ch.channelId"
+            :data-member-locked="isChannelMemberLocked(item.ch.channelId) ? '1' : null"
             :class="{
               active: !reportQueueOpen && selectedChannel?.channelId === item.ch.channelId,
               renaming: renamingChannelId === item.ch.channelId,
@@ -2136,6 +2302,7 @@ onUnmounted(() => {
               unread: channelUnreadCount(item.ch.channelId) > 0 && selectedChannel?.channelId !== item.ch.channelId,
               dragging: dragChannelId === item.ch.channelId,
               'drop-before': dropBeforeChannelId === item.ch.channelId && dragChannelId !== item.ch.channelId,
+              'member-locked': isChannelMemberLocked(item.ch.channelId),
             }"
             @click="selectChannel(item.ch)"
             @dblclick="startRenameChannel(item.ch, $event)"
@@ -2146,6 +2313,19 @@ onUnmounted(() => {
             @dragleave="onChannelDragLeave(item.ch)"
             @drop="onDropOnChannel($event, item.ch, { groupId: item.groupId ?? '', pinned: item.pinned })"
           >
+            <img
+              v-if="item.ch.iconUrl && !channelAvatarFailed[item.ch.channelId]"
+              :src="normalizeShowAvatarUrl(item.ch.iconUrl)"
+              class="channel-av"
+              width="32"
+              height="32"
+              alt=""
+              referrerpolicy="no-referrer"
+              loading="lazy"
+              @error="onChannelAvatarError(item.ch.channelId)"
+            />
+            <span v-else class="channel-av ph" aria-hidden="true" />
+            <p class="channel-row-main">
             <span
               v-if="renamingChannelId === item.ch.channelId && selectedChannel?.channelId !== item.ch.channelId"
               class="title-line rename-line"
@@ -2171,6 +2351,17 @@ onUnmounted(() => {
                 class="channel-name"
                 :title="channelAliasTitle(item.ch.channelId, item.ch.name)"
               >{{ displayChannelName(item.ch) }}</span>
+              <span
+                v-if="isChannelMemberLocked(item.ch.channelId)"
+                class="channel-member-lock"
+                title="会员频道：非会员无法查看完整消息"
+                aria-label="会员频道已锁定"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="2" />
+                  <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                </svg>
+              </span>
               <span
                 v-if="channelIdLabel(item.ch)"
                 class="channel-id-tag"
@@ -2202,9 +2393,19 @@ onUnmounted(() => {
               >↺</button>
             </span>
             <span
-              v-if="item.ch.lastMessagePreview && renamingChannelId !== item.ch.channelId"
-              class="preview"
-            >{{ item.ch.lastMessagePreview }}</span>
+              v-if="
+                (item.ch.lastMessagePreview || item.ch.lastMessageAtMs) &&
+                renamingChannelId !== item.ch.channelId
+              "
+              class="preview-line"
+            >
+              <span class="preview-text">{{ item.ch.lastMessagePreview }}</span>
+              <time
+                v-if="formatChannelPreviewTime(item.ch.lastMessageAtMs)"
+                class="preview-time"
+                :datetime="new Date(item.ch.lastMessageAtMs).toISOString()"
+              >{{ formatChannelPreviewTime(item.ch.lastMessageAtMs) }}</time>
+            </span>
             <span
               v-if="channelStripVisible(item.ch.channelId) && renamingChannelId !== item.ch.channelId"
               class="channel-strip-stats"
@@ -2215,6 +2416,7 @@ onUnmounted(() => {
                 :title="'当日已结算：止盈 / 止损（策略含止盈的卡片）'"
               >{{ formatStripToday(channelStrip(item.ch.channelId)) }}</span>
             </span>
+            </p>
           </button>
         </template>
       </div>
@@ -2228,6 +2430,7 @@ onUnmounted(() => {
           <span class="main-sub">每 5 分钟 · 周期最低 5m · 形态 / 是否放量 / OI 异常</span>
         </template>
         <template v-else-if="selectedChannel">
+          <button type="button" class="kolvip-back-rank" title="返回博主胜率榜单" @click="showBloggerRankHome">← 榜单</button>
           <span class="main-hash">#</span>
           <template v-if="renamingChannelId === selectedChannel.channelId">
             <input
@@ -2269,15 +2472,13 @@ onUnmounted(() => {
           </template>
         </template>
         <template v-else>
-          <span class="main-sub">从左侧选择服务器与频道；信号统计见</span>
-          <RouterLink to="/eval" class="main-sub">评估</RouterLink>
-          <span class="main-sub">；原始 WS 见</span>
-          <RouterLink to="/debug" class="main-sub">Debug</RouterLink>
+          <span class="main-title">博主胜率</span>
+          <span class="main-sub">kolvip 本地镜像 · 点左侧频道看消息流</span>
         </template>
       </header>
 
       <div v-if="navError" class="kook-nav-alert err">{{ navError }}</div>
-      <p v-if="navPending" class="kook-nav-alert info">后台同步 CDP / 消息库…（可先浏览已缓存内容）</p>
+      <p v-if="navPending" class="kook-nav-alert info">同步消息库…</p>
       <p v-if="channelMessagesHint" class="kook-nav-alert info">{{ channelMessagesHint }}</p>
 
       <div
@@ -2295,33 +2496,71 @@ onUnmounted(() => {
           v-else-if="selectedChannel"
           :key="selectedChannel.channelId"
           :messages="paneMessages"
+          :channel-icon-url="selectedChannelIconUrl"
           :loading="channelMessagesLoading"
           :loading-older="channelOlderLoading"
           :snapshot-warming="snapshotWarming"
           :highlight-message-id="highlightMessageId"
-          empty-hint="该频道近 7 天暂无已入库消息，且库中无更早记录；Gateway/CDP 采集到新消息后会自动出现。"
+          empty-hint="该频道近 7 天暂无已入库消息，且库中无更早记录；新消息入库后会自动出现。"
         />
+        <KolvipSigRankPane v-else-if="showKolvipRankHome" />
         <p v-else class="kook-wait">选择左侧频道查看消息（含头像、昵称、时间）。</p>
       </div>
+      <MemberLockOverlay
+        v-if="showChannelMessageLock"
+        title="开通会员后可查看该频道消息"
+        detail="该频道属于默认列表前 15 个会员频道。非会员无法查看完整消息；前 15 之外的频道可以正常查看。切回「会员」可查看全部。"
+      />
     </section>
 
     <SignalCardRail
-      v-if="showSignalCards"
+      v-if="showSignalCards && !showChannelMessageLock"
       ref="signalCardRailRef"
       :channel-id="selectedChannel?.channelId ?? ''"
       :guild-id="selectedGuildId"
       @scroll-to-message="scrollToSignalMessage"
       @card-updated="onSignalCardUpdated"
     />
-    <KolvipEvalPanel :active-channel-id="selectedChannel?.channelId ?? ''" />
+    <KolvipSigBloggerDetailPane
+      v-if="!showChannelMessageLock"
+      :channel-label="kolvipDetailChannelLabel"
+    />
   </div>
 </template>
 
 <style scoped>
 @import "../styles/show-theme.css";
+.main {
+  position: relative;
+}
+.channel-member-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.2rem;
+  color: #e8c57a;
+  flex-shrink: 0;
+}
+.channel-row.member-locked {
+  position: relative;
+}
 a.main-sub {
   color: #5865f2;
   text-decoration: none;
   margin-left: 0.25rem;
+}
+.kolvip-back-rank {
+  margin-right: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #404249;
+  background: #2b2d31;
+  color: #b5bac1;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.kolvip-back-rank:hover {
+  color: #fff;
+  border-color: #5865f2;
 }
 </style>

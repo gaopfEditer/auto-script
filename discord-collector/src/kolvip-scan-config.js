@@ -2,6 +2,8 @@
  * 巨鲸非精选频道：虚拟 signal channelId，仅胜率扫描、不跟单 TG。
  */
 import { config } from "./config.js";
+import { findKolvipCatalogNameByKid } from "./kolvip-api-catalog.js";
+import { getKolvipChannelMappings } from "./kolvip-cdp-config.js";
 
 const SCAN_PREFIX = "kolvip-scan-";
 
@@ -23,10 +25,16 @@ export function resolveKolvipScanSignalConfig(channelId, displayName) {
   if (!config.kolvipScanEvalEnabled) return null;
   const kid = parseKolvipScanVirtualChannelId(channelId);
   if (!kid) return null;
-  const name = String(displayName ?? "").trim() || `kolvip-${kid}`;
+  const map = getKolvipChannelMappings().find((m) => String(m.kolvipChannelId) === kid);
+  const name =
+    findKolvipCatalogNameByKid(kid) ||
+    map?.logicName ||
+    String(displayName ?? "").trim() ||
+    `kolvip-${kid}`;
+  const isAoying = kid === "27" || /熬鹰/i.test(name);
   return {
-    name,
-    parser: /** @type {const} */ ("generic"),
+    name: isAoying ? "熬鹰" : name,
+    parser: /** @type {const} */ (isAoying ? "aoying_position" : "generic"),
     styles: ["cn_brief"],
     telegramStyle: "cn_brief",
   };

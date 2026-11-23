@@ -10,6 +10,7 @@
  * 飞扬 / seven / 山寨之王 在巨鲸侧暂无对应频道，不在默认表内。
  */
 import { config } from "./config.js";
+import { isSignalChannel } from "./discord-signal-config.js";
 
 /** @typedef {{ logicName: string, kolvipChannelId: string, discordChannelId: string, parser: string }} KolvipChannelMapping */
 
@@ -71,8 +72,13 @@ export function isKolvipSignalEnabled() {
  * @returns {boolean}
  */
 export function shouldBypassDiscordSignalChannel(discordChannelId) {
+  const cid = String(discordChannelId ?? "").trim();
+  if (!cid) return false;
+  if (config.signalIngestSource === "kolvip") {
+    return isSignalChannel(cid);
+  }
   if (!isKolvipSignalEnabled() || !config.kolvipBypassDiscordSignals) return false;
-  return getKolvipMappedDiscordChannelIds().has(String(discordChannelId ?? "").trim());
+  return getKolvipMappedDiscordChannelIds().has(cid);
 }
 
 export function kolvipWebUrl() {
@@ -97,6 +103,7 @@ export function kolvipAssetOrigin() {
 export function resolveKolvipAssetUrl(url) {
   const u = String(url ?? "").trim();
   if (!u) return "";
+  if (/^\/kolvip-avatars\//i.test(u)) return u.split("?")[0];
   if (/^https?:\/\//i.test(u)) return u;
   if (u.startsWith("//")) return `https:${u}`;
   const origin = kolvipAssetOrigin();

@@ -108,3 +108,32 @@ export async function kolvipApiFetchChannelMessages(client, channelId, opts = {}
   if (data && Array.isArray(data.messages)) return data.messages;
   return [];
 }
+
+/** @typedef {'7' | '30' | 'all'} KolvipSigRange */
+
+/**
+ * @param {KolvipApiClientOpts} client
+ * @param {KolvipSigRange | string} [range]
+ */
+export async function kolvipApiSigRank(client, range = "30") {
+  const r = String(range || "30").trim();
+  return kolvipApiRequest(client, `/webu/sig/rank?range=${encodeURIComponent(r)}`);
+}
+
+/**
+ * @param {KolvipApiClientOpts} client
+ * @param {string} name
+ * @param {KolvipSigRange | string} [range]
+ */
+export async function kolvipApiSigBlogger(client, name, range = "30") {
+  const q = new URLSearchParams({ name: String(name || "").trim(), range: String(range || "30") });
+  return kolvipApiRequest(client, `/webu/sig/blogger?${q}`);
+}
+
+/**
+ * @param {KolvipApiClientOpts} client
+ * @param {string|number} id
+ */
+export async function kolvipApiSigDetail(client, id) {
+  return kolvipApiRequest(client, `/webu/sig/detail?id=${encodeURIComponent(String(id))}`);
+}

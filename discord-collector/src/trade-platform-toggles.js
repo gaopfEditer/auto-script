@@ -13,6 +13,10 @@ import {
   telegramChatIdInExactList,
 } from "./telegram-channel-profiles.js";
 import { isTelegramAutoTradeChannel } from "./telegram-auto-trade.js";
+import {
+  listKolvipAutotradeChannelIds,
+  loadKolvipBitgetAutotrade,
+} from "./kolvip-bitget-autotrade.js";
 
 /** @typedef {{ bitget: boolean; weex: boolean }} TradePlatformToggles */
 
@@ -63,6 +67,14 @@ export function getAutoTradeChannelIds(override) {
     const id = String(raw ?? "").trim();
     if (!id || out.includes(id)) continue;
     out.push(id);
+  }
+  const kolvip = loadKolvipBitgetAutotrade();
+  if (kolvip.enabled) {
+    for (const id of listKolvipAutotradeChannelIds()) {
+      const cid = String(id ?? "").trim();
+      if (!cid || out.includes(cid)) continue;
+      out.push(cid);
+    }
   }
   return out;
 }

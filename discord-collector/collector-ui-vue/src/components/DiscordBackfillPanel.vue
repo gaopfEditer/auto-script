@@ -719,10 +719,6 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <p v-if="!cdpReady" class="warn tiny">
-        CDP 未连接 —「开始获取数据」将<strong>仅用 MySQL 已有消息</strong>解析，不会上滚拉历史。补拉请配置
-        <code>CDP_CONNECT_URL</code>（如 <code>http://127.0.0.1:9222</code>）并保持 Chrome 内 Discord 已登录。
-      </p>
       <p v-if="running" class="run-banner">
         正在获取数据（拉取/解析信号，不算盈亏）
         <template v-if="runPeriod">

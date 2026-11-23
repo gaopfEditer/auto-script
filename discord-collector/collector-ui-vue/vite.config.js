@@ -27,7 +27,7 @@ export default defineConfig(({ mode }) => {
     uiMode !== "dev" &&
     uiMode !== "full";
   /** 本机 Local 模块：deploy 构建强制关闭（Telegram 顶栏模块可打包） */
-  const LOCAL_ONLY = new Set(["manual-stats", "fetch", "archives", "debug"]);
+  const LOCAL_ONLY = new Set(["manual-stats", "membership", "fetch", "archives", "debug"]);
   const pagesCsv =
     String(env.VITE_UI_PAGES ?? "show,cards,eval,community,oi,news,telegram").trim() ||
     "show,cards,eval,community,oi,news,telegram";

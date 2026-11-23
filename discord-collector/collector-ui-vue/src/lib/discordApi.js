@@ -108,6 +108,20 @@ export async function warmChannelShowHistory(guildId, channelId, opts = {}) {
   return readOkJson(res, "频道历史预热失败");
 }
 
+/** @param {string} channelId @param {{ beforeMessageId?: string, limit?: number }} [opts] */
+export async function kolvipChannelCatchup(channelId, opts = {}) {
+  const res = await fetch("/api/kolvip/channels/catchup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      channelId,
+      ...(opts.beforeMessageId ? { beforeMessageId: opts.beforeMessageId } : {}),
+      ...(opts.limit != null ? { limit: opts.limit } : {}),
+    }),
+  });
+  return readOkJson(res, "kolvip 频道补拉失败");
+}
+
 export async function scrollDiscordChannelHistory(guildId, channelId, opts = {}) {
   const beforeMessageId = String(opts.beforeMessageId ?? "").trim();
   const res = await fetch("/api/cdp/discord-channel-scroll-up", {

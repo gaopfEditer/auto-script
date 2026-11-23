@@ -18,6 +18,8 @@ import { formatWeexPrice, parseWeexContractMeta } from "./weex-api.js";
 import { normalizeHumanSymbol } from "./card-fields.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { resolveOpenTpslPrices, isValidTakeProfit } from "./bitget-tpsl-guard.js";
+import { resolveKolvipMarginUsdt } from "./kolvip-bitget-autotrade.js";
+import { hasWeexSymbolExposure } from "./trade-position-guard.js";
 
 /** @param {number} marketPrice @param {number} sl @param {"long"|"short"} holdSide */
 function isValidStopLoss(marketPrice, sl, holdSide) {
@@ -90,7 +92,8 @@ export async function executeWeexStagedMarketOpen(client, input) {
   if (contractMeta.maxLeverage > 0 && leverage > contractMeta.maxLeverage) {
     leverage = contractMeta.maxLeverage;
   }
-  const sizeResult = resolveBitgetOrderSize(Number(channelTrade.orderSizeUsdt ?? 50), refPrice, contractMeta, {
+  const marginUsdt = resolveKolvipMarginUsdt(parsed, channelTrade);
+  const sizeResult = resolveBitgetOrderSize(marginUsdt, refPrice, contractMeta, {
     dryRun: input.dryRun,
     leverage,
   });
@@ -98,6 +101,20 @@ export async function executeWeexStagedMarketOpen(client, input) {
   const size = sizeResult.size;
 
   const holdSide = side === "buy" ? "long" : "short";
+
+  if (!input.dryRun) {
+    try {
+      if (await hasWeexSymbolExposure(client, { symbol, holdSide })) {
+        return {
+          ok: false,
+          reason: "duplicate_position",
+          error: `WEEX 已有 ${symbol} ${holdSide} 仓位，跳过重复开仓`,
+        };
+      }
+    } catch {
+      /* 查仓失败则继续（与 Bitget 一致） */
+    }
+  }
   const fillPrice = refPrice;
   const tpslResolved = resolveOpenTpslPrices({
     parsed,
@@ -126,6 +143,7 @@ export async function executeWeexStagedMarketOpen(client, input) {
     size,
     fillPrice,
     leverage,
+    orderSizeUsdt: marginUsdt,
     initialSlPct,
     initialSlPrice: initialSl,
     initialTpPrice: initialTp,

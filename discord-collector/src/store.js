@@ -164,6 +164,7 @@ export async function openStore(cfg, log) {
   for (const col of [
     "ADD COLUMN show_history_warmed_at DATETIME(3) NULL AFTER updated_at",
     "ADD COLUMN show_history_oldest_message_id VARCHAR(32) NULL AFTER show_history_warmed_at",
+    "ADD COLUMN icon_url VARCHAR(512) NULL AFTER channel_type",
   ]) {
     try {
       await pool.query(`ALTER TABLE discord_channels ${col}`);
@@ -717,6 +718,45 @@ export async function openStore(cfg, log) {
     return valid.length;
   }
 
+  /**
+   * @param {Array<{ channelId: string, iconUrl?: string }>} rows
+   */
+  async function upsertDiscordChannelIcons(rows) {
+    const valid = rows.filter((r) => r?.channelId && String(r.iconUrl ?? "").trim());
+    if (!valid.length) return 0;
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const tuples = valid.map((r) => [
+      String(r.channelId).trim(),
+      String(r.iconUrl).trim().slice(0, 512),
+      now,
+    ]);
+    await pool.query(
+      `INSERT INTO discord_channels (channel_id, guild_id, name, channel_type, icon_url, updated_at)
+       VALUES ${tuples.map(() => "(?, '', '', 0, ?, ?)").join(", ")}
+       ON DUPLICATE KEY UPDATE
+         icon_url = IF(VALUES(icon_url) != '', VALUES(icon_url), icon_url),
+         updated_at = VALUES(updated_at)`,
+      tuples.flat()
+    );
+    return valid.length;
+  }
+
+  /** @param {string[]} channelIds */
+  async function listDiscordChannelIcons(channelIds) {
+    const ids = [...new Set(channelIds.map((id) => String(id).trim()).filter(Boolean))];
+    if (!ids.length) return new Map();
+    const [rows] = await pool.query(
+      `SELECT channel_id, icon_url FROM discord_channels WHERE channel_id IN (?) AND COALESCE(icon_url, '') != ''`,
+      [ids]
+    );
+    /** @type {Map<string, string>} */
+    const out = new Map();
+    for (const row of rows) {
+      out.set(String(row.channel_id), String(row.icon_url));
+    }
+    return out;
+  }
+
   /** 清理误把 channel_id 写入 discord_guilds 的历史脏数据 */
   async function purgeMisclassifiedGuilds() {
     const [r] = await pool.execute(`
@@ -791,7 +831,7 @@ export async function openStore(cfg, log) {
     const gid = String(guildId ?? "").trim();
     if (!gid) return [];
     const [rows] = await pool.query(
-      `SELECT channel_id, guild_id, name, channel_type, last_message_preview, last_message_at_ms, updated_at
+      `SELECT channel_id, guild_id, name, channel_type, icon_url, last_message_preview, last_message_at_ms, updated_at
        FROM discord_channels WHERE guild_id = ? ORDER BY name ASC`,
       [gid]
     );
@@ -1074,6 +1114,38 @@ export async function openStore(cfg, log) {
     );
   }
 
+  /**
+   * 仅更新预热时间（kolvip 虚拟频道等，无 Discord 雪花 id 时仍可减少源站补拉）。
+   * @param {string} channelId
+   * @param {string} [oldestMessageId]
+   */
+  async function markDiscordChannelShowHistoryWarmed(channelId, oldestMessageId = "") {
+    const cid = String(channelId ?? "").trim();
+    if (!cid) return;
+    const now = isoToMysqlDatetime3(new Date().toISOString());
+    const oldest = String(oldestMessageId ?? "").trim();
+    if (!oldest) {
+      await pool.execute(
+        `INSERT INTO discord_channels (channel_id, guild_id, name, channel_type, updated_at, show_history_warmed_at)
+         VALUES (?, '', '', 0, ?, ?)
+         ON DUPLICATE KEY UPDATE show_history_warmed_at = VALUES(show_history_warmed_at), updated_at = VALUES(updated_at)`,
+        [cid, now, now]
+      );
+      return;
+    }
+    const cur = await getDiscordChannelShowHistoryCache(cid);
+    const mergedOldest = minDiscordSnowflakeId(cur.oldestMessageId, oldest);
+    await pool.execute(
+      `INSERT INTO discord_channels (channel_id, guild_id, name, channel_type, updated_at, show_history_warmed_at, show_history_oldest_message_id)
+       VALUES (?, '', '', 0, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         show_history_warmed_at = VALUES(show_history_warmed_at),
+         show_history_oldest_message_id = VALUES(show_history_oldest_message_id),
+         updated_at = VALUES(updated_at)`,
+      [cid, now, now, mergedOldest]
+    );
+  }
+
   async function listRecentFrames(limit = 120) {
     const lim = Math.min(500, Math.max(1, limit));
     const [rows] = await pool.query(
@@ -1309,12 +1381,14 @@ export async function openStore(cfg, log) {
       where.push("(sc.symbol = ? OR sc.symbol = ? OR sc.symbol LIKE ?)");
       params.push(sym, symbol.replace(/USDT$/, ""), `${symbol.replace(/USDT$/, "")}%`);
     }
+    const signalTimeExpr =
+      "COALESCE(IF(dm.created_at_ms > 0, FROM_UNIXTIME(dm.created_at_ms / 1000, '%Y-%m-%d %H:%i:%s.%f'), NULL), sc.signal_at, sc.created_at)";
     if (Number.isFinite(fromMs) && fromMs > 0) {
-      where.push("COALESCE(sc.signal_at, sc.created_at) >= ?");
+      where.push(`${signalTimeExpr} >= ?`);
       params.push(isoToMysqlDatetime3(new Date(fromMs).toISOString()));
     }
     if (Number.isFinite(toMs) && toMs > 0) {
-      where.push("COALESCE(sc.signal_at, sc.created_at) <= ?");
+      where.push(`${signalTimeExpr} <= ?`);
       params.push(isoToMysqlDatetime3(new Date(toMs).toISOString()));
     }
     const sinceId = Number(filters.sinceId);
@@ -2515,6 +2589,8 @@ export async function openStore(cfg, log) {
     findExistingDiscordMessageIds,
     upsertDiscordGuildsBatch,
     upsertDiscordChannelsBatch,
+    upsertDiscordChannelIcons,
+    listDiscordChannelIcons,
     purgeMisclassifiedGuilds,
     getChannelMeta,
     listDiscordGuilds,
@@ -2528,6 +2604,7 @@ export async function openStore(cfg, log) {
     repairDiscordMessageCreatedAtForChannel,
     getDiscordChannelShowHistoryCache,
     mergeDiscordChannelShowHistoryCache,
+    markDiscordChannelShowHistoryWarmed,
     listChannelTextCaches,
     upsertChannelTextCache,
     listChannelMessageDedupCaches,
@@ -2656,6 +2733,8 @@ export function createOfflineStore() {
     findExistingDiscordMessageIds: async () => new Set(),
     upsertDiscordGuildsBatch: async () => 0,
     upsertDiscordChannelsBatch: async () => 0,
+    upsertDiscordChannelIcons: async () => 0,
+    listDiscordChannelIcons: async () => new Map(),
     purgeMisclassifiedGuilds: async () => {},
     getChannelMeta: async () => null,
     listDiscordGuilds: async () => [],
@@ -2669,6 +2748,7 @@ export function createOfflineStore() {
     repairDiscordMessageCreatedAtForChannel: async () => ({ updated: 0 }),
     getDiscordChannelShowHistoryCache: async () => ({ warmedAtMs: 0, oldestMessageId: "" }),
     mergeDiscordChannelShowHistoryCache: async () => {},
+    markDiscordChannelShowHistoryWarmed: async () => {},
     listChannelTextCaches: async () => [],
     upsertChannelTextCache: async () => {},
     listChannelMessageDedupCaches: async () => [],

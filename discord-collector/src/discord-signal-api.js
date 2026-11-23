@@ -95,10 +95,10 @@ export function registerDiscordSignalRoutes(app, store, signalService, broadcast
       const channels = [];
       const signalIds = getSignalChannelIds();
       const channelIds = listFilters.channelId
-        ? signalIds.includes(listFilters.channelId)
+        ? signalIds.has(listFilters.channelId)
           ? [listFilters.channelId]
           : []
-        : signalIds;
+        : [...signalIds];
       for (const channelId of channelIds) {
         const cfg = getSignalChannelConfig(channelId);
         const rows = await store.listSignalCards({

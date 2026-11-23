@@ -24,6 +24,9 @@ import {
   isTelegramModuleEnabled,
   UI_MODULES,
 } from "./lib/uiMode.js";
+import MemberLockOverlay from "./components/MemberLockOverlay.vue";
+import MembershipContactModal from "./components/MembershipContactModal.vue";
+import { isMemberLockedPath, useMembership } from "./composables/useMembership.js";
 
 const route = useRoute();
 const { open: openOnboarding } = useOnboardingGuide();
@@ -43,14 +46,40 @@ const isTelegram = computed(() => activeModule.value === "telegram");
 const isLocal = computed(() => activeModule.value === "local");
 /** Discord / Local 二级导航；OI / 平台热点 / Telegram 顶栏模块用 spacer */
 const showSubNav = computed(() => !isOi.value && !isNews.value && !isTelegram.value);
-const navPages = computed(() =>
-  getNavPages(isLocal.value ? "local" : "discord")
-);
+const showAreaNav = computed(() => {
+  const p = route.path;
+  return p === "/show" || p.startsWith("/show/");
+});
+const navPages = computed(() => {
+  const discordRest = getNavPages("discord").filter((p) => p.name !== "show");
+  if (showAreaNav.value) {
+    return [
+      { path: "/show/rank", name: "show-rank", label: "博主胜率" },
+      { path: "/show/messages", name: "show-messages", label: "频道消息" },
+      ...discordRest,
+    ];
+  }
+  if (isLocal.value) return getNavPages("local");
+  return [{ path: "/show/rank", name: "show-rank", label: "博主胜率" }, ...discordRest];
+});
 const showDebugToggle = computed(
   () => !isOi.value && !isNews.value && !isTelegram.value && !isDeployUi(),
 );
 /** /content 独立全屏，不共用 Discord/OI 顶栏 */
 const isContentStandalone = computed(() => activeModule.value === "content");
+
+const {
+  isMember,
+  setMember,
+  openContact,
+  messages,
+} = useMembership();
+const showMemberToggle = computed(() => !isContentStandalone.value && !isDeployUi());
+const showMemberLock = computed(() => {
+  if (isMember.value || isContentStandalone.value || isDeployUi()) return false;
+  return isMemberLockedPath(route.path);
+});
+const memberInboxCount = computed(() => messages.value.length);
 
 const { status: wsStatus, error: wsError, disconnectedSince, reconnect: reconnectWs } =
   useCollectorSocket();
@@ -116,7 +145,7 @@ const moduleLinks = computed(() => {
     if (m.id === "discord") {
       return {
         ...m,
-        to: isDeployUi() ? getDefaultDeployPath() : brandTo === "/" ? "/show" : brandTo,
+        to: isDeployUi() ? getDefaultDeployPath() : brandTo === "/" ? "/show/rank" : brandTo,
       };
     }
     return m;
@@ -173,6 +202,33 @@ async function toggleDebug() {
               : "Telegram · 频道监听 / 置顶"
         }}
       </div>
+      <div v-if="showMemberToggle" class="member-switch" title="本地会员体验切换">
+        <button
+          type="button"
+          class="member-switch-btn"
+          :class="{ on: isMember }"
+          @click="setMember(true)"
+        >
+          会员
+        </button>
+        <button
+          type="button"
+          class="member-switch-btn guest"
+          :class="{ on: !isMember }"
+          @click="setMember(false)"
+        >
+          非会员
+        </button>
+      </div>
+      <button
+        v-if="showMemberToggle && isMember"
+        type="button"
+        class="member-inbox-btn"
+        title="查看本机客服留言"
+        @click="openContact({ preset: false })"
+      >
+        客服留言<span v-if="memberInboxCount" class="member-inbox-count">{{ memberInboxCount }}</span>
+      </button>
       <button
         type="button"
         class="guide-btn"
@@ -200,6 +256,17 @@ async function toggleDebug() {
         {{ debugMode ? "Debug 开" : "精简模式" }}
       </button>
     </header>
+    <div v-if="showMemberToggle && !isMember" class="member-tipbar">
+      <span class="member-tip-lock" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="2" />
+          <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        </svg>
+      </span>
+      <span>开通会员后可以查看会员频道</span>
+      <RouterLink class="member-tip-link" to="/local/membership">会员中心</RouterLink>
+      <button type="button" class="member-contact-btn" @click="openContact()">联系开通</button>
+    </div>
     <div
       v-if="!isOi && !isNews && wsLongDisconnect"
       class="ws-down-banner"
@@ -218,9 +285,11 @@ async function toggleDebug() {
           />
         </KeepAlive>
       </RouterView>
+      <MemberLockOverlay v-if="showMemberLock" />
     </main>
     <OnboardingGuide v-if="(!isOi && !isNews && !isTelegram) || onboardingState.open" />
     <NewCardToastStack v-if="!isOi && !isNews && !isTelegram" />
+    <MembershipContactModal v-if="showMemberToggle" />
   </div>
 </template>
 
@@ -393,5 +462,99 @@ async function toggleDebug() {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+.member-switch {
+  display: inline-flex;
+  padding: 0.12rem;
+  border-radius: 8px;
+  background: #1e1f22;
+  border: 1px solid #3a3c41;
+  flex-shrink: 0;
+}
+.member-switch-btn {
+  border: none;
+  background: transparent;
+  color: #949ba4;
+  padding: 0.22rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.member-switch-btn.on {
+  background: linear-gradient(180deg, #f3d394, #c9953d);
+  color: #3a2a10;
+}
+.member-switch-btn.guest.on {
+  background: #c4483a;
+  color: #fff;
+}
+.member-inbox-btn {
+  border: 1px solid rgba(212, 175, 99, 0.4);
+  background: #2b2d31;
+  color: #e8c57a;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.member-inbox-btn:hover {
+  background: #332e24;
+}
+.member-inbox-count {
+  min-width: 1.1rem;
+  padding: 0 0.28rem;
+  border-radius: 999px;
+  background: #c4483a;
+  color: #fff;
+  font-size: 0.68rem;
+  line-height: 1.2rem;
+  text-align: center;
+}
+.member-tipbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.38rem 1.1rem;
+  background: #2a1c14;
+  border-bottom: 1px solid #5a3a28;
+  color: #e8a070;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.member-tip-lock {
+  display: inline-flex;
+  color: #e8a070;
+}
+.member-tip-link {
+  margin-left: auto;
+  color: #f3d394;
+  text-decoration: none;
+  font-size: 0.76rem;
+}
+.member-tip-link:hover {
+  text-decoration: underline;
+}
+.member-contact-btn {
+  border: none;
+  background: #e2454a;
+  color: #fff;
+  padding: 0.22rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.member-contact-btn:hover {
+  filter: brightness(1.06);
 }
 </style>

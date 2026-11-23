@@ -7,6 +7,27 @@ import { parseArchiveRangeMs, resolveArchiveListSourceTypes } from "./card-archi
 import { isCardEnteredForEval, resolveCardEvalOutcome } from "./card-eval-outcome.js";
 import { runEvalPendingSettleSweep } from "./card-eval-pending-settle.js";
 import { createLogger } from "./logger.js";
+import {
+  ensureKolvipEvalRankFromSig,
+  getKolvipEvalChannelIdAliases,
+  getKolvipEvalRankedChannelIds,
+  getKolvipEvalRankSource,
+  getKolvipEvalTopChannelCount,
+  isKolvipEvalSourceFilter,
+  filterKolvipEvalCards,
+  groupKolvipEvalCardsByShow,
+} from "./kolvip-eval-channels.js";
+import { getKolvipEvalRankedChannelName } from "./kolvip-eval-rank.js";
+import {
+  aggregateKolvipSigForChannelIds,
+  aggregateKolvipSigRankedBoard,
+  applyKolvipSigToEvalChannel,
+  applyKolvipSigToEvalOverall,
+  buildKolvipSigEvalOverlay,
+  resolveKolvipSigRangeForEval,
+} from "./kolvip-sig-eval-overlay.js";
+import { loadKolvipSigBlogger } from "./kolvip-sig-store.js";
+import { evalCardPathQualityIssue, isCorruptEvalCard } from "./card-eval-path-quality.js";
 
 const evalSettleLog = createLogger("card-eval-settle");
 
@@ -103,10 +124,15 @@ export function aggregateMetrics(cards) {
   let tp2Hits = 0;
   let tp3Hits = 0;
   let cardCount = 0;
+  let excludedCorrupt = 0;
 
   for (const card of cards) {
     const c = classifyCardEval(card);
     if (!c.entered) continue;
+    if (isCorruptEvalCard(card)) {
+      excludedCorrupt += 1;
+      continue;
+    }
     cardCount += 1;
     if (c.outcome === "take_profit") winCount += 1;
     else if (c.outcome === "stop_loss") lossCount += 1;
@@ -136,6 +162,8 @@ export function aggregateMetrics(cards) {
     tp1Hits,
     tp2Hits,
     tp3Hits,
+    excludedCorrupt,
+    pathAggregateReliable: excludedCorrupt === 0,
   };
 }
 
@@ -201,7 +229,7 @@ function rowsToCards(rows) {
 /**
  * @param {ReturnType<typeof archiveCardToClient>[]} cards
  */
-function groupByChannel(cards) {
+export function groupByChannel(cards) {
   /** @type {Map<string, typeof cards>} */
   const byChannel = new Map();
   for (const card of cards) {
@@ -295,21 +323,26 @@ export function registerCardEvalRoutes(app, store, deps = {}) {
 
   async function evalSummaryHandler(req, res) {
     try {
+      await ensureKolvipEvalRankFromSig();
       const { fromMs, toMs } = parseArchiveRangeMs(req);
       const sourceTypes = resolveArchiveListSourceTypes(req);
       const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
       const channelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
+      const kolvipScope = isKolvipEvalSourceFilter(sourceTypes);
       const rows = await store.listCardsForEval({
         fromMs,
         toMs,
         channelId: channelId || undefined,
-        sourceTypes: sourceTypes.length ? sourceTypes : undefined,
+        sourceTypes: kolvipScope ? undefined : sourceTypes.length ? sourceTypes : undefined,
         symbol: symbol || undefined,
-        limit: 2000,
+        limit: kolvipScope ? 6000 : 2000,
       });
-      const cards = rowsToCards(rows);
+      let cards = rowsToCards(rows);
+      if (kolvipScope) cards = filterKolvipEvalCards(cards);
 
-      const byChannel = groupByChannel(cards);
+      const byChannel = kolvipScope ? groupKolvipEvalCardsByShow(cards) : groupByChannel(cards);
+
+      const sigOverlay = kolvipScope ? await buildKolvipSigEvalOverlay(fromMs, toMs) : null;
 
       const channels = [...byChannel.entries()]
         .map(([channelId, list]) => {
@@ -317,23 +350,101 @@ export function registerCardEvalRoutes(app, store, deps = {}) {
             channelId === "_unknown"
               ? "未分组"
               : resolveCardChannelName(channelId, list[0]?.channelName);
-          return {
+          const row = {
             channelId: channelId === "_unknown" ? "" : channelId,
             channelName: name,
             ...aggregateMetrics(list),
           };
+          return sigOverlay ? applyKolvipSigToEvalChannel(row, sigOverlay) : row;
         })
         .filter((ch) => (ch.cardCount || 0) > 0)
         .sort((a, b) => (b.cardCount || 0) - (a.cardCount || 0));
+
+      const rankedIds = getKolvipEvalRankedChannelIds();
+      const todayRange = resolveEvalRangeMs("1d");
+      const todayRows = await store.listCardsForEval({
+        fromMs: todayRange.fromMs,
+        toMs: todayRange.toMs,
+        sourceTypes: kolvipScope ? undefined : sourceTypes.length ? sourceTypes : undefined,
+        symbol: symbol || undefined,
+        limit: 4000,
+      });
+      let todayCards = rowsToCards(todayRows);
+      if (kolvipScope) todayCards = filterKolvipEvalCards(todayCards);
+      const todayBy = kolvipScope ? groupKolvipEvalCardsByShow(todayCards) : groupByChannel(todayCards);
+      const dailyTopOverview = rankedIds.map((cid, idx) => {
+        const list = todayBy.get(cid) || [];
+        const channelName = resolveCardChannelName(cid, list[0]?.channelName);
+        return {
+          rank: idx + 1,
+          channelId: cid,
+          channelName,
+          ...aggregateMetrics(list),
+        };
+      });
+
+      const localOverall = aggregateMetrics(cards);
+      const overall = sigOverlay
+        ? applyKolvipSigToEvalOverall(localOverall, rankedIds, sigOverlay, {
+            focusChannelId: channelId || undefined,
+            topN: getKolvipEvalTopChannelCount(),
+          })
+        : localOverall;
+      const evalNote = kolvipScope
+        ? `${sigOverlay?.note ?? ""}。本地卡片仅在灰字 localPath 中保留（TP/SL 5m 路径），与网页 R 无关。`
+        : "PnL 按 1/N 分批止盈累加（杠杆口径与回测一致）；胜率：任意 TP=赢，先 SL=输，未入场不计";
+
+      /** @type {Record<string, unknown>[]} */
+      const sigRankRows =
+        kolvipScope && sigOverlay
+          ? rankedIds.map((cid, idx) => {
+              const list = byChannel.get(cid) || [];
+              const rankName = getKolvipEvalRankedChannelName(cid);
+              const base = {
+                rank: idx + 1,
+                channelId: cid,
+                channelName: rankName || resolveCardChannelName(cid, list[0]?.channelName) || cid,
+                ...aggregateMetrics(list),
+              };
+              const row = applyKolvipSigToEvalChannel(base, sigOverlay);
+              if (!row.channelName || row.channelName === "未分组") {
+                row.channelName = rankName || row.sig?.bloggerName || cid;
+              }
+              return row;
+            })
+          : [];
 
       res.json({
         ok: true,
         fromMs,
         toMs,
         filters: { sourceTypes, symbol, channelId },
-        note: "PnL 按 1/N 分批止盈累加（杠杆口径与回测一致）；胜率：任意 TP=赢，先 SL=输，未入场不计",
-        overall: aggregateMetrics(cards),
+        note: evalNote,
+        overall,
         channels,
+        kolvipEval: {
+          label: "巨鲸信号频道",
+          topN: getKolvipEvalTopChannelCount(),
+          rankSource: getKolvipEvalRankSource(),
+          rankedChannelIds: rankedIds,
+          dailyTopOverview,
+          todayFromMs: todayRange.fromMs,
+          todayToMs: todayRange.toMs,
+          sigRange: sigOverlay?.range ?? null,
+          sigAvailable: Boolean(sigOverlay?.available),
+          sigRankRows,
+          kolvipWeb: sigOverlay
+            ? {
+                range: sigOverlay.range,
+                rangeLabel: sigOverlay.rangeLabel,
+                minCount: sigOverlay.minCount,
+                openTotal: sigOverlay.openTotal,
+                syncedNote: sigOverlay.note,
+                topNAggregate: aggregateKolvipSigForChannelIds(rankedIds, sigOverlay),
+                boardAggregate: aggregateKolvipSigRankedBoard(sigOverlay),
+              }
+            : null,
+        },
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
@@ -342,14 +453,17 @@ export function registerCardEvalRoutes(app, store, deps = {}) {
 
   async function evalChannelStripHandler(_req, res) {
     try {
+      await ensureKolvipEvalRankFromSig();
       const today = resolveEvalRangeMs("1d");
       const lastWeek = resolveLastWeekMs();
       const [todayRows, weekRows] = await Promise.all([
         store.listCardsForEval({ fromMs: today.fromMs, toMs: today.toMs, limit: 2000 }),
         store.listCardsForEval({ fromMs: lastWeek.fromMs, toMs: lastWeek.toMs, limit: 2000 }),
       ]);
-      const todayBy = groupByChannel(rowsToCards(todayRows));
-      const weekBy = groupByChannel(rowsToCards(weekRows));
+      let todayCards = filterKolvipEvalCards(rowsToCards(todayRows));
+      let weekCards = filterKolvipEvalCards(rowsToCards(weekRows));
+      const todayBy = groupKolvipEvalCardsByShow(todayCards);
+      const weekBy = groupKolvipEvalCardsByShow(weekCards);
       const channelIds = new Set([...todayBy.keys(), ...weekBy.keys()]);
 
       /** @type {Array<Record<string, unknown>>} */
@@ -386,13 +500,20 @@ export function registerCardEvalRoutes(app, store, deps = {}) {
               : null,
         });
       }
-      channels.sort((a, b) => String(a.channelName).localeCompare(String(b.channelName), "zh"));
+      const rankOrder = getKolvipEvalRankedChannelIds();
+      const rankIndex = new Map(rankOrder.map((id, i) => [id, i]));
+      const filtered = channels.filter((ch) => rankIndex.has(String(ch.channelId ?? "")));
+      filtered.sort(
+        (a, b) =>
+          (rankIndex.get(String(a.channelId)) ?? 999) - (rankIndex.get(String(b.channelId)) ?? 999),
+      );
 
       res.json({
         ok: true,
         today: { fromMs: today.fromMs, toMs: today.toMs },
         lastWeek: { fromMs: lastWeek.fromMs, toMs: lastWeek.toMs },
-        channels,
+        channels: filtered,
+        kolvipEvalTopN: getKolvipEvalTopChannelCount(),
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });
@@ -401,27 +522,75 @@ export function registerCardEvalRoutes(app, store, deps = {}) {
 
   async function evalChannelDetailHandler(req, res) {
     try {
+      await ensureKolvipEvalRankFromSig();
       const { fromMs, toMs } = parseArchiveRangeMs(req);
       const sourceTypes = resolveArchiveListSourceTypes(req);
+      const kolvipScope = isKolvipEvalSourceFilter(sourceTypes);
       const symbol = String(req.query.symbol ?? req.query.coin ?? "").trim();
       let channelId = String(req.params.channelId ?? "").trim();
       if (channelId === "none" || channelId === "_unknown") channelId = "";
       const filterChannelId = String(req.query.channel_id ?? req.query.channelId ?? "").trim();
       if (filterChannelId) channelId = filterChannelId;
-      const rows = await store.listCardsForEval({
-        fromMs,
-        toMs,
-        channelId: channelId || undefined,
-        sourceTypes: sourceTypes.length ? sourceTypes : undefined,
-        symbol: symbol || undefined,
-        limit: 1000,
-      });
+      /** @type {Record<string, unknown>[]} */
+      let rows = [];
+      if (kolvipScope && channelId) {
+        const aliases = getKolvipEvalChannelIdAliases(channelId);
+        const seen = new Set();
+        for (const aid of aliases) {
+          const part = await store.listCardsForEval({
+            fromMs,
+            toMs,
+            channelId: aid,
+            symbol: symbol || undefined,
+            limit: 1000,
+          });
+          for (const r of part) {
+            const id = Number(r.id ?? r.ID);
+            if (Number.isFinite(id) && seen.has(id)) continue;
+            if (Number.isFinite(id)) seen.add(id);
+            rows.push(r);
+          }
+        }
+      } else {
+        rows = await store.listCardsForEval({
+          fromMs,
+          toMs,
+          channelId: channelId || undefined,
+          sourceTypes: sourceTypes.length ? sourceTypes : undefined,
+          symbol: symbol || undefined,
+          limit: 1000,
+        });
+      }
       let cards = rowsToCards(rows);
+      if (kolvipScope) cards = filterKolvipEvalCards(cards);
       if (!channelId) {
         cards = cards.filter((c) => !String(c.channelId ?? "").trim());
       }
 
       const items = buildEvalCardListItems(cards);
+
+      /** @type {Record<string, unknown>|null} */
+      let kolvipSig = null;
+      if (kolvipScope && channelId) {
+        const bloggerName =
+          getKolvipEvalRankedChannelName(channelId) ||
+          resolveCardChannelName(channelId, cards[0]?.channelName);
+        const sigRange = resolveKolvipSigRangeForEval(fromMs, toMs);
+        const snap = bloggerName ? await loadKolvipSigBlogger(bloggerName, sigRange) : null;
+        if (snap && typeof snap === "object") {
+          const stat = /** @type {Record<string, unknown>} */ (
+            /** @type {{ stat?: unknown }} */ (snap).stat ?? {}
+          );
+          kolvipSig = {
+            range: sigRange,
+            bloggerName,
+            metricsSource: "kolvip_web",
+            stat,
+            history: Array.isArray(snap.history) ? snap.history : [],
+            open: Array.isArray(snap.open) ? snap.open : [],
+          };
+        }
+      }
 
       res.json({
         ok: true,
@@ -432,6 +601,7 @@ export function registerCardEvalRoutes(app, store, deps = {}) {
         channelName: resolveCardChannelName(channelId, cards[0]?.channelName),
         metrics: aggregateMetrics(cards),
         cards: items,
+        kolvipSig,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: /** @type {Error} */ (e).message });

@@ -528,7 +528,7 @@ export function createDiscordMessageIngest(store, log, broadcast, opts = {}) {
       log.info(`Discord 消息入库 +${result.inserted}（重复 ${result.duplicate}）`);
     }
 
-    if (signalCards) {
+    if (signalCards && config.signalIngestSource === "discord") {
       const gatewayRows = isRestBatch
         ? []
         : toPersist.filter((r) => String(r.source ?? "") !== "rest_api");

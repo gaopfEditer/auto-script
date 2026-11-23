@@ -9,10 +9,28 @@ import { buildKolvipApiClient } from "./kolvip-api-fetch.js";
 import {
   getKolvipChannelMappings,
   getKolvipMappedKolvipChannelIds,
+  resolveKolvipAssetUrl,
 } from "./kolvip-cdp-config.js";
+import { hydrateKolvipCatalogAvatarsFromDisk, persistKolvipChannelAvatars } from "./kolvip-avatar-cache.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CATALOG_PATH = path.join(__dirname, "..", "data", "kolvip-channel-catalog.json");
+
+/** @type {KolvipCatalogChannel[]} */
+let catalogChannelsMemory = [];
+
+/** @param {KolvipCatalogChannel[]} channels */
+export function setKolvipCatalogMemory(channels) {
+  catalogChannelsMemory = Array.isArray(channels) ? channels : [];
+}
+
+/** @param {string} kolvipChannelId */
+export function findKolvipCatalogNameByKid(kolvipChannelId) {
+  const kid = String(kolvipChannelId ?? "").trim();
+  if (!kid) return "";
+  const hit = catalogChannelsMemory.find((c) => String(c.kolvipChannelId) === kid);
+  return String(hit?.name ?? "").trim();
+}
 
 /**
  * @typedef {{
@@ -22,6 +40,8 @@ const CATALOG_PATH = path.join(__dirname, "..", "data", "kolvip-channel-catalog.
  *   groupId: number,
  *   categoryId: number,
  *   curated: boolean,
+ *   avatar?: string,
+ *   avatarUrl?: string,
  * }} KolvipCatalogChannel
  */
 
@@ -42,6 +62,7 @@ export function normalizeKolvipCatalogResponse(data) {
     const kid = String(c.id ?? "").trim();
     if (!kid || seen.has(kid)) continue;
     seen.add(kid);
+    const avatarRaw = String(c.avatar ?? "").trim();
     out.push({
       kolvipChannelId: kid,
       name: String(c.name ?? `ch-${kid}`).trim(),
@@ -49,6 +70,8 @@ export function normalizeKolvipCatalogResponse(data) {
       groupId: Number(c.group_id) || 0,
       categoryId: Number(c.category_id) || 0,
       curated: curated.has(kid),
+      avatar: avatarRaw,
+      avatarUrl: avatarRaw ? resolveKolvipAssetUrl(avatarRaw) : "",
     });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, "zh"));
@@ -59,11 +82,15 @@ export async function loadKolvipCatalogCache() {
     const raw = await fs.readFile(CATALOG_PATH, "utf8");
     const j = JSON.parse(raw);
     if (!j || typeof j !== "object") throw new Error("bad catalog");
+    const channels = Array.isArray(j.channels) ? j.channels : [];
+    await hydrateKolvipCatalogAvatarsFromDisk(channels);
+    setKolvipCatalogMemory(channels);
     return {
       updatedAt: String(j.updatedAt ?? ""),
-      channels: Array.isArray(j.channels) ? j.channels : [],
+      channels,
     };
   } catch {
+    setKolvipCatalogMemory([]);
     return { updatedAt: "", channels: /** @type {KolvipCatalogChannel[]} */ ([]) };
   }
 }
@@ -83,11 +110,19 @@ export async function saveKolvipCatalogCache(channels) {
 /**
  * @param {ReturnType<typeof import('./logger.js').createLogger>} log
  */
-export async function syncKolvipChannelCatalog(log) {
+/**
+ * @param {ReturnType<typeof import('./logger.js').createLogger>} log
+ * @param {ReturnType<typeof import('./store.js').openStore>} [store]
+ */
+export async function syncKolvipChannelCatalog(log, store = null) {
   const { client } = await buildKolvipApiClient(log);
   const data = await kolvipApiListChannels(client, { markRead: false });
   const channels = normalizeKolvipCatalogResponse(data);
+  if (store) {
+    await persistKolvipChannelAvatars(channels, store, log);
+  }
   const saved = await saveKolvipCatalogCache(channels);
+  setKolvipCatalogMemory(channels);
   log.info(`巨鲸频道目录已同步 ${channels.length} 个（精选 ${channels.filter((c) => c.curated).length}）`);
   return saved;
 }
@@ -100,4 +135,31 @@ export function listKolvipBrowseChannels(catalog) {
 export function listKolvipScanCandidateChannels(catalog) {
   const curated = getKolvipMappedKolvipChannelIds();
   return listKolvipBrowseChannels(catalog).filter((c) => !curated.has(c.kolvipChannelId));
+}
+
+/**
+ * @param {string} showChannelId
+ * @param {{ channels?: KolvipCatalogChannel[] }} catalog
+ */
+export async function kolvipCatalogIconForShowChannel(showChannelId, catalog) {
+  const cid = String(showChannelId ?? "").trim();
+  if (!cid) return "";
+  let kid = "";
+  if (cid.startsWith("kolvip-scan-")) {
+    kid = cid.slice("kolvip-scan-".length);
+  } else {
+    for (const m of getKolvipChannelMappings()) {
+      if (String(m.discordChannelId) === cid) {
+        kid = String(m.kolvipChannelId);
+        break;
+      }
+    }
+  }
+  if (!kid) return "";
+  const { findLocalKolvipAvatarUrl } = await import("./kolvip-avatar-cache.js");
+  const local = await findLocalKolvipAvatarUrl("ch", kid);
+  if (local) return local;
+  const hit = (catalog.channels || []).find((c) => String(c.kolvipChannelId) === kid);
+  const url = String(hit?.avatarUrl ?? hit?.avatar ?? "").trim();
+  return url.startsWith("http") ? resolveKolvipAssetUrl(url) : url;
 }

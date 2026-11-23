@@ -321,7 +321,7 @@ export function directionLabel(side) {
 }
 
 /** @type {{ major: number, altcoin: number }} */
-const DEFAULT_EVAL_LEVERAGE = { major: 100, altcoin: 20 };
+const DEFAULT_EVAL_LEVERAGE = { major: 100, gold: 50, altcoin: 20 };
 
 /** @type {{ major: number, altcoin: number }} */
 let evalLeverageConfig = { ...DEFAULT_EVAL_LEVERAGE };
@@ -330,8 +330,10 @@ let evalLeverageConfig = { ...DEFAULT_EVAL_LEVERAGE };
 export function configureEvalLeverage(cfg) {
   if (!cfg || typeof cfg !== "object") return;
   const major = Number(cfg.major);
+  const gold = Number(cfg.gold);
   const altcoin = Number(cfg.altcoin);
   if (Number.isFinite(major) && major > 0) evalLeverageConfig.major = major;
+  if (Number.isFinite(gold) && gold > 0) evalLeverageConfig.gold = gold;
   if (Number.isFinite(altcoin) && altcoin > 0) evalLeverageConfig.altcoin = altcoin;
 }
 
@@ -360,9 +362,12 @@ export function detectSymbolTier(symbol) {
 export function resolveEvalLeverage(symbol, override) {
   const n = Number(override);
   if (Number.isFinite(n) && n > 0) return n;
-  return detectSymbolTier(symbol) === "major"
-    ? evalLeverageConfig.major
-    : evalLeverageConfig.altcoin;
+  const bare = String(symbol ?? "")
+    .toUpperCase()
+    .trim()
+    .replace(/USDT$|USDC$|BUSD$/, "");
+  if (/^(XAU|XAG|GOLD|PAXG)$/.test(bare)) return evalLeverageConfig.gold ?? 50;
+  return detectSymbolTier(symbol) === "major" ? evalLeverageConfig.major : evalLeverageConfig.altcoin;
 }
 
 /** @param {unknown} symbol @returns {string} */

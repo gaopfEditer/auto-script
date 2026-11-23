@@ -418,6 +418,14 @@ export function createWeexClient(creds) {
       return signedRequest("POST", "/capi/v3/closePositions", null, { symbol: p.symbol });
     },
 
+    /** @param {{ symbol?: string }} [p] */
+    async getPositionList(p = {}) {
+      const query = /** @type {Record<string, string | number | undefined>} */ (
+        p.symbol ? { symbol: p.symbol } : {}
+      );
+      return signedRequest("GET", "/capi/v3/account/positionList", query, null);
+    },
+
     async ping() {
       return publicGet("/capi/v3/market/ticker/24hr", { symbol: "BTCUSDT" });
     },

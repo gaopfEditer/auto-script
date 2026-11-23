@@ -34,7 +34,11 @@ import { createLogger } from "./logger.js";
 const log = createLogger("kolvip-manual-backfill");
 
 export const KOLVIP_BACKFILL_PERIODS = DISCORD_BACKFILL_PERIODS;
-export const normalizeKolvipBackfillPeriod = normalizeDiscordBackfillPeriod;
+/** @param {unknown} [raw] 缺省为 30 天（month1），与 kolvip-sig 30d 榜对齐 */
+export function normalizeKolvipBackfillPeriod(raw) {
+  if (raw == null || String(raw).trim() === "") return "month1";
+  return normalizeDiscordBackfillPeriod(raw);
+}
 
 export function kolvipBackfillPeriodBounds(period) {
   return discordBackfillPeriodBounds(normalizeKolvipBackfillPeriod(period));

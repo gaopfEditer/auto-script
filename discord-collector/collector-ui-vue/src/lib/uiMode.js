@@ -23,6 +23,7 @@
 /** 仅本机 Local 模块；deploy 构建一律剔除（即使误写进 VITE_UI_PAGES） */
 export const LOCAL_ONLY_PAGE_NAMES = Object.freeze([
   "manual-stats",
+  "membership",
   "fetch",
   "archives",
   "debug",
@@ -31,11 +32,12 @@ export const LOCAL_ONLY_PAGE_NAMES = Object.freeze([
 /** @type {UiPageDef[]} */
 export const ALL_UI_PAGES = [
   { path: "/", name: "home", label: "首页", nav: false, module: "discord" },
-  { path: "/show", name: "show", label: "Show", nav: true, module: "discord" },
+  { path: "/show/rank", name: "show", label: "Show", nav: true, module: "discord" },
   { path: "/cards", name: "cards", label: "卡片", nav: true, module: "discord" },
   { path: "/eval", name: "eval", label: "评估", nav: true, module: "discord" },
   { path: "/community", name: "community", label: "社区", nav: true, module: "discord" },
   { path: "/local/manual-stats", name: "manual-stats", label: "手动统计", nav: true, module: "local" },
+  { path: "/local/membership", name: "membership", label: "会员中心", nav: true, module: "local" },
   { path: "/telegram", name: "telegram", label: "Telegram", nav: false, module: "telegram" },
   { path: "/fetch", name: "fetch", label: "拉取", nav: true, module: "local" },
   { path: "/archives", name: "archives", label: "文稿", nav: true, module: "local" },
@@ -48,7 +50,7 @@ export const ALL_UI_PAGES = [
 
 /** @type {{ id: "discord" | "oi" | "news" | "telegram" | "local", label: string, to: string }[]} */
 export const UI_MODULES = [
-  { id: "discord", label: "专属频道", to: "/show" },
+  { id: "discord", label: "专属频道", to: "/show/rank" },
   { id: "oi", label: "实时信号", to: "/oi" },
   { id: "news", label: "平台热点", to: "/news" },
   { id: "telegram", label: "Telegram", to: "/telegram" },
@@ -164,5 +166,5 @@ export function getDefaultDeployPath() {
   const first = ALL_UI_PAGES.find(
     (p) => enabled.has(p.name) && p.path !== "/" && (p.module ?? "discord") === "discord"
   );
-  return first?.path ?? "/show";
+  return first?.path ?? "/show/rank";
 }

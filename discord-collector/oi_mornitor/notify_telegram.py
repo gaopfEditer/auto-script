@@ -8,10 +8,12 @@ from typing import Any
 
 from oi_mornitor.config import (
     CANDLE_CARD_TELEGRAM_CHAT_ID,
+    KOLVIP_TOP10_TELEGRAM_CHAT_ID,
     MAIN_CARD_TELEGRAM_CHAT_ID,
     PATTERN_OI_COMBO_TELEGRAM,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
+    TELEGRAM_PUSH_CHAT_ID,
     TELEGRAM_SEND_URL,
 )
 
@@ -192,13 +194,15 @@ def format_candle_oi_short_message(alert: dict[str, Any]) -> str:
 
 
 def _resolve_chat_id(override: str | None = None) -> str:
-    """OI 形态/K 线群：不用 TELEGRAM_PUSH_CHAT_ID（该群仅 collect:ui / listen 交易卡片）。"""
-    return (
-        (override or "").strip()
-        or CANDLE_CARD_TELEGRAM_CHAT_ID
-        or TELEGRAM_CHAT_ID
-        or ""
-    ).strip()
+    """OI 形态/K 线群：不回退 TELEGRAM_CHAT_ID（常与 KOLVIP 专群相同）。"""
+    for cand in (
+        (override or "").strip(),
+        (CANDLE_CARD_TELEGRAM_CHAT_ID or "").strip(),
+        (MAIN_CARD_TELEGRAM_CHAT_ID or "").strip(),
+    ):
+        if cand and not _is_kolvip_or_trade_card_chat(cand):
+            return cand
+    return ""
 
 
 def _redact_secrets(text: str, *extra: str) -> str:
@@ -344,20 +348,33 @@ def send_telegram_text(text: str, *, chat_id: str | None = None) -> bool:
     return False
 
 
+def _is_kolvip_or_trade_card_chat(chat_id: str) -> bool:
+    """巨鲸博主专群 / Discord 交易卡片群 — 禁止接收 OI·形态·NLV 推送。"""
+    c = str(chat_id or "").strip()
+    if not c:
+        return False
+    kolvip = str(KOLVIP_TOP10_TELEGRAM_CHAT_ID or "").strip()
+    if kolvip and c == kolvip:
+        return True
+    if kolvip and c == str(TELEGRAM_CHAT_ID or "").strip():
+        return True
+    push = str(TELEGRAM_PUSH_CHAT_ID or "").strip()
+    return bool(push and c == push)
+
+
 def _pattern_push_chat_order(primary_chat_id: str | None = None) -> list[str]:
-    """形态/OI 卡片推送顺序：主目标群 → TELEGRAM_CHAT_ID（去重、保序；不含交易卡片群）。"""
+    """形态/OI 卡片：仅主目标群；不再把 TELEGRAM_CHAT_ID 当第二镜像（常为 KOLVIP 专群）。"""
     out: list[str] = []
     seen: set[str] = set()
 
     def add(raw: str | None) -> None:
         c = str(raw or "").strip()
-        if not c or c in seen:
+        if not c or c in seen or _is_kolvip_or_trade_card_chat(c):
             return
         seen.add(c)
         out.append(c)
 
     add(primary_chat_id)
-    add(TELEGRAM_CHAT_ID)
     return out
 
 

@@ -44,6 +44,8 @@ import {
 import { normalizeSymbol } from "./card-fields.js";
 
 import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
+import { appendBitgetTradeAudit } from "./bitget-trade-audit-log.js";
+import { leverageForKolvipSymbol, resolveKolvipBitgetPolicy } from "./kolvip-bitget-autotrade.js";
 import { STAGED_TP_PARTIAL_RATIOS } from "./discord-signal-staged-trade.js";
 import {
   ensureBitgetPositionTpslAfterOpen,
@@ -119,22 +121,48 @@ export function createBitgetOrderService(store, log) {
 
    */
 
-  async function persistOrderResult(cardId, parsed, bitgetOrder) {
+  /**
+   * @param {number} cardId
+   * @param {Record<string, unknown>} parsed
+   * @param {Record<string, unknown>} bitgetOrder
+   * @param {{ channelId?: string; channelName?: string; event?: string; dryRun?: boolean }} [audit]
+   */
+  async function persistOrderResult(cardId, parsed, bitgetOrder, audit = {}) {
+    const executionTemplate = String(
+      parsed.kolvipBitgetTemplate ?? parsed.executionTemplate ?? audit.event ?? ""
+    );
+    const enriched = { ...parsed, bitgetOrder };
+    if (executionTemplate) enriched.kolvipBitgetTemplate = executionTemplate;
+
+    appendBitgetTradeAudit({
+      exchange: "bitget",
+      event: audit.event ?? "order_persist",
+      cardId,
+      channelId: audit.channelId,
+      channelName: audit.channelName,
+      dryRun: audit.dryRun,
+      executionTemplate: String(parsed.kolvipBitgetTemplate ?? ""),
+      orderSizeUsdt: Number(parsed.kolvipOrderSizeUsdt ?? bitgetOrder.orderSizeUsdt ?? 0) || undefined,
+      leverage: Number(bitgetOrder.leverage ?? 0) || undefined,
+      symbol: String(parsed.symbol ?? ""),
+      direction: String(parsed.direction ?? ""),
+      bitgetOrder,
+      meta: {
+        status: bitgetOrder.status,
+        orderId: bitgetOrder.orderId,
+        kolvipPolicyKey: parsed.kolvipPolicyKey,
+      },
+    });
 
     if (!store?.updateSignalCard) return;
 
-    const next = { ...parsed, bitgetOrder };
+    const next = enriched;
 
     try {
-
       await store.updateSignalCard(cardId, { parsedJson: next });
-
     } catch (e) {
-
       log.warn(`Bitget 下单结果写入卡片失败 #${cardId}: ${/** @type {Error} */ (e).message}`);
-
     }
-
   }
 
 
@@ -370,12 +398,28 @@ export function createBitgetOrderService(store, log) {
 
     reloadConfig();
 
-    const resolved = resolveChannelBitgetTrade(input.channelId, tradeCfg);
+    const resolved = resolveChannelBitgetTrade(
+      input.channelId,
+      tradeCfg,
+      undefined,
+      input.channelName
+    );
 
     if (!resolved) return { skipped: "channel_not_configured" };
 
     const autoTradeSym = String(input.symbol ?? input.parsed?.symbol ?? "").trim();
+    const kolvipPolicy = resolveKolvipBitgetPolicy(input.channelId, input.channelName);
+    if (kolvipPolicy) {
+      resolved.channel.leverage = leverageForKolvipSymbol(autoTradeSym, kolvipPolicy);
+      resolved.channel.orderSizeUsdt = kolvipPolicy.orderSizeUsdt;
+    }
+
     let parsed = { ...(input.parsed ?? {}) };
+    if (resolved.channel.executionTemplate) {
+      parsed.kolvipBitgetTemplate = resolved.channel.executionTemplate;
+      parsed.kolvipOrderSizeUsdt = resolved.channel.orderSizeUsdt;
+      parsed.kolvipPolicyKey = resolved.channel.kolvipPolicyKey;
+    }
     let executionJson = input.executionJson;
     const ex0 = normalizeExecution(executionJson, parsed);
     const prepared = await prepareAutoTradeForOrder(parsed, ex0, autoTradeSym);
@@ -611,6 +655,27 @@ export function createBitgetOrderService(store, log) {
     try {
 
       const holdSide = plan.side === "buy" ? "long" : "short";
+
+      try {
+        if (
+          await hasBitgetSymbolExposure(client, {
+            symbol: plan.symbol,
+            productType: plan.productType,
+            holdSide,
+            marginCoin: plan.marginCoin,
+          })
+        ) {
+          log.info(`Bitget 跳过重复仓位 card=#${input.cardId} ${plan.symbol} ${holdSide}`);
+          await persistOrderResult(input.cardId, input.parsed, {
+            status: "skipped",
+            reason: "duplicate_position",
+            at: new Date().toISOString(),
+          });
+          return { skipped: "duplicate_position" };
+        }
+      } catch {
+        /* 查仓失败则继续 */
+      }
 
       const maxAttempts = 3;
 
@@ -962,7 +1027,7 @@ export function createBitgetOrderService(store, log) {
 
           cardId: input.cardId,
 
-          skipFirstLevel: true,
+          skipFirstLevel: resolved.channel.tpSkipFirstLevel === true,
 
         });
 
@@ -976,7 +1041,12 @@ export function createBitgetOrderService(store, log) {
 
       );
 
-      await persistOrderResult(input.cardId, input.parsed, orderRecord);
+      await persistOrderResult(input.cardId, input.parsed, orderRecord, {
+        channelId: input.channelId,
+        channelName: input.channelName,
+        event: "open_placed",
+        dryRun: resolved.dryRun,
+      });
 
       return { placed: true, orderId: orderRecord.orderId, plan };
 
@@ -1022,11 +1092,14 @@ export function createBitgetOrderService(store, log) {
 
     reloadConfig();
 
-    const resolved = resolveChannelBitgetTrade(input.channelId, tradeCfg);
+    const resolved = resolveChannelBitgetTrade(
+      input.channelId,
+      tradeCfg,
+      undefined,
+      input.channelName
+    );
 
     if (!resolved) return { skipped: "channel_not_configured" };
-
-
 
     let prevBitget = input.prevBitgetOrder ?? null;
 

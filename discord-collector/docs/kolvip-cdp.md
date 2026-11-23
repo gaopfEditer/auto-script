@@ -10,22 +10,50 @@
 
 | 变量 | 默认 | 含义 |
 |------|------|------|
-| `KOLVIP_ENABLED` / `KOLVIP_API_ENABLED` | `0` | 开启巨鲸信号源（推荐 `KOLVIP_ENABLED=1`） |
+| `SIGNAL_INGEST_SOURCE` | `kolvip` | **互斥**：`kolvip` 巨鲸建卡且 Discord 信号频道不建卡；`discord` 仅 Gateway 建卡 |
+| `KOLVIP_ENABLED` / `KOLVIP_API_ENABLED` | `kolvip` 源下默认 API 开 | 开启巨鲸信号源 |
 | `KOLVIP_FETCH_MODE` | `auto` | `api` / `cdp` / `auto`（API 优先） |
 | `KOLVIP_API_BASE_URL` | `https://kolvip.vip/api-v1` | API 根 |
 | `KOLVIP_API_WTOKEN` | 空 | Header `x-wtoken`（勿提交 git） |
 | `KOLVIP_API_TOKEN_FILE` | `data/kolvip-api-token.json` | token 或 localStorage 导出 |
-| `KOLVIP_API_CDP_TOKEN_SYNC` | `1` | 无 token 时从 CDP 读 `wv.wtoken` |
-| `KOLVIP_POLL_INTERVAL_MS` | `90000` | 实时轮询（精选 8 频道） |
+| `KOLVIP_API_CDP_TOKEN_SYNC` | `1` | 从 CDP 读 `wv.wtoken` |
+| `KOLVIP_API_WTOKEN_PRIORITY` | `file-first` | `cdp-first`：先 CDP 再 `KOLVIP_API_TOKEN_FILE` 兜底 |
+| `KOLVIP_CDP_CONNECT_URL` | 空→`CDP_CONNECT_URL` | kolvip 专用 Chrome（如 `http://127.0.0.1:9223` 已登录 `/web`） |
+| `KOLVIP_WS_ENABLED` | `1` | 订阅 `wss://…/webu/ws?token=`（与官网同路，秒级） |
+| `KOLVIP_POLL_DEFER_WHEN_WS` | `1` | WS 在线时 HTTP 轮询降为兜底 |
+| `KOLVIP_POLL_FALLBACK_MS` | `600000` | WS 在线时 HTTP 全量补拉间隔 |
+| `KOLVIP_POLL_INTERVAL_MS` | `90000` | HTTP 轮询 tick（WS 断线或兜底时扫 8 精选频道） |
 | `KOLVIP_BYPASS_DISCORD_SIGNALS` | 源开时 `1` | 旁路 Discord 同频道建卡 |
 | `KOLVIP_CDP_ENABLED` | `0` | DOM 兜底 |
 | `KOLVIP_CHANNEL_IDS` | 空 | 覆盖默认 8 精选 |
 
-切回 Discord：`KOLVIP_ENABLED=0` → 重启 `pnpm run collect:ui`。
+切回 Discord 建卡：`SIGNAL_INGEST_SOURCE=discord`（可选 `KOLVIP_ENABLED=0`）→ 重启 `pnpm run collect:ui`。
 
 ---
 
-## 2. HTTP API
+## 2. 实时 WebSocket（推荐）
+
+与官网 `kolvip.vip/web` 相同：`wss://{KOLVIP_API_BASE_URL}/webu/ws?token={wtoken}`。
+
+| `type` | 处理 |
+|--------|------|
+| `msg` | `data` 与 `/webu/messages` 同结构 → `discord_messages` + 建卡 |
+| `hb` | 心跳，忽略 |
+
+本地 `collect:ui` 在 `KOLVIP_WS_ENABLED=1` 时常驻连接；`GET /api/kolvip/status` 的 `ws.connected` 可看是否在线。WS 在线且 `KOLVIP_POLL_DEFER_WHEN_WS=1` 时，HTTP 仅每 `KOLVIP_POLL_FALLBACK_MS` 补扫精选 8 频道。
+
+**防漏消息（类 Discord 主动拉取）**
+
+| 时机 | 行为 |
+|------|------|
+| WS **重连** | 自动 `runOnce()` 扫精选 8 频道 |
+| Show **切频道** | `show-history-warm` → kolvip `GET /webu/messages`；**库内已预热且在 TTL 内则跳过**（默认与巨鲸 **30 天** 窗口一致，读 MySQL） |
+| Show **向上翻** | `POST /api/kolvip/channels/catchup`（`beforeMessageId` = 最旧 `kolvip-{ch}-{id}`，**不受 TTL 限制**） |
+| 榜单 `kolvip-scan-*` 轮转 | 同上 TTL；实时仍走 **WebSocket** |
+
+---
+
+## 3. HTTP API
 
 | 用途 | 方法 | 路径 |
 |------|------|------|
@@ -33,7 +61,10 @@
 | 消息 | GET | `/webu/messages?channel_id=&before_id=&limit=` |
 | 心跳 | GET | `/webu/ping` |
 
-Token：localStorage `wv.wtoken`（JSON 字符串）。写入 `data/kolvip-api-token.json`：`{"wtoken":"..."}`。
+Token：localStorage `wv.wtoken`（JSON 字符串）。
+
+- **VIP 后会话（推荐暂用）**：独立 Chrome `--remote-debugging-port=9223`，打开 `https://kolvip.vip/web` 并保持登录；`.env` 设 `KOLVIP_CDP_CONNECT_URL=http://127.0.0.1:9223`、`KOLVIP_API_WTOKEN_PRIORITY=cdp-first`。`data/kolvip-api-token.json` 仅作 CDP 不可用时的兜底。
+- **离线导出**：写入 `data/kolvip-api-token.json`：`{"wtoken":"..."}`。
 
 ---
 
@@ -73,7 +104,7 @@ Token：localStorage `wv.wtoken`（JSON 字符串）。写入 `data/kolvip-api-t
 
 云端代理不要对 Mac 生产库跑回溯。在已配置 wtoken 的本机 `collect:ui` 上：
 
-1. `.env`：`KOLVIP_ENABLED=1`、`KOLVIP_BACKFILL_ENABLED=1`、`KOLVIP_BACKFILL_DAYS=7`、`KOLVIP_BACKFILL_SHADOW=0`（默认 shadow 是开的，不关则不会入库）。
+1. `.env`：`KOLVIP_ENABLED=1`、`KOLVIP_BACKFILL_ENABLED=1`、`KOLVIP_BACKFILL_DAYS=30`、`KOLVIP_BACKFILL_SHADOW=0`（默认 shadow 是开的，不关则不会入库）。
 2. 重启 `pnpm run collect:ui`。
 3. 只对 8 个精选频道调用已有接口（不要 `POST /api/kolvip/backfill/start-all`，那会排队全站备选）：
 
@@ -131,7 +162,31 @@ done
 
 ## 5. Show 胜率面板
 
-`KolvipEvalPanel.vue`：**精选（跟单）** + **全站备选（按胜率排序）**。口径同 `GET /api/v1/cards/eval/summary`。
+`KolvipEvalPanel.vue`：**精选（跟单）** + **全站备选（按胜率排序）**。口径同 `GET /api/v1/cards/eval/summary`（自建卡 + 清算，与巨鲸站内「博主胜率分析」不是同一套）。
+
+## 5b. 博主胜率分析（本地镜像 kolvip /webu/sig）
+
+线上页面对应 API：
+
+| 方法 | 路径 | 含义 |
+|------|------|------|
+| GET | `/webu/sig/rank?range=7\|30\|all` | 榜单 |
+| GET | `/webu/sig/blogger?name=&range=` | 博主详情 + 历史 |
+| GET | `/webu/sig/detail?id=` | 单子详情 |
+
+本地只读 **`data/kolvip-sig/`**（UI 与统计不再依赖打开 kolvip.vip 该页）：
+
+| 方法 | 路径 |
+|------|------|
+| GET | `/api/kolvip/sig/rank` |
+| GET | `/api/kolvip/sig/blogger` |
+| GET | `/api/kolvip/sig/detail` |
+| GET | `/api/kolvip/sig/meta` |
+| POST | `/api/kolvip/sig/sync` |
+
+页面：`http://127.0.0.1:3851/local/manual-stats/kolvip-sig`（collect:ui 本地模块）。
+
+定时：`KOLVIP_SIG_SYNC_INTERVAL_MS` 默认 `120000`（0 关闭）。需有效 wtoken（同消息 API）。
 
 ---
 

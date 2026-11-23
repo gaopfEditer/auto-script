@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from "vue";
 import PageLoadingBlock from "./PageLoadingBlock.vue";
+import { aggregateEvalChannelRows, emptyEvalMetrics, fetchEvalChannel } from "../lib/cardEvalApi.js";
 import {
   fetchSignalConfig,
   fetchSignalOverview,
@@ -10,6 +11,7 @@ import {
 } from "../lib/discordSignalApi.js";
 import { subscribeCollectorSocket } from "../composables/useCollectorSocket.js";
 import { useHideKolName } from "../composables/useHideKolName.js";
+import { pnlToneClass } from "../lib/pnlTone.js";
 import {
   cardExecution,
   outcomeLabel,
@@ -67,6 +69,21 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  /** 胜率榜前 N（展示文案） */
+  evalTopN: {
+    type: Number,
+    default: 20,
+  },
+  /** 左侧时间筛选文案（生成汇总表标题） */
+  periodLabel: {
+    type: String,
+    default: "当前时段",
+  },
+  /** 巨鲸模式：网格可勾选 + 生成汇总 */
+  kolvipSelectMode: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 const loading = ref(false);
@@ -77,6 +94,21 @@ const overview = ref(
 const selectedChannelId = ref("");
 const historyLoading = ref(false);
 const history = ref(/** @type {import("../lib/discordSignalApi.js").SignalCard[]} */ ([]));
+/** @type {import('vue').Ref<Array<Record<string, unknown>>>} */
+const kolvipSigHistory = ref([]);
+/** @type {import('vue').Ref<Array<Record<string, unknown>>>} */
+const kolvipSigOpen = ref([]);
+/** @type {import('vue').Ref<Record<string, unknown>|null>} */
+const kolvipSigStat = ref(null);
+const kolvipSigRange = ref("");
+const localArchiveCardCount = ref(0);
+
+/** @type {import("vue").Ref<Set<string>>} */
+const checkedChannelIds = ref(new Set());
+const showCustomSummary = ref(false);
+/** @type {import("vue").Ref<Array<Record<string, unknown>>>} */
+const customSummaryRows = ref([]);
+const customSummaryTotal = ref(/** @type {import("../lib/cardEvalApi.js").EvalMetrics} */ (emptyEvalMetrics()));
 
 const sectionBooting = computed(
   () => props.parentLoading || loading.value,
@@ -99,11 +131,74 @@ const channels = computed(() => {
         channelId: String(row.channelId ?? ""),
         name: String(row.channelName ?? row.channelId ?? "未分组"),
         evalRow: row,
+        rank: row.rank,
       };
     });
   }
   return overview.value?.channels ?? [];
 });
+
+const checkedCount = computed(() => checkedChannelIds.value.size);
+
+function syncCheckedFromChannels() {
+  if (!props.kolvipSelectMode || !useEvalChannels.value) return;
+  const valid = new Set(channels.value.map((c) => String(c.channelId ?? "")).filter(Boolean));
+  const next = new Set([...checkedChannelIds.value].filter((id) => valid.has(id)));
+  if (!next.size && valid.size) {
+    for (const id of valid) next.add(id);
+  }
+  checkedChannelIds.value = next;
+}
+
+function selectAllChannels() {
+  const next = new Set();
+  for (const ch of channels.value) {
+    const id = String(ch.channelId ?? "");
+    if (id) next.add(id);
+  }
+  checkedChannelIds.value = next;
+}
+
+function clearChannelChecks() {
+  checkedChannelIds.value = new Set();
+  showCustomSummary.value = false;
+}
+
+/** @param {string} channelId */
+function toggleChannelCheck(channelId) {
+  const id = String(channelId ?? "").trim();
+  if (!id) return;
+  const next = new Set(checkedChannelIds.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  checkedChannelIds.value = next;
+}
+
+/** @param {string} channelId */
+function isChannelChecked(channelId) {
+  return checkedChannelIds.value.has(String(channelId ?? ""));
+}
+
+function generateCustomSummary() {
+  /** @type {import("../lib/cardEvalApi.js").EvalChannelRow[]} */
+  const picked = [];
+  for (const ch of channels.value) {
+    const id = String(ch.channelId ?? "");
+    if (!id || !checkedChannelIds.value.has(id)) continue;
+    const row = ch.evalRow;
+    if (row && typeof row === "object") {
+      picked.push(/** @type {import("../lib/cardEvalApi.js").EvalChannelRow} */ (row));
+    }
+  }
+  customSummaryRows.value = picked.map((r) => ({ ...r }));
+  customSummaryTotal.value = aggregateEvalChannelRows(picked);
+  showCustomSummary.value = picked.length > 0;
+}
+
+/** @param {string} channelId */
+function openChannelDetail(channelId) {
+  selectedChannelId.value = String(channelId);
+}
 
 const selectedChannel = computed(() =>
   channels.value.find((c) => String(c.channelId) === selectedChannelId.value)
@@ -112,6 +207,54 @@ const selectedChannel = computed(() =>
 const enteredHistory = computed(() =>
   history.value.filter((c) => isCardEnteredForEval(/** @type {Record<string, unknown>} */ (c)))
 );
+
+const useKolvipSigDetail = computed(
+  () => useEvalChannels.value && (kolvipSigHistory.value.length > 0 || kolvipSigOpen.value.length > 0)
+);
+
+const kolvipHistoryHeadStats = computed(() => {
+  const st = kolvipSigStat.value;
+  const openN = kolvipSigOpen.value.length;
+  if (!st && !kolvipSigHistory.value.length) return "";
+  const wins = Number(st?.wins) || 0;
+  const losses = Number(st?.losses) || 0;
+  const count = Number(st?.count) || kolvipSigHistory.value.length;
+  let winN = 0;
+  let lossN = 0;
+  for (const row of kolvipSigHistory.value) {
+    const s = String(row.status ?? "").toLowerCase();
+    if (s === "win") winN += 1;
+    else if (s === "lose" || s === "loss") lossN += 1;
+  }
+  if (wins || losses) {
+    return `网页 ${count} 笔 · 胜 ${wins}/负 ${losses} · 进行中 ${openN}`;
+  }
+  return `网页 ${kolvipSigHistory.value.length} 笔 · 胜 ${winN}/负 ${lossN} · 进行中 ${openN}`;
+});
+
+function kolvipSideLabel(s) {
+  return Number(s) > 0 ? "多" : "空";
+}
+
+function fmtKolvipR(r) {
+  const n = Number(r);
+  if (!Number.isFinite(n)) return "—";
+  return `${n > 0 ? "+" : ""}${Math.round(n * 100) / 100} R`;
+}
+
+function fmtKolvipTs(ms) {
+  const t = Number(ms);
+  if (!Number.isFinite(t) || t <= 0) return "—";
+  return new Date(t).toLocaleString("zh-CN", { hour12: false });
+}
+
+function kolvipStatusLabel(row) {
+  const s = String(row?.status ?? "").trim();
+  if (s === "win") return "止盈";
+  if (s === "lose" || s === "loss") return "止损";
+  if (s === "be") return "保本";
+  return s || "—";
+}
 
 const filteredStats = computed(() => statLineFromCards(enteredHistory.value));
 
@@ -155,13 +298,28 @@ function channelStats(ch) {
   return /** @type {Record<string, number>} */ (ch.stats ?? {});
 }
 
+function fmtRowR(v) {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  const n = Number(v);
+  const sign = n > 0 ? "+" : "";
+  return maskPercent(`${sign}${n.toFixed(2)} R`);
+}
+
 /** @param {Record<string, unknown>} ch */
 function channelSubtitle(ch) {
   const row = ch.evalRow;
   if (row && typeof row === "object") {
+    const web = row.metricsSource === "kolvip_web" || row.sig;
     const wr = displayWinRate(
       row.winRate != null && Number.isFinite(Number(row.winRate)) ? Number(row.winRate) : null
     );
+    if (web) {
+      const n = Number(row.cardCount) || 0;
+      return `网页 ${n} 笔 · 胜率 ${wr} · 累计 ${fmtRowR(row.totalPnlPct)}`;
+    }
+    if (row.kolvipSigMissing) {
+      return "网页胜率未关联 · 见上方提示";
+    }
     if (hideKolName.value) {
       return `已入场 ${Number(row.cardCount) || 0} · ***胜 /***负 · 胜率 ${wr}`;
     }
@@ -192,15 +350,38 @@ async function loadOverview() {
 async function loadHistory() {
   if (!selectedChannelId.value) {
     history.value = [];
+    kolvipSigHistory.value = [];
+    kolvipSigOpen.value = [];
+    kolvipSigStat.value = null;
     return;
   }
   historyLoading.value = true;
   try {
-    const res = await fetchSignalHistory(selectedChannelId.value, {
-      ...overviewQuery.value,
-      limit: 500,
-    });
-    history.value = [...(res.cards ?? [])].sort(compareCardsByTimeDesc);
+    const res = useEvalChannels.value
+      ? await fetchEvalChannel(selectedChannelId.value, {
+          ...overviewQuery.value,
+          source: "kolvip",
+        })
+      : await fetchSignalHistory(selectedChannelId.value, {
+          ...overviewQuery.value,
+          limit: 500,
+        });
+    const raw = res.cards ?? [];
+    history.value = [...raw].sort(compareCardsByTimeDesc);
+    localArchiveCardCount.value = Array.isArray(raw) ? raw.length : 0;
+    const ks = res.kolvipSig;
+    if (ks && typeof ks === "object") {
+      kolvipSigHistory.value = Array.isArray(ks.history) ? [...ks.history] : [];
+      kolvipSigOpen.value = Array.isArray(ks.open) ? [...ks.open] : [];
+      kolvipSigStat.value = ks.stat && typeof ks.stat === "object" ? ks.stat : null;
+      kolvipSigRange.value = String(ks.range ?? "");
+      kolvipSigHistory.value.sort((a, b) => Number(b.call_time ?? 0) - Number(a.call_time ?? 0));
+    } else {
+      kolvipSigHistory.value = [];
+      kolvipSigOpen.value = [];
+      kolvipSigStat.value = null;
+      kolvipSigRange.value = "";
+    }
     syncOverviewStatsForSelected();
   } catch (e) {
     error.value = String(/** @type {Error} */ (e).message ?? e);
@@ -252,15 +433,22 @@ function statLine(stats) {
 watch(
   () => props.evalChannels,
   () => {
-    if (useEvalChannels.value) syncSelectedChannelId();
+    if (useEvalChannels.value) {
+      syncSelectedChannelId();
+      syncCheckedFromChannels();
+    }
   },
-  { deep: true }
+  { deep: true, immediate: true }
 );
+
+watch(channels, () => syncCheckedFromChannels());
 
 watch(
   () => props.listQuery,
   () => {
-    void loadOverview();
+    showCustomSummary.value = false;
+    if (!useEvalChannels.value) void loadOverview();
+    else syncSelectedChannelId();
     void loadHistory();
   },
   { deep: true }
@@ -278,7 +466,11 @@ watch(selectedChannelId, () => void loadHistory());
 onMounted(async () => {
   await fetchSignalConfig();
   if (props.channelId) selectedChannelId.value = props.channelId;
-  await loadOverview();
+  if (props.kolvipSelectMode || useEvalChannels.value) {
+    syncSelectedChannelId();
+  } else {
+    await loadOverview();
+  }
   subscribeCollectorSocket(onSocketMsg);
 });
 </script>
@@ -287,14 +479,18 @@ onMounted(async () => {
   <section class="sov-section">
     <PageLoadingBlock
       v-if="sectionBooting"
-      message="加载 Discord 信号频道…"
-      hint="正在拉取各频道发单记录与盈利统计"
+      message="加载巨鲸信号频道…"
+      hint="正在拉取胜率榜频道发单记录与盈利统计"
     />
     <header class="sov-section-head">
       <div>
-        <h2 class="sov-section-title">{{ useEvalChannels ? "频道盈利明细" : "Discord 信号频道" }}</h2>
+        <h2 class="sov-section-title">{{ useEvalChannels ? "巨鲸信号频道 · 盈利明细" : "巨鲸信号频道" }}</h2>
         <p class="sov-section-sub">
-          {{ useEvalChannels ? "与上方评估表一致的频道/博主列表" : "各监听频道发单与实际做单盈利率（与左侧筛选一致）" }}
+          {{
+            useEvalChannels
+              ? `胜率榜前 ${evalTopN} 博主 · 与上方评估表一致`
+              : "各监听频道发单与实际做单盈利率（与左侧筛选一致）"
+          }}
         </p>
       </div>
       <button
@@ -310,20 +506,119 @@ onMounted(async () => {
 
     <p v-if="error" class="sov-err">{{ error }}</p>
 
+    <div
+      v-if="kolvipSelectMode && useEvalChannels && channels.length"
+      class="sov-pick-toolbar"
+    >
+      <span class="sov-pick-hint">勾选博主 · 时间「{{ periodLabel }}」</span>
+      <div class="sov-pick-actions">
+        <button type="button" class="sov-pick-btn" @click="selectAllChannels">全选</button>
+        <button type="button" class="sov-pick-btn" @click="clearChannelChecks">清空</button>
+        <button
+          type="button"
+          class="sov-pick-btn primary"
+          :disabled="checkedCount === 0"
+          @click="generateCustomSummary"
+        >
+          生成汇总表（{{ checkedCount }}）
+        </button>
+      </div>
+    </div>
+
     <div v-if="channels.length" class="sov-channel-grid">
-      <button
+      <div
         v-for="ch in channels"
         :key="String(ch.channelId)"
-        type="button"
         class="sov-channel-card"
-        :class="{ active: selectedChannelId === String(ch.channelId) }"
-        @click="selectedChannelId = String(ch.channelId)"
+        :class="{
+          active: selectedChannelId === String(ch.channelId),
+          checked: kolvipSelectMode && isChannelChecked(ch.channelId),
+        }"
       >
-        <div class="sov-channel-name">{{ maskChannelName(String(ch.name ?? "")) }}</div>
-        <div class="sov-channel-stats">{{ channelSubtitle(ch) }}</div>
-      </button>
+        <label
+          v-if="kolvipSelectMode && useEvalChannels"
+          class="sov-channel-check"
+          @click.stop
+        >
+          <input
+            type="checkbox"
+            :checked="isChannelChecked(ch.channelId)"
+            @change="toggleChannelCheck(ch.channelId)"
+          />
+        </label>
+        <button
+          type="button"
+          class="sov-channel-open"
+          @click="openChannelDetail(ch.channelId)"
+        >
+          <div class="sov-channel-name">
+            <span v-if="ch.rank" class="sov-rank">#{{ ch.rank }}</span>
+            {{ maskChannelName(String(ch.name ?? "")) }}
+          </div>
+          <div class="sov-channel-stats">
+            <template v-if="ch.evalRow && (ch.evalRow.metricsSource === 'kolvip_web' || ch.evalRow.sig)">
+              网页 {{ Number(ch.evalRow.cardCount) || 0 }} 笔 · 胜率
+              {{
+                displayWinRate(
+                  ch.evalRow.winRate != null && Number.isFinite(Number(ch.evalRow.winRate))
+                    ? Number(ch.evalRow.winRate)
+                    : null
+                )
+              }}
+              · 累计
+              <span class="sov-r" :class="pnlToneClass(ch.evalRow.totalPnlPct)">{{
+                maskPercent(fmtRowR(ch.evalRow.totalPnlPct))
+              }}</span>
+            </template>
+            <template v-else>{{ channelSubtitle(ch) }}</template>
+          </div>
+        </button>
+      </div>
     </div>
-    <p v-else-if="!loading" class="sov-wait">当前筛选下暂无 Discord 信号频道数据</p>
+    <p v-else-if="!loading" class="sov-wait">当前筛选下暂无巨鲸信号频道数据</p>
+
+    <div v-if="showCustomSummary && customSummaryRows.length" class="sov-summary-table-wrap">
+      <h3 class="sov-summary-title">勾选汇总 · {{ periodLabel }} · {{ checkedCount }} 个频道</h3>
+      <table class="sov-table sov-summary-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>博主</th>
+            <th>卡片</th>
+            <th>胜率</th>
+            <th>总 PnL</th>
+            <th>平均 PnL</th>
+            <th>胜/负</th>
+            <th>进行中</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in customSummaryRows" :key="'sum-' + row.channelId">
+            <td class="sov-muted">{{ row.rank ?? "—" }}</td>
+            <td>{{ maskChannelName(String(row.channelName ?? row.channelId)) }}</td>
+            <td>{{ row.cardCount }}</td>
+            <td>{{ displayWinRate(row.winRate != null ? Number(row.winRate) : null) }}</td>
+            <td :class="{ gain: row.totalPnlPct > 0, loss: row.totalPnlPct < 0 }">
+              {{ displayProfitPercent(row.totalPnlPct) }}
+            </td>
+            <td>{{ displayProfitPercent(row.avgPnlPct) }}</td>
+            <td class="sov-muted">{{ row.winCount }}/{{ row.lossCount }}</td>
+            <td>{{ row.pendingCount }}</td>
+          </tr>
+          <tr class="sov-summary-total">
+            <td colspan="2">合计</td>
+            <td>{{ customSummaryTotal.cardCount }}</td>
+            <td>{{ displayWinRate(customSummaryTotal.winRate) }}</td>
+            <td :class="{ gain: customSummaryTotal.totalPnlPct > 0, loss: customSummaryTotal.totalPnlPct < 0 }">
+              {{ displayProfitPercent(customSummaryTotal.totalPnlPct) }}
+            </td>
+            <td>{{ displayProfitPercent(customSummaryTotal.avgPnlPct) }}</td>
+            <td class="sov-muted">{{ customSummaryTotal.winCount }}/{{ customSummaryTotal.lossCount }}</td>
+            <td>{{ customSummaryTotal.pendingCount }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <div v-if="selectedChannel" class="sov-history">
       <PageLoadingBlock
@@ -342,14 +637,62 @@ onMounted(async () => {
             （{{ displayProfitPercent(historyProfitSum.sum) }}）
           </span>
         </h3>
-        <span class="sov-history-stats">{{ statLine(filteredStats) }}</span>
+        <span class="sov-history-stats">{{
+          useKolvipSigDetail ? kolvipHistoryHeadStats : statLine(filteredStats)
+        }}</span>
       </header>
 
-      <p v-if="!historyLoading && !enteredHistory.length" class="sov-wait">
-        该筛选条件下暂无已入场信号记录
+      <p v-if="useKolvipSigDetail" class="sov-wait sov-kolvip-note">
+        下列为 kolvip 网页 AI 结算单（与「博主胜率」同源{{
+          kolvipSigRange ? ` · ${kolvipSigRange === "7" ? "近7天" : kolvipSigRange === "30" ? "近30天" : "全部"}` : ""
+        }}）。本地归档 {{ localArchiveCardCount }} 张卡，已入场路径明细 {{ enteredHistory.length }} 条。
       </p>
 
-      <div v-else class="sov-table-wrap">
+      <template v-if="useKolvipSigDetail">
+        <div v-if="kolvipSigOpen.length" class="sov-kolvip-open">
+          <h4>进行中（{{ kolvipSigOpen.length }}）</h4>
+          <ul>
+            <li v-for="s in kolvipSigOpen" :key="'o-' + s.id">
+              <b>{{ s.coin }}</b> {{ kolvipSideLabel(s.side) }}
+              <span class="sov-muted">{{ s.status }}</span>
+            </li>
+          </ul>
+        </div>
+        <div class="sov-table-wrap">
+          <table class="sov-table sov-kolvip-tbl">
+            <thead>
+              <tr>
+                <th>喊单时间</th>
+                <th>币种</th>
+                <th>方向</th>
+                <th>结果</th>
+                <th>收益 R</th>
+                <th>入场</th>
+                <th>止损</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in kolvipSigHistory" :key="'k-' + s.id">
+                <td class="sov-col-time">{{ fmtKolvipTs(s.call_time) }}</td>
+                <td><b>{{ s.coin }}</b></td>
+                <td :class="Number(s.side) > 0 ? 'gain' : 'loss'">{{ kolvipSideLabel(s.side) }}</td>
+                <td>{{ kolvipStatusLabel(s) }}<span v-if="s.how" class="sov-muted"> · {{ s.how }}</span></td>
+                <td class="sov-col-profit sov-r" :class="pnlToneClass(s.r)">
+                  {{ maskPercent(fmtKolvipR(s.r)) }}
+                </td>
+                <td class="sov-muted">{{ s.entry_price ?? s.entry_lo ?? "—" }}</td>
+                <td class="sov-muted">{{ s.sl ?? "—" }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <p v-else-if="!historyLoading && !enteredHistory.length" class="sov-wait">
+        该筛选条件下暂无已入场信号记录；可在「博主胜率」同步后查看网页结算单。
+      </p>
+
+      <div v-else-if="enteredHistory.length" class="sov-table-wrap">
         <table class="sov-table">
           <thead>
             <tr>
@@ -471,6 +814,61 @@ onMounted(async () => {
   color: #9aa0a6;
   font-size: 0.85rem;
 }
+.sov-kolvip-note {
+  margin: 0 0 0.65rem;
+  line-height: 1.45;
+}
+.sov-kolvip-open {
+  margin-bottom: 0.75rem;
+}
+.sov-kolvip-open h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  color: #dcddde;
+}
+.sov-kolvip-open ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.82rem;
+}
+.sov-kolvip-open li {
+  padding: 0.2rem 0;
+}
+.sov-pick-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.sov-pick-hint {
+  font-size: 0.78rem;
+  color: #9aa0a6;
+}
+.sov-pick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.sov-pick-btn {
+  padding: 0.3rem 0.55rem;
+  border-radius: 6px;
+  background: #2b2d31;
+  color: #dbdee1;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sov-pick-btn.primary {
+  background: #5865f2;
+  color: #fff;
+}
+.sov-pick-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .sov-channel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -478,17 +876,71 @@ onMounted(async () => {
   margin-bottom: 1.25rem;
 }
 .sov-channel-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
   text-align: left;
   background: #1a1c20;
   border: 1px solid #2d3136;
   border-radius: 10px;
-  padding: 0.75rem;
-  cursor: pointer;
+  padding: 0.55rem 0.5rem 0.55rem 0.4rem;
   color: inherit;
+}
+.sov-channel-card.checked {
+  border-color: rgba(88, 101, 242, 0.55);
 }
 .sov-channel-card.active {
   border-color: #5865f2;
   background: rgba(88, 101, 242, 0.12);
+}
+.sov-channel-check {
+  flex-shrink: 0;
+  padding: 0.2rem 0.15rem 0 0.25rem;
+  cursor: pointer;
+}
+.sov-channel-check input {
+  width: 14px;
+  height: 14px;
+  accent-color: #5865f2;
+}
+.sov-channel-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.35rem 0.15rem 0;
+  color: inherit;
+  cursor: pointer;
+}
+.sov-rank {
+  margin-right: 0.25rem;
+  font-size: 0.68rem;
+  color: #6d7480;
+  font-weight: 700;
+}
+.sov-summary-table-wrap {
+  margin-bottom: 1.25rem;
+  border: 1px solid #2d3136;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1a1c20;
+}
+.sov-summary-title {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.88rem;
+  font-weight: 650;
+  border-bottom: 1px solid #2d3136;
+  color: #e8eaed;
+}
+.sov-summary-table {
+  font-size: 0.82rem;
+}
+.sov-summary-total td {
+  font-weight: 700;
+  background: rgba(88, 101, 242, 0.08);
+  border-top: 1px solid #3d4148;
 }
 .sov-channel-name {
   font-weight: 700;
@@ -602,11 +1054,17 @@ onMounted(async () => {
 .sov-profit {
   font-weight: 600;
 }
-.sov-profit.gain {
+.sov-profit.gain,
+.sov-r.gain,
+.sov-col-profit.gain {
   color: #81c995;
+  font-weight: 600;
 }
-.sov-profit.loss {
+.sov-profit.loss,
+.sov-r.loss,
+.sov-col-profit.loss {
   color: #f28b82;
+  font-weight: 600;
 }
 .sov-lev-tag {
   display: inline-block;

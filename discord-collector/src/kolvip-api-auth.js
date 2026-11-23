@@ -164,40 +164,66 @@ export async function extractWtokenFromCdp(connectUrl) {
 /**
  * @param {ReturnType<typeof import('./logger.js').createLogger>} [log]
  */
+async function readWtokenFromCdpIfEnabled(log) {
+  if (!config.kolvipApiCdpTokenSync) return "";
+  const connectUrl = (config.kolvipCdpConnectUrl || config.cdpConnectUrl || "").trim();
+  if (!connectUrl) return "";
+  try {
+    const fromCdp = await extractWtokenFromCdp(connectUrl);
+    if (fromCdp) {
+      log?.info?.(
+        `巨鲸 wtoken 已从 CDP localStorage 读取（${connectUrl}，未写入磁盘）`
+      );
+      return fromCdp;
+    }
+  } catch (e) {
+    log?.warn?.(`巨鲸 CDP 取 token 失败: ${/** @type {Error} */ (e).message}`);
+  }
+  return "";
+}
+
+/**
+ * @param {ReturnType<typeof import('./logger.js').createLogger>} [log]
+ */
 export async function resolveKolvipApiWtoken(log) {
   const fromEnv = String(config.kolvipApiWtoken ?? "").trim();
   if (fromEnv) return { wtoken: fromEnv, source: "env" };
 
   const tokenFile =
     String(config.kolvipApiTokenFile ?? "").trim() || DEFAULT_TOKEN_FILE;
-  const fromFile = await readWtokenFromFile(tokenFile);
-  if (fromFile) return { wtoken: fromFile, source: "file" };
-
   const lsFile = String(config.kolvipApiLocalStorageFile ?? "").trim();
-  if (lsFile) {
-    try {
-      const raw = JSON.parse(await fs.readFile(lsFile, "utf8"));
-      const fromLs = parseWtokenFromLocalStorageExport(raw);
-      if (fromLs) return { wtoken: fromLs, source: "localStorage-export" };
-    } catch {
-      /* ignore */
-    }
-  }
 
-  if (config.kolvipApiCdpTokenSync) {
-    const connectUrl = (config.kolvipCdpConnectUrl || config.cdpConnectUrl || "").trim();
-    if (connectUrl) {
+  const readFileChain = async () => {
+    const fromFile = await readWtokenFromFile(tokenFile);
+    if (fromFile) return { wtoken: fromFile, source: "file" };
+    if (lsFile) {
       try {
-        const fromCdp = await extractWtokenFromCdp(connectUrl);
-        if (fromCdp) {
-          log?.info?.("巨鲸 wtoken 已从 CDP localStorage 读取（未写入磁盘）");
-          return { wtoken: fromCdp, source: "cdp-localStorage" };
-        }
-      } catch (e) {
-        log?.warn?.(`巨鲸 CDP 取 token 失败: ${/** @type {Error} */ (e).message}`);
+        const raw = JSON.parse(await fs.readFile(lsFile, "utf8"));
+        const fromLs = parseWtokenFromLocalStorageExport(raw);
+        if (fromLs) return { wtoken: fromLs, source: "localStorage-export" };
+      } catch {
+        /* ignore */
       }
     }
+    return { wtoken: "", source: "none" };
+  };
+
+  if (config.kolvipApiWtokenPriority === "cdp-first") {
+    const fromCdp = await readWtokenFromCdpIfEnabled(log);
+    if (fromCdp) return { wtoken: fromCdp, source: "cdp-localStorage" };
+    const fallback = await readFileChain();
+    if (fallback.wtoken) {
+      log?.info?.("巨鲸 wtoken 使用本地文件兜底（CDP 未取到）");
+      return fallback;
+    }
+    return { wtoken: "", source: "none" };
   }
+
+  const fallback = await readFileChain();
+  if (fallback.wtoken) return fallback;
+
+  const fromCdp = await readWtokenFromCdpIfEnabled(log);
+  if (fromCdp) return { wtoken: fromCdp, source: "cdp-localStorage" };
 
   return { wtoken: "", source: "none" };
 }

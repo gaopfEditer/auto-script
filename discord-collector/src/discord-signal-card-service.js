@@ -2,6 +2,7 @@
  * 信号卡片：去重 → 解析 → AI 多风格 → 入库 → Telegram → WS 广播。
  */
 import { getSignalChannelConfig, isSignalChannel } from "./discord-signal-config.js";
+import { isTechnicalChannelLabel, resolveKolvipChannelDisplayName } from "./kolvip-channel-display.js";
 import {
   resolveSignalCardInsertSource,
   assertSignalCardSourceLength,
@@ -18,6 +19,14 @@ import {
 import { generateCardsByStyles, extractSignalWithAi } from "./discord-signal-ai.js";
 import { JUNZHANG_SL_LINK_MS, parseSignalText } from "./discord-signal-parsers.js";
 import { createDiscordSignalTelegramPush } from "./discord-signal-telegram.js";
+import {
+  createKolvipTop10CardTelegramPush,
+  getKolvipTop10TelegramChannelIds,
+  mirrorKolvipTop10SignalCardTelegram,
+  isKolvipSignalCardTelegramRoute,
+  sendKolvipSignalCardTelegramOnly,
+  sendKolvipTop10CardMirrorOnly,
+} from "./kolvip-top10-telegram.js";
 import { executionFromParsed, formatManualRawContent, normalizeExecution } from "./discord-signal-execution.js";
 import { buildCardFieldsFromExecution, extractSymbolFromPayload } from "./card-fields.js";
 import {
@@ -45,7 +54,11 @@ import {
   shouldPushToTradePlatform,
 } from "./trade-platform-toggles.js";
 import { formatCardUid, stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
-import { buildCardSinkPayload, pickCardSinkText } from "./card-external-sink.js";
+import {
+  buildCardSinkPayload,
+  pickCardSinkText,
+  coerceCardsByStyleForClient,
+} from "./card-external-sink.js";
 import {
   buildSignalCardMergePatch,
   findMergeTargetCard,
@@ -268,6 +281,12 @@ async function enrichTwOpgFromRecentCard(store, channelId, parsed) {
 export function createDiscordSignalCardService(store, log, broadcast, deps = {}) {
   const dedup = createChannelTextDedup(store);
   const telegram = createDiscordSignalTelegramPush(log);
+  const kolvipTop10Telegram = createKolvipTop10CardTelegramPush(log);
+  if (kolvipTop10Telegram?.enabled) {
+    log.info(
+      `[kolvip-top10-tg] 信号卡片镜像 chat=${config.kolvipTop10TelegramChatId} channels=${[...getKolvipTop10TelegramChannelIds()].join(",")}`,
+    );
+  }
   const bitgetOrder = deps.bitgetOrder ?? null;
   const weexOrder = deps.weexOrder ?? null;
   const cardSink = deps.cardSink ?? null;
@@ -357,12 +376,69 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
    *   telegramSentAt?: string | null,
    *   event?: "create" | "update",
    * }} input
-   * @param {{ skipTelegram?: boolean }} [opts]
+   * @param {{ skipTelegram?: boolean; skipKolvipTop10Mirror?: boolean }} [opts]
    */
   async function sendSignalCardTelegram(input, opts = {}) {
-    if (!telegram.enabled || opts.skipTelegram) return { skipped: "telegram_disabled" };
     const event = input.event === "update" ? "update" : "create";
     const channelId = String(input.channelId ?? "").trim();
+    const kolvipOnly = isKolvipSignalCardTelegramRoute(channelId, {
+      kolvipIngest: Boolean(opts.kolvipIngest || opts.skipTelegram),
+    });
+    if (kolvipOnly && kolvipTop10Telegram?.enabled && !opts.skipKolvipTop10Mirror) {
+      const cardId = input.cardId;
+      let claimed = false;
+      const firstPush = !input.telegramSentAt;
+      if (cardId && firstPush && store.claimSignalCardTelegramSend) {
+        claimed = await store.claimSignalCardTelegramSend(cardId);
+        if (!claimed) {
+          log.info(
+            formatPipelineLog("tg_push_skip", {
+              cardId,
+              channelId,
+              channelName: input.channelName ?? "",
+              symbol: String(input.symbol ?? ""),
+              event,
+              reason: "already_sent",
+              detail: "kolvip_only claim 失败",
+            }),
+          );
+          return { skipped: "already_sent" };
+        }
+      }
+      const only = await sendKolvipSignalCardTelegramOnly(log, kolvipTop10Telegram, input, {
+        requireTop10Channel: false,
+      });
+      if (only?.ok) {
+        if (cardId && store.markSignalCardTelegramSent) {
+          await store.markSignalCardTelegramSent(cardId);
+        }
+        return only;
+      }
+      if (claimed && cardId && store.releaseSignalCardTelegramSend) {
+        await store.releaseSignalCardTelegramSend(cardId);
+      }
+      if (!telegram.enabled || opts.skipTelegram) {
+        if (only?.error) {
+          log.error(
+            `[kolvip-top10-tg] 实时推送失败 card=${input.cardId ?? "?"} channel=${channelId}: ${only.error}`,
+          );
+        }
+        return { ...only, skipped: only.skipped ?? only.error ?? "kolvip_only" };
+      }
+    }
+    if (!telegram.enabled || opts.skipTelegram) {
+      if (opts.skipKolvipTop10Mirror) {
+        return {
+          skipped: opts.skipTelegram ? "telegram_skipped" : "telegram_disabled",
+        };
+      }
+      const mirror = await sendKolvipTop10CardMirrorOnly(log, kolvipTop10Telegram, input);
+      if (mirror?.ok) return mirror;
+      return {
+        skipped: opts.skipTelegram ? "telegram_skipped" : "telegram_disabled",
+        kolvipTop10: mirror,
+      };
+    }
     const channelName = input.channelName;
     const cardId = input.cardId;
     const messageRef = String(input.messageId ?? "").trim();
@@ -435,6 +511,13 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         channelName,
         cardId,
       });
+      if (!kolvipOnly) {
+        await mirrorKolvipTop10SignalCardTelegram(log, kolvipTop10Telegram, channelId, bodyText, {
+          channelId,
+          channelName,
+          cardId,
+        });
+      }
       markTelegramCardPushSent(dedupInput);
       if (cardId && store.markSignalCardTelegramSent) {
         await store.markSignalCardTelegramSent(cardId);
@@ -1070,7 +1153,12 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     Object.assign(cardsByStyle, stampedStyles);
 
     const telegramStyle = chCfg.telegramStyle || chCfg.styles[0] || "cn_brief";
-    const telegramText = stampedStyles[telegramStyle] ?? Object.values(stampedStyles)[0] ?? content;
+    const clientCardForTg = signalCardToClient(cardRow);
+    const telegramText =
+      pickCardSinkText(clientCardForTg, telegramStyle) ||
+      stampedStyles[telegramStyle] ||
+      Object.values(stampedStyles)[0] ||
+      content;
 
     // 军长无止损时先入库，等约 2 分钟内止损补发再推 Telegram
     const deferJunzhangTelegram =
@@ -1226,6 +1314,14 @@ export function signalCardToClient(row) {
   const isManual = source === "manual" || messageId.startsWith("manual-");
   const id = extractSignalCardRowId(row.id ?? row.ID);
   const rawContent = String(row.raw_content ?? row.rawContent ?? "");
+  const styleObj =
+    cardsByStyle && typeof cardsByStyle === "object"
+      ? /** @type {Record<string, string>} */ (cardsByStyle)
+      : {};
+  const displayStyles = coerceCardsByStyleForClient(
+    { parsedJson, parsed_json: parsedJson, rawContent },
+    styleObj,
+  );
   return {
     id,
     uid: formatCardUid(id),
@@ -1236,7 +1332,7 @@ export function signalCardToClient(row) {
     body: rawContent,
     rawContent,
     parsedJson,
-    cardsByStyle: cardsByStyle && typeof cardsByStyle === "object" ? cardsByStyle : {},
+    cardsByStyle: displayStyles,
     status: String(row.status ?? "active"),
     expiresAt: row.expires_at ?? row.expiresAt ?? null,
     telegramSentAt: row.telegram_sent_at ?? row.telegramSentAt ?? null,
@@ -1246,7 +1342,17 @@ export function signalCardToClient(row) {
     sourceType: String(row.source_type ?? row.sourceType ?? "discord"),
     sourceRef: row.source_ref ?? row.sourceRef ?? null,
     symbol: String(row.symbol ?? "").trim() || undefined,
-    channelName: row.channel_name != null ? String(row.channel_name) : undefined,
+    channelName: (() => {
+      const cid = String(row.channel_id ?? row.channelId ?? "");
+      const raw = row.channel_name != null ? String(row.channel_name) : "";
+      if (raw && !isTechnicalChannelLabel(raw)) return raw;
+      const kolvip = resolveKolvipChannelDisplayName(cid);
+      if (kolvip) return kolvip;
+      const cfg = getSignalChannelConfig(cid)?.name;
+      if (cfg && !isTechnicalChannelLabel(cfg)) return cfg;
+      const n = raw || kolvip || cfg || "";
+      return n || undefined;
+    })(),
     progress: parseSignalCardJsonField(row.progress_json ?? row.progressJson),
     backtest: parseSignalCardJsonField(row.backtest_json ?? row.backtestJson),
     isManual,

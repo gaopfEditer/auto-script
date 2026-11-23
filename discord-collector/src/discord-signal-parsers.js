@@ -31,12 +31,81 @@ const CN_SYMBOL_ALIASES = [
   { names: ["比特币"], symbol: "BTC" },
   { names: ["以太币", "以太坊", "以太"], symbol: "ETH" },
   { names: ["闪迪"], symbol: "SNDK" },
+  { names: ["黄金", "现货黄金"], symbol: "XAU" },
 ];
+
+/** @param {string} block */
+function splitSignalPriceLevels(block) {
+  return String(block ?? "")
+    .replace(/美元/g, " ")
+    .replace(/\$/g, " ")
+    .split(/[-–—/,\s]+/)
+    .map((x) => x.trim())
+    .filter((x) => /^\d/.test(x));
+}
+
+/** 单行双语模板：入场截取到目标/止损字段前 */
+const KOLVIP_NEXT_FIELD_RE =
+  /\s+(?:(?:目标位|目标价|目标)\s*[:：]|(?:止损价|止损)\s*[:：]|Targets?\s*[:：]|Stop\s*loss\s*[:：]|Stoploss\s*[:：])/i;
+
+/** @param {string} raw */
+function trimKolvipInlineField(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  const cut = s.split(KOLVIP_NEXT_FIELD_RE)[0]?.trim() ?? s;
+  return cut.replace(/\s+/g, " ").trim();
+}
+
+/** @param {string} text */
+function kolvipEntryLine(text) {
+  const raw = matchLine(text, /(?:入场价|入场区间|入场)\s*[:：]\s*([^\n]+)/i);
+  return trimKolvipInlineField(raw);
+}
+
+function isKolvipBriefSignalText(text) {
+  const t = String(text ?? "");
+  return (
+    /(?:入场价|入场区间|入场)\s*[:：]/.test(t) &&
+    /(?:目标位|目标价|目标)\s*[:：]/.test(t) &&
+    /(?:止损价|止损)\s*[:：]/.test(t) &&
+    /(做空|做多|SHORT|LONG)/i.test(t)
+  );
+}
+
+/** @param {string} text */
+function inferSymbolFromEntryHeuristic(text) {
+  const entryRaw = kolvipEntryLine(text);
+  const priceCtx = `${entryRaw} ${String(text ?? "").slice(0, 200)}`;
+  if (!entryRaw) return "";
+  const nums = splitSignalPriceLevels(entryRaw);
+  const first = nums.length ? Number(nums[0]) : NaN;
+  if (!Number.isFinite(first)) return "";
+  const dollar = /美元|\$/.test(priceCtx);
+  if (!dollar) return "";
+  if (first >= 50_000) return "BTC";
+  if (first >= 400 && first < 50_000) return "XAU";
+  if (first >= 8 && first < 400) return "XAU";
+  if (first > 0 && first < 2) return "";
+  return "";
+}
 
 /** @param {string} text */
 function matchSymbolFromText(text) {
-  const fromHash = matchLine(text, /#([A-Z0-9]+)/i);
+  const fromCoinLine =
+    matchLine(text, /(?:币种|coin)\s*[:：#]\s*\$?([A-Za-z0-9]{2,15})/i) ||
+    matchLine(text, /(?:币种|coin)\s*[:：#]\s*([A-Za-z0-9]{2,15})\/USDT/i);
+  if (fromCoinLine) return fromCoinLine.replace(/^\$/, "").split("/")[0].toUpperCase();
+
+  const fromHash = matchLine(text, /#([A-Z0-9]{2,15})/i);
   if (fromHash) return fromHash.toUpperCase();
+
+  const lead = matchLine(text, /^([A-Z][A-Z0-9]{1,14})\s+(?:做空|做多|SHORT|LONG)\b/im);
+  if (lead) return lead.toUpperCase();
+
+  if (/黄金|现货黄金|\bXAU\b|\bGOLD\b/i.test(text)) return "XAU";
+
+  const inferred = inferSymbolFromEntryHeuristic(text);
+  if (inferred) return inferred;
 
   const sorted = [...CN_SYMBOL_ALIASES].sort((a, b) => {
     const maxA = Math.max(...a.names.map((n) => n.length));
@@ -49,6 +118,119 @@ function matchSymbolFromText(text) {
     }
   }
   return "";
+}
+
+/**
+ * 巨鲸常见单行模板（华尔街女王等）：入场价/目标位/止损 + 美元金价。
+ * @param {string} text
+ */
+export function parseKolvipBrief(text) {
+  const joined = lines(text).join("\n");
+  if (!isKolvipBriefSignalText(joined)) return null;
+
+  const direction = /做空|SHORT/i.test(joined)
+    ? "做空"
+    : /做多|LONG/i.test(joined)
+      ? "做多"
+      : "";
+  if (!direction) return null;
+
+  const symbol = matchSymbolFromText(joined);
+  if (!symbol) return null;
+
+  const entry = kolvipEntryLine(joined);
+  const stopLoss =
+    matchLine(joined, /(?:止损价|止损)\s*[:：]\s*([\d.]+(?:\.\d+)?)/i) ||
+    matchLine(joined, /(?:止损价|止损)\s*[:：]\s*([^\n]+)/i);
+  const tpRaw = matchLine(joined, /(?:目标位|目标价|目标)\s*[:：]\s*([^\n]+)/i);
+  const takeProfits = splitSignalPriceLevels(tpRaw);
+  const leverage =
+    matchLine(joined, /杠杆\s*[:：]\s*(\d+)\s*倍/i) || matchLine(joined, /(\d+)\s*倍/);
+
+  if (!entry || !stopLoss) return null;
+
+  const sl = String(stopLoss).replace(/美元|\$/g, "").trim();
+  return {
+    parser: "kolvip_brief",
+    symbol,
+    asset: symbol,
+    direction,
+    entry: entry.replace(/美元/g, "").trim(),
+    stopLoss: sl,
+    takeProfits,
+    targets: takeProfits,
+    leverage: leverage ? `${leverage}倍` : "",
+    title: `${symbol} · ${direction}`,
+  };
+}
+
+/**
+ * 熬鹰带单仓位 Bot：仅「注意，新开仓」建卡；全量持仓清单不入卡（避免重复）。
+ * @param {string} text
+ */
+export function parseAoyingPosition(text) {
+  const t = String(text ?? "").replace(/\\n/g, "\n");
+  if (!/熬鹰|带单仓位信息推送/i.test(t)) return null;
+  if (!/注意[，,]?\s*新开仓/.test(t)) return null;
+
+  const direction = /做空|🟥/i.test(t) ? "做空" : /做多|🟩/i.test(t) ? "做多" : "";
+  if (!direction) return null;
+
+  const coinRaw =
+    matchLine(t, /币种[：:]\s*([A-Za-z0-9]+)\s*永续/i) ||
+    matchLine(t, /币种[：:]\s*([A-Za-z0-9]+)USDT/i);
+  if (!coinRaw) return null;
+  let symbol = String(coinRaw).toUpperCase().replace(/USDT$/, "");
+  if (!symbol) return null;
+
+  const entry =
+    matchLine(t, /开仓均价[：:]\s*([\d,.]+)\s*USDT/i) ||
+    matchLine(t, /开仓均价[：:]\s*([\d,.]+)/i);
+  const liq =
+    matchLine(t, /强平价格[：:]\s*([\d,.]+)\s*USDT/i) ||
+    matchLine(t, /强平价格[：:]\s*([\d,.]+)/i);
+  const lev =
+    matchLine(t, /[|｜]\s*(\d+)\s*x/i) ||
+    matchLine(t, /实际杠杆[：:]\s*([\d.]+)/i) ||
+    matchLine(t, /(\d+)\s*x/i);
+
+  if (!entry) return null;
+  const entryN = parseFloat(String(entry).replace(/,/g, ""));
+  const liqN = liq ? parseFloat(String(liq).replace(/,/g, "")) : 0;
+  let stopLoss = liqN > 0 ? String(liqN) : "";
+  if (!stopLoss && entryN > 0) {
+    const pct = 0.1;
+    stopLoss =
+      direction === "做空"
+        ? String(roundPrice(entryN * (1 + pct)))
+        : String(roundPrice(entryN * (1 - pct)));
+  }
+
+  return {
+    parser: "aoying_position",
+    symbol,
+    asset: symbol,
+    direction,
+    entry: String(entryN),
+    stopLoss,
+    takeProfits: [],
+    targets: [],
+    leverage: lev ? (String(lev).includes("x") ? lev : `${lev}倍`) : "",
+    orderMode: "market",
+    signalPhase: "open",
+    awaitingTpsl: true,
+    note: "熬鹰带单·新开仓镜像（无止盈档，强平或10%保底止损用于路径核算）",
+    title: `${symbol} · ${direction} · 熬鹰开仓`,
+  };
+}
+
+/** @param {number} x */
+function roundPrice(x) {
+  if (!Number.isFinite(x)) return x;
+  const a = Math.abs(x);
+  if (a >= 1000) return Math.round(x * 100) / 100;
+  if (a >= 1) return Math.round(x * 10000) / 10000;
+  return Math.round(x * 1e8) / 1e8;
 }
 
 /** 归一化后低于此长度忽略（闲聊/短回复） */
@@ -164,6 +346,14 @@ const SIGNAL_PATTERN_SETS = {
     /(现价格?|现在价格?|低位|继续|附近|目标|止损)/,
     /\d/,
   ],
+  aoying_position: [
+    /熬鹰|带单仓位/,
+    /新开仓/,
+    /开仓均价/,
+    /币种[：:]/,
+    /(做多|做空)/,
+    /USDT/,
+  ],
   generic: [
     /(做多|做空|LONG|SHORT|多|空)/i,
     /(止盈|目标|TARGETS?|TP)\s*[：:]/i,
@@ -267,11 +457,13 @@ export function parseBtcCn(text) {
 
 /** @param {string} text */
 export function parseStreakCn(text) {
+  if (isKolvipBriefSignalText(text)) return null;
   const block =
     String(text ?? "")
       .split(/(?=BTC|ETH)/i)
       .find((b) => /(BTC|ETH)/i.test(b) && /(做多|做空|空|多)/.test(b)) ?? text;
   const joined = lines(block).join("\n");
+  if (isKolvipBriefSignalText(joined)) return null;
   const asset = /ETH/i.test(joined) && !/BTC/i.test(joined) ? "ETH" : "BTC";
   const direction = /做空|空/.test(joined) ? "做空" : /做多|多/.test(joined) ? "做多" : "";
   const streak =
@@ -1014,6 +1206,14 @@ export function parseSignalText(text, kind) {
   const t = String(text ?? "").trim();
   if (!t) return null;
 
+  const kolvipBrief = parseKolvipBrief(t);
+  if (kolvipBrief) return kolvipBrief;
+
+  if (kind === "aoying_position" || /熬鹰|带单仓位/.test(t)) {
+    const aoy = parseAoyingPosition(t);
+    if (aoy) return aoy;
+  }
+
   if (kind === "junzhang" && /现价开|参考价格|止损\s*[\d.]/.test(t)) {
     const r = parseJunzhang(t);
     if (r) return r;
@@ -1036,6 +1236,9 @@ export function parseSignalText(text, kind) {
   if (kind === "pangmao") {
     const r = parsePangmao(t);
     if (r) return r;
+  }
+  if (kind === "aoying_position") {
+    return parseAoyingPosition(t);
   }
 
   if (!looksLikeSignal(t, kind)) return null;
@@ -1067,6 +1270,8 @@ export function parseSignalText(text, kind) {
       return parseJunzhang(t);
     case "pangmao":
       return parsePangmao(t);
+    case "aoying_position":
+      return parseAoyingPosition(t);
     default:
       return (
         parseDabiaoke(t) ||
@@ -1111,14 +1316,20 @@ function formatCnBriefTradeCard(parsed) {
           .split(/[,，\s·]+/)
           .map((x) => x.trim())
           .filter(Boolean);
-  const stopLoss = String(parsed.stopLoss ?? "").trim();
+  let stopLoss = String(parsed.stopLoss ?? "").trim();
   const note = String(parsed.note ?? "").trim();
+  const leverage = String(parsed.leverage ?? "").trim();
+  const isAoying = parsed.parser === "aoying_position";
+  if (isAoying && parsed.awaitingTpsl) {
+    if (/路径核算|保底止损/.test(note)) stopLoss = "";
+  }
   return [
     `${emoji} ${symbol}${direction ? ` ${direction}` : ""}`.trim(),
-    entry ? `入场：${entry}` : "",
-    tps.length ? `止盈：${tps.join(", ")}` : "",
+    leverage ? `杠杆：${leverage.replace(/倍$/, "")}倍` : "",
+    entry ? `入场：${trimKolvipInlineField(entry)}` : "",
+    tps.length ? `止盈：${tps.join(", ")}` : isAoying && parsed.awaitingTpsl ? "止盈：待频道更新" : "",
     stopLoss ? `止损：${stopLoss}` : "",
-    note ? `备注：${note}` : "",
+    note && !isAoying ? `备注：${note}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1130,10 +1341,12 @@ export function formatCardFallback(parsed, styleId) {
   const useEn = styleId === "en_brief";
   const L = (cn, tw, en) => (useEn ? en : useTw ? tw : cn);
 
-  // 军长 / 币圈所长等同款简体极简（cn_brief / cn_formal）
+  // 军长 / 币圈所长 / 巨鲸单行模板 — 同款简体极简（cn_brief / cn_formal）
   if (
+    parsed.parser === "kolvip_brief" ||
     parsed.parser === "junzhang" ||
     parsed.parser === "pangmao" ||
+    parsed.parser === "aoying_position" ||
     ((parsed.parser === "biquan_suozhang" ||
       parsed.parser === "dabiaoke" ||
       parsed.parser === "feiyang" ||

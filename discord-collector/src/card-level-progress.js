@@ -8,6 +8,7 @@ import { isShortDirection } from "./card-direction.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { config } from "./config.js";
+import { resolveStatsLeverage } from "./card-symbol-leverage.js";
 
 /** @typedef {'watching'|'entered'|'partial_tp'|'closed_tp'|'closed_sl'|'expired'} ProgressStatus */
 /** @typedef {'pending'|'take_profit'|'stop_loss'} ProgressOutcome */
@@ -42,7 +43,7 @@ export function emptyProgress(extra = {}) {
     pnlPct: 0,
     outcome: "pending",
     sizePct: 0,
-    leverage: Number(config.cardVerifyLeverage) || 100,
+    leverage: resolveStatsLeverage("BTC"),
     ...extra,
   };
 }
@@ -73,9 +74,7 @@ export function resolveCardExecution(card) {
  * @param {Record<string, unknown>} card
  */
 export function resolveProgressLeverage(card) {
-  const plan = getCardBacktestPlan(card.symbol, card.assetClass ?? card.asset_class);
-  if (!plan.skip && plan.spec?.leverage) return Number(plan.spec.leverage);
-  return Number(config.cardVerifyLeverage) || 100;
+  return resolveStatsLeverage(card.symbol, card.assetClass ?? card.asset_class);
 }
 
 /**

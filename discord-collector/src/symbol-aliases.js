@@ -50,6 +50,12 @@ export function toUsdtSymbol(symbol) {
  * @param {string} symbol
  * @param {"binance"|"bybit"|"okx"|"bitget"|"gate"|string} [venue]
  */
+/** @param {string} symbol */
+function isGoldProxySymbol(symbol) {
+  const bare = humanBaseAsset(symbol);
+  return /^(XAU|XAG|GOLD)$/i.test(bare);
+}
+
 export function symbolLookupCandidates(symbol, venue = "binance") {
   const raw = toUsdtSymbol(symbol);
   const human = humanUsdtSymbol(raw);
@@ -64,7 +70,10 @@ export function symbolLookupCandidates(symbol, venue = "binance") {
     }
   }
   /** @type {string[]} */
-  const ordered = preferHuman ? [human, raw, ...multis] : [raw, human, ...multis];
+  let ordered = preferHuman ? [human, raw, ...multis] : [raw, human, ...multis];
+  if (isGoldProxySymbol(symbol)) {
+    ordered = ["PAXGUSDT", "XAUUSDT", ...ordered];
+  }
   /** @type {string[]} */
   const out = [];
   for (const s of ordered) {

@@ -59,18 +59,23 @@ export function classifyWeexAutoTradeChannel(channelId, envList, profilesFile) {
   return "discord";
 }
 
-/** @param {string} channelId @param {ReturnType<typeof loadWeexTradeConfig>} cfg */
-export function resolveChannelWeexTrade(channelId, cfg) {
+/** @param {string} channelId @param {ReturnType<typeof loadWeexTradeConfig>} cfg @param {string} [channelName] */
+export function resolveChannelWeexTrade(channelId, cfg, channelName) {
   if (!readWeexEnabledFromEnv()) return null;
   const cid = String(channelId ?? "").trim();
   if (!cid) return null;
 
+  const bitgetResolved = resolveChannelBitgetTrade(
+    channelId,
+    { ...cfg, enabled: true, dryRun: cfg.dryRun },
+    undefined,
+    channelName
+  );
+  if (bitgetResolved) return { ...bitgetResolved, dryRun: cfg.dryRun };
+
   const envList = config.weexAutoTradeChannelIds;
   const kind = classifyWeexAutoTradeChannel(cid, envList);
   if (kind === "reject") return null;
-
-  const bitgetResolved = resolveChannelBitgetTrade(channelId, { ...cfg, enabled: true, dryRun: cfg.dryRun });
-  if (bitgetResolved) return { ...bitgetResolved, dryRun: cfg.dryRun };
 
   if (kind === "discord" && envList.includes(cid)) {
     return { enabled: true, dryRun: cfg.dryRun, channel: { ...cfg.default } };
