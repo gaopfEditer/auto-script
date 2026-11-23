@@ -16,6 +16,10 @@ import { resolveDiscordMessageCreatedAtMs } from "./discord-gateway.js";
 import { minDiscordSnowflakeId } from "./discord-show-history-cache.js";
 import { kolvipScanVirtualChannelIdFrom, isDiscordSnowflakeMessageId, sqlKolvipSourcePredicate } from "./kolvip-show-messages.js";
 import { serializeRawJsonColumnForMysql } from "./mysql-json.js";
+import {
+  buildSignalCardArchiveRangeSql,
+  msToMysqlDatetimeShanghai,
+} from "./card-archive-mysql-time.js";
 
 /**
  * @typedef {{ host: string; port: number; user: string; password: string; database: string }} MysqlConfig
@@ -1381,15 +1385,28 @@ export async function openStore(cfg, log) {
       where.push("(sc.symbol = ? OR sc.symbol = ? OR sc.symbol LIKE ?)");
       params.push(sym, symbol.replace(/USDT$/, ""), `${symbol.replace(/USDT$/, "")}%`);
     }
-    const signalTimeExpr =
-      "COALESCE(IF(dm.created_at_ms > 0, FROM_UNIXTIME(dm.created_at_ms / 1000, '%Y-%m-%d %H:%i:%s.%f'), NULL), sc.signal_at, sc.created_at)";
-    if (Number.isFinite(fromMs) && fromMs > 0) {
-      where.push(`${signalTimeExpr} >= ?`);
-      params.push(isoToMysqlDatetime3(new Date(fromMs).toISOString()));
-    }
-    if (Number.isFinite(toMs) && toMs > 0) {
-      where.push(`${signalTimeExpr} <= ?`);
-      params.push(isoToMysqlDatetime3(new Date(toMs).toISOString()));
+    if (Number.isFinite(fromMs) && fromMs > 0 && Number.isFinite(toMs) && toMs > 0) {
+      const range = buildSignalCardArchiveRangeSql(fromMs, toMs);
+      if (range) {
+        where.push(range.sql);
+        params.push(...range.params);
+      }
+    } else {
+      const cardTimeExpr = "COALESCE(sc.signal_at, sc.created_at)";
+      if (Number.isFinite(fromMs) && fromMs > 0) {
+        const from = msToMysqlDatetimeShanghai(fromMs);
+        if (from) {
+          where.push(`${cardTimeExpr} >= ?`);
+          params.push(from);
+        }
+      }
+      if (Number.isFinite(toMs) && toMs > 0) {
+        const to = msToMysqlDatetimeShanghai(toMs);
+        if (to) {
+          where.push(`${cardTimeExpr} <= ?`);
+          params.push(to);
+        }
+      }
     }
     const sinceId = Number(filters.sinceId);
     if (Number.isFinite(sinceId) && sinceId > 0) {
@@ -1401,12 +1418,14 @@ export async function openStore(cfg, log) {
     if (Number.isFinite(tgFrom) && tgFrom > 0) {
       where.push("sc.telegram_sent_at IS NOT NULL");
       where.push("sc.telegram_sent_at >= ?");
-      params.push(isoToMysqlDatetime3(new Date(tgFrom).toISOString()));
+      const from = msToMysqlDatetimeShanghai(tgFrom);
+      if (from) params.push(from);
     }
     if (Number.isFinite(tgTo) && tgTo > 0) {
       where.push("sc.telegram_sent_at IS NOT NULL");
       where.push("sc.telegram_sent_at <= ?");
-      params.push(isoToMysqlDatetime3(new Date(tgTo).toISOString()));
+      const to = msToMysqlDatetimeShanghai(tgTo);
+      if (to) params.push(to);
     }
     return { where, params };
   }

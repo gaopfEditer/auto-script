@@ -37,12 +37,18 @@ export const PERIOD_OPTIONS = [
   { value: 0, label: "全部" },
 ];
 
+const ARCHIVE_TZ = "Asia/Shanghai";
+
+/** @param {number} [nowMs] */
+export function shanghaiArchiveDayStartIso(nowMs = Date.now()) {
+  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: ARCHIVE_TZ }).format(new Date(nowMs));
+  return new Date(`${ymd}T00:00:00+08:00`).toISOString();
+}
+
 /** @param {string | number} period */
 export function buildArchivePeriodQuery(period) {
   if (period === "today") {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    return { from: start.toISOString() };
+    return { from: shanghaiArchiveDayStartIso() };
   }
   const d = Number(period);
   if (Number.isFinite(d) && d > 0) return { days: d };
