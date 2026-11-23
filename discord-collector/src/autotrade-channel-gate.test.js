@@ -143,15 +143,59 @@ describe("autotrade channel gate", { concurrency: 1 }, () => {
     assert.equal(classifyWeexAutoTradeChannel("1444963405185159238", DISCORD_ENV, EXAMPLE), "reject");
   });
 
-  it("BITGET_DRY_RUN=0 时不被 bitget-trade-channels.json 强制模拟", () => {
+  it("JSON dryRun=true 覆盖 env BITGET_DRY_RUN=0，Bitget 保持演练", () => {
     const prev = process.env.BITGET_DRY_RUN;
     process.env.BITGET_DRY_RUN = "0";
     try {
       const cfg = loadBitgetTradeConfig();
-      assert.equal(cfg.dryRun, false);
+      assert.equal(cfg.dryRun, true);
     } finally {
       if (prev === undefined) delete process.env.BITGET_DRY_RUN;
       else process.env.BITGET_DRY_RUN = prev;
+    }
+  });
+
+  it("非白名单频道（三马哥/所长/胖猫/大镖客）不进入下单路径", () => {
+    const prev = config.bitgetAutoTradeChannelIds;
+    config.bitgetAutoTradeChannelIds = [...DISCORD_ENV];
+    try {
+      const names = ["三马哥合约", "币圈所长", "胖猫社区", "大镖客vip策略"];
+      for (const name of names) {
+        assert.equal(resolveKolvipBitgetPolicy("", name), null, name);
+      }
+      assert.equal(isAutoTradeChannel("kolvip-scan-999", { discordChannelIds: DISCORD_ENV }), false);
+    } finally {
+      config.bitgetAutoTradeChannelIds = prev;
+    }
+  });
+
+  it("backfill/scan 不当作 live 重推下单，live kolvip_api 才放行", () => {
+    const prevB = config.bitgetEnabled;
+    const prevW = config.weexEnabled;
+    config.bitgetEnabled = true;
+    config.weexEnabled = true;
+    const liveCh = KOLVIP_CHANNELS[0].id;
+    const baseOpts = {
+      tradePlatforms: { bitget: true, weex: true },
+      profilesFile: EXAMPLE,
+      discordChannelIds: DISCORD_ENV,
+    };
+    try {
+      assert.equal(shouldPushToTradePlatform("bitget", liveCh, { ...baseOpts, source: "kolvip_api" }), true);
+      assert.equal(shouldPushToTradePlatform("weex", liveCh, { ...baseOpts, source: "kolvip_api" }), true);
+      assert.equal(
+        shouldPushToTradePlatform("bitget", liveCh, { ...baseOpts, source: "kolvip_api_scan" }),
+        false
+      );
+      assert.equal(
+        shouldPushToTradePlatform("weex", liveCh, { ...baseOpts, source: "kolvip_api_backfill" }),
+        false
+      );
+      // 非巨鲸来源未传 source 时不误拦
+      assert.equal(shouldPushToTradePlatform("bitget", liveCh, baseOpts), true);
+    } finally {
+      config.bitgetEnabled = prevB;
+      config.weexEnabled = prevW;
     }
   });
 });

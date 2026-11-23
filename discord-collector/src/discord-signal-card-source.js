@@ -57,6 +57,17 @@ export function isKolvipApiBackfillSource(source) {
   return String(source ?? "").trim() === "kolvip_api_backfill";
 }
 
+/** 巨鲸 live 入库 source（curated / show 尾拉 beforeId=0） */
+export function isKolvipApiLiveSource(source) {
+  return String(source ?? "").trim() === "kolvip_api";
+}
+
+/** 回溯或榜单扫描入库：可建卡，但不得当作 live 重推自动下单 */
+export function isKolvipHistoricalIngestSource(source) {
+  const s = String(source ?? "").trim();
+  return s === "kolvip_api_backfill" || s === "kolvip_api_scan";
+}
+
 /**
  * 规则解析失败后是否调用 Ollama（live 默认开；回溯默认关，见 OLLAMA_BACKFILL_ENABLED）。
  * @param {Record<string, unknown>} row

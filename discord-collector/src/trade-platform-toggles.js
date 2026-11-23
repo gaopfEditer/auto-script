@@ -18,6 +18,7 @@ import {
   listKolvipAutotradeChannelIds,
   loadKolvipBitgetAutotrade,
 } from "./kolvip-bitget-autotrade.js";
+import { isKolvipHistoricalIngestSource } from "./discord-signal-card-source.js";
 
 /** @typedef {{ bitget: boolean; weex: boolean }} TradePlatformToggles */
 
@@ -153,6 +154,7 @@ export function resolveTradePlatforms(opts) {
  * @param {{ tradePlatforms?: Partial<TradePlatformToggles> } & AutoTradeChannelOverride} [opts]
  */
 export function shouldPushToTradePlatform(platform, channelId, opts) {
+  if (isKolvipHistoricalIngestSource(opts?.source)) return false;
   if (
     !isAutoTradeChannel(channelId, {
       profilesFile: opts?.profilesFile,

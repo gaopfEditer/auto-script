@@ -122,8 +122,10 @@ function normalizeTradeConfig(raw) {
     };
   }
 
-  /** 模拟/实盘仅以 .env BITGET_DRY_RUN 为准；JSON 的 dryRun 不再覆盖 env=0 的实盘 */
-  const dryRun = readBitgetDryRunFromEnv();
+  const envDryRun = readBitgetDryRunFromEnv();
+  const fileDryRun = root.dryRun;
+  // JSON dryRun=true 覆盖 env（保持演练）；仅当 JSON 省略该字段时才回退到 BITGET_DRY_RUN
+  const dryRun = fileDryRun === false ? false : fileDryRun === true ? true : envDryRun;
 
   return {
     enabled: root.enabled !== false && readBitgetEnabledFromEnv(),
