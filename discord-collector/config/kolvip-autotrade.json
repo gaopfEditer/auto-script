@@ -9,7 +9,7 @@
     "gold_track2": "FX-黄金/女王：跳过TP1全平；TP2约30%→TP5约50%→余仓末档；TP2成交后SL=开仓价，TP5减仓后SL=TP2价",
     "crypto_track2": "零下二度：轨2从TP2分批，TP2后保本；币安杀手：止损宽(~10%)，TP3后再保本",
     "kacang_tp1": "100%@TP1全平，不推连锁止损",
-    "aoying_mirror": "熬鹰带单镜像：5U 市价开仓；无止盈档时仅挂止损（强平/保底）"
+    "aoying_mirror": "熬鹰带单镜像：2U 市价开仓；无止盈档时仅挂止损（强平/保底）"
   },
   "marginDefaultUsdt": { "queen": 2, "others": 2 },
   "leverage": { "gold": 50, "crypto": 20 },
@@ -72,10 +72,10 @@
       "channelIds": ["kolvip-scan-31"],
       "executionTemplate": "track2",
       "templateLabel": "B 轨2",
-      "orderSizeUsdt": 5,
+      "orderSizeUsdt": 2,
       "leverageGold": 50,
       "leverageCrypto": 20,
-      "backtestNote": "与女王同为5U；站30d多档止盈，轨2对齐分批"
+      "backtestNote": "与女王同为2U；站30d多档止盈，轨2对齐分批"
     },
     {
       "key": "binance_killer",
@@ -98,7 +98,7 @@
       "channelIds": ["kolvip-scan-27"],
       "executionTemplate": "tp1_all",
       "templateLabel": "镜像开仓",
-      "orderSizeUsdt": 5,
+      "orderSizeUsdt": 2,
       "leverageGold": 50,
       "leverageCrypto": 20,
       "backtestNote": "带单新开仓镜像；无止盈档仅止损"

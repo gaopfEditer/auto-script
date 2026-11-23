@@ -1,8 +1,9 @@
 /**
  * 交易平台开关：Debug 页 localStorage 同步到服务端，信号建卡时决定是否向 Bitget / WEEX 下单。
- * 频道白名单分成两条，互不借用：
- * - Discord 雪花频道：BITGET_AUTO_TRADE_CHANNEL_IDS（WEEX 默认同此列表）
- * - Telegram 群：telegram/channel_profiles.json 的 `placeAnOrder`（`-100…` 字符串全等）
+ * 频道白名单（并集，任一命中即可下单）：
+ * - Discord：`BITGET_AUTO_TRADE_CHANNEL_IDS` + `config/kolvip-autotrade.json`（enabled 时）
+ * - Telegram：`telegram/channel_profiles.json` 的 `placeAnOrder`（`-100…` 字符串全等）
+ * 平台开关：`.env` 的 `BITGET_ENABLED` / `WEEX_ENABLED` + Debug 页 bitget/weex 勾选。
  * `send` 只控制转发/CDP。主流币种 BTC/ETH 不参与自动交易。
  */
 import { config } from "./config.js";
@@ -23,8 +24,8 @@ import {
 /** @type {TradePlatformToggles} */
 let toggles = { bitget: true, weex: true };
 
-/** @type {number} 单笔保证金 USDT（Telegram 自动开单与 Debug 模拟共用，默认 1） */
-let orderSizeUsdt = 1;
+/** @type {number} 单笔保证金 USDT（Telegram 自动开单与 Debug 模拟共用，默认 2） */
+let orderSizeUsdt = 2;
 
 /** @returns {number} */
 export function getTradeOrderSizeUsdt() {
@@ -80,7 +81,21 @@ export function getAutoTradeChannelIds(override) {
 }
 
 /**
- * Telegram 群只看 placeAnOrder。BITGET_AUTO_TRADE_CHANNEL_IDS 只放行非 Telegram 的 Discord 频道。
+ * Discord 雪花频道：BITGET_AUTO_TRADE_CHANNEL_IDS 与 kolvip-autotrade.json（enabled 时）并集。
+ * @param {string} cid
+ * @param {AutoTradeChannelOverride} [override]
+ */
+function isDiscordAutoTradeChannel(cid, override) {
+  const ids = override?.discordChannelIds ?? config.bitgetAutoTradeChannelIds;
+  if (ids.some((id) => String(id ?? "").trim() === cid)) return true;
+  const kolvip = loadKolvipBitgetAutotrade();
+  if (!kolvip.enabled) return false;
+  const want = new Set(listKolvipAutotradeChannelIds().map(String));
+  return want.has(cid);
+}
+
+/**
+ * Telegram 群只看 placeAnOrder。Discord 另读 kolvip-autotrade.json，不单靠 BITGET_AUTO_TRADE_CHANNEL_IDS。
  * @param {string} channelId
  * @param {AutoTradeChannelOverride} [override]
  */
@@ -93,9 +108,7 @@ export function isAutoTradeChannel(channelId, override) {
     }
     return isTelegramAutoTradeChannel(cid, override?.profilesFile);
   }
-  const ids = override?.discordChannelIds ?? config.bitgetAutoTradeChannelIds;
-  if (!ids.length) return false;
-  return ids.some((id) => String(id ?? "").trim() === cid);
+  return isDiscordAutoTradeChannel(cid, override);
 }
 
 /**
@@ -137,10 +150,20 @@ export function resolveTradePlatforms(opts) {
 /**
  * @param {"bitget"|"weex"} platform
  * @param {string} channelId
- * @param {{ tradePlatforms?: Partial<TradePlatformToggles> }} [opts]
+ * @param {{ tradePlatforms?: Partial<TradePlatformToggles> } & AutoTradeChannelOverride} [opts]
  */
 export function shouldPushToTradePlatform(platform, channelId, opts) {
-  if (!isAutoTradeChannel(channelId)) return false;
+  if (
+    !isAutoTradeChannel(channelId, {
+      profilesFile: opts?.profilesFile,
+      discordChannelIds: opts?.discordChannelIds,
+      placeAnOrderIds: opts?.placeAnOrderIds,
+    })
+  ) {
+    return false;
+  }
+  if (platform === "bitget" && !config.bitgetEnabled) return false;
+  if (platform === "weex" && !config.weexEnabled) return false;
   const p = resolveTradePlatforms(opts);
   return platform === "bitget" ? p.bitget : p.weex;
 }
