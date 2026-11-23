@@ -73,6 +73,7 @@ import { formatPipelineLog } from "./signal-pipeline-log.js";
 import {
   rememberOcrSignalFingerprint,
 } from "./discord-signal-image-ocr.js";
+import { mysqlDatetimeToArchiveIso } from "./card-archive-mysql-time.js";
 
 /** @param {Record<string, unknown>} row */
 export function resolveMessageSignalAt(row) {
@@ -95,9 +96,9 @@ export function resolveCardSignalAt(row) {
     return new Date(msgMs).toISOString();
   }
   const sa = row.signal_at ?? row.signalAt;
-  if (sa) return String(sa);
+  if (sa) return mysqlDatetimeToArchiveIso(sa);
   const ca = row.created_at ?? row.createdAt;
-  return ca ? String(ca) : null;
+  return ca ? mysqlDatetimeToArchiveIso(ca) : null;
 }
 
 /** @param {unknown} raw */
@@ -1357,7 +1358,7 @@ export function signalCardToClient(row) {
     backtest: parseSignalCardJsonField(row.backtest_json ?? row.backtestJson),
     isManual,
     signalAt: resolveCardSignalAt(row),
-    createdAt: row.created_at ?? row.createdAt ?? null,
-    updatedAt: row.updated_at ?? row.updatedAt ?? null,
+    createdAt: mysqlDatetimeToArchiveIso(row.created_at ?? row.createdAt),
+    updatedAt: mysqlDatetimeToArchiveIso(row.updated_at ?? row.updatedAt),
   };
 }
