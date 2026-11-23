@@ -257,7 +257,7 @@ export const config = {
     90,
     Math.max(1, Number(process.env.KOLVIP_EVAL_DEFAULT_DAYS ?? 30) || 30)
   ),
-  /** kolvip HTTP 补拉（切频道/榜单轮转）：期内只读 MySQL，不重复请求 kolvip（默认=近 30 天） */
+  /** kolvip 向上翻页补历史：缓存已覆盖锚点且在 TTL 内只读 MySQL；**不**用于 live 尾拉/榜单轮转 */
   kolvipShowCatchupTtlMs: (() => {
     const hours = Number(process.env.KOLVIP_SHOW_CATCHUP_TTL_HOURS);
     if (Number.isFinite(hours) && hours > 0) {

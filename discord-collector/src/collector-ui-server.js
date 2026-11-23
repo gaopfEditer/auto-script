@@ -1510,6 +1510,20 @@ async function main() {
         const showHistory = await showHistoryCachePayload(channelId);
         const limit = Math.min(150, maxPages * 40);
         const force = Boolean(req.body?.force);
+        if (!force && showHistory?.fresh) {
+          res.json({
+            ok: true,
+            source: "kolvip_api",
+            kolvipChannelId: kolvipKid,
+            skipped: true,
+            reason: "cache_fresh",
+            pagesDone: 0,
+            fetched: 0,
+            showHistory,
+            catchupTtlMs: config.kolvipShowCatchupTtlMs,
+          });
+          return;
+        }
         const out = await kolvipCdp.catchupShowChannel(channelId, { limit, force });
         const showHistoryAfter = await showHistoryCachePayload(channelId);
         res.json({
