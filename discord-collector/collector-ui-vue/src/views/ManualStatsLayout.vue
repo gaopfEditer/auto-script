@@ -11,6 +11,7 @@ const tabs = [
   { to: "/local/manual-stats/telegram-backfill", label: "Telegram 统计", exact: true },
   { to: "/local/manual-stats/discord-backfill", label: "Discord 统计", exact: true },
   { to: "/local/manual-stats/kolvip-backfill", label: "巨鲸 kolvip", exact: true },
+  { to: "/local/manual-stats/today-pnl", label: "今日下单盈亏", exact: true },
 ];
 
 function isActive(tab) {
@@ -33,13 +34,26 @@ function isActive(tab) {
         {{ t.label }}
       </RouterLink>
     </nav>
-    <RouterView />
+    <div class="manual-stats-scroll">
+      <RouterView />
+    </div>
   </div>
 </template>
 
 <style scoped>
 .manual-stats-layout {
-  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #1e1f22;
+}
+.manual-stats-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .page-tabs {
   display: flex;

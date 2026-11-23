@@ -130,6 +130,11 @@ function buildRoutes() {
           name: "manual-stats-kolvip-sig",
           component: () => import("../views/KolvipSigView.vue"),
         },
+        {
+          path: "today-pnl",
+          name: "manual-stats-today-pnl",
+          component: () => import("../views/TodayAutotradePnlView.vue"),
+        },
       ],
     });
     routes.push({ path: "/local", redirect: "/local/manual-stats" });

@@ -9,6 +9,12 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { formatSendCdpLog } from "./signal-pipeline-log.js";
 import { buildKolvipOperateEntryNarrative } from "./kolvip-operate-entry.js";
+import {
+  ensureDailyCdpStatsDay,
+  recordCdpPublishSuccess,
+  shouldKolvipAfternoonCdpBackfill,
+  totalCdpPublishOk,
+} from "./kolvip-operate-cdp-daily.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = path.join(__dirname, "..", "data", "kolvip-operate-cdp-state.json");
@@ -16,6 +22,9 @@ const GLOBAL_KEY = "__global__";
 
 /** @type {{ dayKey: string, count: number }} */
 let globalDailyCount = { dayKey: "", count: 0 };
+
+/** @type {{ dayKey: string, tgOk: number, tgMorningOk: number, kolvipOk: number }} */
+let dailyCdpStats = { dayKey: "", tgOk: 0, tgMorningOk: 0, kolvipOk: 0 };
 
 /**
  * @param {number[]} fromConfig
@@ -84,6 +93,15 @@ function loadState() {
     if (!fs.existsSync(STATE_FILE)) return;
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
     const g = raw?.global;
+    const daily = raw?.dailyCdp;
+    if (daily && typeof daily === "object") {
+      dailyCdpStats = {
+        dayKey: String(daily.dayKey ?? ""),
+        tgOk: Number(daily.tgOk) || 0,
+        tgMorningOk: Number(daily.tgMorningOk) || 0,
+        kolvipOk: Number(daily.kolvipOk) || 0,
+      };
+    }
     if (g && typeof g === "object") {
       globalDailyCount = {
         dayKey: String(g.dayKey ?? ""),
@@ -114,6 +132,7 @@ function saveState() {
         {
           updatedAt: new Date().toISOString(),
           global: globalDailyCount,
+          dailyCdp: dailyCdpStats,
         },
         null,
         2,
@@ -128,24 +147,60 @@ function saveState() {
 loadState();
 
 /**
- * 递增当日全局发单序号；若不在允许槽位则返回 null。
+ * @returns {{ dayKey: string, tgOk: number, tgMorningOk: number, kolvipOk: number, total: number }}
  */
-export function claimKolvipOperateOrderSlot() {
+export function getDailyCdpPublishStats() {
   const dayKey = kolvipOperateSessionDayKey();
+  ensureDailyCdpStatsDay(dailyCdpStats, dayKey);
+  return {
+    ...dailyCdpStats,
+    total: totalCdpPublishOk(dailyCdpStats),
+  };
+}
+
+/** @param {Date} [at] */
+export function recordTelegramCdpPublishSuccess(at = new Date()) {
+  const dayKey = kolvipOperateSessionDayKey(at);
+  ensureDailyCdpStatsDay(dailyCdpStats, dayKey);
+  recordCdpPublishSuccess(dailyCdpStats, "telegram", at);
+  saveState();
+}
+
+/** @param {Date} [at] */
+export function recordKolvipCdpPublishSuccess(at = new Date()) {
+  const dayKey = kolvipOperateSessionDayKey(at);
+  ensureDailyCdpStatsDay(dailyCdpStats, dayKey);
+  recordCdpPublishSuccess(dailyCdpStats, "kolvip", at);
+  saveState();
+}
+
+/**
+ * 递增当日全局发单序号；若不在允许槽位则返回 null（下午补量时可能放宽）。
+ * @returns {{ slot: number, backfill: boolean } | null}
+ */
+export function claimKolvipOperateOrderSlot(at = new Date()) {
+  const dayKey = kolvipOperateSessionDayKey(at);
   const { acceptAll, slots } = getKolvipOperateCdpOrderSlotPolicy();
+  ensureDailyCdpStatsDay(dailyCdpStats, dayKey);
   if (!globalDailyCount.dayKey || globalDailyCount.dayKey !== dayKey) {
     globalDailyCount = { dayKey, count: 0 };
   }
   globalDailyCount.count += 1;
   saveState();
   const ordinal = globalDailyCount.count;
-  if (acceptAll || slots.has(ordinal)) return ordinal;
+  if (acceptAll || slots.has(ordinal)) {
+    return { slot: ordinal, backfill: false };
+  }
+  if (shouldKolvipAfternoonCdpBackfill(dailyCdpStats, at)) {
+    return { slot: ordinal, backfill: true };
+  }
   return null;
 }
 
 /** 测试 / 手动复位 */
 export function resetKolvipOperateCdpStateForTest() {
   globalDailyCount = { dayKey: "", count: 0 };
+  dailyCdpStats = { dayKey: "", tgOk: 0, tgMorningOk: 0, kolvipOk: 0 };
   try {
     if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE);
   } catch {
@@ -174,19 +229,22 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
   const channelId = String(card?.channelId ?? "").trim();
   if (!isKolvipOperateCdpChannel(channelId)) return false;
 
-  const slot = claimKolvipOperateOrderSlot();
-  if (!slot) {
+  const claimed = claimKolvipOperateOrderSlot();
+  if (!claimed) {
+    const stats = getDailyCdpPublishStats();
     opts.log?.info?.(
       formatSendCdpLog("cdp_skip", {
         cardId: card?.id ?? "?",
         channelId,
         symbol: String(card?.symbol ?? ""),
         event,
-        reason: `kolvip-operate 发单序号未命中（允许 ${orderSlotsLogLabel()}，当前日序已递增）`,
+        reason: `kolvip-operate 发单序号未命中（允许 ${orderSlotsLogLabel()}；日 CDP ${stats.total}/${config.kolvipOperateCdpDailyTarget}，上午 TG ${stats.tgMorningOk}）`,
       }),
     );
     return false;
   }
+  const slot = claimed.slot;
+  const backfill = claimed.backfill;
 
   const ex =
     card?.execution && typeof card.execution === "object"
@@ -236,7 +294,9 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
     stopLoss: "",
     narrative,
     body: narrative,
-    note: `kolvip-operate 发单序=${slot}`,
+    note: backfill
+      ? `kolvip-operate 下午补量 发单序=${slot} 日计=${getDailyCdpPublishStats().total}/${config.kolvipOperateCdpDailyTarget}`
+      : `kolvip-operate 发单序=${slot}`,
     cardId: card?.id ?? null,
     channelId,
     async: true,
@@ -255,7 +315,9 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
       symbol,
       direction,
       event,
-      detail: `kolvip-operate 发单序=${slot} ${url}`,
+      detail: backfill
+        ? `kolvip-operate 下午补量 发单序=${slot} ${url}`
+        : `kolvip-operate 发单序=${slot} ${url}`,
     }),
   );
 
@@ -291,6 +353,7 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
         );
         return;
       }
+      recordKolvipCdpPublishSuccess();
       opts.log?.info?.(
         formatSendCdpLog("cdp_ok", {
           cardId: card?.id ?? "?",
@@ -299,7 +362,7 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
           direction,
           event,
           jobId: j?.job_id || "?",
-          detail: `发单序=${slot}`,
+          detail: backfill ? `下午补量 发单序=${slot}` : `发单序=${slot}`,
         }),
       );
     })

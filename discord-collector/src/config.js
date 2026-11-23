@@ -465,6 +465,21 @@ export const config = {
     0,
     Math.min(23, Number(process.env.KOLVIP_OPERATE_CDP_RESET_HOUR ?? 8) || 8),
   ),
+  /** 当日 CDP 成功发布后目标单量（TG + 巨鲸 operate 合计，下午补量用） */
+  kolvipOperateCdpDailyTarget: Math.max(
+    1,
+    Number(process.env.KOLVIP_OPERATE_CDP_DAILY_TARGET ?? 5) || 5,
+  ),
+  /** 上海时区：此小时起视为下午，可开启巨鲸补量 */
+  kolvipOperateCdpAfternoonHour: Math.max(
+    0,
+    Math.min(23, Number(process.env.KOLVIP_OPERATE_CDP_AFTERNOON_HOUR ?? 12) || 12),
+  ),
+  /** 上午 TG CDP 成功数低于此值时，下午允许巨鲸补量 */
+  kolvipOperateCdpMorningTgMin: Math.max(
+    0,
+    Number(process.env.KOLVIP_OPERATE_CDP_MORNING_TG_MIN ?? 1) || 1,
+  ),
   kolvipEvalChannelIds: parseIdList(process.env.KOLVIP_EVAL_CHANNEL_IDS ?? ""),
   telegramSendTimeoutMs: Number(process.env.TELEGRAM_SEND_TIMEOUT_MS ?? 15_000),
   /** 默认 true：全量 WS/API 日志与 UI；设 DISCORD_DEBUG_MODE=0 为精简模式 */
@@ -728,11 +743,23 @@ export const config = {
   telegramLiveSqlitePath: (process.env.TELEGRAM_LIVE_SQLITE_PATH ?? "").trim()
     ? path.resolve(process.env.TELEGRAM_LIVE_SQLITE_PATH.trim())
     : path.join(_collectorRoot, "data", "telegram-live.sqlite"),
+  /** python-ai-operate 信号库（币安广场博主 handle 回填） */
+  operateSignalCardsDb: (process.env.OPERATE_SIGNAL_CARDS_DB ?? "").trim()
+    ? path.resolve(process.env.OPERATE_SIGNAL_CARDS_DB.trim())
+    : path.resolve(_collectorRoot, "..", "..", "python-ai-operate", "output", "signals", "cards.db"),
   /** collect:ui 启动时自动守护 telegram/listen.py（默认开；与 /telegram 页面无关） */
   telegramListenAutoStart: !["0", "false", "no", "off"].includes(
     String(process.env.TELEGRAM_LISTEN_AUTO_START ?? "1").toLowerCase(),
   ),
   telegramSupervisorIntervalMs: Number(process.env.TELEGRAM_SUPERVISOR_INTERVAL_MS ?? 20_000),
+  /** collect:ui 启动时重启 listen.py（默认开，避免假在线外部进程） */
+  telegramListenRestartWithUi: !["0", "false", "no", "off"].includes(
+    String(process.env.TELEGRAM_RESTART_WITH_UI ?? "1").toLowerCase(),
+  ),
+  /** collect:ui 退出时结束 listen.py（默认开，下次启动由 supervisor 干净拉起） */
+  telegramListenStopWithUi: !["0", "false", "no", "off"].includes(
+    String(process.env.TELEGRAM_LISTEN_STOP_WITH_UI ?? "1").toLowerCase(),
+  ),
   /** 社区聊天室媒体上传目录 */
   communityChatUploadDir: (process.env.COMMUNITY_CHAT_UPLOAD_DIR ?? "").trim()
     ? path.resolve(process.env.COMMUNITY_CHAT_UPLOAD_DIR.trim())

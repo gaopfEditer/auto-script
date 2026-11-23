@@ -19,6 +19,16 @@ export function isTechnicalChannelLabel(name) {
   return false;
 }
 
+const PLACEHOLDER_CHANNEL_LABELS = new Set(["未映射", "未映射推特源", "未分组", "api"]);
+
+/** 占位频道名（不含空串；空请用 isTechnicalChannelLabel） */
+export function isPlaceholderChannelLabel(name) {
+  const s = String(name ?? "").trim();
+  if (!s) return false;
+  if (PLACEHOLDER_CHANNEL_LABELS.has(s)) return true;
+  return false;
+}
+
 /**
  * @param {string} channelId
  * @returns {string} 空 = 未解析到人类可读名

@@ -51,6 +51,7 @@ import {
   backtestSummaryLines,
 } from "../lib/signalExecution.js";
 import { resolveCardSourceLink } from "../lib/cardSourceLink.js";
+import { cardSourcePostUrl } from "../lib/cardSourcePostUrl.js";
 import { groupCardsByWeek } from "../lib/weekLabel.js";
 
 const route = useRoute();
@@ -85,6 +86,9 @@ const activeSources = computed(() => normalizeArchiveSourceList(extraSources.val
 const selected = computed(() => cards.value.find((c) => c.id === selectedId.value) ?? null);
 const selectedSourceLink = computed(() =>
   selected.value ? resolveCardSourceLink(selected.value) : null
+);
+const selectedSourcePostUrl = computed(() =>
+  selected.value ? cardSourcePostUrl(selected.value) : ""
 );
 const canDeleteSelected = computed(() =>
   canManageCards && selected.value ? canDeleteArchiveCard(selected.value) : false
@@ -820,6 +824,13 @@ onUnmounted(() => {
                 · {{ hideKolName ? "*****" : selected.sourceRef }}
               </template>
               · {{ fmtTime(selected.signalAt || selected.createdAt) }}
+              <a
+                v-if="selectedSourcePostUrl"
+                class="source-post-link"
+                :href="selectedSourcePostUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+              >· 原帖</a>
             </p>
 
             <div v-if="selected.cardFields?.fields?.length" class="embed-preview">
@@ -957,6 +968,14 @@ h3 {
 }
 .source-article-link:hover {
   color: #7dffab;
+}
+.source-post-link {
+  color: #57a6ff;
+  text-decoration: none;
+  margin-left: 0.2rem;
+}
+.source-post-link:hover {
+  text-decoration: underline;
 }
 .field {
   display: flex;

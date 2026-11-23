@@ -1,5 +1,6 @@
 /**
  * 守护 telegram/listen.py：collect:ui 启动后后台常驻，与 /telegram 页面无关。
+ * 默认随 collect:ui 重启 listen（避免假在线的外部进程被误当成「已在线」）。
  */
 import { spawn, execSync } from "node:child_process";
 import { existsSync, mkdirSync, createWriteStream } from "node:fs";
@@ -44,11 +45,51 @@ function findExternalListenPids(excludePid) {
 }
 
 /**
+ * @param {{ info?: Function; warn?: Function }} log
+ * @param {number | undefined} keepPid 保留的 pid（通常为 supervisor 子进程）
+ * @returns {number[]}
+ */
+function killAllListenPids(log, keepPid) {
+  if (process.platform === "win32") return [];
+  const pids = findExternalListenPids(keepPid);
+  if (keepPid === undefined) {
+    // 含当前子进程：再扫一遍全量
+    try {
+      const out = execSync(`pgrep -f "${LISTEN_SCRIPT}"`, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (out) {
+        for (const s of out.split(/\s+/)) {
+          const pid = Number(s);
+          if (Number.isFinite(pid) && pid > 0 && !pids.includes(pid)) pids.push(pid);
+        }
+      }
+    } catch {
+      /* none */
+    }
+  }
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+      log.info?.(`[telegram-supervisor] 已 SIGTERM listen.py pid=${pid}`);
+    } catch (e) {
+      log.warn?.(
+        `[telegram-supervisor] 结束 listen pid=${pid} 失败: ${/** @type {Error} */ (e).message}`,
+      );
+    }
+  }
+  return pids;
+}
+
+/**
  * @param {{
  *   log?: { info: Function; warn: Function; debug?: Function };
  *   enabled?: boolean;
  *   checkIntervalMs?: number;
  *   pythonBin?: string;
+ *   restartWithUi?: boolean;
+ *   stopWithUi?: boolean;
  * }} [opts]
  */
 export function startTelegramSupervisor(opts = {}) {
@@ -81,6 +122,19 @@ export function startTelegramSupervisor(opts = {}) {
     Number(opts.checkIntervalMs ?? process.env.TELEGRAM_SUPERVISOR_INTERVAL_MS ?? 20_000) || 20_000,
   );
   const pythonBin = resolvePythonBin(opts.pythonBin);
+  /** collect:ui 每次启动时重启 listen（避免 Telethon 假在线、或误认外部旧进程） */
+  const restartWithUi =
+    opts.restartWithUi !== undefined
+      ? opts.restartWithUi !== false
+      : !["0", "false", "no", "off"].includes(
+          String(process.env.TELEGRAM_RESTART_WITH_UI ?? "1").toLowerCase(),
+        );
+  const stopWithUi =
+    opts.stopWithUi !== undefined
+      ? opts.stopWithUi !== false
+      : !["0", "false", "no", "off"].includes(
+          String(process.env.TELEGRAM_LISTEN_STOP_WITH_UI ?? "1").toLowerCase(),
+        );
 
   /** @type {import("node:child_process").ChildProcess | null} */
   let child = null;
@@ -91,6 +145,7 @@ export function startTelegramSupervisor(opts = {}) {
   let lastStartAt = 0;
   /** @type {number | null} */
   let externalPid = null;
+  let bootstrapPending = true;
 
   const logDir = resolve(ROOT, "logs");
   mkdirSync(logDir, { recursive: true });
@@ -138,19 +193,58 @@ export function startTelegramSupervisor(opts = {}) {
     return true;
   }
 
+  async function restartListen(reason) {
+    log.info?.(`[telegram-supervisor] ${reason}`);
+    if (child && !child.killed) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
+      child = null;
+    }
+    killAllListenPids(log, undefined);
+    externalPid = null;
+    await new Promise((r) => setTimeout(r, 1200));
+    spawnListen();
+    await new Promise((r) => setTimeout(r, 2500));
+    const ok = Boolean(child && !child.killed);
+    if (ok) {
+      log.info?.("[telegram-supervisor] listen.py 已由本进程托管");
+    } else {
+      log.warn?.(`[telegram-supervisor] 拉起后仍未在线；请检查 ${logPath} 与 python=${pythonBin}`);
+    }
+    return ok;
+  }
+
+  async function finishBootstrap() {
+    bootstrapPending = false;
+  }
+
   async function ensureOnce() {
     if (stopping) return false;
+
+    if (bootstrapPending && restartWithUi) {
+      await finishBootstrap();
+      return restartListen("collect:ui 已启动，正在重启 listen.py（随主进程刷新 Telethon 连接）…");
+    }
+    await finishBootstrap();
 
     if (child && !child.killed) {
       externalPid = null;
       return true;
     }
 
-    const externals = findExternalListenPids(undefined);
+    const externals = findExternalListenPids(child?.pid);
     if (externals.length) {
+      if (restartWithUi) {
+        return restartListen(
+          `检测到外部 listen.py pid=${externals.join(",")}，正在接管为 supervisor 子进程…`,
+        );
+      }
       externalPid = externals[0];
       log.debug?.(
-        `[telegram-supervisor] 检测到外部 listen.py pid=${externalPid}，跳过重复拉起`,
+        `[telegram-supervisor] 检测到外部 listen.py pid=${externalPid}，跳过重复拉起（TELEGRAM_RESTART_WITH_UI=0）`,
       );
       return true;
     }
@@ -177,19 +271,17 @@ export function startTelegramSupervisor(opts = {}) {
       clearInterval(timer);
       timer = null;
     }
-    if (
-      ["1", "true", "yes", "on"].includes(
-        String(process.env.TELEGRAM_LISTEN_STOP_WITH_UI ?? "0").toLowerCase(),
-      ) &&
-      child &&
-      !child.killed
-    ) {
+    if (!stopWithUi) return;
+    if (child && !child.killed) {
       try {
         child.kill("SIGTERM");
       } catch {
         /* ignore */
       }
+      child = null;
     }
+    killAllListenPids(log, undefined);
+    externalPid = null;
   }
 
   function getStatus() {

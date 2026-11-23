@@ -21,6 +21,7 @@ import {
   sanitizeTelegramPushText,
   stripCdpPlatformHeader,
 } from "./telegram-content-sanitize.js";
+import { recordTelegramCdpPublishSuccess } from "./kolvip-operate-cdp.js";
 
 export { stripCdpPlatformHeader } from "./telegram-content-sanitize.js";
 
@@ -335,6 +336,9 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
           }),
         );
         return;
+      }
+      if (event === "entry") {
+        recordTelegramCdpPublishSuccess();
       }
       log?.info?.(
         formatSendCdpLog("cdp_ok", {

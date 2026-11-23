@@ -1,6 +1,8 @@
 {
   "_comment_send": "send 不是频道条目，而是「来源群 id 白名单」：这些群产生交易信号并推送到 Telegram 后，会额外转发到 python-ai-operate POST /api/v1/trade-signal/publish（CDP 发布）。需 TRADE_SIGNAL_AI_PUBLISH=1。send 不能单独授权 Bitget/WEEX 下单。",
-  "_comment_placeAnOrder": "placeAnOrder 不是频道条目，而是 Telegram 自动下单白名单。只比较完整字符串（必须保留 -100 前缀）。BITGET_AUTO_TRADE_CHANNEL_IDS 只用于 Discord 雪花频道，不会放行这些群。",
+  "_comment_placeAnOrder": "placeAnOrder 不是频道条目，而是 Telegram 自动下单白名单。只比较完整字符串（必须保留 -100 前缀）。BITGET/WEEX 保证金当前统一 2U。BITGET_AUTO_TRADE_CHANNEL_IDS 只用于 Discord 雪花频道，不会放行这些群。",
+  "_comment_telegramNotify": "listen 建卡后，非 kolvip 巨鲸来源的简报默认推 TELEGRAM_PUSH_CHAT_ID（主通知群）。",
+  "_comment_kolvip": "kolvip-scan-* 与 kolvip-autotrade.json：下单+专群推送见该文件 telegramPush；与 send（CDP）、placeAnOrder（TG 2U 群）分开配置。",
   "send":[
     "-1004346465376",
     "-1001720924085",

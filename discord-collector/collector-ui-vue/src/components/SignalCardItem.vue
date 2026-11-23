@@ -11,6 +11,7 @@ import {
   maskProfitPercentText,
 } from "../lib/signalExecution.js";
 import { resolveCardSourceLink } from "../lib/cardSourceLink.js";
+import { cardSourcePostUrl } from "../lib/cardSourcePostUrl.js";
 
 const props = defineProps({
   /** @type {import("vue").PropType<Record<string, unknown>>} */
@@ -128,6 +129,7 @@ const profitBadge = computed(() => {
   return { ...badge, text: maskProfitPercentText(badge.text) };
 });
 const sourceLink = computed(() => resolveCardSourceLink(props.card));
+const sourcePostUrl = computed(() => cardSourcePostUrl(props.card));
 const channelLabel = computed(() => {
   const name = String(props.card.channelName ?? "").trim();
   if (!name) return "";
@@ -205,7 +207,18 @@ function onClick() {
         </span>
       </div>
     </header>
-    <div class="signal-card-time">{{ displayTime }}</div>
+    <div class="signal-card-time-row">
+      <span class="signal-card-time">{{ displayTime }}</span>
+      <a
+        v-if="sourcePostUrl"
+        class="signal-card-post-link"
+        :href="sourcePostUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="在新标签页打开原帖"
+        @click.stop
+      >原帖</a>
+    </div>
     <pre v-if="body" class="signal-card-body">{{ body }}</pre>
   </article>
 </template>
@@ -255,6 +268,20 @@ function onClick() {
 }
 .signal-card-source-tag:hover {
   filter: brightness(1.15);
+  text-decoration: underline;
+}
+.signal-card-time-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.signal-card-post-link {
+  font-size: 0.68rem;
+  color: #57a6ff;
+  text-decoration: none;
+}
+.signal-card-post-link:hover {
   text-decoration: underline;
 }
 .signal-card-eval-tags {

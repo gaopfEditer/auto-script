@@ -78,6 +78,7 @@ import { registerKolvipCdpRoutes } from "./kolvip-cdp-api.js";
 import { registerKolvipSigRoutes } from "./kolvip-sig-api.js";
 import { startKolvipSigPeriodicSync } from "./kolvip-sig-sync.js";
 import { registerKolvipManualBackfillRoutes } from "./kolvip-backfill-manual-api.js";
+import { registerTodayAutotradePnlRoutes } from "./today-autotrade-pnl-api.js";
 import { registerTwitterCdpRoutes } from "./twitter-cdp-api.js";
 import {
   getAutoTradeChannelIds,
@@ -337,6 +338,7 @@ async function main() {
     void import("./kolvip-api-catalog.js").then((m) => m.loadKolvipCatalogCache());
   }
   registerKolvipManualBackfillRoutes(app, { store, signalCards });
+  registerTodayAutotradePnlRoutes(app, { store });
   registerCommunityRoutes(app, store, createLogger("community"), broadcast, { communityFeed });
   registerYoutubeArchiveRoutes(app, { archivesDir: config.youtubeArchivesDir, log: createLogger("yt-archives") });
   void import("./youtube-archives.js")
@@ -1809,6 +1811,8 @@ async function main() {
     log: createLogger("telegram-supervisor"),
     enabled: config.telegramListenAutoStart,
     checkIntervalMs: config.telegramSupervisorIntervalMs,
+    restartWithUi: config.telegramListenRestartWithUi,
+    stopWithUi: config.telegramListenStopWithUi,
   });
   getTelegramListenStatus = () => telegramSupervisor.getStatus();
   process.once("SIGINT", () => {

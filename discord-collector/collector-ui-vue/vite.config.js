@@ -108,6 +108,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
         "/community-avatars": { target: apiTarget, changeOrigin: true },
+        "/kolvip-avatars": { target: apiTarget, changeOrigin: true },
         "/telegram-avatars": { target: apiTarget, changeOrigin: true },
         "/telegram-media": { target: apiTarget, changeOrigin: true },
         "/ws": {

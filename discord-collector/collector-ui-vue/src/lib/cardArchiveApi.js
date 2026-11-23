@@ -32,6 +32,7 @@
  *   execution: import("./signalExecution.js").SignalExecution,
  *   createdAt: string,
  *   updatedAt: string,
+ *   sourcePostUrl?: string | null,
  * }} ArchiveCard */
 
 /** @typedef {{ channelId: string, channelName: string, count: number }} ArchiveChannelOption */

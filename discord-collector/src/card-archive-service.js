@@ -19,8 +19,11 @@ import { signalCardToClient, resolveCardSignalAt } from "./discord-signal-card-s
 import { getSignalChannelConfig, COIN_ACTION_SIGNAL_CHANNEL_ID, isSignalChannel } from "./discord-signal-config.js";
 import {
   isTechnicalChannelLabel,
+  isPlaceholderChannelLabel,
   resolveKolvipChannelDisplayName,
 } from "./kolvip-channel-display.js";
+import { lookupOperateBinanceAuthor } from "./binance-square-author-lookup.js";
+import { resolveCardSourcePostUrl } from "./card-source-post-url.js";
 import { detectAssetClass, resolveVerifyMode } from "./card-verify-policy.js";
 import { stampCardFieldsUid, stampCardsByStyle } from "./card-uid.js";
 import { buildCardSinkPayload, pickCardSinkText } from "./card-external-sink.js";
@@ -126,11 +129,45 @@ export function formatCardAsChannelMessage(card) {
 }
 
 /** @param {string} channelId @param {string|null|undefined} [dbName] */
+/**
+ * 开放 API / 币安广场等写入 parsed 的作者、博主字段。
+ * @param {Record<string, unknown> | null | undefined} parsed
+ */
+export function resolveAuthorLabelFromParsed(parsed) {
+  if (!parsed || typeof parsed !== "object") return "";
+  const p = /** @type {Record<string, unknown>} */ (parsed);
+  const keys = [
+    "channelDisplayName",
+    "blogger",
+    "authorName",
+    "author",
+    "sender",
+    "authorKey",
+    "userHandle",
+    "user_handle",
+    "binanceProfile",
+    "profileName",
+    "profile",
+  ];
+  for (const k of keys) {
+    let v = String(p[k] ?? "").trim();
+    if (!v || isPlaceholderChannelLabel(v) || isTechnicalChannelLabel(v)) continue;
+    if (v.startsWith("@")) v = v.slice(1).trim();
+    if (v) return v;
+  }
+  const lid = String(p.listId ?? p.list_id ?? "").trim();
+  if (lid.toLowerCase().startsWith("binance:")) {
+    const slug = lid.split(":").slice(1).join(":").trim();
+    if (slug && slug !== "square" && !isPlaceholderChannelLabel(slug)) return slug;
+  }
+  return "";
+}
+
 export function resolveCardChannelName(channelId, dbName) {
   const id = String(channelId ?? "").trim();
   if (!id) return "";
   const dn = String(dbName ?? "").trim();
-  if (dn && !isTechnicalChannelLabel(dn)) return dn;
+  if (dn && !isTechnicalChannelLabel(dn) && !isPlaceholderChannelLabel(dn)) return dn;
 
   const kolvipName = resolveKolvipChannelDisplayName(id);
   if (kolvipName) return kolvipName;
@@ -2064,18 +2101,30 @@ export function archiveCardToClient(row) {
       ? /** @type {Record<string, unknown>} */ (base.parsedJson)
       : {};
   const parsedChannelName = String(parsed.channelName ?? "").trim();
+  const sourceType = String(row.source_type ?? row.sourceType ?? "discord");
+  const platform = resolveSourcePlatform(sourceType);
+  const authorLabel = resolveAuthorLabelFromParsed(parsed);
+  const sourceRef = String(row.source_ref ?? row.sourceRef ?? "").trim();
+  const binanceOperateAuthor =
+    platform === "binance" && sourceRef ? lookupOperateBinanceAuthor(sourceRef) : "";
+  const displayParsedName =
+    parsedChannelName && !isPlaceholderChannelLabel(parsedChannelName) ? parsedChannelName : "";
   const channelAvatar = String(parsed.channelAvatar ?? "").trim();
   const images = Array.isArray(parsed.images)
     ? parsed.images.map((x) => String(x ?? "").trim()).filter(Boolean)
     : [];
 
-  return {
+  const client = {
     ...base,
     /** 正文（与 rawContent 同值） */
     body: String(base.rawContent ?? row.raw_content ?? row.rawContent ?? ""),
     channelId,
     channelName:
-      parsedChannelName || resolveCardChannelName(channelId, dbChannelName),
+      displayParsedName ||
+      authorLabel ||
+      binanceOperateAuthor ||
+      resolveCardChannelName(channelId, dbChannelName) ||
+      (platform === "binance" ? "币安广场" : ""),
     channelAvatar: channelAvatar || null,
     images,
     sourceType: String(row.source_type ?? row.sourceType ?? "discord"),
@@ -2091,4 +2140,6 @@ export function archiveCardToClient(row) {
     backtest: backtest && typeof backtest === "object" ? backtest : null,
     progress: progress && typeof progress === "object" ? progress : null,
   };
+  client.sourcePostUrl = resolveCardSourcePostUrl(client) ?? null;
+  return client;
 }

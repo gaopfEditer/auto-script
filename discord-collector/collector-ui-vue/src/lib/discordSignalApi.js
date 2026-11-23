@@ -31,7 +31,17 @@ export function formatCardTime(card) {
   const raw = card?.signalAt ?? card?.createdAt;
   if (!raw) return "";
   const d = new Date(String(raw));
-  return Number.isNaN(d.getTime()) ? String(raw) : d.toLocaleString("zh-CN");
+  if (Number.isNaN(d.getTime())) return String(raw);
+  return d.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 /**

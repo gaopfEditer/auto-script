@@ -3,6 +3,11 @@
   "enabled": true,
   "exchanges": ["bitget", "weex"],
   "comment": "巨鲸榜跟单唯一配置：频道 id、模板、保证金。改此文件后重启 collect:ui。",
+  "telegramPush": {
+    "chatId": "-1004364826383",
+    "env": "KOLVIP_TOP10_TELEGRAM_CHAT_ID",
+    "policy": "本文件 autoTradeChannelIds / channels[].channelIds 产生的信号卡：按模板 Bitget+WEEX 自动下单（orderSizeUsdt，当前 2U）；简报必须镜像到上列专群，不进 TELEGRAM_PUSH 主通知群。"
+  },
   "executionPolicyVersion": "2026-11-21",
   "executionPolicy": {
     "common": "跟信号原止损，不缩小；R=-1 按整笔止损",

@@ -74,6 +74,7 @@ import {
   rememberOcrSignalFingerprint,
 } from "./discord-signal-image-ocr.js";
 import { mysqlDatetimeToArchiveIso } from "./card-archive-mysql-time.js";
+import { notifyKolvipOperateCdpPublish } from "./kolvip-operate-cdp.js";
 
 /** @param {Record<string, unknown>} row */
 export function resolveMessageSignalAt(row) {
@@ -692,6 +693,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       ? normalizeSignalText(String(opts.contentOverride))
       : resolveSignalContentFromRow(row);
     const guildId = String(row.guildId ?? row.guild_id ?? "").trim();
+    const tradeOpts = { ...opts, source: String(row.source ?? "") };
     const replyRefId = resolveReplyReferenceMessageId(row.rawJson ?? row.raw_json);
 
     if (!channelId || !isSignalChannel(channelId)) return { skipped: "not_signal_channel" };
@@ -908,7 +910,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
           bitgetResult = { skipped: "major_symbol_excluded", symbol };
           weexResult = { skipped: "major_symbol_excluded", symbol };
           log.info(`自动交易跳过主流币 TP/SL symbol=${symbol} card=#${openId}`);
-        } else if (bitgetOrder?.onTpslUpdate && shouldPushToTradePlatform("bitget", channelId, opts)) {
+        } else if (bitgetOrder?.onTpslUpdate && shouldPushToTradePlatform("bitget", channelId, tradeOpts)) {
           try {
             bitgetResult = await bitgetOrder.onTpslUpdate({
               cardId: openId,
@@ -920,10 +922,10 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
           } catch (e) {
             log.warn(`Bitget TP/SL 更新异常: ${/** @type {Error} */ (e).message}`);
           }
-        } else if (bitgetOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("bitget", channelId, opts)) {
+        } else if (bitgetOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("bitget", channelId, tradeOpts)) {
           bitgetResult = { skipped: "platform_toggle_off", platform: "bitget" };
         }
-        if (!skipMajorTpsl && weexOrder?.onTpslUpdate && shouldPushToTradePlatform("weex", channelId, opts)) {
+        if (!skipMajorTpsl && weexOrder?.onTpslUpdate && shouldPushToTradePlatform("weex", channelId, tradeOpts)) {
           try {
             weexResult = await weexOrder.onTpslUpdate({
               cardId: openId,
@@ -935,7 +937,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
           } catch (e) {
             log.warn(`WEEX TP/SL 更新异常: ${/** @type {Error} */ (e).message}`);
           }
-        } else if (!skipMajorTpsl && weexOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("weex", channelId, opts)) {
+        } else if (!skipMajorTpsl && weexOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("weex", channelId, tradeOpts)) {
           weexResult = { skipped: "platform_toggle_off", platform: "weex" };
         }
         const updated = await store.getSignalCardById?.(openId);
@@ -1215,7 +1217,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       weexResult = { skipped: "major_symbol_excluded", symbol };
       log.info(`自动交易跳过主流币 symbol=${symbol} card=#${cardId}（BTC/ETH 不自动下单）`);
     } else {
-      if (bitgetOrder && shouldPushToTradePlatform("bitget", channelId, opts)) {
+      if (bitgetOrder && shouldPushToTradePlatform("bitget", channelId, tradeOpts)) {
         try {
           bitgetResult = await bitgetOrder.onSignalCardCreated({
             cardId,
@@ -1235,11 +1237,11 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         } catch (e) {
           log.warn(`Bitget 自动下单异常: ${/** @type {Error} */ (e).message}`);
         }
-      } else if (bitgetOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("bitget", channelId, opts)) {
+      } else if (bitgetOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("bitget", channelId, tradeOpts)) {
         bitgetResult = { skipped: "platform_toggle_off", platform: "bitget" };
       }
 
-      if (weexOrder && shouldPushToTradePlatform("weex", channelId, opts)) {
+      if (weexOrder && shouldPushToTradePlatform("weex", channelId, tradeOpts)) {
         try {
           weexResult = await weexOrder.onSignalCardCreated({
             cardId,
@@ -1256,7 +1258,7 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         } catch (e) {
           log.warn(`WEEX 自动下单异常: ${/** @type {Error} */ (e).message}`);
         }
-      } else if (weexOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("weex", channelId, opts)) {
+      } else if (weexOrder && isAutoTradeChannel(channelId) && !shouldPushToTradePlatform("weex", channelId, tradeOpts)) {
         weexResult = { skipped: "platform_toggle_off", platform: "weex" };
       }
     }
@@ -1264,6 +1266,18 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     const clientCard = signalCardToClient(cardRow);
     broadcast?.("meta", { kind: "signal_card_created", card: clientCard });
     log.info(`信号卡片 #${cardId} channel=${channelId} styles=${Object.keys(cardsByStyle).join(",")}`);
+
+    if (config.kolvipOperateCdpEnabled && config.tradeSignalAiPublishEnabled) {
+      const cdpBody =
+        pickCardSinkText(clientCard, chCfg.telegramStyle || "cn_brief") ||
+        telegramText ||
+        String(content ?? "").trim();
+      notifyKolvipOperateCdpPublish(clientCard, {
+        event: "entry",
+        log,
+        bodyText: cdpBody,
+      });
+    }
 
     if (opts.ocrFingerprint) {
       rememberOcrSignalFingerprint(channelId, String(opts.ocrFingerprint));
