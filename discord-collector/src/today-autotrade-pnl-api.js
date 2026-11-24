@@ -184,19 +184,20 @@ export function signalTpslFromCard(card) {
  * @param {ReturnType<typeof archiveCardToClient>} card
  * @param {Record<string, unknown>} trade
  */
-function attachSignalPlanFields(card, trade) {
+export function attachSignalPlanFields(card, trade) {
   const tpsl = signalTpslFromCard(card);
   trade.stopLossPrice = tpsl.stopLossPrice;
   trade.takeProfitPrices = tpsl.takeProfitPrices;
   trade.takeProfitText = tpsl.takeProfitText;
   const displayPnl = reconcileDisplayPnlPct(card, trade.pnlPct != null ? Number(trade.pnlPct) : null);
-  if (displayPnl !== trade.pnlPct) trade.rawPnlPct = trade.pnlPct;
   trade.pnlPct = displayPnl;
   trade.pnlUsdt =
     displayPnl != null && Number.isFinite(Number(displayPnl))
       ? Math.round(((Number(trade.marginUsdt) || 2) * Number(displayPnl)) / 100 * 100) / 100
-      : trade.pnlUsdt ?? null;
+      : null;
   attachDisplayOutcome(trade, displayPnl);
+  if ("rawPnlPct" in trade) delete trade.rawPnlPct;
+  if ("slPrice" in trade) delete trade.slPrice;
   return trade;
 }
 
