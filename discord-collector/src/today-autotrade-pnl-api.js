@@ -14,9 +14,12 @@ import {
 import { executionFromParsed, normalizeExecution } from "./discord-signal-execution.js";
 import { computeTodayPnlOpenMark } from "./today-autotrade-pnl-mark.js";
 import {
-  reconcileDisplayOutcome,
-  reconcileDisplayPnlPct,
+  dedupeTodayPnlTrades,
+  resolveCardAlignedDisplayOutcome,
+  resolveCardAlignedDisplayPnl,
+  resolveTodayPnlEntryDisplay,
   sanitizeDisplayTpsl,
+  TODAY_PNL_SIGNAL_DEDUPE_MS,
 } from "./today-autotrade-pnl-display.js";
 
 const SETTLEMENT_SOURCE_TYPES = new Set(["kolvip", "telegram", "binance"]);
@@ -189,13 +192,20 @@ export function attachSignalPlanFields(card, trade) {
   trade.stopLossPrice = tpsl.stopLossPrice;
   trade.takeProfitPrices = tpsl.takeProfitPrices;
   trade.takeProfitText = tpsl.takeProfitText;
-  const displayPnl = reconcileDisplayPnlPct(card, trade.pnlPct != null ? Number(trade.pnlPct) : null);
+  const displayPnl = resolveCardAlignedDisplayPnl(
+    card,
+    trade.pnlPct != null ? Number(trade.pnlPct) : null
+  );
   trade.pnlPct = displayPnl;
   trade.pnlUsdt =
     displayPnl != null && Number.isFinite(Number(displayPnl))
       ? Math.round(((Number(trade.marginUsdt) || 2) * Number(displayPnl)) / 100 * 100) / 100
       : null;
-  attachDisplayOutcome(trade, displayPnl);
+  attachDisplayOutcome(card, trade, displayPnl);
+  const entry = resolveTodayPnlEntryDisplay(card);
+  trade.entryPrice = entry.entryPrice;
+  trade.entryPriceKind = entry.entryPriceKind;
+  trade.entryPriceDisplay = entry.entryPriceDisplay;
   if ("rawPnlPct" in trade) delete trade.rawPnlPct;
   if ("slPrice" in trade) delete trade.slPrice;
   return trade;
@@ -205,8 +215,11 @@ export function attachSignalPlanFields(card, trade) {
  * @param {Record<string, unknown>} trade
  * @param {number | null | undefined} pnlPct
  */
-function attachDisplayOutcome(trade, pnlPct) {
-  trade.displayOutcome = reconcileDisplayOutcome(trade.progressOutcome, pnlPct);
+function attachDisplayOutcome(card, trade, pnlPct) {
+  trade.displayOutcome = resolveCardAlignedDisplayOutcome(card, trade.progressOutcome);
+  if (!trade.displayOutcome && pnlPct != null) {
+    trade.displayOutcome = pnlPct >= 0 ? "take_profit" : "stop_loss";
+  }
   return trade;
 }
 
@@ -331,17 +344,13 @@ export function registerTodayAutotradePnlRoutes(app, { store }) {
         }
       }
 
-      trades.sort(
-        (a, b) =>
-          Date.parse(String(b.orderAt ?? b.signalAt ?? "")) -
-          Date.parse(String(a.orderAt ?? a.signalAt ?? ""))
-      );
+      const deduped = dedupeTodayPnlTrades(trades);
 
       let sumPnlUsdt = 0;
       let closedPnl = 0;
       let openCount = 0;
       let closedCount = 0;
-      for (const t of trades) {
+      for (const t of deduped) {
         if (t.closed) closedCount += 1;
         else openCount += 1;
         if (t.pnlUsdt != null && Number.isFinite(Number(t.pnlUsdt))) {
@@ -364,16 +373,17 @@ export function registerTodayAutotradePnlRoutes(app, { store }) {
         fromMs,
         toMs,
         summary: {
-          tradeCards: trades.length,
+          tradeCards: deduped.length,
           openCount,
           closedCount,
           sumPnlUsdt,
           closedPnlUsdt: closedPnl,
+          dedupeWindowMs: TODAY_PNL_SIGNAL_DEDUPE_MS,
           note:
-            "pnlUsdt = 自定义保证金 × progress.pnlPct / 100；含巨鲸/Telegram/币安广场当日可结算卡；路径进度非交易所账单",
+            `pnlUsdt = 自定义保证金 × progress.pnlPct / 100；含巨鲸/Telegram/币安广场当日可结算卡；路径进度非交易所账单；同源同币种信号 ${TODAY_PNL_SIGNAL_DEDUPE_MS / 60_000} 分钟内去重（仅列表展示）`,
         },
         sourceTypes: [...SETTLEMENT_SOURCE_TYPES],
-        trades,
+        trades: deduped,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });

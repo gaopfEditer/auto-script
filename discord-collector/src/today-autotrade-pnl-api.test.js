@@ -47,6 +47,35 @@ describe("signalTpslFromCard", () => {
     assert.deepEqual(tpsl.takeProfitPrices, []);
   });
 
+  it("SC-3127 shape: attach shows take_profit +10.8% and entry", () => {
+    const card = {
+      symbol: "XAUUSDT",
+      execution: {
+        direction: "做多",
+        planned: { entryPrice: "3625", stopLossPrice: "3615", takeProfitPrices: ["3628", "3648"] },
+        actual: {},
+        outcome: "pending",
+      },
+      progress: {
+        status: "closed_sl",
+        outcome: "take_profit",
+        pnlPct: -10.8,
+        entryPriceUsed: 3625,
+        leverage: 50,
+        tpHits: [{ index: 1, price: 3628, sizePct: 1 / 6 }],
+        slHitAt: "2026-01-01T12:00:00.000Z",
+      },
+    };
+    const trade = attachSignalPlanFields(card, {
+      pnlPct: -10.8,
+      marginUsdt: 2,
+      progressOutcome: "take_profit",
+    });
+    assert.equal(trade.displayOutcome, "take_profit");
+    assert.equal(trade.pnlPct, 10.8);
+    assert.equal(trade.entryPrice, "3625");
+  });
+
   it("clears pnlUsdt when display pnl is rejected (SC-3112)", () => {
     const card = {
       symbol: "BTCUSDT",

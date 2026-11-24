@@ -555,6 +555,7 @@ onUnmounted(() => {
             <th>盈亏U</th>
             <th>状态</th>
             <th>信号时间</th>
+            <th>入场</th>
             <th>止损</th>
             <th>止盈</th>
           </tr>
@@ -629,6 +630,12 @@ onUnmounted(() => {
             </td>
             <td>{{ outcomeLabel(t) }}</td>
             <td class="time" :title="'Asia/Shanghai (UTC+8)'">{{ fmtSignalTime(t) }}</td>
+            <td
+              class="mono tpsl entry-col"
+              :title="t.entryPriceKind === 'market_at_signal' ? '发单当时的市价（非现价）' : undefined"
+            >
+              {{ fmtPlanPrice(t.entryPriceDisplay) }}
+            </td>
             <td class="mono tpsl">{{ fmtPlanPrice(t.stopLossPrice) }}</td>
             <td class="mono tpsl">{{ fmtTakeProfit(t) }}</td>
           </tr>
