@@ -16,6 +16,7 @@ import {
 } from "./card-level-progress.js";
 import { isCardEnteredForEval, resolveCardEvalOutcome } from "./card-eval-outcome.js";
 import { evaluateLiquidation, resolveLiquidationPlan } from "./card-liquidation-engine.js";
+import { resolveTodayPnlMarkContext } from "./today-autotrade-pnl-display.js";
 import { hasEvaluatedYield, normalizeExecution } from "./discord-signal-execution.js";
 import { resolveCardSignalAt } from "./discord-signal-card-service.js";
 import { config } from "./config.js";
@@ -287,9 +288,7 @@ export async function forceCloseEvalCardAtMark(card) {
   if (!prog?.entryHitAt || !Number.isFinite(entry) || entry <= 0) return null;
   const sym = String(card.symbol ?? "").trim();
   if (!sym) return null;
-  const plan = resolveLiquidationPlan(card);
-  const lev = Number(plan?.leverage) || Number(prog?.leverage) || 20;
-  const isShort = Boolean(plan?.isShort);
+  const { isShort, leverage: lev } = resolveTodayPnlMarkContext(card);
   try {
     const tick = await fetchFuturesPrice(sym);
     const px = tick.price;

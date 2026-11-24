@@ -2,14 +2,15 @@
  * 今日盈亏页：持仓中按现价浮盈浮亏（只读，不写库、不触发下单）。
  */
 import { forceCloseEvalCardAtMark } from "./card-eval-pending-settle.js";
-import { resolveLiquidationPlan } from "./card-liquidation-engine.js";
 import {
   isProgressTerminal,
   parseProgressJson,
-  resolveProgressLeverage,
 } from "./card-level-progress.js";
-import { alignPnlWithOutcome, calcLeveragePnl, fetchFuturesPrice, parseEntryPrice } from "./card-price-fetch.js";
-import { normalizeExecution } from "./discord-signal-execution.js";
+import { alignPnlWithOutcome, calcLeveragePnl, fetchFuturesPrice } from "./card-price-fetch.js";
+import {
+  resolveMarkEntryPriceForDisplay,
+  resolveTodayPnlMarkContext,
+} from "./today-autotrade-pnl-display.js";
 
 /** @param {string} code */
 export function markOpenUserMessage(code) {
@@ -31,11 +32,7 @@ export function markOpenUserMessage(code) {
 
 /** @param {Record<string, unknown>} card */
 export function resolveMarkEntryPrice(card) {
-  const prog = parseProgressJson(card.progress);
-  const fromProg = Number(prog?.entryPriceUsed);
-  if (Number.isFinite(fromProg) && fromProg > 0) return fromProg;
-  const ex = normalizeExecution(card.execution, card.parsedJson);
-  return parseEntryPrice(ex.planned?.entryPrice);
+  return resolveMarkEntryPriceForDisplay(card);
 }
 
 /**
@@ -74,13 +71,7 @@ export async function computeTodayPnlOpenMark(card) {
     return { ok: false, error: "no_entry", markError: markOpenUserMessage("no_entry") };
   }
 
-  const plan = resolveLiquidationPlan(card);
-  const ex = normalizeExecution(card.execution, card.parsedJson);
-  const isShort = Boolean(plan?.isShort) || /空|short/i.test(String(ex.direction ?? ""));
-  const lev =
-    Number(prog?.leverage) ||
-    Number(plan?.leverage) ||
-    resolveProgressLeverage(card);
+  const { isShort, leverage: lev } = resolveTodayPnlMarkContext(card);
 
   try {
     const tick = await fetchFuturesPrice(sym);

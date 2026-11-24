@@ -11,8 +11,13 @@ import {
   formatTodayPnlPublishText,
   postTodayPnlToOperatePublish,
 } from "./today-autotrade-pnl-publish.js";
-import { normalizeExecution } from "./discord-signal-execution.js";
+import { executionFromParsed, normalizeExecution } from "./discord-signal-execution.js";
 import { computeTodayPnlOpenMark } from "./today-autotrade-pnl-mark.js";
+import {
+  reconcileDisplayOutcome,
+  reconcileDisplayPnlPct,
+  sanitizeDisplayTpsl,
+} from "./today-autotrade-pnl-display.js";
 
 const SETTLEMENT_SOURCE_TYPES = new Set(["kolvip", "telegram", "binance"]);
 
@@ -148,8 +153,7 @@ function takeProfitPricesText(prices) {
  * 卡片原文中的止盈/止损价（execution_json + parsedJson 回填）。
  * @param {ReturnType<typeof archiveCardToClient>} card
  */
-export function signalTpslFromCard(card) {
-  const ex = normalizeExecution(card.execution, card.parsedJson);
+function rawTpslFromExecution(ex) {
   const stopLossPrice = String(ex.planned?.stopLossPrice ?? "").trim();
   const takeProfitPrices = Array.isArray(ex.planned?.takeProfitPrices)
     ? ex.planned.takeProfitPrices.map((x) => String(x ?? "").trim()).filter(Boolean)
@@ -162,6 +166,20 @@ export function signalTpslFromCard(card) {
   };
 }
 
+function tpslMissing(tpsl) {
+  return !tpsl.stopLossPrice && !(tpsl.takeProfitPrices?.length);
+}
+
+export function signalTpslFromCard(card) {
+  const ex = normalizeExecution(card.execution, card.parsedJson);
+  let tpsl = sanitizeDisplayTpsl(card, rawTpslFromExecution(ex));
+  if (tpslMissing(tpsl) && card.parsedJson && typeof card.parsedJson === "object") {
+    const fromParsed = executionFromParsed(card.parsedJson);
+    tpsl = sanitizeDisplayTpsl(card, rawTpslFromExecution(fromParsed));
+  }
+  return tpsl;
+}
+
 /**
  * @param {ReturnType<typeof archiveCardToClient>} card
  * @param {Record<string, unknown>} trade
@@ -171,6 +189,23 @@ function attachSignalPlanFields(card, trade) {
   trade.stopLossPrice = tpsl.stopLossPrice;
   trade.takeProfitPrices = tpsl.takeProfitPrices;
   trade.takeProfitText = tpsl.takeProfitText;
+  const displayPnl = reconcileDisplayPnlPct(card, trade.pnlPct != null ? Number(trade.pnlPct) : null);
+  if (displayPnl !== trade.pnlPct) trade.rawPnlPct = trade.pnlPct;
+  trade.pnlPct = displayPnl;
+  trade.pnlUsdt =
+    displayPnl != null && Number.isFinite(Number(displayPnl))
+      ? Math.round(((Number(trade.marginUsdt) || 2) * Number(displayPnl)) / 100 * 100) / 100
+      : trade.pnlUsdt ?? null;
+  attachDisplayOutcome(trade, displayPnl);
+  return trade;
+}
+
+/**
+ * @param {Record<string, unknown>} trade
+ * @param {number | null | undefined} pnlPct
+ */
+function attachDisplayOutcome(trade, pnlPct) {
+  trade.displayOutcome = reconcileDisplayOutcome(trade.progressOutcome, pnlPct);
   return trade;
 }
 
