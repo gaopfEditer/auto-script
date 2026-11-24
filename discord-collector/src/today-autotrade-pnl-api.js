@@ -12,6 +12,7 @@ import {
   postTodayPnlToOperatePublish,
 } from "./today-autotrade-pnl-publish.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
+import { computeTodayPnlOpenMark } from "./today-autotrade-pnl-mark.js";
 
 const SETTLEMENT_SOURCE_TYPES = new Set(["kolvip", "telegram", "binance"]);
 
@@ -337,6 +338,51 @@ export function registerTodayAutotradePnlRoutes(app, { store }) {
         },
         sourceTypes: [...SETTLEMENT_SOURCE_TYPES],
         trades,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
+    }
+  });
+
+  app.post("/api/local/today-autotrade-pnl/mark-open", requireLocalRequest, async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const cardId = Number(body.cardId ?? req.query?.cardId);
+      if (!Number.isFinite(cardId) || cardId <= 0) {
+        res.status(400).json({ ok: false, error: "cardId 无效" });
+        return;
+      }
+      if (!store?.getSignalCardById) {
+        res.status(503).json({ ok: false, error: "store_unavailable" });
+        return;
+      }
+      const row = await store.getSignalCardById(cardId);
+      if (!row) {
+        res.status(404).json({ ok: false, error: "card_not_found" });
+        return;
+      }
+      const card = archiveCardToClient(row);
+      const result = await computeTodayPnlOpenMark(card);
+      if (result.skip) {
+        res.json({ ok: false, cardId, skipped: true, reason: result.reason ?? "closed" });
+        return;
+      }
+      if (!result.ok) {
+        res.json({
+          ok: false,
+          cardId,
+          error: result.error,
+          markError: result.markError ?? result.error,
+        });
+        return;
+      }
+      res.json({
+        ok: true,
+        cardId,
+        pnlPct: result.pnlPct,
+        markPrice: result.markPrice ?? null,
+        mode: result.mode ?? "",
+        markAt: new Date().toISOString(),
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: String(/** @type {Error} */ (e).message ?? e) });
