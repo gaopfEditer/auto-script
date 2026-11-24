@@ -19,14 +19,14 @@ describe("resolveMarkEntryPrice", () => {
     assert.equal(entry, 100);
   });
 
-  it("rejects percent-hype entry on BTC when progress missing", () => {
+  it("falls back to parsedJson entry when execution text is marketing hype", () => {
     const entry = resolveMarkEntryPrice({
       symbol: "BTCUSDT",
       progress: null,
       execution: { planned: { entryPrice: "斩获800%+" } },
       parsedJson: { entry: "92000" },
     });
-    assert.equal(entry, null);
+    assert.equal(entry, 92000);
   });
 });
 

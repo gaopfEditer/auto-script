@@ -3,8 +3,10 @@
  */
 import { isShortDirection } from "./card-direction.js";
 import { parseProgressJson, resolveProgressLeverage } from "./card-level-progress.js";
-import { isValidSlLevel, isValidTpLevel } from "./card-liquidation-engine.js";
-import { parseEntryPrice, parsePrice } from "./card-price-fetch.js";
+import { flattenBatchBacktestDoc } from "./card-batch-backtest-engine.js";
+import { isMarketEntryHint, isValidSlLevel, isValidTpLevel } from "./card-liquidation-engine.js";
+import { alignPnlWithOutcome, parseEntryPrice, parsePrice } from "./card-price-fetch.js";
+import { resolveCardEvalOutcome } from "./card-eval-outcome.js";
 import { executionFromParsed, normalizeExecution } from "./discord-signal-execution.js";
 
 /** @param {unknown} symbol */
@@ -249,17 +251,219 @@ export function reconcileDisplayOutcome(storedOutcome, pnlPct) {
 }
 
 /**
+ * 与卡片 UI `resolveCardPnlPct` 一致：先质量过滤，再按评价 outcome 对齐盈亏符号。
+ * @param {Record<string, unknown>} card
+ * @param {number | null | undefined} rawPnlPct
+ */
+export function resolveCardAlignedDisplayPnl(card, rawPnlPct) {
+  const filtered = reconcileDisplayPnlPct(card, rawPnlPct);
+  if (filtered == null) return null;
+  const outcome = resolveCardEvalOutcome(card);
+  return alignPnlWithOutcome(outcome, filtered);
+}
+
+/**
+ * 与卡片 UI `resolveCardEvalOutcome` 一致（任一 TP 命中 → 止盈）。
+ * @param {Record<string, unknown>} card
+ * @param {unknown} [progressOutcomeFallback]
+ */
+export function resolveCardAlignedDisplayOutcome(card, progressOutcomeFallback) {
+  const o = resolveCardEvalOutcome(card);
+  if (o === "take_profit" || o === "stop_loss") return o;
+  return reconcileDisplayOutcome(progressOutcomeFallback, null);
+}
+
+/**
  * @param {Record<string, unknown>} card
  */
 export function resolveMarkEntryPriceForDisplay(card) {
-  const prog = parseProgressJson(card.progress);
-  const fromProg = Number(prog?.entryPriceUsed);
-  if (Number.isFinite(fromProg) && fromProg > 0) return fromProg;
   const ex = executionForDisplayPlan(card);
-  const raw = ex.planned?.entryPrice;
-  if (isImplausibleEntryText(raw, card.symbol)) return null;
-  const parsed = parseEntryPrice(raw);
-  if (parsed == null) return null;
-  if (!priceSaneForSymbol(card.symbol, parsed)) return null;
-  return parsed;
+  return resolveDisplayEntryAnchor(card, ex);
+}
+
+/** @param {number} n */
+export function formatDisplayPrice(n) {
+  if (!Number.isFinite(n)) return null;
+  const a = Math.abs(n);
+  if (a >= 1000) return String(Math.round(n * 100) / 100);
+  if (a >= 1) return String(Math.round(n * 10000) / 10000);
+  return String(Math.round(n * 1e6) / 1e6);
+}
+
+/** @param {unknown} raw */
+function parseCardJsonBlob(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return /** @type {Record<string, unknown>} */ (raw);
+  if (typeof raw === "string") {
+    try {
+      const v = JSON.parse(raw);
+      return v && typeof v === "object" ? /** @type {Record<string, unknown>} */ (v) : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * 管线已存的信号时刻市价（非现价 MTM）。
+ * @param {Record<string, unknown>} card
+ */
+export function resolveStoredMarketAtSignal(card) {
+  const sym = String(card.symbol ?? "").trim();
+  const bt = parseCardJsonBlob(card.backtest ?? card.backtest_json ?? card.backtestJson);
+  if (bt) {
+    const flat = flattenBatchBacktestDoc(bt) ?? bt;
+    const m = Number(flat.marketAtSignal ?? flat.market_at_signal);
+    if (Number.isFinite(m) && m > 0 && priceSaneForSymbol(sym, m)) return m;
+  }
+
+  const ex = normalizeExecution(card.execution, card.parsedJson);
+  const rawEx = parseCardJsonBlob(card.execution);
+  const auto =
+    rawEx?.autoEval && typeof rawEx.autoEval === "object"
+      ? /** @type {Record<string, unknown>} */ (rawEx.autoEval)
+      : null;
+  const fromAuto = Number(auto?.marketAtSignal ?? auto?.marketAtSignalPrice);
+  if (Number.isFinite(fromAuto) && fromAuto > 0 && priceSaneForSymbol(sym, fromAuto)) {
+    return fromAuto;
+  }
+
+  const pj = parseCardJsonBlob(card.parsedJson);
+  const bg =
+    pj?.bitgetOrder && typeof pj.bitgetOrder === "object"
+      ? /** @type {Record<string, unknown>} */ (pj.bitgetOrder)
+      : null;
+  if (bg) {
+    const fill = Number(bg.avgFillPrice ?? bg.fillPrice ?? bg.executedPrice ?? bg.price);
+    const plan =
+      bg.plan && typeof bg.plan === "object"
+        ? /** @type {Record<string, unknown>} */ (bg.plan)
+        : null;
+    const fromOrder = Number(
+      fill > 0 ? fill : plan?.price ?? plan?.entryPrice ?? bg.markPrice
+    );
+    if (Number.isFinite(fromOrder) && fromOrder > 0 && priceSaneForSymbol(sym, fromOrder)) {
+      return fromOrder;
+    }
+  }
+
+  const plannedRaw = ex.planned?.entryPrice;
+  if (isMarketEntryHint(plannedRaw)) {
+    const anchor = resolveDisplayEntryAnchor(card, executionForDisplayPlan(card));
+    if (anchor != null) return anchor;
+  }
+
+  return null;
+}
+
+/**
+ * 今日盈亏表入场列：合法计划/成交价，否则发单时刻市价（管线已有字段）。
+ * @param {Record<string, unknown>} card
+ */
+/** 同源渠道 + 同币种 + 信号时间差小于此值 → 今日盈亏列表去重（仅展示，不改库） */
+export const TODAY_PNL_SIGNAL_DEDUPE_MS = 5 * 60 * 1000;
+
+/**
+ * @param {Record<string, unknown>} t
+ */
+function tradeDedupeKey(t) {
+  const ch = String(t.channelId ?? t.channelName ?? "").trim().toLowerCase();
+  const sym = bareTradeSymbol(t.symbol);
+  return `${ch}\0${sym}`;
+}
+
+/** @param {Record<string, unknown>} t */
+function tradeSignalMs(t) {
+  const ms = Date.parse(String(t.signalAt ?? t.orderAt ?? ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/** @param {Record<string, unknown>} t */
+function planCompletenessScore(t) {
+  let s = 0;
+  if (String(t.stopLossPrice ?? "").trim()) s += 2;
+  if (String(t.takeProfitText ?? "").trim() || (Array.isArray(t.takeProfitPrices) && t.takeProfitPrices.length)) {
+    s += 2;
+  }
+  if (String(t.entryPrice ?? t.entryPriceDisplay ?? "").trim()) s += 1;
+  if (t.pnlPct != null && Number.isFinite(Number(t.pnlPct))) s += 1;
+  return s;
+}
+
+/**
+ * @param {Record<string, unknown>} a
+ * @param {Record<string, unknown>} b
+ */
+function pickRicherTodayPnlTrade(a, b) {
+  const sa = planCompletenessScore(a);
+  const sb = planCompletenessScore(b);
+  if (sa !== sb) return sa > sb ? a : b;
+  return tradeSignalMs(a) >= tradeSignalMs(b) ? a : b;
+}
+
+/**
+ * @param {Record<string, unknown>[]} trades
+ * @param {number} [windowMs]
+ */
+export function dedupeTodayPnlTrades(trades, windowMs = TODAY_PNL_SIGNAL_DEDUPE_MS) {
+  const win = Number(windowMs) > 0 ? Number(windowMs) : TODAY_PNL_SIGNAL_DEDUPE_MS;
+  const sorted = [...trades].sort((a, b) => tradeSignalMs(a) - tradeSignalMs(b));
+  /** @type {Record<string, unknown>[]} */
+  const kept = [];
+  for (const t of sorted) {
+    const key = tradeDedupeKey(t);
+    const tm = tradeSignalMs(t);
+    let merged = false;
+    for (let i = 0; i < kept.length; i++) {
+      if (tradeDedupeKey(kept[i]) !== key) continue;
+      const om = tradeSignalMs(kept[i]);
+      if (!tm || !om || Math.abs(tm - om) > win) continue;
+      kept[i] = pickRicherTodayPnlTrade(kept[i], t);
+      merged = true;
+      break;
+    }
+    if (!merged) kept.push(t);
+  }
+  return kept.sort((a, b) => tradeSignalMs(b) - tradeSignalMs(a));
+}
+
+export function resolveTodayPnlEntryDisplay(card) {
+  const ex = executionForDisplayPlan(card);
+  const anchor = resolveDisplayEntryAnchor(card, ex);
+  const plannedRaw = String(ex.planned?.entryPrice ?? "").trim();
+
+  if (anchor != null && plannedRaw && !isMarketEntryHint(plannedRaw) && !isImplausibleEntryText(plannedRaw, card.symbol)) {
+    const s = formatDisplayPrice(anchor);
+    return {
+      entryPrice: s,
+      entryPriceKind: "planned",
+      entryPriceDisplay: s ?? "—",
+    };
+  }
+
+  if (anchor != null) {
+    const s = formatDisplayPrice(anchor);
+    return {
+      entryPrice: s,
+      entryPriceKind: "used",
+      entryPriceDisplay: s ?? "—",
+    };
+  }
+
+  const mkt = resolveStoredMarketAtSignal(card);
+  if (mkt != null) {
+    const s = formatDisplayPrice(mkt);
+    return {
+      entryPrice: s,
+      entryPriceKind: "market_at_signal",
+      entryPriceDisplay: s ? `发单市价 ${s}` : "发单市价",
+    };
+  }
+
+  return {
+    entryPrice: null,
+    entryPriceKind: "market_at_signal",
+    entryPriceDisplay: "发单市价",
+  };
 }
