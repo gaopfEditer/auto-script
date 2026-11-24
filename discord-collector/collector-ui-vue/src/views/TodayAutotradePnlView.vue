@@ -319,6 +319,36 @@ function outcomeLabel(t) {
   return "持仓中";
 }
 
+/** @param {string | null | undefined} v */
+function fmtPlanPrice(v) {
+  const s = String(v ?? "").trim();
+  return s || "—";
+}
+
+/** @param {Record<string, unknown>} t */
+function fmtTakeProfit(t) {
+  const text = String(t.takeProfitText ?? "").trim();
+  if (text) return text;
+  const arr = Array.isArray(t.takeProfitPrices) ? t.takeProfitPrices : [];
+  const joined = arr.map((x) => String(x ?? "").trim()).filter(Boolean).join(", ");
+  return joined || "—";
+}
+
+/** @param {Record<string, unknown>} t */
+function fmtSignalTime(t) {
+  const raw = t.signalAt;
+  if (!raw) return "—";
+  const s = formatCardTime({ signalAt: raw });
+  return s || "—";
+}
+
+/** @param {Record<string, unknown>} t */
+function fmtOrderTime(t) {
+  if (!t.hasLiveAutotrade || !t.orderAt) return "—";
+  const s = formatCardTime({ signalAt: t.orderAt });
+  return s || "—";
+}
+
 onMounted(() => {
   loadDisplayPrefs();
   void load();
@@ -410,7 +440,10 @@ onUnmounted(() => {
             <th>盈亏%</th>
             <th>盈亏U</th>
             <th>状态</th>
-            <th>时间</th>
+            <th>信号时间</th>
+            <th>下单时间</th>
+            <th>止损</th>
+            <th>止盈</th>
           </tr>
         </thead>
         <tbody>
@@ -467,7 +500,12 @@ onUnmounted(() => {
               {{ fmtPnl(t.effectivePnlUsdt) }}
             </td>
             <td>{{ outcomeLabel(t) }}</td>
-            <td class="time">{{ formatCardTime({ signalAt: t.orderAt || t.signalAt }) }}</td>
+            <td class="time" :title="'Asia/Shanghai (UTC+8)'">{{ fmtSignalTime(t) }}</td>
+            <td class="time muted-order" :title="'实盘跟单提交时间 · Asia/Shanghai'">
+              {{ fmtOrderTime(t) }}
+            </td>
+            <td class="mono tpsl">{{ fmtPlanPrice(t.stopLossPrice) }}</td>
+            <td class="mono tpsl">{{ fmtTakeProfit(t) }}</td>
           </tr>
         </tbody>
       </table>
@@ -726,6 +764,14 @@ onUnmounted(() => {
   font-size: 0.78rem;
   color: #949ba4;
   white-space: nowrap;
+}
+.muted-order {
+  color: #72767d;
+}
+.tpsl {
+  font-size: 0.8rem;
+  max-width: 9rem;
+  word-break: break-all;
 }
 .margin-cell {
   min-width: 6.5rem;
