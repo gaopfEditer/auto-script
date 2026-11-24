@@ -302,7 +302,7 @@ function buildPublishRows() {
     channelName: displayChannelLabel(t),
     symbol: t.symbol,
     marginUsdt: t.effectiveMarginUsdt,
-    pnlPct: t.effectivePnlPct ?? t.pnlPct,
+    pnlPct: t.effectivePnlPct,
     pnlUsdt: t.effectivePnlUsdt,
     statusLabel: outcomeLabel(t),
     uid: t.uid,
@@ -699,10 +699,26 @@ onUnmounted(() => {
                 <td>{{ displayChannelLabel(t) }}</td>
                 <td class="mono">{{ t.symbol }}</td>
                 <td>{{ t.effectiveMarginUsdt }}U</td>
-                <td :class="Number(t.effectivePnlPct ?? t.pnlPct) >= 0 ? 'up' : 'down'">
-                  {{ fmtPct(t.effectivePnlPct ?? t.pnlPct) }}
+                <td
+                  :class="
+                    t.effectivePnlPct == null
+                      ? ''
+                      : Number(t.effectivePnlPct) >= 0
+                        ? 'up'
+                        : 'down'
+                  "
+                >
+                  {{ fmtPct(t.effectivePnlPct) }}
                 </td>
-                <td :class="Number(t.effectivePnlUsdt) >= 0 ? 'up' : 'down'">
+                <td
+                  :class="
+                    t.effectivePnlUsdt == null
+                      ? ''
+                      : Number(t.effectivePnlUsdt) >= 0
+                        ? 'up'
+                        : 'down'
+                  "
+                >
                   {{ fmtPnl(t.effectivePnlUsdt) }}
                 </td>
                 <td>{{ outcomeLabel(t) }}</td>

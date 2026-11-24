@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { signalTpslFromCard } from "./today-autotrade-pnl-api.js";
+import { attachSignalPlanFields, signalTpslFromCard } from "./today-autotrade-pnl-api.js";
 
 describe("signalTpslFromCard", () => {
   it("reads planned TP/SL from execution", () => {
@@ -45,6 +45,42 @@ describe("signalTpslFromCard", () => {
     assert.equal(tpsl.stopLossPrice, null);
     assert.equal(tpsl.takeProfitText, null);
     assert.deepEqual(tpsl.takeProfitPrices, []);
+  });
+
+  it("clears pnlUsdt when display pnl is rejected (SC-3112)", () => {
+    const card = {
+      symbol: "BTCUSDT",
+      progress: {
+        entryPriceUsed: 800,
+        pnlPct: 9997.41,
+        status: "closed_sl",
+        outcome: "stop_loss",
+        slPrice: 0.207,
+      },
+      execution: {
+        symbol: "BTC",
+        direction: "做多",
+        planned: {
+          entryPrice: "斬获800%+",
+          stopLossPrice: "0.207",
+          takeProfitPrices: ["0.226"],
+        },
+        actual: {},
+        outcome: "stop_loss",
+      },
+      parsedJson: { symbol: "BTC", stopLoss: "0.207", targets: ["0.226"] },
+    };
+    const trade = attachSignalPlanFields(card, {
+      pnlPct: 9997.41,
+      pnlUsdt: 199.95,
+      marginUsdt: 2,
+      progressOutcome: "stop_loss",
+    });
+    assert.equal(trade.pnlPct, null);
+    assert.equal(trade.pnlUsdt, null);
+    assert.equal(trade.rawPnlPct, undefined);
+    assert.equal(trade.stopLossPrice, null);
+    assert.equal(trade.takeProfitText, null);
   });
 
   it("sanitizes wrong-scale BTC plan on display", () => {

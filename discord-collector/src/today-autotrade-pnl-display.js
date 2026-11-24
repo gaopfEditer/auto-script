@@ -3,6 +3,7 @@
  */
 import { isShortDirection } from "./card-direction.js";
 import { parseProgressJson, resolveProgressLeverage } from "./card-level-progress.js";
+import { isValidSlLevel, isValidTpLevel } from "./card-liquidation-engine.js";
 import { parseEntryPrice, parsePrice } from "./card-price-fetch.js";
 import { executionFromParsed, normalizeExecution } from "./discord-signal-execution.js";
 
@@ -84,6 +85,42 @@ export function levelNearAnchor(anchor, level, maxRatio = 4) {
  * execution 币种与卡片不一致时，只用 parsedJson 上的同币种计划。
  * @param {Record<string, unknown>} card
  */
+/**
+ * 展示用入场锚价：不用 progress 里从营销文偷来的 800 之类。
+ * @param {Record<string, unknown>} card
+ * @param {ReturnType<typeof normalizeExecution>} ex
+ */
+export function resolveDisplayEntryAnchor(card, ex) {
+  const sym = String(card.symbol ?? ex.symbol ?? "").trim();
+  const prog = parseProgressJson(card.progress);
+  const fromProg = Number(prog?.entryPriceUsed);
+  if (Number.isFinite(fromProg) && fromProg > 0 && priceSaneForSymbol(sym, fromProg)) {
+    return fromProg;
+  }
+  if (card.parsedJson && typeof card.parsedJson === "object") {
+    const fromParsed = executionFromParsed(card.parsedJson);
+    const e = parseEntryPrice(fromParsed.planned?.entryPrice);
+    if (e != null && priceSaneForSymbol(sym, e)) return e;
+  }
+  const raw = ex.planned?.entryPrice;
+  if (!isImplausibleEntryText(raw, sym)) {
+    const e = parseEntryPrice(raw);
+    if (e != null && priceSaneForSymbol(sym, e)) return e;
+  }
+  return null;
+}
+
+/**
+ * @param {number | null} entry
+ * @param {number} level
+ * @param {boolean} isShort
+ * @param {"sl"|"tp"} kind
+ */
+export function levelMatchesDirection(entry, level, isShort, kind) {
+  if (entry == null || !Number.isFinite(entry) || entry <= 0) return true;
+  return kind === "sl" ? isValidSlLevel(entry, level, isShort) : isValidTpLevel(entry, level, isShort);
+}
+
 function executionForDisplayPlan(card) {
   const ex = normalizeExecution(card.execution, card.parsedJson);
   const cardSym = bareTradeSymbol(card.symbol);
@@ -102,36 +139,39 @@ function executionForDisplayPlan(card) {
  * @param {Record<string, unknown>} card
  * @param {{ stopLossPrice: string | null, takeProfitPrices: string[], takeProfitText: string | null }} raw
  */
+function filterTpslLevel(sym, anchor, isShort, kind, priceStr) {
+  const n = parsePrice(priceStr);
+  if (n == null) return false;
+  if (!priceSaneForSymbol(sym, n)) return false;
+  if (anchor != null && !levelNearAnchor(anchor, n, 3)) return false;
+  if (!levelMatchesDirection(anchor, n, isShort, kind)) return false;
+  return true;
+}
+
 export function sanitizeDisplayTpsl(card, raw) {
   const ex = executionForDisplayPlan(card);
-  const prog = parseProgressJson(card.progress);
   const sym = String(card.symbol ?? ex.symbol ?? "").trim();
-
-  let anchor =
-    Number(prog?.entryPriceUsed) > 0
-      ? Number(prog.entryPriceUsed)
-      : parseEntryPrice(ex.planned?.entryPrice);
-
-  if (isImplausibleEntryText(ex.planned?.entryPrice, sym)) {
-    const fromProg = Number(prog?.entryPriceUsed);
-    anchor = Number.isFinite(fromProg) && fromProg > 0 ? fromProg : null;
-  }
+  const isShort = isShortDirection(ex.direction);
+  const anchor = resolveDisplayEntryAnchor(card, ex);
 
   const slRaw = raw.stopLossPrice;
-  let stopLossPrice = slRaw;
   const slNum = parsePrice(slRaw);
+  if (
+    slNum != null &&
+    anchor != null &&
+    !levelMatchesDirection(anchor, slNum, isShort, "sl")
+  ) {
+    return { stopLossPrice: null, takeProfitPrices: [], takeProfitText: null };
+  }
+
+  let stopLossPrice = slRaw;
   if (slNum != null) {
-    const okScale = priceSaneForSymbol(sym, slNum);
-    const okAnchor = anchor == null || levelNearAnchor(anchor, slNum, 3);
-    if (!okScale || !okAnchor) stopLossPrice = null;
+    if (!filterTpslLevel(sym, anchor, isShort, "sl", slRaw)) stopLossPrice = null;
   }
 
   const takeProfitPrices = [];
   for (const p of raw.takeProfitPrices ?? []) {
-    const n = parsePrice(p);
-    if (n == null) continue;
-    if (!priceSaneForSymbol(sym, n)) continue;
-    if (anchor != null && !levelNearAnchor(anchor, n, 3)) continue;
+    if (!filterTpslLevel(sym, anchor, isShort, "tp", p)) continue;
     takeProfitPrices.push(String(p).trim());
   }
 
@@ -145,22 +185,25 @@ export function sanitizeDisplayTpsl(card, raw) {
 
   if ((!out.stopLossPrice || !out.takeProfitPrices.length) && card.parsedJson) {
     const fromParsed = executionFromParsed(card.parsedJson);
+    const dirShort = isShortDirection(fromParsed.direction || ex.direction);
+    const slParsed = parsePrice(fromParsed.planned?.stopLossPrice);
+    if (
+      slParsed != null &&
+      anchor != null &&
+      !levelMatchesDirection(anchor, slParsed, dirShort, "sl")
+    ) {
+      return out;
+    }
     if (fromParsed.planned) {
       const sl2 = String(fromParsed.planned.stopLossPrice ?? "").trim();
-      const tps2 = (fromParsed.planned.takeProfitPrices ?? [])
-        .map((x) => String(x ?? "").trim())
-        .filter(Boolean);
-      const slNum2 = parsePrice(sl2);
-      if (!out.stopLossPrice && slNum2 != null && priceSaneForSymbol(sym, slNum2)) {
-        if (anchor == null || levelNearAnchor(anchor, slNum2, 3)) out.stopLossPrice = sl2;
+      if (!out.stopLossPrice && sl2 && filterTpslLevel(sym, anchor, dirShort, "sl", sl2)) {
+        out.stopLossPrice = sl2;
       }
       if (!out.takeProfitPrices.length) {
-        for (const p of tps2) {
-          const n = parsePrice(p);
-          if (n == null) continue;
-          if (!priceSaneForSymbol(sym, n)) continue;
-          if (anchor != null && !levelNearAnchor(anchor, n, 3)) continue;
-          out.takeProfitPrices.push(p);
+        for (const p of fromParsed.planned.takeProfitPrices ?? []) {
+          const s = String(p ?? "").trim();
+          if (!s || !filterTpslLevel(sym, anchor, dirShort, "tp", s)) continue;
+          out.takeProfitPrices.push(s);
         }
         out.takeProfitText = out.takeProfitPrices.length ? out.takeProfitPrices.join(", ") : null;
       }
@@ -186,8 +229,7 @@ export function reconcileDisplayPnlPct(card, pnlPct) {
   }
   const ex = executionForDisplayPlan(card);
   if (isImplausibleEntryText(ex.planned?.entryPrice, card.symbol)) {
-    const saneEntry = Number(prog?.entryPriceUsed);
-    if (!Number.isFinite(saneEntry) || saneEntry <= 0) return null;
+    if (resolveDisplayEntryAnchor(card, ex) == null) return null;
   }
   if (Math.abs(p) > 2500) return null;
   return Math.round(p * 100) / 100;

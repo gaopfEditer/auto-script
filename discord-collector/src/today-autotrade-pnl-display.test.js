@@ -77,6 +77,68 @@ describe("sanitizeDisplayTpsl", () => {
     assert.deepEqual(tpsl.takeProfitPrices, ["95000"]);
   });
 
+  it("rejects short stop below entry (ICNT leak)", () => {
+    const tpsl = sanitizeDisplayTpsl(
+      {
+        symbol: "ICNTUSDT",
+        execution: {
+          symbol: "ICNT",
+          direction: "做空",
+          planned: {
+            entryPrice: "0.3302",
+            stopLossPrice: "0.207",
+            takeProfitPrices: ["0.226", "0.239", "0.261"],
+          },
+          actual: {},
+          outcome: "pending",
+        },
+        parsedJson: {
+          symbol: "ICNT",
+          direction: "做空",
+          entry: "0.3302",
+          stopLoss: "0.207",
+          targets: ["0.226"],
+        },
+        progress: { entryPriceUsed: 0.3302 },
+      },
+      {
+        stopLossPrice: "0.207",
+        takeProfitPrices: ["0.226", "0.239", "0.261"],
+        takeProfitText: "0.226, 0.239, 0.261",
+      }
+    );
+    assert.equal(tpsl.stopLossPrice, null);
+    assert.deepEqual(tpsl.takeProfitPrices, []);
+  });
+
+  it("keeps valid short ICNT plan", () => {
+    const tpsl = sanitizeDisplayTpsl(
+      {
+        symbol: "ICNTUSDT",
+        execution: {
+          symbol: "ICNT",
+          direction: "做空",
+          planned: {
+            entryPrice: "0.3302",
+            stopLossPrice: "0.3418",
+            takeProfitPrices: ["0.3165", "0.296", "0.262"],
+          },
+          actual: {},
+          outcome: "pending",
+        },
+        parsedJson: null,
+        progress: { entryPriceUsed: 0.3302 },
+      },
+      {
+        stopLossPrice: "0.3418",
+        takeProfitPrices: ["0.3165", "0.296", "0.262"],
+        takeProfitText: "0.3165, 0.296, 0.262",
+      }
+    );
+    assert.equal(tpsl.stopLossPrice, "0.3418");
+    assert.deepEqual(tpsl.takeProfitPrices, ["0.3165", "0.296", "0.262"]);
+  });
+
   it("rejects absurd stop vs SKHYNIX entry anchor", () => {
     const tpsl = sanitizeDisplayTpsl(
       {
@@ -98,6 +160,24 @@ describe("sanitizeDisplayTpsl", () => {
 });
 
 describe("reconcileDisplayPnlPct", () => {
+  it("nulls garbage pnl when BTC progress entry is marketing 800", () => {
+    const p = reconcileDisplayPnlPct(
+      {
+        symbol: "BTCUSDT",
+        progress: { entryPriceUsed: 800, pnlPct: 9997.41 },
+        execution: {
+          direction: "做多",
+          planned: { entryPrice: "斬获800%+" },
+          actual: {},
+          outcome: "pending",
+        },
+        parsedJson: null,
+      },
+      9997.41
+    );
+    assert.equal(p, null);
+  });
+
   it("nulls garbage pnl from sub-dollar BTC entry in progress", () => {
     const p = reconcileDisplayPnlPct(
       {
