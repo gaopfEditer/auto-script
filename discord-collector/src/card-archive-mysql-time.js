@@ -30,6 +30,47 @@ export function shanghaiCalendarDayStartIso(nowMs = Date.now()) {
   return new Date(shanghaiCalendarDayStartMs(nowMs)).toISOString();
 }
 
+/** @param {number} [ms] */
+export function shanghaiYmdFromMs(ms = Date.now()) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: CARD_ARCHIVE_TZ }).format(new Date(ms));
+}
+
+/**
+ * @param {unknown} ymd `YYYY-MM-DD` 上海日历日
+ * @returns {number | null} 当日 00:00:00 +08:00 的毫秒时间戳
+ */
+export function parseShanghaiCalendarDayYmd(ymd) {
+  const s = String(ymd ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const t = Date.parse(`${s}T00:00:00+08:00`);
+  if (!Number.isFinite(t)) return null;
+  if (shanghaiYmdFromMs(t) !== s) return null;
+  return t;
+}
+
+/**
+ * 上海自然日查询窗：默认今日 [00:00, now]；历史日 [00:00, 23:59:59.999]。
+ * @param {{ day?: unknown, nowMs?: number }} [opts]
+ */
+export function resolveShanghaiDayRange(opts = {}) {
+  const now = Number(opts.nowMs) > 0 ? Number(opts.nowMs) : Date.now();
+  const todayYmd = shanghaiYmdFromMs(now);
+  const todayStart = shanghaiCalendarDayStartMs(now);
+  let dayYmd = todayYmd;
+  let fromMs = todayStart;
+  const raw = String(opts.day ?? "").trim();
+  if (raw) {
+    const start = parseShanghaiCalendarDayYmd(raw);
+    if (start != null) {
+      fromMs = start;
+      dayYmd = raw;
+    }
+  }
+  const isToday = dayYmd === todayYmd;
+  const toMs = isToday ? now : fromMs + 86_400_000 - 1;
+  return { fromMs, toMs, dayYmd, isToday };
+}
+
 /**
  * MySQL 读出的 DATETIME（按 CST 墙钟存、无 TZ）→ ISO 字符串 +08:00，避免误加 Z 造成 UI 偏移。
  * @param {unknown} raw

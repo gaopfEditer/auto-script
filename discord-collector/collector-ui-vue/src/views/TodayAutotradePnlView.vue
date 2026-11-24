@@ -32,6 +32,19 @@ const mtmByCardId = ref({});
 const mtmSweepActive = ref(false);
 let mtmInFlight = 0;
 
+function shanghaiTodayYmd() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+  }).format(new Date());
+}
+
+/** 查询日 YYYY-MM-DD（上海）；默认今日 */
+const selectedDayYmd = ref(shanghaiTodayYmd());
+
+const isViewingToday = computed(
+  () => data.value?.isQueryToday !== false && selectedDayYmd.value === shanghaiTodayYmd(),
+);
+
 function loadDisplayPrefs() {
   try {
     const raw = localStorage.getItem(DISPLAY_CACHE);
@@ -68,6 +81,26 @@ function toggleHideChannel() {
   persistDisplayPrefs();
 }
 
+function onDayInputChange(ev) {
+  const v = String(/** @type {HTMLInputElement} */ (ev.target).value ?? "").trim();
+  if (!v) return;
+  selectedDayYmd.value = v;
+  void load();
+}
+
+function pickToday() {
+  selectedDayYmd.value = shanghaiTodayYmd();
+  void load();
+}
+
+function pickYesterday() {
+  const start = Date.parse(`${shanghaiTodayYmd()}T00:00:00+08:00`) - 86_400_000;
+  selectedDayYmd.value = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+  }).format(new Date(start));
+  void load();
+}
+
 /** @param {Record<string, unknown>} t */
 function displaySourceLabel(t) {
   if (hideSource.value) return "*****";
@@ -85,7 +118,9 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    data.value = await fetchTodayAutotradePnl();
+    mtmByCardId.value = {};
+    data.value = await fetchTodayAutotradePnl(selectedDayYmd.value);
+    if (data.value?.queryDay) selectedDayYmd.value = String(data.value.queryDay);
     restoreMarginCache();
     void settleOpenPositions();
   } catch (e) {
@@ -454,10 +489,20 @@ function fmtSignalTime(t) {
   return s || "—";
 }
 
+function restartAutoRefresh() {
+  if (timer) clearInterval(timer);
+  timer = 0;
+  if (isViewingToday.value) {
+    timer = window.setInterval(() => void load(), 60_000);
+  }
+}
+
+watch(isViewingToday, () => restartAutoRefresh());
+
 onMounted(() => {
   loadDisplayPrefs();
   void load();
-  timer = window.setInterval(() => void load(), 60_000);
+  restartAutoRefresh();
 });
 onUnmounted(() => {
   if (timer) clearInterval(timer);
@@ -469,6 +514,19 @@ onUnmounted(() => {
     <header class="hero" aria-label="今日跟单盈亏摘要">
       <p class="hero-kicker">巨鲸 / Telegram / 币安广场 · 路径结算</p>
       <h1 class="hero-date">{{ dayLabel || "今日（上海）" }}</h1>
+      <div class="hero-day-pick">
+        <label class="day-label" for="today-pnl-day">查询日</label>
+        <input
+          id="today-pnl-day"
+          type="date"
+          class="day-inp"
+          :value="selectedDayYmd"
+          :max="shanghaiTodayYmd()"
+          @change="onDayInputChange"
+        />
+        <button type="button" class="btn-secondary day-btn" @click="pickYesterday">昨天</button>
+        <button type="button" class="btn-secondary day-btn" @click="pickToday">今天</button>
+      </div>
       <p class="hero-pnl" :class="sumClass">{{ fmtPnl(sumPnl) }}</p>
       <p class="hero-sub">
         有效卡 <strong>{{ summary.tradeCards ?? 0 }}</strong> 张 · 已结
@@ -499,7 +557,11 @@ onUnmounted(() => {
           type="button"
           class="btn-secondary"
           :disabled="mtmSweepActive || !summary.openCount"
-          :title="summary.openCount ? '按永续现价重算持仓中行的盈亏%' : '今日无持仓中'"
+          :title="
+            summary.openCount
+              ? `按现价重算本页「持仓中」行（${selectedDayYmd}）`
+              : '本查询日无持仓中'
+          "
           @click="settleOpenPositions"
         >
           {{ mtmSweepActive ? "持仓结算中…" : "重新结算持仓中" }}
@@ -765,6 +827,29 @@ onUnmounted(() => {
   font-size: 1.05rem;
   font-weight: 600;
   color: #f2f3f5;
+}
+.hero-day-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.5rem;
+}
+.day-label {
+  font-size: 0.85rem;
+  color: #b5bac1;
+}
+.day-inp {
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid #404249;
+  background: #2b2d31;
+  color: #f2f3f5;
+}
+.day-btn {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.85rem;
 }
 .hero-pnl {
   margin: 0;

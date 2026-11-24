@@ -1,5 +1,14 @@
-export async function fetchTodayAutotradePnl() {
-  const res = await fetch("/api/local/today-autotrade-pnl", { cache: "no-store" });
+/**
+ * @param {string} [dayYmd] `YYYY-MM-DD` Asia/Shanghai；省略=今日
+ */
+export async function fetchTodayAutotradePnl(dayYmd) {
+  const d = String(dayYmd ?? "").trim();
+  const res = await fetch(
+    d
+      ? `/api/local/today-autotrade-pnl?day=${encodeURIComponent(d)}`
+      : "/api/local/today-autotrade-pnl",
+    { cache: "no-store" },
+  );
   const j = await res.json().catch(() => ({}));
   if (!res.ok || j?.ok === false) {
     throw new Error(j?.error || `HTTP ${res.status}`);

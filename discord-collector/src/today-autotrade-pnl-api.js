@@ -2,7 +2,7 @@
  * Local：当日自动跟单（Bitget / WEEX）盈亏一览，供发盈利图。
  */
 import { archiveCardToClient } from "./card-archive-service.js";
-import { shanghaiCalendarDayStartMs } from "./card-archive-mysql-time.js";
+import { resolveShanghaiDayRange, shanghaiCalendarDayStartMs } from "./card-archive-mysql-time.js";
 import { parseProgressJson, isProgressTerminal } from "./card-level-progress.js";
 import { requireLocalRequest } from "./local-request.js";
 import { config } from "./config.js";
@@ -262,15 +262,23 @@ function settlementRowWithoutLiveOrder(card, marginDefault) {
 /**
  * @param {ReturnType<typeof import("./store.js").openStore>} store
  */
+/**
+ * @param {unknown} [queryDay] `YYYY-MM-DD` Asia/Shanghai
+ * @param {number} [nowMs]
+ */
+export function resolveTodayAutotradePnlDayRange(queryDay, nowMs) {
+  return resolveShanghaiDayRange({ day: queryDay, nowMs });
+}
+
 export function registerTodayAutotradePnlRoutes(app, { store }) {
-  app.get("/api/local/today-autotrade-pnl", requireLocalRequest, async (_req, res) => {
+  app.get("/api/local/today-autotrade-pnl", requireLocalRequest, async (req, res) => {
     try {
       if (!store?.listSignalCards) {
         res.status(503).json({ ok: false, error: "store_unavailable" });
         return;
       }
-      const fromMs = shanghaiCalendarDayStartMs();
-      const toMs = Date.now();
+      const queryDay = String(req.query?.day ?? "").trim();
+      const { fromMs, toMs, dayYmd, isToday } = resolveTodayAutotradePnlDayRange(queryDay);
       const rows = await store.listSignalCards({ fromMs, toMs, limit: 800, status: "active" });
       /** @type {Record<string, unknown>[]} */
       const trades = [];
@@ -369,6 +377,8 @@ export function registerTodayAutotradePnlRoutes(app, { store }) {
       res.json({
         ok: true,
         publishEnabled: config.tradeSignalAiPublishEnabled,
+        queryDay: dayYmd,
+        isQueryToday: isToday,
         dayLabel,
         fromMs,
         toMs,
