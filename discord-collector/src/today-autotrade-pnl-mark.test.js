@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { isProgressTerminal } from "./card-level-progress.js";
+import { calcLeveragePnl } from "./card-price-fetch.js";
 import {
   computeTodayPnlOpenMark,
   markOpenUserMessage,
   resolveMarkEntryPrice,
 } from "./today-autotrade-pnl-mark.js";
+import { resolveTodayPnlMarkContext as ctxFromDisplay } from "./today-autotrade-pnl-display.js";
 
 describe("resolveMarkEntryPrice", () => {
   it("prefers progress entryPriceUsed", () => {
@@ -17,13 +19,29 @@ describe("resolveMarkEntryPrice", () => {
     assert.equal(entry, 100);
   });
 
-  it("falls back to planned entry", () => {
+  it("rejects percent-hype entry on BTC when progress missing", () => {
     const entry = resolveMarkEntryPrice({
+      symbol: "BTCUSDT",
       progress: null,
-      execution: { planned: { entryPrice: "0.55" } },
-      parsedJson: { entry: "0.6" },
+      execution: { planned: { entryPrice: "斩获800%+" } },
+      parsedJson: { entry: "92000" },
     });
-    assert.equal(entry, 0.55);
+    assert.equal(entry, null);
+  });
+});
+
+describe("short MTM sign", () => {
+  it("short profit is positive with mark context", () => {
+    const card = {
+      symbol: "BTCUSDT",
+      execution: { direction: "做空", planned: { entryPrice: "100000" }, actual: {}, outcome: "pending" },
+      parsedJson: null,
+      progress: { entryHitAt: "2026-01-01T00:00:00.000Z", entryPriceUsed: 100000, leverage: 20 },
+    };
+    const { isShort, leverage } = ctxFromDisplay(card);
+    assert.equal(isShort, true);
+    const pnl = calcLeveragePnl(100000, 99000, isShort, leverage);
+    assert.ok(pnl && pnl.pnlPctOnMargin > 0);
   });
 });
 

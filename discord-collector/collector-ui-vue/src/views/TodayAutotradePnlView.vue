@@ -418,8 +418,15 @@ function fmtPct(v) {
 }
 
 function outcomeLabel(t) {
-  if (t?.progressOutcome === "take_profit") return "止盈";
-  if (t?.progressOutcome === "stop_loss") return "止损";
+  const outcome =
+    String(t?.displayOutcome ?? t?.progressOutcome ?? "").trim() ||
+    (t?.effectivePnlPct != null && Number.isFinite(Number(t.effectivePnlPct))
+      ? Number(t.effectivePnlPct) >= 0
+        ? "take_profit"
+        : "stop_loss"
+      : "");
+  if (outcome === "take_profit") return "止盈";
+  if (outcome === "stop_loss") return "止损";
   if (t?.closed) return "已结算";
   return "持仓中";
 }

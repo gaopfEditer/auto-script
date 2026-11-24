@@ -46,4 +46,25 @@ describe("signalTpslFromCard", () => {
     assert.equal(tpsl.takeProfitText, null);
     assert.deepEqual(tpsl.takeProfitPrices, []);
   });
+
+  it("sanitizes wrong-scale BTC plan on display", () => {
+    const tpsl = signalTpslFromCard({
+      symbol: "BTCUSDT",
+      execution: {
+        symbol: "BTC",
+        direction: "做多",
+        planned: {
+          entryPrice: "0.207",
+          stopLossPrice: "0.207",
+          takeProfitPrices: ["0.226"],
+        },
+        actual: {},
+        outcome: "pending",
+      },
+      parsedJson: { symbol: "BTC", stopLoss: "89000", targets: ["93000"] },
+      progress: { entryPriceUsed: 91000 },
+    });
+    assert.equal(tpsl.stopLossPrice, "89000");
+    assert.deepEqual(tpsl.takeProfitPrices, ["93000"]);
+  });
 });
