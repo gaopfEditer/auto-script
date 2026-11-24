@@ -1,6 +1,10 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { fetchTodayAutotradePnl, publishTodayPnlSelection } from "../lib/todayAutotradePnlApi.js";
+import {
+  fetchTodayAutotradePnl,
+  markTodayPnlOpenCard,
+  publishTodayPnlSelection,
+} from "../lib/todayAutotradePnlApi.js";
 import { formatCardTime } from "../lib/discordSignalApi.js";
 
 defineOptions({ name: "TodayAutotradePnlView" });
@@ -23,6 +27,10 @@ const publishLoading = ref(false);
 const publishMessage = ref("");
 const hideSource = ref(false);
 const hideChannel = ref(false);
+/** @type {import('vue').Ref<Record<number, { status: string, pnlPct?: number, markError?: string, markPrice?: number }>>} */
+const mtmByCardId = ref({});
+const mtmSweepActive = ref(false);
+let mtmInFlight = 0;
 
 function loadDisplayPrefs() {
   try {
@@ -79,6 +87,7 @@ async function load() {
   try {
     data.value = await fetchTodayAutotradePnl();
     restoreMarginCache();
+    void settleOpenPositions();
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
     data.value = null;
@@ -138,17 +147,42 @@ function marginFor(t) {
   return Number(t.defaultMarginUsdt ?? t.marginUsdt ?? 2);
 }
 
-function pnlUsdtFor(t) {
+/** @param {Record<string, unknown>} t */
+function mtmStateFor(t) {
+  const id = Number(t.cardId);
+  return mtmByCardId.value[id] ?? null;
+}
+
+/** @param {Record<string, unknown>} t */
+function displayPnlPct(t) {
+  if (!t.closed) {
+    const mtm = mtmStateFor(t);
+    if (mtm?.status === "ok" && mtm.pnlPct != null && Number.isFinite(Number(mtm.pnlPct))) {
+      return Number(mtm.pnlPct);
+    }
+  }
   if (t.pnlPct == null || !Number.isFinite(Number(t.pnlPct))) return null;
-  return Math.round((marginFor(t) * Number(t.pnlPct)) / 100 * 100) / 100;
+  return Number(t.pnlPct);
+}
+
+function pnlUsdtFor(t, pnlPct) {
+  const pct = pnlPct != null ? pnlPct : displayPnlPct(t);
+  if (pct == null || !Number.isFinite(Number(pct))) return null;
+  return Math.round((marginFor(t) * Number(pct)) / 100 * 100) / 100;
 }
 
 /** @param {Record<string, unknown>} t */
 function enrichTrade(t) {
+  const pnlPct = displayPnlPct(t);
+  const mtm = mtmStateFor(t);
   return {
     ...t,
     effectiveMarginUsdt: marginFor(t),
-    effectivePnlUsdt: pnlUsdtFor(t),
+    effectivePnlPct: pnlPct,
+    effectivePnlUsdt: pnlUsdtFor(t, pnlPct),
+    mtmStatus: mtm?.status ?? "",
+    mtmError: mtm?.markError ?? "",
+    mtmMarkPrice: mtm?.markPrice,
   };
 }
 
@@ -268,11 +302,82 @@ function buildPublishRows() {
     channelName: displayChannelLabel(t),
     symbol: t.symbol,
     marginUsdt: t.effectiveMarginUsdt,
-    pnlPct: t.pnlPct,
+    pnlPct: t.effectivePnlPct ?? t.pnlPct,
     pnlUsdt: t.effectivePnlUsdt,
     statusLabel: outcomeLabel(t),
     uid: t.uid,
   }));
+}
+
+/** @param {Record<string, unknown>} t */
+function fmtRowPct(t) {
+  if (!t.closed && t.mtmStatus === "pending") return "结算中…";
+  if (!t.closed && t.mtmStatus === "error") {
+    return t.mtmError || "现价失败";
+  }
+  return fmtPct(t.effectivePnlPct);
+}
+
+/** @param {Record<string, unknown>} t */
+function fmtRowPnl(t) {
+  if (!t.closed && t.mtmStatus === "pending") return "…";
+  if (!t.closed && t.mtmStatus === "error") return "—";
+  return fmtPnl(t.effectivePnlUsdt);
+}
+
+/** @param {number} cardId */
+async function markOneOpenRow(cardId) {
+  mtmInFlight += 1;
+  mtmSweepActive.value = true;
+  mtmByCardId.value = {
+    ...mtmByCardId.value,
+    [cardId]: { status: "pending" },
+  };
+  try {
+    const j = await markTodayPnlOpenCard(cardId);
+    if (j?.skipped) {
+      const next = { ...mtmByCardId.value };
+      delete next[cardId];
+      mtmByCardId.value = next;
+      return;
+    }
+    if (j?.ok) {
+      mtmByCardId.value = {
+        ...mtmByCardId.value,
+        [cardId]: {
+          status: "ok",
+          pnlPct: Number(j.pnlPct),
+          markPrice: j.markPrice != null ? Number(j.markPrice) : undefined,
+        },
+      };
+      return;
+    }
+    mtmByCardId.value = {
+      ...mtmByCardId.value,
+      [cardId]: {
+        status: "error",
+        markError: String(j?.markError ?? j?.error ?? "现价获取失败"),
+      },
+    };
+  } catch (e) {
+    mtmByCardId.value = {
+      ...mtmByCardId.value,
+      [cardId]: {
+        status: "error",
+        markError: e instanceof Error ? e.message : String(e),
+      },
+    };
+  } finally {
+    mtmInFlight = Math.max(0, mtmInFlight - 1);
+    mtmSweepActive.value = mtmInFlight > 0;
+  }
+}
+
+function settleOpenPositions() {
+  const open = trades.value.filter((t) => !t.closed);
+  for (const t of open) {
+    void markOneOpenRow(Number(t.cardId));
+  }
 }
 
 async function publishPickerToOperate() {
@@ -342,13 +447,6 @@ function fmtSignalTime(t) {
   return s || "—";
 }
 
-/** @param {Record<string, unknown>} t */
-function fmtOrderTime(t) {
-  if (!t.hasLiveAutotrade || !t.orderAt) return "—";
-  const s = formatCardTime({ signalAt: t.orderAt });
-  return s || "—";
-}
-
 onMounted(() => {
   loadDisplayPrefs();
   void load();
@@ -390,6 +488,15 @@ onUnmounted(() => {
         />
         <button type="button" class="btn-secondary" @click="applyBatchMargin">应用到全部</button>
         <button type="button" class="btn-secondary" @click="resetAllMargins">恢复默认基数</button>
+        <button
+          type="button"
+          class="btn-secondary"
+          :disabled="mtmSweepActive || !summary.openCount"
+          :title="summary.openCount ? '按永续现价重算持仓中行的盈亏%' : '今日无持仓中'"
+          @click="settleOpenPositions"
+        >
+          {{ mtmSweepActive ? "持仓结算中…" : "重新结算持仓中" }}
+        </button>
       </div>
       <div class="toolbar-row">
         <button type="button" class="btn-primary" :disabled="!someSelected" @click="openPicker">
@@ -441,7 +548,6 @@ onUnmounted(() => {
             <th>盈亏U</th>
             <th>状态</th>
             <th>信号时间</th>
-            <th>下单时间</th>
             <th>止损</th>
             <th>止盈</th>
           </tr>
@@ -495,15 +601,27 @@ onUnmounted(() => {
                 默认{{ t.defaultMarginUsdt ?? t.marginUsdt }}U
               </button>
             </td>
-            <td :class="Number(t.pnlPct) >= 0 ? 'up' : 'down'">{{ fmtPct(t.pnlPct) }}</td>
+            <td
+              :class="
+                t.mtmStatus === 'error'
+                  ? 'mtm-err'
+                  : Number(t.effectivePnlPct) >= 0
+                    ? 'up'
+                    : 'down'
+              "
+              :title="
+                t.mtmMarkPrice != null && !t.closed
+                  ? `现价 ${t.mtmMarkPrice}`
+                  : t.mtmError || undefined
+              "
+            >
+              {{ fmtRowPct(t) }}
+            </td>
             <td :class="Number(t.effectivePnlUsdt) >= 0 ? 'up' : 'down'">
-              {{ fmtPnl(t.effectivePnlUsdt) }}
+              {{ fmtRowPnl(t) }}
             </td>
             <td>{{ outcomeLabel(t) }}</td>
             <td class="time" :title="'Asia/Shanghai (UTC+8)'">{{ fmtSignalTime(t) }}</td>
-            <td class="time muted-order" :title="'实盘跟单提交时间 · Asia/Shanghai'">
-              {{ fmtOrderTime(t) }}
-            </td>
             <td class="mono tpsl">{{ fmtPlanPrice(t.stopLossPrice) }}</td>
             <td class="mono tpsl">{{ fmtTakeProfit(t) }}</td>
           </tr>
@@ -574,7 +692,9 @@ onUnmounted(() => {
                 <td>{{ displayChannelLabel(t) }}</td>
                 <td class="mono">{{ t.symbol }}</td>
                 <td>{{ t.effectiveMarginUsdt }}U</td>
-                <td :class="Number(t.pnlPct) >= 0 ? 'up' : 'down'">{{ fmtPct(t.pnlPct) }}</td>
+                <td :class="Number(t.effectivePnlPct ?? t.pnlPct) >= 0 ? 'up' : 'down'">
+                  {{ fmtPct(t.effectivePnlPct ?? t.pnlPct) }}
+                </td>
                 <td :class="Number(t.effectivePnlUsdt) >= 0 ? 'up' : 'down'">
                   {{ fmtPnl(t.effectivePnlUsdt) }}
                 </td>
@@ -765,8 +885,9 @@ onUnmounted(() => {
   color: #949ba4;
   white-space: nowrap;
 }
-.muted-order {
-  color: #72767d;
+.mtm-err {
+  color: #faa81a;
+  font-size: 0.8rem;
 }
 .tpsl {
   font-size: 0.8rem;

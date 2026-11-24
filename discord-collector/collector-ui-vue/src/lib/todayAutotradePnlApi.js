@@ -15,6 +15,20 @@ export async function fetchTodayAutotradePnl() {
  *   platforms?: string[],
  * }} payload
  */
+/** @param {number} cardId */
+export async function markTodayPnlOpenCard(cardId) {
+  const res = await fetch("/api/local/today-autotrade-pnl/mark-open", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cardId }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok && j?.ok !== false && !j?.skipped) {
+    throw new Error(j?.error || `HTTP ${res.status}`);
+  }
+  return j;
+}
+
 export async function publishTodayPnlSelection(payload) {
   const res = await fetch("/api/local/today-autotrade-pnl/publish", {
     method: "POST",
