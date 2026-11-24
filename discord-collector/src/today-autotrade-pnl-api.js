@@ -11,6 +11,7 @@ import {
   formatTodayPnlPublishText,
   postTodayPnlToOperatePublish,
 } from "./today-autotrade-pnl-publish.js";
+import { normalizeExecution } from "./discord-signal-execution.js";
 
 const SETTLEMENT_SOURCE_TYPES = new Set(["kolvip", "telegram", "binance"]);
 
@@ -133,6 +134,45 @@ function attachSourcePostUrl(card, trade) {
   return trade;
 }
 
+/** @param {string[]} prices */
+function takeProfitPricesText(prices) {
+  if (!Array.isArray(prices) || !prices.length) return "";
+  return prices
+    .map((x) => String(x ?? "").trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+/**
+ * 卡片原文中的止盈/止损价（execution_json + parsedJson 回填）。
+ * @param {ReturnType<typeof archiveCardToClient>} card
+ */
+export function signalTpslFromCard(card) {
+  const ex = normalizeExecution(card.execution, card.parsedJson);
+  const stopLossPrice = String(ex.planned?.stopLossPrice ?? "").trim();
+  const takeProfitPrices = Array.isArray(ex.planned?.takeProfitPrices)
+    ? ex.planned.takeProfitPrices.map((x) => String(x ?? "").trim()).filter(Boolean)
+    : [];
+  const takeProfitText = takeProfitPricesText(takeProfitPrices);
+  return {
+    stopLossPrice: stopLossPrice || null,
+    takeProfitPrices,
+    takeProfitText: takeProfitText || null,
+  };
+}
+
+/**
+ * @param {ReturnType<typeof archiveCardToClient>} card
+ * @param {Record<string, unknown>} trade
+ */
+function attachSignalPlanFields(card, trade) {
+  const tpsl = signalTpslFromCard(card);
+  trade.stopLossPrice = tpsl.stopLossPrice;
+  trade.takeProfitPrices = tpsl.takeProfitPrices;
+  trade.takeProfitText = tpsl.takeProfitText;
+  return trade;
+}
+
 function settlementRowWithoutLiveOrder(card, marginDefault) {
   const progress = parseProgressJson(card.progress);
   const pnlPct =
@@ -208,7 +248,9 @@ export function registerTodayAutotradePnlRoutes(app, { store }) {
           const pnlUsdt = slices[0]?.pnlUsdt ?? null;
 
           trades.push(
-            attachSourcePostUrl(card, {
+            attachSignalPlanFields(
+              card,
+              attachSourcePostUrl(card, {
               cardId: card.id,
               uid: card.uid ?? (card.id != null ? `SC-${card.id}` : ""),
               symbol: card.symbol ?? slices[0]?.symbol,
@@ -236,13 +278,17 @@ export function registerTodayAutotradePnlRoutes(app, { store }) {
                 card.cardsByStyle?.cn_brief ??
                 card.cardsByStyle?.brief ??
                 String(card.rawContent ?? "").slice(0, 120),
-            })
+            }),
+            ),
           );
         } else {
           trades.push(
-            attachSourcePostUrl(
+            attachSignalPlanFields(
               card,
-              settlementRowWithoutLiveOrder(card, defaultMarginFromCard(card))
+              attachSourcePostUrl(
+                card,
+                settlementRowWithoutLiveOrder(card, defaultMarginFromCard(card))
+              )
             )
           );
         }
