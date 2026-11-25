@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { formatSendCdpLog } from "./signal-pipeline-log.js";
+import { appendKolvipPipelineAudit, auditCardId } from "./kolvip-pipeline-audit-log.js";
 import { buildKolvipOperateEntryNarrative } from "./kolvip-operate-entry.js";
 import {
   ensureDailyCdpStatsDay,
@@ -220,27 +221,53 @@ function orderSlotsLogLabel() {
  * @param {{ event?: string, log?: { info: Function, warn: Function }, bodyText?: string }} [opts]
  */
 export function notifyKolvipOperateCdpPublish(card, opts = {}) {
-  if (!config.kolvipOperateCdpEnabled) return false;
-  if (!config.tradeSignalAiPublishEnabled) return false;
+  const auditBase = {
+    channelId: String(card?.channelId ?? "").trim(),
+    cardId: auditCardId(card?.id),
+    symbol: String(card?.symbol ?? ""),
+    target: "8787",
+    event: String(opts.event || "entry").trim() || "entry",
+  };
+  if (!config.kolvipOperateCdpEnabled) {
+    appendKolvipPipelineAudit("cdp_notify", { ...auditBase, result: "skip", reason: "kolvip_operate_cdp_disabled" });
+    return false;
+  }
+  if (!config.tradeSignalAiPublishEnabled) {
+    appendKolvipPipelineAudit("cdp_notify", { ...auditBase, result: "skip", reason: "trade_signal_ai_publish_disabled" });
+    return false;
+  }
 
   const event = String(opts.event || "entry").trim() || "entry";
-  if (event !== "entry") return false;
+  if (event !== "entry") {
+    appendKolvipPipelineAudit("cdp_notify", { ...auditBase, result: "skip", reason: `event_not_entry:${event}` });
+    return false;
+  }
 
   const channelId = String(card?.channelId ?? "").trim();
-  if (!isKolvipOperateCdpChannel(channelId)) return false;
+  if (!isKolvipOperateCdpChannel(channelId)) {
+    appendKolvipPipelineAudit("cdp_notify", {
+      ...auditBase,
+      channelId,
+      result: "skip",
+      reason: "not_operate_cdp_channel",
+    });
+    return false;
+  }
 
   const claimed = claimKolvipOperateOrderSlot();
   if (!claimed) {
     const stats = getDailyCdpPublishStats();
+    const reason = `kolvip-operate 发单序号未命中（允许 ${orderSlotsLogLabel()}；日 CDP ${stats.total}/${config.kolvipOperateCdpDailyTarget}，上午 TG ${stats.tgMorningOk}）`;
     opts.log?.info?.(
       formatSendCdpLog("cdp_skip", {
         cardId: card?.id ?? "?",
         channelId,
         symbol: String(card?.symbol ?? ""),
         event,
-        reason: `kolvip-operate 发单序号未命中（允许 ${orderSlotsLogLabel()}；日 CDP ${stats.total}/${config.kolvipOperateCdpDailyTarget}，上午 TG ${stats.tgMorningOk}）`,
+        reason,
       }),
     );
+    appendKolvipPipelineAudit("cdp_notify", { ...auditBase, channelId, result: "skip", reason });
     return false;
   }
   const slot = claimed.slot;
@@ -279,6 +306,14 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
         reason: "kolvip-operate 无法生成入场四行正文",
       }),
     );
+    appendKolvipPipelineAudit("cdp_notify", {
+      ...auditBase,
+      channelId,
+      symbol,
+      direction,
+      result: "skip",
+      reason: "kolvip-operate 无法生成入场四行正文",
+    });
     return false;
   }
 
@@ -320,6 +355,15 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
         : `kolvip-operate 发单序=${slot} ${url}`,
     }),
   );
+  appendKolvipPipelineAudit("cdp_notify", {
+    ...auditBase,
+    channelId,
+    symbol,
+    direction,
+    result: "post",
+    reason: backfill ? `afternoon_backfill slot=${slot}` : `slot=${slot}`,
+    detail: url,
+  });
 
   void fetch(url, {
     method: "POST",
@@ -341,6 +385,7 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
         /* ignore */
       }
       if (!r.ok || j?.success === false) {
+        const reason = `kolvip-operate HTTP ${r.status} ${j?.error || text.slice(0, 160)}`;
         opts.log?.warn?.(
           formatSendCdpLog("cdp_fail", {
             cardId: card?.id ?? "?",
@@ -348,9 +393,18 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
             symbol,
             direction,
             event,
-            reason: `kolvip-operate HTTP ${r.status} ${j?.error || text.slice(0, 160)}`,
+            reason,
           }),
         );
+        appendKolvipPipelineAudit("cdp_notify", {
+          channelId,
+          cardId: auditCardId(card?.id),
+          symbol,
+          direction,
+          target: "8787",
+          result: "fail",
+          reason,
+        });
         return;
       }
       recordKolvipCdpPublishSuccess();
@@ -365,8 +419,19 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
           detail: backfill ? `下午补量 发单序=${slot}` : `发单序=${slot}`,
         }),
       );
+      appendKolvipPipelineAudit("cdp_notify", {
+        channelId,
+        cardId: auditCardId(card?.id),
+        symbol,
+        direction,
+        target: "8787",
+        result: "ok",
+        reason: backfill ? `afternoon_backfill slot=${slot}` : `slot=${slot}`,
+        detail: String(j?.job_id || ""),
+      });
     })
     .catch((e) => {
+      const reason = `kolvip-operate ${String(e?.message || e)}`;
       opts.log?.warn?.(
         formatSendCdpLog("cdp_fail", {
           cardId: card?.id ?? "?",
@@ -374,9 +439,18 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
           symbol,
           direction,
           event,
-          reason: `kolvip-operate ${String(e?.message || e)}`,
+          reason,
         }),
       );
+      appendKolvipPipelineAudit("cdp_notify", {
+        channelId,
+        cardId: auditCardId(card?.id),
+        symbol,
+        direction,
+        target: "8787",
+        result: "fail",
+        reason,
+      });
     });
   return true;
 }

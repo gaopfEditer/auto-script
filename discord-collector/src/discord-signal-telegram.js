@@ -9,6 +9,29 @@ import {
 } from "./discord-telegram-push-config.js";
 import { formatPipelineLog } from "./signal-pipeline-log.js";
 import { preferSingleLanguageSignalText } from "./message-text-format.js";
+import { fetch as undiciFetch, ProxyAgent } from "undici";
+
+/** @type {import("undici").Dispatcher | undefined} */
+let telegramApiDispatcher;
+
+/** @returns {import("undici").Dispatcher | undefined} */
+function getTelegramApiDispatcher() {
+  const proxy = String(config.telegramSendProxy ?? "").trim();
+  if (!proxy) return undefined;
+  if (!telegramApiDispatcher) telegramApiDispatcher = new ProxyAgent(proxy);
+  return telegramApiDispatcher;
+}
+
+/** @param {unknown} err */
+function formatTelegramFetchError(err) {
+  const e = /** @type {{ message?: string, cause?: { code?: string, message?: string } }} */ (err);
+  const msg = String(e?.message ?? err);
+  const cause = e?.cause;
+  if (!cause) return msg;
+  const extra = [cause.code, cause.message].filter(Boolean).join(" ");
+  return extra ? `${msg}: ${extra}` : msg;
+}
+
 
 /**
  * @param {ReturnType<typeof import("./logger.js").createLogger>} log
@@ -18,11 +41,13 @@ async function sendViaBotApi(chatId, text, botToken, timeoutMs, log) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const r = await fetch(url, {
+    const dispatcher = getTelegramApiDispatcher();
+    const r = await undiciFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text }),
       signal: controller.signal,
+      ...(dispatcher ? { dispatcher } : {}),
     });
     const raw = await r.text().catch(() => "");
     let parsed = null;
@@ -35,6 +60,10 @@ async function sendViaBotApi(chatId, text, botToken, timeoutMs, log) {
       throw new Error(`Bot API HTTP ${r.status}${raw ? `: ${raw.slice(0, 200)}` : ""}`);
     }
     return { ok: true };
+  } catch (e) {
+    const already = String(/** @type {Error} */ (e).message ?? e);
+    if (already.startsWith("Bot API HTTP")) throw e;
+    throw new Error(`Bot API ${formatTelegramFetchError(e)}`);
   } finally {
     clearTimeout(timer);
   }
@@ -140,7 +169,7 @@ export function createDiscordSignalTelegramPush(log, opts = {}) {
         return { ok: true };
       } catch (e) {
         log.warn(
-          `[telegram] HTTP 网关失败: ${/** @type {Error} */ (e).message}${
+          `[telegram] HTTP 网关失败: ${formatTelegramFetchError(e)}${
             botToken ? "，尝试 Bot API" : ""
           }`,
         );
@@ -169,7 +198,7 @@ export function createDiscordSignalTelegramPush(log, opts = {}) {
   if (enabled) {
     const tag = label ? ` label=${label}` : "";
     log.info(
-      `Discord 信号 Telegram 推送已启用 chat=${chatId}${tag} transport=${sendUrl ? "gateway" : "bot"}${sendUrl && botToken ? "+bot_fallback" : ""}`,
+      `Discord 信号 Telegram 推送已启用 chat=${chatId}${tag} transport=${sendUrl ? "gateway" : "bot"}${sendUrl && botToken ? "+bot_fallback" : ""}${config.telegramSendProxy ? " bot_api_proxy=on" : ""}`,
     );
   }
 

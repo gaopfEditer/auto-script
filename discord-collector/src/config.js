@@ -482,6 +482,8 @@ export const config = {
   ),
   kolvipEvalChannelIds: parseIdList(process.env.KOLVIP_EVAL_CHANNEL_IDS ?? ""),
   telegramSendTimeoutMs: Number(process.env.TELEGRAM_SEND_TIMEOUT_MS ?? 15_000),
+  /** Bot API 访问 api.telegram.org 的代理（国内直连会超时）；默认 COMMON_PROXY */
+  telegramSendProxy: envProxy("TELEGRAM_SEND_PROXY", "COMMON_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),
   /** 默认 true：全量 WS/API 日志与 UI；设 DISCORD_DEBUG_MODE=0 为精简模式 */
   debugMode: ["0", "false", "no", "off"].includes(
     String(process.env.DISCORD_DEBUG_MODE ?? "1").toLowerCase()

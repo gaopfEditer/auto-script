@@ -61,4 +61,53 @@ describe("parseKolvipBrief", () => {
     assert.equal(r?.symbol, "ARC");
     assert.equal(r?.takeProfits?.length, 4);
   });
+
+  const queen3134Multiline = `Coin: #XAUUSDT
+
+Direction: SHORT
+
+Leverage: 60x
+
+Entry: 3568$ - 3590$
+
+Targets: 3555 - 3542 - 3525- 3510$
+
+Stoploss: 3600$`;
+  const queen3134Flat =
+    "Coin: #XAUUSDT Direction: SHORT Leverage: 60x Entry: 3568$ - 3590$ Targets: 3555 - 3542 - 3525- 3510$ Stoploss: 3600$";
+
+  it("#3134 纯英文多行：XAUUSDT 做空，保留入场区间与全部 TP/SL，不被 binance_killers 吞字段", () => {
+    const r = parseSignalText(queen3134Multiline, "generic");
+    assert.equal(r?.parser, "kolvip_brief");
+    assert.equal(r?.symbol, "XAUUSDT");
+    assert.equal(r?.direction, "做空");
+    assert.equal(r?.entry, "3568$ - 3590$");
+    assert.equal(r?.stopLoss, "3600");
+    assert.deepEqual(r?.takeProfits, ["3555", "3542", "3525", "3510"]);
+    assert.equal(r?.leverage, "60倍");
+  });
+
+  it("#3134 纯英文单行同样截断 Entry，不把 Targets/Stoploss 吞进入场", () => {
+    const r = parseKolvipBrief(queen3134Flat);
+    assert.equal(r?.parser, "kolvip_brief");
+    assert.equal(r?.symbol, "XAUUSDT");
+    assert.equal(r?.direction, "做空");
+    assert.equal(r?.entry, "3568$ - 3590$");
+    assert.equal(r?.stopLoss, "3600");
+    assert.deepEqual(r?.takeProfits, ["3555", "3542", "3525", "3510"]);
+    const all = parseSignalText(queen3134Flat, "generic");
+    assert.equal(all?.parser, "kolvip_brief");
+    assert.notEqual(all?.parser, "binance_killers");
+    assert.ok(!String(all?.direction ?? "").includes("Leverage"));
+    assert.ok(!String(all?.entry ?? "").includes("Targets"));
+  });
+
+  it("cn_brief 纯英文区间信号仍打出币种、方向、区间入场", () => {
+    const r = parseKolvipBrief(queen3134Multiline);
+    const text = formatCardFallback(/** @type {Record<string, unknown>} */ (r), "cn_brief");
+    assert.match(text, /XAU/);
+    assert.match(text, /做空/);
+    assert.match(text, /入场：3568\$ - 3590\$/);
+    assert.match(text, /止损：3600/);
+  });
 });

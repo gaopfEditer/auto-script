@@ -75,6 +75,7 @@ import {
 } from "./discord-signal-image-ocr.js";
 import { mysqlDatetimeToArchiveIso } from "./card-archive-mysql-time.js";
 import { notifyKolvipOperateCdpPublish } from "./kolvip-operate-cdp.js";
+import { appendKolvipPipelineAudit, auditCardId } from "./kolvip-pipeline-audit-log.js";
 
 /** @param {Record<string, unknown>} row */
 export function resolveMessageSignalAt(row) {
@@ -1184,6 +1185,21 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
       if (tgResult.ok) {
         cardRow.telegram_sent_at = cardRow.telegramSentAt = new Date().toISOString();
       }
+      appendKolvipPipelineAudit("tg_push", {
+        channelId,
+        channelName: chCfg.name,
+        cardId,
+        messageId,
+        source: String(row.source ?? ""),
+        symbol,
+        target: isKolvipSignalCardTelegramRoute(channelId, {
+          kolvipIngest: Boolean(opts.kolvipIngest || opts.skipTelegram),
+        })
+          ? "KOLVIP_TOP10"
+          : "TELEGRAM_PUSH",
+        result: tgResult.ok ? "ok" : tgResult.skipped ? "skip" : "fail",
+        reason: String(tgResult.skipped ?? tgResult.error ?? (tgResult.ok ? "sent" : "unknown")),
+      });
     } else if (deferJunzhangTelegram) {
       log.info(`军长开仓卡 #${cardId} 待止损（约 2 分钟内）后再推 Telegram symbol=${symbol}`);
     }
@@ -1267,6 +1283,52 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     broadcast?.("meta", { kind: "signal_card_created", card: clientCard });
     log.info(`信号卡片 #${cardId} channel=${channelId} styles=${Object.keys(cardsByStyle).join(",")}`);
 
+    if (isAutoTradeChannel(channelId) || bitgetResult || weexResult) {
+      const summarize = (r, platform) => {
+        if (!r || typeof r !== "object") return;
+        const rec = /** @type {Record<string, unknown>} */ (r);
+        appendKolvipPipelineAudit("trade", {
+          channelId,
+          channelName: chCfg.name,
+          cardId,
+          messageId,
+          source: String(row.source ?? ""),
+          symbol,
+          target: platform,
+          result: rec.skipped ? "skip" : rec.status ? String(rec.status) : "attempted",
+          reason: String(rec.skipped ?? rec.reason ?? rec.error ?? ""),
+        });
+      };
+      if (skipMajor && isAutoTradeChannel(channelId)) {
+        appendKolvipPipelineAudit("trade_gate", {
+          channelId,
+          channelName: chCfg.name,
+          cardId,
+          messageId,
+          source: String(row.source ?? ""),
+          symbol,
+          result: "skip",
+          reason: "major_symbol_excluded",
+        });
+      } else if (isAutoTradeChannel(channelId)) {
+        const bitgetOn = shouldPushToTradePlatform("bitget", channelId, tradeOpts);
+        const weexOn = shouldPushToTradePlatform("weex", channelId, tradeOpts);
+        appendKolvipPipelineAudit("trade_gate", {
+          channelId,
+          channelName: chCfg.name,
+          cardId,
+          messageId,
+          source: String(row.source ?? ""),
+          symbol,
+          result: bitgetOn || weexOn ? "enter" : "skip",
+          reason: bitgetOn || weexOn ? "autotrade_whitelist" : "platform_or_source_blocked",
+          detail: `bitget=${bitgetOn} weex=${weexOn}`,
+        });
+      }
+      summarize(bitgetResult, "bitget");
+      summarize(weexResult, "weex");
+    }
+
     if (config.kolvipOperateCdpEnabled && config.tradeSignalAiPublishEnabled) {
       const cdpBody =
         pickCardSinkText(clientCard, chCfg.telegramStyle || "cn_brief") ||
@@ -1276,6 +1338,20 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
         event: "entry",
         log,
         bodyText: cdpBody,
+      });
+    } else {
+      appendKolvipPipelineAudit("cdp_notify", {
+        channelId,
+        channelName: chCfg.name,
+        cardId,
+        messageId,
+        source: String(row.source ?? ""),
+        symbol,
+        target: "8787",
+        result: "skip",
+        reason: !config.kolvipOperateCdpEnabled
+          ? "kolvip_operate_cdp_disabled"
+          : "trade_signal_ai_publish_disabled",
       });
     }
 

@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "dryRun": true,
+  "dryRun": false,
   "default": {
     "marginMode": "isolated",
     "leverage": 20,

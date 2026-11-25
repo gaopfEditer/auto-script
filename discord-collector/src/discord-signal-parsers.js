@@ -58,16 +58,16 @@ function trimKolvipInlineField(raw) {
 
 /** @param {string} text */
 function kolvipEntryLine(text) {
-  const raw = matchLine(text, /(?:入场价|入场区间|入场)\s*[:：]\s*([^\n]+)/i);
+  const raw = matchLine(text, /(?:入场价|入场区间|入场|Entry)\s*[:：]\s*([^\n]+)/i);
   return trimKolvipInlineField(raw);
 }
 
 function isKolvipBriefSignalText(text) {
   const t = String(text ?? "");
   return (
-    /(?:入场价|入场区间|入场)\s*[:：]/.test(t) &&
-    /(?:目标位|目标价|目标)\s*[:：]/.test(t) &&
-    /(?:止损价|止损)\s*[:：]/.test(t) &&
+    /(?:入场价|入场区间|入场)\s*[:：]|\bEntry\s*[:：]/i.test(t) &&
+    /(?:目标位|目标价|目标)\s*[:：]|\bTargets?\s*[:：]/i.test(t) &&
+    /(?:止损价|止损)\s*[:：]|\bStop\s*loss\s*[:：]|\bStoploss\s*[:：]/i.test(t) &&
     /(做空|做多|SHORT|LONG)/i.test(t)
   );
 }
@@ -121,7 +121,7 @@ function matchSymbolFromText(text) {
 }
 
 /**
- * 巨鲸常见单行模板（华尔街女王等）：入场价/目标位/止损 + 美元金价。
+ * 巨鲸常见模板（华尔街女王等）：入场价/目标位/止损，或英文 Entry/Targets/Stoploss；入场可保留区间原文。
  * @param {string} text
  */
 export function parseKolvipBrief(text) {
@@ -139,13 +139,16 @@ export function parseKolvipBrief(text) {
   if (!symbol) return null;
 
   const entry = kolvipEntryLine(joined);
-  const stopLoss =
-    matchLine(joined, /(?:止损价|止损)\s*[:：]\s*([\d.]+(?:\.\d+)?)/i) ||
-    matchLine(joined, /(?:止损价|止损)\s*[:：]\s*([^\n]+)/i);
-  const tpRaw = matchLine(joined, /(?:目标位|目标价|目标)\s*[:：]\s*([^\n]+)/i);
+  const stopLossRaw =
+    matchLine(joined, /(?:止损价|止损|Stop\s*loss|Stoploss)\s*[:：.]?\s*([\d.]+(?:\.\d+)?)/i) ||
+    matchLine(joined, /(?:止损价|止损|Stop\s*loss|Stoploss)\s*[:：.]?\s*([^\n]+)/i);
+  const stopLoss = trimKolvipInlineField(stopLossRaw);
+  const tpRaw = trimKolvipInlineField(matchLine(joined, /(?:目标位|目标价|目标|Targets?)\s*[:：]\s*([^\n]+)/i));
   const takeProfits = splitSignalPriceLevels(tpRaw);
   const leverage =
-    matchLine(joined, /杠杆\s*[:：]\s*(\d+)\s*倍/i) || matchLine(joined, /(\d+)\s*倍/);
+    matchLine(joined, /杠杆\s*[:：]\s*(\d+)\s*倍/i) ||
+    matchLine(joined, /(\d+)\s*倍/) ||
+    matchLine(joined, /Leverage\s*[:：]\s*(\d+)\s*x/i);
 
   if (!entry || !stopLoss) return null;
 
@@ -1202,12 +1205,133 @@ export function parsePangmaoSignals(text) {
   return one ? [one] : [];
 }
 
+
+/**
+ * FX-黄金信号（$XAUUSD BUY NOW / SELL NOW + TP/SL，可附中文对照）。
+ * 须在 generic 回退到 altcoin_king 之前调用，否则「止盈/止损」会被当成山寨补档且丢币种方向。
+ * @param {string} text
+ */
+export function parseFxGoldSignal(text) {
+  const t = String(text ?? "")
+    .replace(/[\u00a0\u200b\u200c\u200d\u2060\u2063]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return null;
+  if (!/\bXAUUSD\b|\bXAU\/USD\b|\bXAU\b|黄金/i.test(t)) return null;
+
+  const isHitOnly =
+    /TP\s*\d+\s*HIT|HIT\s*SUCCESSFULLY|止盈目标成功|成功命中|第[一二三四五六123456]止盈/i.test(t) &&
+    !/(?:BUY|SELL)\s*NOW|现价买入|现价卖出/i.test(t);
+  if (isHitOnly) return null;
+
+  const dirM = t.match(/\bSELL\s*NOW\b|\bBUY\s*NOW\b|\bSELL\b|\bBUY\b|现价卖出|现价买入|做空|做多/i);
+  if (!dirM) return null;
+  const rawDir = dirM[0];
+  const direction = /SELL|卖出|做空/i.test(rawDir) ? "做空" : /BUY|买入|做多/i.test(rawDir) ? "做多" : "";
+  if (!direction) return null;
+
+  const entryM =
+    t.match(/(?:BUY|SELL)\s*NOW\s+([0-9]{3,}(?:\.[0-9]+)?)/i) ||
+    t.match(/(?:现价买入|现价卖出)\s+([0-9]{3,}(?:\.[0-9]+)?)/i);
+  const entry = entryM ? entryM[1] : "";
+
+  const takeProfits = [];
+  const seen = new Set();
+  const tpRe = /\bTP\s*(?:[1-6]\s+)?([0-9]{3,}(?:\.[0-9]+)?)|止盈\s*[:：]?\s*([0-9]{3,}(?:\.[0-9]+)?)/gi;
+  for (const m of t.matchAll(tpRe)) {
+    const v = m[1] || m[2];
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    takeProfits.push(v);
+  }
+
+  const slM = t.match(/\bSL\s*[.:]?\s*([0-9]{3,}(?:\.[0-9]+)?)/i) || t.match(/止损\s*[:：.]?\s*([0-9]{3,}(?:\.[0-9]+)?)/i);
+  const stopLoss = slM ? slM[1] : "";
+  if (!entry || !stopLoss) return null;
+
+  return {
+    parser: "fx_gold",
+    symbol: "XAU",
+    asset: "XAU",
+    direction,
+    entry,
+    stopLoss,
+    takeProfits,
+    targets: takeProfits,
+    orderMode: "market",
+    title: `XAU · ${direction}`,
+  };
+}
+
+/**
+ * kacang-团队黄金区间单：Gold buy/sell now … @3619 - 3615 + tp1/tp2/sl（可附中文对照）。
+ * 只解析结构化字段，不在此决定市价或限价/分批挂法。
+ * @param {string} text
+ */
+export function parseKacangGoldSignal(text) {
+  const t = String(text ?? "")
+    .replace(/[\u00a0\u200b\u200c\u200d\u2060\u2063]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return null;
+  if (!/\bXAUUSD\b|\bXAU\/USD\b|\bXAU\b|黄金|\bGold\b/i.test(t)) return null;
+
+  const isHitOnly =
+    /HIT\s*SUCCESSFULLY|止盈目标成功|成功命中|Running Profit|close all layer/i.test(t) &&
+    !/(?:BUY|SELL)\s*NOW|现价买入|现价卖出/i.test(t);
+  if (isHitOnly) return null;
+
+  const dirM = t.match(/\b(?:Gold\s+)?(?:SELL|BUY)\s*NOW\b|现价卖出|现价买入/i);
+  if (!dirM) return null;
+  const rawDir = dirM[0];
+  const direction = /SELL|卖出|做空/i.test(rawDir) ? "做空" : /BUY|买入|做多/i.test(rawDir) ? "做多" : "";
+  if (!direction) return null;
+
+  const rangeM = t.match(/@\s*([0-9]{3,}(?:\.[0-9]+)?)\s*[-–—~至到]+\s*([0-9]{3,}(?:\.[0-9]+)?)/);
+  if (!rangeM) return null;
+  const entry = `${rangeM[1]} - ${rangeM[2]}`;
+
+  const takeProfits = [];
+  const seen = new Set();
+  const tpRe = /\btp\s*[1-6]\s*[:：]?\s*([0-9]{3,}(?:\.[0-9]+)?)|第[一二三四五六]止盈位（tp[1-6]）\s*[:：]\s*([0-9]{3,}(?:\.[0-9]+)?)|止盈(?:[1-6]|位)?\s*[:：]?\s*([0-9]{3,}(?:\.[0-9]+)?)/gi;
+  for (const m of t.matchAll(tpRe)) {
+    const v = m[1] || m[2] || m[3];
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    takeProfits.push(v);
+  }
+
+  const slM =
+    t.match(/\bsl\s*[:：]?\s*([0-9]{3,}(?:\.[0-9]+)?)/i) ||
+    t.match(/止损(?:位)?\s*[:：]?\s*([0-9]{3,}(?:\.[0-9]+)?)/i);
+  const stopLoss = slM ? slM[1] : "";
+  if (!stopLoss || takeProfits.length === 0) return null;
+
+  return {
+    parser: "kacang_gold",
+    symbol: "XAU",
+    asset: "XAU",
+    direction,
+    entry,
+    stopLoss,
+    takeProfits,
+    targets: takeProfits,
+    title: `XAU · ${direction}`,
+  };
+}
+
 export function parseSignalText(text, kind) {
   const t = String(text ?? "").trim();
   if (!t) return null;
 
   const kolvipBrief = parseKolvipBrief(t);
   if (kolvipBrief) return kolvipBrief;
+
+  const fxGold = parseFxGoldSignal(t);
+  if (fxGold) return fxGold;
+
+  const kacangGold = parseKacangGoldSignal(t);
+  if (kacangGold) return kacangGold;
 
   if (kind === "aoying_position" || /熬鹰|带单仓位/.test(t)) {
     const aoy = parseAoyingPosition(t);
@@ -1347,6 +1471,8 @@ export function formatCardFallback(parsed, styleId) {
     parsed.parser === "junzhang" ||
     parsed.parser === "pangmao" ||
     parsed.parser === "aoying_position" ||
+    parsed.parser === "fx_gold" ||
+    parsed.parser === "kacang_gold" ||
     ((parsed.parser === "biquan_suozhang" ||
       parsed.parser === "dabiaoke" ||
       parsed.parser === "feiyang" ||

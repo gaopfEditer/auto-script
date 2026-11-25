@@ -15,6 +15,8 @@ import {
   buildPangmaoPriorityEnqueueBody,
   enqueuePriorityCard,
 } from "./priority-queue-client.js";
+import { appendKolvipPipelineAudit, auditCardId } from "./kolvip-pipeline-audit-log.js";
+import { isAutoTradeChannel } from "./trade-platform-toggles.js";
 
 /** 单图 OCR 已判定不出卡：不要再把 OCR 文本交给正文 parser。 */
 const OCR_TERMINAL_SKIPS = new Set([
@@ -209,6 +211,27 @@ export async function runSignalCardPipelineForRows(rows, deps) {
       bump(skipped);
     } else {
       bump("unknown");
+    }
+    if (isKolvipIngestSource(src) || isAutoTradeChannel(cid)) {
+      const cardObj =
+        cardResult?.card && typeof cardResult.card === "object"
+          ? /** @type {Record<string, unknown>} */ (cardResult.card)
+          : null;
+      appendKolvipPipelineAudit(cardObj || cardResult?.merged ? "card_create" : "ingest", {
+        channelId: cid,
+        channelName: String(r.channelName ?? r.channel_name ?? ""),
+        messageId: String(r.messageId ?? r.message_id ?? ""),
+        source: src || "unknown",
+        cardId: auditCardId(cardObj?.id),
+        symbol: String(cardObj?.symbol ?? ""),
+        direction: String(
+          (cardObj?.execution && typeof cardObj.execution === "object"
+            ? /** @type {Record<string, unknown>} */ (cardObj.execution).direction
+            : "") ?? "",
+        ),
+        result: cardObj ? "created" : cardResult?.merged ? "merged" : skipped || "unknown",
+        reason: skipped || undefined,
+      });
     }
     if (cardResult?.card || cardResult?.merged || skipped !== "parse_failed") {
       await signalCards.dedup.remember(cid, content);

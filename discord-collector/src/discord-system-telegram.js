@@ -116,7 +116,10 @@ export function createSystemTelegramAlert(log, opts = {}) {
    */
   async function notifyCdpConnected(info) {
     clearCdpOutageWatch();
-    if (!cdpNotifyConnect) return { skipped: "cdp_notify_disabled" };
+    if (!cdpNotifyConnect) {
+      log.info("[system-telegram] CDP 已连接，已跳过 Telegram 成功通知");
+      return { skipped: "cdp_notify_disabled" };
+    }
     const connectUrl = String(info.connectUrl ?? "").trim() || "—";
     const tabs = Number(info.tabCount);
     const text = [
