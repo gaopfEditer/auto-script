@@ -1,5 +1,6 @@
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { maskProfitPercentText } from "../lib/signalExecution.js";
+import { isDeployUi } from "../lib/uiMode.js";
 
 export const HIDE_KOL_STORAGE_KEY = "dc_archive_hide_kol";
 
@@ -13,6 +14,10 @@ try {
 }
 
 export function useHideKolName() {
+  /** 仅本地 UI 显示开关；deploy / build:all 公网页不出现、也不掩码 */
+  const hideKolControlVisible = computed(() => !isDeployUi());
+  const namesHidden = computed(() => hideKolControlVisible.value && hideKolName.value);
+
   function toggleHideKol() {
     hideKolName.value = !hideKolName.value;
     try {
@@ -29,11 +34,30 @@ export function useHideKolName() {
     return hideKolName.value ? "*****" : s;
   }
 
+  /**
+   * 榜单截图用占位：星号个数与原名称 Unicode 码点数相同（如 6 字 → ******），便于区分不同频道。
+   * @param {string | null | undefined} name
+   */
+  function maskKolChannelLabel(name) {
+    const s = String(name ?? "").trim();
+    if (!namesHidden.value) return s || "—";
+    if (!s) return "—";
+    return "*".repeat(Array.from(s).length);
+  }
+
   /** @param {string} formatted */
   function maskPercent(formatted) {
     if (!hideKolName.value) return formatted;
     return maskProfitPercentText(formatted);
   }
 
-  return { hideKolName, toggleHideKol, maskKolName, maskPercent };
+  return {
+    hideKolName,
+    hideKolControlVisible,
+    namesHidden,
+    toggleHideKol,
+    maskKolName,
+    maskKolChannelLabel,
+    maskPercent,
+  };
 }

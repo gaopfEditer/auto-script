@@ -1,7 +1,9 @@
 /**
  * kolvip Show 前 N 频道 · 按全局发单顺序筛选 → python-ai-operate CDP。
- * `KOLVIP_OPERATE_CDP_ORDER_SLOTS=999` 表示全部；`1,3,5,6` 表示仅第 1/3/5/6 单。
- * 交易日历日界：每天 08:00 Asia/Shanghai 重置序号。
+ * 上海自然日最多成功发布 KOLVIP_OPERATE_CDP_DAILY_TARGET 条（默认 4），与 TG send 路径分开。
+ * `KOLVIP_OPERATE_CDP_ORDER_SLOTS=999` 表示全部（默认，由日上限裁条）；`1,3,5,6` 表示仅这些序号。
+ * 序号仍按每天 08:00 Asia/Shanghai 复位；日限额按自然日 00:00 计数。
+ * 不把 kolvip 卡发进 channel_profiles.json 的 send 源群。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -12,8 +14,10 @@ import { appendKolvipPipelineAudit, auditCardId } from "./kolvip-pipeline-audit-
 import { buildKolvipOperateEntryNarrative } from "./kolvip-operate-entry.js";
 import {
   ensureDailyCdpStatsDay,
+  kolvipOperateCalendarDayKey,
+  kolvipOperateCdpDailyQuota,
   recordCdpPublishSuccess,
-  shouldKolvipAfternoonCdpBackfill,
+  shouldPublishKolvipOperateCdp,
   totalCdpPublishOk,
 } from "./kolvip-operate-cdp-daily.js";
 
@@ -36,7 +40,7 @@ export function resolveKolvipOperateOrderSlots(fromConfig) {
     .map((x) => Number(x))
     .filter((n) => Number.isFinite(n) && n > 0);
   if (!nums.length) {
-    return { acceptAll: false, slots: new Set([1, 3, 5, 6]) };
+    return { acceptAll: true, slots: new Set() };
   }
   if (nums.length === 1 && nums[0] === 999) {
     return { acceptAll: true, slots: new Set() };
@@ -151,7 +155,7 @@ loadState();
  * @returns {{ dayKey: string, tgOk: number, tgMorningOk: number, kolvipOk: number, total: number }}
  */
 export function getDailyCdpPublishStats() {
-  const dayKey = kolvipOperateSessionDayKey();
+  const dayKey = kolvipOperateCalendarDayKey();
   ensureDailyCdpStatsDay(dailyCdpStats, dayKey);
   return {
     ...dailyCdpStats,
@@ -161,7 +165,7 @@ export function getDailyCdpPublishStats() {
 
 /** @param {Date} [at] */
 export function recordTelegramCdpPublishSuccess(at = new Date()) {
-  const dayKey = kolvipOperateSessionDayKey(at);
+  const dayKey = kolvipOperateCalendarDayKey(at);
   ensureDailyCdpStatsDay(dailyCdpStats, dayKey);
   recordCdpPublishSuccess(dailyCdpStats, "telegram", at);
   saveState();
@@ -169,31 +173,33 @@ export function recordTelegramCdpPublishSuccess(at = new Date()) {
 
 /** @param {Date} [at] */
 export function recordKolvipCdpPublishSuccess(at = new Date()) {
-  const dayKey = kolvipOperateSessionDayKey(at);
+  const dayKey = kolvipOperateCalendarDayKey(at);
   ensureDailyCdpStatsDay(dailyCdpStats, dayKey);
   recordCdpPublishSuccess(dailyCdpStats, "kolvip", at);
   saveState();
 }
 
 /**
- * 递增当日全局发单序号；若不在允许槽位则返回 null（下午补量时可能放宽）。
+ * 递增当日全局发单序号；日限额已满或不在允许槽位则返回 null。
+ * 日限额只看巨鲸成功数，不再用上午 TG 条数放宽槽位。
  * @returns {{ slot: number, backfill: boolean } | null}
  */
 export function claimKolvipOperateOrderSlot(at = new Date()) {
-  const dayKey = kolvipOperateSessionDayKey(at);
+  const calendarDay = kolvipOperateCalendarDayKey(at);
+  const sessionDay = kolvipOperateSessionDayKey(at);
   const { acceptAll, slots } = getKolvipOperateCdpOrderSlotPolicy();
-  ensureDailyCdpStatsDay(dailyCdpStats, dayKey);
-  if (!globalDailyCount.dayKey || globalDailyCount.dayKey !== dayKey) {
-    globalDailyCount = { dayKey, count: 0 };
+  ensureDailyCdpStatsDay(dailyCdpStats, calendarDay);
+  if (!shouldPublishKolvipOperateCdp(dailyCdpStats)) {
+    return null;
+  }
+  if (!globalDailyCount.dayKey || globalDailyCount.dayKey !== sessionDay) {
+    globalDailyCount = { dayKey: sessionDay, count: 0 };
   }
   globalDailyCount.count += 1;
   saveState();
   const ordinal = globalDailyCount.count;
   if (acceptAll || slots.has(ordinal)) {
     return { slot: ordinal, backfill: false };
-  }
-  if (shouldKolvipAfternoonCdpBackfill(dailyCdpStats, at)) {
-    return { slot: ordinal, backfill: true };
   }
   return null;
 }
@@ -257,7 +263,10 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
   const claimed = claimKolvipOperateOrderSlot();
   if (!claimed) {
     const stats = getDailyCdpPublishStats();
-    const reason = `kolvip-operate 发单序号未命中（允许 ${orderSlotsLogLabel()}；日 CDP ${stats.total}/${config.kolvipOperateCdpDailyTarget}，上午 TG ${stats.tgMorningOk}）`;
+    const quota = kolvipOperateCdpDailyQuota();
+    const reason = shouldPublishKolvipOperateCdp(stats)
+      ? `kolvip-operate 发单序号未命中（允许 ${orderSlotsLogLabel()}；巨鲸日计 ${stats.kolvipOk}/${quota}）`
+      : `kolvip-operate 当日已满 ${stats.kolvipOk}/${quota}（上海自然日，不含 TG send）`;
     opts.log?.info?.(
       formatSendCdpLog("cdp_skip", {
         cardId: card?.id ?? "?",
@@ -271,7 +280,6 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
     return false;
   }
   const slot = claimed.slot;
-  const backfill = claimed.backfill;
 
   const ex =
     card?.execution && typeof card.execution === "object"
@@ -329,9 +337,7 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
     stopLoss: "",
     narrative,
     body: narrative,
-    note: backfill
-      ? `kolvip-operate 下午补量 发单序=${slot} 日计=${getDailyCdpPublishStats().total}/${config.kolvipOperateCdpDailyTarget}`
-      : `kolvip-operate 发单序=${slot}`,
+    note: `kolvip-operate 发单序=${slot} 日计=${getDailyCdpPublishStats().kolvipOk}/${kolvipOperateCdpDailyQuota()}`,
     cardId: card?.id ?? null,
     channelId,
     async: true,
@@ -350,9 +356,7 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
       symbol,
       direction,
       event,
-      detail: backfill
-        ? `kolvip-operate 下午补量 发单序=${slot} ${url}`
-        : `kolvip-operate 发单序=${slot} ${url}`,
+      detail: `kolvip-operate 发单序=${slot} ${url}`,
     }),
   );
   appendKolvipPipelineAudit("cdp_notify", {
@@ -361,7 +365,7 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
     symbol,
     direction,
     result: "post",
-    reason: backfill ? `afternoon_backfill slot=${slot}` : `slot=${slot}`,
+    reason: `slot=${slot}`,
     detail: url,
   });
 
@@ -416,7 +420,7 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
           direction,
           event,
           jobId: j?.job_id || "?",
-          detail: backfill ? `下午补量 发单序=${slot}` : `发单序=${slot}`,
+          detail: `发单序=${slot}`,
         }),
       );
       appendKolvipPipelineAudit("cdp_notify", {
@@ -426,7 +430,7 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
         direction,
         target: "8787",
         result: "ok",
-        reason: backfill ? `afternoon_backfill slot=${slot}` : `slot=${slot}`,
+        reason: `slot=${slot}`,
         detail: String(j?.job_id || ""),
       });
     })

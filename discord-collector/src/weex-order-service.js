@@ -20,9 +20,12 @@ import {
 } from "./kolvip-bitget-autotrade.js";
 import { normalizeExecution } from "./discord-signal-execution.js";
 import { prepareAutoTradeForOrder } from "./telegram-auto-trade.js";
+import { isShortDirection } from "./card-direction.js";
+import { hasWeexSymbolExposure } from "./trade-position-guard.js";
+import { applyKolvipRangeEntryGate } from "./range-entry-service.js";
 
 /** @param {ReturnType<typeof import("./store.js").openStore> extends Promise<infer S> ? S : never} store @param {ReturnType<typeof import("./logger.js").createLogger>} log */
-export function createWeexOrderService(store, log) {
+export function createWeexOrderService(store, log, deps = {}) {
   let tradeCfg = loadWeexTradeConfig();
 
   function reloadConfig() {
@@ -211,6 +214,44 @@ export function createWeexOrderService(store, log) {
       parsed = { ...parsed, signalPhase: "full", orderMode: "market" };
       input = { ...input, parsed };
     }
+    if (kolvipPolicy && deps.rangeEntry && !input.isReverse && input.skipRangeEntry !== true) {
+      const gate = await applyKolvipRangeEntryGate(
+        deps.rangeEntry,
+        {
+          exchange: "weex",
+          cardId: input.cardId,
+          channelId: input.channelId,
+          channelName: input.channelName,
+          parsed: input.parsed,
+          executionJson: input.executionJson,
+          channelTrade: resolved.channel,
+          dryRun: resolved.dryRun === true,
+        },
+        async (record) => {
+          await persistOrderResult(
+            input.cardId,
+            input.parsed,
+            { ...record, exchange: "weex" },
+            {
+              channelId: input.channelId,
+              channelName: input.channelName,
+              event: "range_entry",
+              dryRun: resolved.dryRun === true,
+            }
+          );
+        }
+      );
+      if (gate.action === "waiting") {
+        log.info(
+          `WEEX 区间入场等待 card=#${input.cardId} ${autoTradeSym} ${gate.range ? `${gate.range.low}-${gate.range.high}` : ""} mark=${gate.mark ?? "n/a"}`
+        );
+        return { skipped: "range_waiting", range: gate.range, mark: gate.mark };
+      }
+      if (gate.action === "skipped") {
+        log.info(`WEEX 区间入场跳过 card=#${input.cardId} ${autoTradeSym} reason=${gate.reason}`);
+        return { skipped: gate.reason ?? "range_skipped" };
+      }
+    }
     return runStagedTrade({
       cardId: input.cardId,
       channelId: input.channelId,
@@ -306,6 +347,35 @@ export function createWeexOrderService(store, log) {
       log.warn(`WEEX TP1保本失败 card=#${input.cardId}: ${result.error ?? result.reason}`);
     }
     return result;
+  }
+
+  async function openPendingRangeEntry(item) {
+    return onSignalCardCreated({
+      cardId: Number(item.cardId),
+      channelId: String(item.channelId ?? ""),
+      channelName: String(item.channelName ?? ""),
+      parsed: item.parsed && typeof item.parsed === "object"
+        ? /** @type {Record<string, unknown>} */ (item.parsed)
+        : {},
+      executionJson: item.executionJson ?? null,
+      symbol: String(item.symbol ?? ""),
+      skipRangeEntry: true,
+    });
+  }
+
+  if (deps.rangeEntry && typeof deps.rangeEntry.registerExchange === "function") {
+    deps.rangeEntry.registerExchange("weex", {
+      hasExposure: async (symbol, direction) => {
+        const creds = credentials();
+        if (!creds || !symbol) return false;
+        const client = createWeexClient(creds);
+        return hasWeexSymbolExposure(client, {
+          symbol,
+          holdSide: isShortDirection(direction) ? "short" : "long",
+        });
+      },
+      openPending: openPendingRangeEntry,
+    });
   }
 
   return {

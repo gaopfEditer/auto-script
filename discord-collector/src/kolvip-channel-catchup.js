@@ -10,8 +10,11 @@ import { kolvipApiRawToDomMessage } from "./kolvip-api-message.js";
 import {
   getKolvipChannelMappings,
   getKolvipMappingByKolvipId,
+  getKolvipMappedKolvipChannelIds,
 } from "./kolvip-cdp-config.js";
 import { ingestKolvipMessageBatch, loadKolvipSeen, saveKolvipSeen } from "./kolvip-ingest.js";
+import { loadKolvipBitgetAutotrade } from "./kolvip-bitget-autotrade.js";
+import { loadDiscordGroupsFromFile } from "./discord-groups-file.js";
 import { kolvipScanVirtualChannelId, parseKolvipScanVirtualChannelId } from "./kolvip-scan-config.js";
 import { markKolvipShowCatchupWarmed } from "./kolvip-show-catchup-cache.js";
 import { cacheKolvipMessageAuthorAvatars } from "./kolvip-avatar-cache.js";
@@ -19,6 +22,49 @@ import { parseKolvipMessageTimeMs } from "./kolvip-cdp-message.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SEEN_PATH = path.join(__dirname, "..", "data", "kolvip-cdp-seen.json");
+
+/** @param {string} [note] */
+export function parseKolvipKidFromNote(note) {
+  const m = String(note ?? "").match(/\bkid=(\d+)\b/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * 从跟单白名单把 Discord 雪花 / 虚拟 id 反查成巨鲸频道 id。
+ * @param {string} channelId
+ * @param {Array<{ channelIds?: string[], kolvipChannelId?: string }>} [policies]
+ */
+export function resolveKolvipKidFromAutotradePolicies(channelId, policies) {
+  const cid = String(channelId ?? "").trim();
+  if (!cid) return null;
+  for (const p of policies ?? []) {
+    const ids = (p?.channelIds ?? []).map((x) => String(x));
+    if (!ids.includes(cid)) continue;
+    const explicit = String(p.kolvipChannelId ?? "").trim();
+    if (explicit) return explicit;
+    for (const id of ids) {
+      const kid = parseKolvipScanVirtualChannelId(id);
+      if (kid) return kid;
+    }
+  }
+  return null;
+}
+
+/**
+ * showChannels.note 里的 `kid=13`（榜单生成时写下）。
+ * @param {string} channelId
+ * @param {Array<{ channelId?: string, note?: string }>} [entries]
+ */
+export function resolveKolvipKidFromShowChannelEntries(channelId, entries) {
+  const cid = String(channelId ?? "").trim();
+  if (!cid) return null;
+  for (const e of entries ?? []) {
+    if (String(e.channelId ?? "").trim() !== cid) continue;
+    const kid = parseKolvipKidFromNote(e.note);
+    if (kid) return kid;
+  }
+  return null;
+}
 
 /**
  * @param {string} discordOrVirtualChannelId
@@ -31,7 +77,52 @@ export function resolveKolvipChannelIdForShow(discordOrVirtualChannelId) {
   for (const m of getKolvipChannelMappings()) {
     if (String(m.discordChannelId) === cid) return String(m.kolvipChannelId);
   }
+  const fromAuto = resolveKolvipKidFromAutotradePolicies(
+    cid,
+    loadKolvipBitgetAutotrade().policies ?? [],
+  );
+  if (fromAuto) return fromAuto;
+  const fromGroups = resolveKolvipKidFromShowChannelEntries(
+    cid,
+    loadDiscordGroupsFromFile().showChannels ?? [],
+  );
+  if (fromGroups) return fromGroups;
   return null;
+}
+
+/**
+ * Show 榜单 kolvip-scan 与跟单白名单（非精选 8 路）需要 HTTP 尾拉。
+ * 侧栏若仍写 Discord 雪花，也要能解析到 kid，否则会漏补（如零下二度）。
+ *
+ * @param {string[]} [sidebarChannelIds]
+ * @param {{
+ *   curatedKids?: Set<string> | string[],
+ *   policies?: Array<{ channelIds?: string[], kolvipChannelId?: string }>,
+ * }} [opts]
+ * @returns {string[]}
+ */
+export function listKolvipShowScanCatchupIds(sidebarChannelIds, opts = {}) {
+  const curatedRaw = opts.curatedKids ?? getKolvipMappedKolvipChannelIds();
+  const curated = curatedRaw instanceof Set ? curatedRaw : new Set([...curatedRaw].map(String));
+  /** @type {string[]} */
+  const kids = [];
+  const seen = new Set();
+  /** @param {unknown} kid */
+  const add = (kid) => {
+    const k = String(kid ?? "").trim();
+    if (!k || curated.has(k) || seen.has(k)) return;
+    seen.add(k);
+    kids.push(k);
+  };
+  for (const cid of sidebarChannelIds ?? []) {
+    add(resolveKolvipChannelIdForShow(cid));
+  }
+  const policies = opts.policies ?? loadKolvipBitgetAutotrade().policies ?? [];
+  for (const p of policies) {
+    add(p.kolvipChannelId);
+    for (const id of p.channelIds ?? []) add(resolveKolvipChannelIdForShow(id));
+  }
+  return kids;
 }
 
 /**

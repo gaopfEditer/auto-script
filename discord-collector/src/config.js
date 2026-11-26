@@ -451,34 +451,35 @@ export const config = {
   ),
   kolvipOperateCdpChannelIds: parseIdList(process.env.KOLVIP_OPERATE_CDP_CHANNEL_IDS ?? ""),
   /**
-   * 全局发单顺序槽位：仅 `999` = 全部；`1,3,5,6` = 只取这些序号（08:00 复位）
+   * 全局发单顺序槽位：默认 `999` = 全部（由日上限裁到 4 条）；
+   * `1,3,5,6` 仍可只取这些序号（08:00 复位）。不把卡发进 send 源群。
    */
   kolvipOperateCdpOrderSlots: (() => {
-    const raw = process.env.KOLVIP_OPERATE_CDP_ORDER_SLOTS ?? "1,3,5,6";
+    const raw = process.env.KOLVIP_OPERATE_CDP_ORDER_SLOTS ?? "999";
     return raw
       .split(/[,;\s]+/)
       .map((x) => Number(String(x).trim()))
       .filter((n) => Number.isFinite(n) && n > 0);
   })(),
-  /** 列表复位时刻（Asia/Shanghai，默认 8 点） */
+  /** 列表序号复位时刻（Asia/Shanghai，默认 8 点；日限额按自然日 00:00 另计） */
   kolvipOperateCdpResetHour: Math.max(
     0,
     Math.min(23, Number(process.env.KOLVIP_OPERATE_CDP_RESET_HOUR ?? 8) || 8),
   ),
-  /** 当日 CDP 成功发布后目标单量（TG + 巨鲸 operate 合计，下午补量用） */
+  /** 巨鲸 operate 当日成功发布上限（上海自然日，默认 4；不含 TG send 路径） */
   kolvipOperateCdpDailyTarget: Math.max(
     1,
-    Number(process.env.KOLVIP_OPERATE_CDP_DAILY_TARGET ?? 5) || 5,
+    Number(process.env.KOLVIP_OPERATE_CDP_DAILY_TARGET ?? 4) || 4,
   ),
-  /** 上海时区：此小时起视为下午，可开启巨鲸补量 */
+  /** 保留：仅用于统计上午/下午，不再作为巨鲸 CDP 门闩 */
   kolvipOperateCdpAfternoonHour: Math.max(
     0,
     Math.min(23, Number(process.env.KOLVIP_OPERATE_CDP_AFTERNOON_HOUR ?? 12) || 12),
   ),
-  /** 上午 TG CDP 成功数低于此值时，下午允许巨鲸补量 */
+  /** 已废弃：不再用上午 TG CDP 条数决定是否发巨鲸 CDP */
   kolvipOperateCdpMorningTgMin: Math.max(
     0,
-    Number(process.env.KOLVIP_OPERATE_CDP_MORNING_TG_MIN ?? 1) || 1,
+    Number(process.env.KOLVIP_OPERATE_CDP_MORNING_TG_MIN ?? 0) || 0,
   ),
   kolvipEvalChannelIds: parseIdList(process.env.KOLVIP_EVAL_CHANNEL_IDS ?? ""),
   telegramSendTimeoutMs: Number(process.env.TELEGRAM_SEND_TIMEOUT_MS ?? 15_000),

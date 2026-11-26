@@ -1,11 +1,14 @@
 <script setup>
 import { inject } from "vue";
+import { useHideKolName } from "../composables/useHideKolName.js";
 
 defineOptions({ name: "KolvipSigRankPane" });
 
 /** @type {ReturnType<import('../composables/useKolvipSig.js').useKolvipSig>} */
 const sig = inject("kolvipSig");
 if (!sig) throw new Error("kolvipSig provide missing");
+
+const { hideKolControlVisible, hideKolName, toggleHideKol, maskKolChannelLabel } = useHideKolName();
 
 /** @param {{ name?: string }} row */
 function pickRow(row) {
@@ -28,6 +31,16 @@ function pickRow(row) {
       </button>
       <button type="button" class="kv-sig-sync" :disabled="sig.syncing" @click="sig.onSync()">
         {{ sig.syncing ? "同步中…" : "从巨鲸拉取" }}
+      </button>
+      <button
+        v-if="hideKolControlVisible"
+        type="button"
+        class="kv-hide-kol-btn"
+        :class="{ on: hideKolName }"
+        :title="hideKolName ? '显示 KOL 频道名称' : '隐藏 KOL 频道名称，便于本地截图调试'"
+        @click="toggleHideKol"
+      >
+        {{ hideKolName ? "显示频道名称" : "隐藏频道名称" }}
       </button>
       <span v-if="sig.rank?.open != null" class="kv-sig-live">● {{ sig.rank.open }} 单进行中</span>
       <span v-if="sig.meta?.lastSyncAt" class="kv-sig-meta">同步 {{ sig.meta.lastSyncAt }}</span>
@@ -52,7 +65,7 @@ function pickRow(row) {
           >
             <span class="rk">{{ ["🥇", "🥈", "🥉"][i] || i + 1 }}</span>
             <div class="t">
-              <b>{{ row.name }}</b>
+              <b>{{ maskKolChannelLabel(row.name, i) }}</b>
               <small>{{ row.count }} 单 · 盈亏比 {{ row.pl || "–" }} · {{ sig.fmtR(row.r) }}</small>
             </div>
             <span class="wr" :class="row.win_rate >= 50 ? 'up' : 'dn'">
@@ -64,7 +77,7 @@ function pickRow(row) {
           <h3>样本不足</h3>
           <ul>
             <li
-              v-for="row in sig.moreList"
+              v-for="(row, j) in sig.moreList"
               :key="'m-' + row.name"
               class="kv-sig-row alt"
               :class="{ on: row.name === sig.selectedName }"
@@ -72,7 +85,7 @@ function pickRow(row) {
             >
               <span class="rk">–</span>
               <div class="t">
-                <b>{{ row.name }}</b>
+                <b>{{ maskKolChannelLabel(row.name, sig.rankedList.length + j) }}</b>
                 <small>{{ row.count }} 单</small>
               </div>
               <span class="wr muted">{{ row.count ? row.win_rate + "%" : "–" }}</span>
@@ -211,5 +224,22 @@ ul {
 }
 .kv-sig-muted {
   color: #949ba4;
+}
+
+.kv-hide-kol-btn {
+  margin-left: 0.25rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #404249;
+  background: #2b2d31;
+  color: #b5bac1;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.kv-hide-kol-btn.on {
+  border-color: #5865f2;
+  background: rgba(88, 101, 242, 0.18);
+  color: #aeb4ff;
 }
 </style>

@@ -10,6 +10,7 @@
     "collect:live": "COLLECTOR_UI_EMBED=1 node src/index.js --mode=collect",
     "collect:ui": "node scripts/pre-collect-ui.mjs",
     "collect:ui:daemon": "node scripts/collect-ui-daemon.mjs",
+    "taskos:live-feed": "node src/taskos-live-feed-server.js",
     "build:all": "pnpm run oi:ui:build && node scripts/sync-oi-dist-public.mjs && vite build --config collector-ui-vue/vite.config.js && node scripts/print-build-artifacts.mjs",
     "ui:build": "pnpm run build:all",
     "build:oi": "pnpm run oi:ui:build",

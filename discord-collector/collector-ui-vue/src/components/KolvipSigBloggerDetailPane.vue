@@ -1,5 +1,6 @@
 <script setup>
-import { inject } from "vue";
+import { computed, inject } from "vue";
+import { useHideKolName } from "../composables/useHideKolName.js";
 
 defineOptions({ name: "KolvipSigBloggerDetailPane" });
 
@@ -11,6 +12,18 @@ const props = defineProps({
 const sig = inject("kolvipSig");
 if (!sig) throw new Error("kolvipSig provide missing");
 
+const { maskKolChannelLabel } = useHideKolName();
+
+const displayBloggerName = computed(() => {
+  const name = sig.stat?.name || sig.selectedName || "";
+  return maskKolChannelLabel(name);
+});
+
+const displayChannelLabel = computed(() => {
+  if (!props.channelLabel) return "";
+  return maskKolChannelLabel(props.channelLabel);
+});
+
 // sig 为 reactive 包裹，模板直接读字段
 </script>
 
@@ -18,14 +31,14 @@ if (!sig) throw new Error("kolvipSig provide missing");
   <aside class="kolvip-sig-detail-panel" aria-label="博主胜率明细">
     <header class="kolvip-sig-detail-head">
       <span class="kolvip-sig-detail-title">博主明细</span>
-      <span v-if="channelLabel" class="kolvip-sig-detail-ch" :title="channelLabel"># {{ channelLabel }}</span>
+      <span v-if="displayChannelLabel" class="kolvip-sig-detail-ch" :title="displayChannelLabel"># {{ displayChannelLabel }}</span>
     </header>
 
     <template v-if="!sig.selectedName">
       <p class="kolvip-sig-detail-muted">在榜单或左侧频道选一位博主</p>
     </template>
     <template v-else>
-      <h2 class="kolvip-sig-detail-name">{{ sig.stat?.name || sig.selectedName }}</h2>
+      <h2 class="kolvip-sig-detail-name">{{ displayBloggerName }}</h2>
       <div v-if="sig.stat" class="kolvip-sig-kpis">
         <div>
           <b :class="sig.stat.win_rate >= 50 ? 'up' : 'dn'">{{ sig.stat.count ? sig.stat.win_rate + "%" : "–" }}</b>

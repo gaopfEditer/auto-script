@@ -168,7 +168,7 @@ async function fetchOkxFuturesPrice(symbol) {
 }
 
 /** @param {string} symbol */
-async function fetchBitgetPublicPrice(symbol) {
+export async function fetchBitgetPublicPrice(symbol) {
   const sym = normalizeUsdtSymbol(symbol);
   const base = String(config.bitgetBaseUrl || "https://api.bitget.com").replace(/\/$/, "");
   const url = `${base}/api/v2/mix/market/ticker?productType=USDT-FUTURES&symbol=${encodeURIComponent(sym)}`;
@@ -181,6 +181,23 @@ async function fetchBitgetPublicPrice(symbol) {
   const row = Array.isArray(data?.data) ? data.data[0] : data?.data;
   const price = Number(row?.markPrice ?? row?.lastPr);
   if (!Number.isFinite(price) || price <= 0) throw new Error("Bitget price empty");
+  return { symbol: sym, price };
+}
+
+/** @param {string} symbol */
+export async function fetchWeexPublicPrice(symbol) {
+  const sym = normalizeUsdtSymbol(symbol);
+  const base = String(config.weexBaseUrl || "https://api-contract.weex.com").replace(/\/$/, "");
+  const url = `${base}/capi/v3/market/ticker/24hr?symbol=${encodeURIComponent(sym)}`;
+  const res = await marketFetch(url);
+  if (!res.ok) throw new Error(`WEEX price HTTP ${res.status}`);
+  const data = await res.json();
+  const row = Array.isArray(data) ? data[0] : data?.data ?? data;
+  if (row && typeof row === "object" && "success" in row && row.success === false) {
+    throw new Error(`WEEX price ${row.errorMessage ?? row.errorCode ?? "rejected"}`);
+  }
+  const price = Number(row?.markPrice ?? row?.lastPrice ?? row?.lastPr ?? 0);
+  if (!Number.isFinite(price) || price <= 0) throw new Error("WEEX price empty");
   return { symbol: sym, price };
 }
 

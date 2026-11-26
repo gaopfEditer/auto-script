@@ -19,8 +19,9 @@ import {
   catchupKolvipChannelMessages,
   kolvipBeforeIdFromMessageId,
   resolveKolvipChannelIdForShow,
+  listKolvipShowScanCatchupIds,
 } from "./kolvip-channel-catchup.js";
-import { kolvipScanVirtualChannelId, parseKolvipScanVirtualChannelId } from "./kolvip-scan-config.js";
+import { kolvipScanVirtualChannelId } from "./kolvip-scan-config.js";
 import { shouldSkipKolvipShowTailCatchup } from "./kolvip-show-catchup-cache.js";
 import { syncKolvipChannelCatalog } from "./kolvip-api-catalog.js";
 
@@ -78,14 +79,7 @@ export function createKolvipCdpService(store, log, broadcast, deps = {}) {
 
   /** @returns {string[]} */
   function listShowScanKolvipIds() {
-    const ids = config.discordShowSidebar?.channelIds ?? [];
-    /** @type {string[]} */
-    const kids = [];
-    for (const cid of ids) {
-      const kid = parseKolvipScanVirtualChannelId(String(cid));
-      if (kid) kids.push(kid);
-    }
-    return kids;
+    return listKolvipShowScanCatchupIds(config.discordShowSidebar?.channelIds ?? []);
   }
 
   /**

@@ -47,6 +47,8 @@ import { isAutoTradeExcludedMajorSymbol } from "./trade-platform-toggles.js";
 import { appendBitgetTradeAudit } from "./bitget-trade-audit-log.js";
 import { leverageForKolvipSymbol, resolveKolvipBitgetPolicy } from "./kolvip-bitget-autotrade.js";
 import { STAGED_TP_PARTIAL_RATIOS } from "./discord-signal-staged-trade.js";
+import { isShortDirection } from "./card-direction.js";
+import { applyKolvipRangeEntryGate } from "./range-entry-service.js";
 import {
   ensureBitgetPositionTpslAfterOpen,
   enrichBitgetContractMeta,
@@ -65,7 +67,7 @@ import {
 
  */
 
-export function createBitgetOrderService(store, log) {
+export function createBitgetOrderService(store, log, deps = {}) {
 
   let tradeCfg = loadBitgetTradeConfig();
 
@@ -472,6 +474,45 @@ export function createBitgetOrderService(store, log) {
         at: new Date().toISOString(),
       });
       return { skipped: "missing_stop_loss" };
+    }
+
+    if (kolvipPolicy && deps.rangeEntry && !input.isReverse && input.skipRangeEntry !== true) {
+      const gate = await applyKolvipRangeEntryGate(
+        deps.rangeEntry,
+        {
+          exchange: "bitget",
+          cardId: input.cardId,
+          channelId: input.channelId,
+          channelName: input.channelName,
+          parsed,
+          executionJson,
+          channelTrade: resolved.channel,
+          dryRun: resolved.dryRun === true,
+        },
+        async (record) => {
+          await persistOrderResult(
+            input.cardId,
+            parsed,
+            { ...record, exchange: "bitget" },
+            {
+              channelId: input.channelId,
+              channelName: input.channelName,
+              event: "range_entry",
+              dryRun: resolved.dryRun === true,
+            }
+          );
+        }
+      );
+      if (gate.action === "waiting") {
+        log.info(
+          `Bitget 区间入场等待 card=#${input.cardId} ${autoTradeSym} ${gate.range ? `${gate.range.low}-${gate.range.high}` : ""} mark=${gate.mark ?? "n/a"}`
+        );
+        return { skipped: "range_waiting", range: gate.range, mark: gate.mark };
+      }
+      if (gate.action === "skipped") {
+        log.info(`Bitget 区间入场跳过 card=#${input.cardId} ${autoTradeSym} reason=${gate.reason}`);
+        return { skipped: gate.reason ?? "range_skipped" };
+      }
     }
 
     if (isStaged) {
@@ -1225,6 +1266,37 @@ export function createBitgetOrderService(store, log) {
       );
     }
     return result;
+  }
+
+  async function openPendingRangeEntry(item) {
+    return onSignalCardCreated({
+      cardId: Number(item.cardId),
+      channelId: String(item.channelId ?? ""),
+      channelName: String(item.channelName ?? ""),
+      parsed: item.parsed && typeof item.parsed === "object"
+        ? /** @type {Record<string, unknown>} */ (item.parsed)
+        : {},
+      executionJson: item.executionJson ?? null,
+      symbol: String(item.symbol ?? ""),
+      skipRangeEntry: true,
+    });
+  }
+
+  if (deps.rangeEntry && typeof deps.rangeEntry.registerExchange === "function") {
+    deps.rangeEntry.registerExchange("bitget", {
+      hasExposure: async (symbol, direction) => {
+        const creds = credentials();
+        if (!creds || !symbol) return false;
+        const client = createBitgetClient(creds);
+        return hasBitgetSymbolExposure(client, {
+          symbol,
+          productType: "USDT-FUTURES",
+          holdSide: isShortDirection(direction) ? "short" : "long",
+          marginCoin: "USDT",
+        });
+      },
+      openPending: openPendingRangeEntry,
+    });
   }
 
   return {

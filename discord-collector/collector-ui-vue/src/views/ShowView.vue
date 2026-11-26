@@ -55,12 +55,14 @@ import { resetAttachmentImgDeadCache } from "../lib/showAttachmentImages.js";
 import { fetchOiReportQueue } from "../lib/oiReportQueueApi.js";
 import MemberLockOverlay from "../components/MemberLockOverlay.vue";
 import { memberLockedChannelIds, useMembership } from "../composables/useMembership.js";
+import { useHideKolName } from "../composables/useHideKolName.js";
 
 defineOptions({ name: "ShowView" });
 
 const kolvipSig = useKolvipSig();
 const route = useRoute();
 const { isMember } = useMembership();
+const { hideKolControlVisible, hideKolName, namesHidden, toggleHideKol, maskKolChannelLabel } = useHideKolName();
 const router = useRouter();
 provide("kolvipSig", kolvipSig);
 
@@ -281,6 +283,21 @@ const kolvipDetailChannelLabel = computed(() => {
 /** @param {{ channelId: string, name: string }} ch */
 function displayChannelName(ch) {
   return channelDisplayName(ch, channelAliases);
+}
+
+/** 仅 /show/rank 榜单页截图时掩码左侧频道名 */
+const hideRankPageChannelNames = computed(() => namesHidden.value && showKolvipRankHome.value);
+
+/** @param {{ channelId: string, name: string }} ch */
+function visibleChannelName(ch) {
+  if (!hideRankPageChannelNames.value) return displayChannelName(ch);
+  return maskKolChannelLabel(displayChannelName(ch));
+}
+
+/** @param {{ channelId: string, name: string }} ch */
+function visibleChannelTitle(ch) {
+  if (!hideRankPageChannelNames.value) return channelAliasTitle(ch.channelId, ch.name);
+  return visibleChannelName(ch);
 }
 
 /** @param {string} channelId */
@@ -2349,8 +2366,8 @@ onUnmounted(() => {
               <span class="hash">#</span>
               <span
                 class="channel-name"
-                :title="channelAliasTitle(item.ch.channelId, item.ch.name)"
-              >{{ displayChannelName(item.ch) }}</span>
+                :title="visibleChannelTitle(item.ch)"
+              >{{ visibleChannelName(item.ch) }}</span>
               <span
                 v-if="isChannelMemberLocked(item.ch.channelId)"
                 class="channel-member-lock"
@@ -2474,6 +2491,16 @@ onUnmounted(() => {
         <template v-else>
           <span class="main-title">博主胜率</span>
           <span class="main-sub">kolvip 本地镜像 · 点左侧频道看消息流</span>
+          <button
+            v-if="hideKolControlVisible"
+            type="button"
+            class="kv-hide-kol-btn"
+            :class="{ on: hideKolName }"
+            :title="hideKolName ? '显示 KOL 频道名称' : '隐藏 KOL 频道名称，便于本地截图调试'"
+            @click="toggleHideKol"
+          >
+            {{ hideKolName ? "显示频道名称" : "隐藏频道名称" }}
+          </button>
         </template>
       </header>
 
@@ -2562,5 +2589,23 @@ a.main-sub {
 .kolvip-back-rank:hover {
   color: #fff;
   border-color: #5865f2;
+}
+
+.kv-hide-kol-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0.35rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid #404249;
+  background: #2b2d31;
+  color: #dbdee1;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.kv-hide-kol-btn.on {
+  border-color: #5865f2;
+  background: rgba(88, 101, 242, 0.18);
+  color: #aeb4ff;
 }
 </style>

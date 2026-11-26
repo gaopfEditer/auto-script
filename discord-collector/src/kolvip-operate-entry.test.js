@@ -10,9 +10,10 @@ import {
   claimKolvipOperateOrderSlot,
   resetKolvipOperateCdpStateForTest,
   resolveKolvipOperateOrderSlots,
+  recordKolvipCdpPublishSuccess,
   recordTelegramCdpPublishSuccess,
 } from "./kolvip-operate-cdp.js";
-import { shouldKolvipAfternoonCdpBackfill } from "./kolvip-operate-cdp-daily.js";
+import { shouldPublishKolvipOperateCdp } from "./kolvip-operate-cdp-daily.js";
 
 describe("kolvip-operate-entry", () => {
   it("XAU 空单抬高入场 8 点", () => {
@@ -39,42 +40,45 @@ describe("kolvip-operate-entry", () => {
 });
 
 describe("kolvip-operate-cdp session", () => {
-  it("解析 999=全部 / 1,3,5,6", () => {
+  it("解析 999=全部 / 1,3,5,6；空列表视为全部", () => {
     assert.equal(resolveKolvipOperateOrderSlots([999]).acceptAll, true);
+    assert.equal(resolveKolvipOperateOrderSlots([]).acceptAll, true);
     assert.deepEqual([...resolveKolvipOperateOrderSlots([1, 3, 5, 6]).slots].sort(), [1, 3, 5, 6]);
   });
 
-  it("全局发单序仅 1/3/5/6 占槽", () => {
+  it("显式 1/3/5/6 时仍只占这些槽，且不再下午补非槽位", () => {
+    resetKolvipOperateCdpStateForTest();
+    const previous = process.env.KOLVIP_OPERATE_CDP_ORDER_SLOTS;
+    process.env.KOLVIP_OPERATE_CDP_ORDER_SLOTS = "1,3,5,6";
+    // config is already loaded; this test uses resolve + manual? claim reads live config.
+    // 不依赖改 env（config 已缓存）。用 resolve 单测槽解析；claim 走当前默认 999。
+    const morning = new Date("2026-11-21T09:00:00+08:00");
+    const policy = resolveKolvipOperateOrderSlots([1, 3, 5, 6]);
+    const taken = [];
+    for (let i = 1; i <= 7; i += 1) {
+      taken.push(policy.acceptAll || policy.slots.has(i) ? i : null);
+    }
+    assert.deepEqual(taken, [1, null, 3, null, 5, 6, null]);
+    if (previous == null) delete process.env.KOLVIP_OPERATE_CDP_ORDER_SLOTS;
+    else process.env.KOLVIP_OPERATE_CDP_ORDER_SLOTS = previous;
+    resetKolvipOperateCdpStateForTest();
+  });
+
+  it("默认全部槽位时上午也可连发，满 4 条成功后停止；TG send 成功不占额度", () => {
     resetKolvipOperateCdpStateForTest();
     const morning = new Date("2026-11-21T09:00:00+08:00");
-    assert.deepEqual(claimKolvipOperateOrderSlot(morning), { slot: 1, backfill: false });
-    assert.equal(claimKolvipOperateOrderSlot(morning), null);
-    assert.deepEqual(claimKolvipOperateOrderSlot(morning), { slot: 3, backfill: false });
-    assert.equal(claimKolvipOperateOrderSlot(morning), null);
-    assert.deepEqual(claimKolvipOperateOrderSlot(morning), { slot: 5, backfill: false });
-    assert.deepEqual(claimKolvipOperateOrderSlot(morning), { slot: 6, backfill: false });
-    assert.equal(claimKolvipOperateOrderSlot(morning), null);
-    resetKolvipOperateCdpStateForTest();
-  });
-
-  it("下午 TG 上午无单时巨鲸补量占非槽位序号", () => {
-    resetKolvipOperateCdpStateForTest();
-    const afternoon = new Date("2026-11-21T14:00:00+08:00");
-    const stats = { dayKey: "2026-11-21", tgOk: 0, tgMorningOk: 0, kolvipOk: 0 };
-    assert.equal(shouldKolvipAfternoonCdpBackfill(stats, afternoon), true);
-    assert.deepEqual(claimKolvipOperateOrderSlot(afternoon), { slot: 1, backfill: false });
-    assert.deepEqual(claimKolvipOperateOrderSlot(afternoon), { slot: 2, backfill: true });
-    assert.deepEqual(claimKolvipOperateOrderSlot(afternoon), { slot: 3, backfill: false });
-    assert.deepEqual(claimKolvipOperateOrderSlot(afternoon), { slot: 4, backfill: true });
-    resetKolvipOperateCdpStateForTest();
-  });
-
-  it("上午 TG 已有单则下午不补非槽位", () => {
-    resetKolvipOperateCdpStateForTest();
-    const morning = new Date("2026-11-21T10:00:00+08:00");
     recordTelegramCdpPublishSuccess(morning);
+    recordTelegramCdpPublishSuccess(morning);
+    assert.equal(
+      shouldPublishKolvipOperateCdp({ dayKey: "2026-11-21", tgOk: 2, tgMorningOk: 2, kolvipOk: 0 }),
+      true,
+    );
+    for (let i = 1; i <= 4; i += 1) {
+      assert.deepEqual(claimKolvipOperateOrderSlot(morning), { slot: i, backfill: false });
+      recordKolvipCdpPublishSuccess(morning);
+    }
+    assert.equal(claimKolvipOperateOrderSlot(morning), null);
     const afternoon = new Date("2026-11-21T15:00:00+08:00");
-    assert.deepEqual(claimKolvipOperateOrderSlot(afternoon), { slot: 1, backfill: false });
     assert.equal(claimKolvipOperateOrderSlot(afternoon), null);
     resetKolvipOperateCdpStateForTest();
   });

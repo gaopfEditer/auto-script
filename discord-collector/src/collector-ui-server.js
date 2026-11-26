@@ -66,6 +66,7 @@ import { createCardPriceMonitor } from "./card-price-monitor.js";
 import { createCardExternalSink } from "./card-external-sink.js";
 import { createBitgetOrderService } from "./bitget-order-service.js";
 import { createWeexOrderService } from "./weex-order-service.js";
+import { createRangeEntryService } from "./range-entry-service.js";
 import { createBitgetManualService } from "./bitget-manual-service.js";
 import { registerBitgetRoutes } from "./bitget-api-routes.js";
 import { registerWeexRoutes } from "./weex-api-routes.js";
@@ -239,8 +240,12 @@ async function main() {
     cdpNotifyConnect: config.cdpTelegramNotifyConnect,
     cdpDisconnectNotifyAfterMs: config.cdpTelegramDisconnectAfterMs,
   });
-  const bitgetOrder = createBitgetOrderService(store, createLogger("bitget"));
-  const weexOrder = createWeexOrderService(store, createLogger("weex"));
+  const rangeEntry = createRangeEntryService({
+    log: createLogger("range-entry"),
+    intervalMs: 3000,
+  });
+  const bitgetOrder = createBitgetOrderService(store, createLogger("bitget"), { rangeEntry });
+  const weexOrder = createWeexOrderService(store, createLogger("weex"), { rangeEntry });
   const bitgetManual = createBitgetManualService(createLogger("bitget-manual"));
   if (config.bitgetEnabled) {
     const bgProxy = getBitgetProxyInUse();
@@ -1706,6 +1711,7 @@ async function main() {
     log.info(`退出 (${reason})`);
     channelRotate?.stop();
     channelRotate = null;
+    rangeEntry.stop();
     cardPriceMonitor.stop();
     twitterCdp.stop();
     kolvipCdp.stop();
@@ -1766,6 +1772,7 @@ async function main() {
     );
   } else {
     cardPriceMonitor.start();
+    rangeEntry.start();
     if (store.migrateCoinActionPasteCards) {
       void store
         .migrateCoinActionPasteCards(COIN_ACTION_SIGNAL_CHANNEL_ID)
