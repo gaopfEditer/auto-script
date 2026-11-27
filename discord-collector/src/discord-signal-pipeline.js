@@ -11,6 +11,7 @@ import {
   isKolvipIngestSource,
   upgradeKolvipSignalCardSourceFromRow,
 } from "./discord-signal-card-source.js";
+import { buildPangmaoPriorityDisplayCard } from "./discord-signal-parsers.js";
 import {
   buildPangmaoPriorityEnqueueBody,
   enqueuePriorityCard,
@@ -237,9 +238,19 @@ export async function runSignalCardPipelineForRows(rows, deps) {
       await signalCards.dedup.remember(cid, content);
     }
 
+    const parserKind = getSignalChannelConfig(cid)?.parser;
+    let priorityCard = cardResult?.card ?? null;
+    // 有交易意图但建卡失败（解析返回 null）时仍推展示卡。单图 OCR 的门槛跳过不走这里。
+    if (!priorityCard && parserKind === "pangmao" && skipped === "parse_failed" && !ocrPreParsed) {
+      priorityCard = buildPangmaoPriorityDisplayCard(content, {
+        messageId: String(r.messageId ?? r.message_id ?? ""),
+        channelId: cid,
+      });
+    }
+
     const enqueueBody = buildPangmaoPriorityEnqueueBody({
-      parser: getSignalChannelConfig(cid)?.parser,
-      card: cardResult?.card,
+      parser: parserKind,
+      card: priorityCard,
       skipped,
       via: ocrPreParsed?.ocrPoster ? "ocr" : "text",
       yieldPct: ocrPreParsed?.profitRatePct,

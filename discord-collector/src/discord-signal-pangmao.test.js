@@ -1,8 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parsePangmao, parseSignalText, formatCardFallback } from "./discord-signal-parsers.js";
+import {
+  parsePangmao,
+  parseSignalText,
+  formatCardFallback,
+  isPangmaoDisplayOnly,
+  buildPangmaoPriorityDisplayCard,
+} from "./discord-signal-parsers.js";
 import { DEFAULT_SIGNAL_CHANNELS, isSignalChannel, getSignalChannelConfig } from "./discord-signal-config.js";
 import { isStagedTradeChannel, STAGED_TRADE_PARSERS } from "./discord-signal-staged-trade.js";
+import { runSignalCardPipelineForRows } from "./discord-signal-pipeline.js";
 
 const PANGMAO_ID = "1562351038277619783";
 
@@ -78,6 +85,10 @@ describe("胖猫社区 parser + 频道配置", () => {
   const oral = [
     ["init给我多进去，速度，拉盘了牛来了", "INIT", "做多"],
     ["ake轻仓空进去", "AKE", "做空"],
+    ["bless空进去", "BLESS", "做空"],
+    ["btw做空", "BTW", "做空"],
+    ["btw开空", "BTW", "做空"],
+    ["fhe开多", "FHE", "做多"],
     ["tac多进去，止损放在0.01263", "TAC", "做多"],
     ["蚂蚁仓空evaa", "EVAA", "做空"],
     ["1837接个空", "ETH", "做空"],
@@ -109,6 +120,131 @@ describe("胖猫社区 parser + 频道配置", () => {
     const r = parseSignalText("magma做空", "pangmao");
     assert.ok(r);
     assert.equal(r.symbol, "MAGMA");
+  });
+
+  const TEXT_22923 =
+    "btw小心了，这个币等会可以反抽做空，基本上算是一个纯纯的垃圾币，向下的空间巨大";
+
+  it("btw做空 仍是 BTW 做空", () => {
+    const r = parsePangmao("btw做空");
+    assert.ok(r);
+    assert.equal(r.symbol, "BTW");
+    assert.equal(r.direction, "做空");
+    assert.equal(r.signalPhase, "open");
+    assert.equal(isPangmaoDisplayOnly(r), false);
+    assert.equal(r.orderMode, "market");
+  });
+
+  it("kolvip-16-22923 口语中间隔着币种和反抽做空", () => {
+    const r = parsePangmao(TEXT_22923);
+    assert.ok(r);
+    assert.equal(r.symbol, "BTW");
+    assert.equal(r.direction, "做空");
+    assert.equal(r.signalPhase, "open");
+    assert.equal(isPangmaoDisplayOnly(r), false);
+  });
+
+  it("开多/开空 与止损可以离币种更远", () => {
+    const fhe = parsePangmao("fhe可以开多试试现在，止损放进一点");
+    assert.ok(fhe);
+    assert.equal(fhe.symbol, "FHE");
+    assert.equal(fhe.direction, "做多");
+    assert.match(String(fhe.note), /止损放进/);
+
+    const mmt = parsePangmao("mmt关注一下，可以考虑做多，止损放在 0.12");
+    assert.ok(mmt);
+    assert.equal(mmt.symbol, "MMT");
+    assert.equal(mmt.direction, "做多");
+    assert.equal(mmt.stopLoss, "0.12");
+    assert.equal(isPangmaoDisplayOnly(mmt), false);
+  });
+
+  it("the/this/can 不当币种；纯聊天和返佣不成交卡片", () => {
+    for (const text of ["can做空", "the做空", "this可以开多"]) {
+      const r = parsePangmao(text);
+      assert.equal(isPangmaoDisplayOnly(r), true, text);
+      assert.equal(r.symbol, "");
+      assert.notEqual(r.orderMode, "market");
+    }
+    assert.equal(parsePangmao("the btw做空")?.symbol, "BTW");
+    assert.equal(parsePangmao("今天吃肉了"), null);
+    assert.equal(parsePangmao("哈哈今天天气不错"), null);
+    assert.equal(parsePangmao("返佣邀请码在这，开多这个平台"), null);
+    assert.equal(parsePangmao("千万不要学做空"), null);
+    const two = parsePangmao("关注 fhe 和 mmt，可以做多");
+    assert.equal(isPangmaoDisplayOnly(two), true);
+    assert.equal(two.symbol, "");
+  });
+
+  it("有交易意图但没有币种：展示卡，不编造 symbol", () => {
+    const text = "这个币等会可以反抽做空";
+    const r = parsePangmao(text);
+    assert.ok(r);
+    assert.equal(r.symbol, "");
+    assert.equal(r.direction, "做空");
+    assert.equal(r.signalPhase, "incomplete");
+    assert.equal(r.displayOnly, true);
+    assert.equal(r.orderMode, undefined);
+    const display = buildPangmaoPriorityDisplayCard(text, {
+      messageId: "kolvip-16-no-ticker",
+      channelId: PANGMAO_ID,
+    });
+    assert.equal(display?.signalPhase, "incomplete");
+    assert.equal(display?.symbol, "");
+    assert.equal(buildPangmaoPriorityDisplayCard("btw做空"), null);
+    assert.equal(buildPangmaoPriorityDisplayCard("今天天气不错"), null);
+  });
+
+  it("无币种的交易意图仍入优先队列，闲聊和返佣不入队", async () => {
+    const log = { info() {}, warn() {}, debug() {} };
+    /**
+     * @param {string} content
+     * @param {{ skipped?: string, card?: Record<string, unknown> }} [result]
+     */
+    async function enqueueOf(content, result = { skipped: "parse_failed" }) {
+      /** @type {unknown[]} */
+      const enqueued = [];
+      await runSignalCardPipelineForRows(
+        [
+          {
+            messageId: "pm-q",
+            channelId: PANGMAO_ID,
+            content,
+            source: "kolvip_api",
+            rawJson: { content, attachments: [] },
+          },
+        ],
+        {
+          signalCards: {
+            ensureHydrated: async () => {},
+            dedup: { isDuplicate: () => false, remember: async () => {} },
+            onMessage: async () => result,
+          },
+          store: {},
+          log,
+          respectKolvipBypass: false,
+          enqueuePriority: async (body) => {
+            enqueued.push(body);
+            return { ok: true };
+          },
+        },
+      );
+      return enqueued;
+    }
+
+    const trade = await enqueueOf("这个币等会可以反抽做空");
+    assert.equal(trade.length, 1);
+    assert.equal(trade[0].source, "pangmao");
+    assert.equal(trade[0].meta.via, "text");
+    assert.equal(trade[0].card.symbol, "");
+    assert.equal(trade[0].card.direction, "做空");
+    assert.equal(trade[0].card.signalPhase, "incomplete");
+    assert.equal(trade[0].card.displayOnly, true);
+    assert.equal(trade[0].card.orderMode, undefined);
+
+    assert.equal((await enqueueOf("今天天气不错啊")).length, 0);
+    assert.equal((await enqueueOf("返佣邀请码注册链接，开多")).length, 0);
+    assert.equal((await enqueueOf("千万不要学做空")).length, 0);
   });
 
   it("formatCardFallback 胖猫用可读卡片而非 JSON", () => {
