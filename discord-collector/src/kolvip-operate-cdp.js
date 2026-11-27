@@ -12,6 +12,7 @@ import { config } from "./config.js";
 import { formatSendCdpLog } from "./signal-pipeline-log.js";
 import { appendKolvipPipelineAudit, auditCardId } from "./kolvip-pipeline-audit-log.js";
 import { buildKolvipOperateEntryNarrative } from "./kolvip-operate-entry.js";
+import { cardChannelName, isoCardOpenedAt } from "./cdp-signal-fields.js";
 import {
   ensureDailyCdpStatsDay,
   kolvipOperateCalendarDayKey,
@@ -328,6 +329,8 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
   const base = String(config.tradeSignalAiPublishUrl || "http://127.0.0.1:8787").replace(/\/$/, "");
   const url = `${base}/api/v1/trade-signal/publish`;
   /** @type {Record<string, unknown>} */
+  const channelName = cardChannelName(card);
+  const cardOpenedAt = isoCardOpenedAt(card);
   const body = {
     symbol,
     direction,
@@ -340,6 +343,9 @@ export function notifyKolvipOperateCdpPublish(card, opts = {}) {
     note: `kolvip-operate 发单序=${slot} 日计=${getDailyCdpPublishStats().kolvipOk}/${kolvipOperateCdpDailyQuota()}`,
     cardId: card?.id ?? null,
     channelId,
+    channel: channelName,
+    channelName,
+    cardOpenedAt,
     async: true,
   };
   if (Array.isArray(config.tradeSignalAiPublishPlatforms) && config.tradeSignalAiPublishPlatforms.length) {

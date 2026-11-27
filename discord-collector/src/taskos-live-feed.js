@@ -375,6 +375,20 @@ export function mapRangePendingItem(item) {
   );
 }
 
+/** Colon-free job segment for `cdp:<event>:<jobId>:<tail>` (desktop parseCdpItemId). */
+export function cdpQueueJobId(row = {}) {
+  const raw = firstText(row.job_id, row.jobId, row.content_ref, row.contentRef);
+  if (raw) return raw.replaceAll(":", "-");
+  const at = isoOf(row.ts, row.at, row.time);
+  return at ? at.replaceAll(":", "-") : "";
+}
+
+function nestedSignal(row) {
+  return row && row.signal && typeof row.signal === "object" && !Array.isArray(row.signal)
+    ? row.signal
+    : {};
+}
+
 export function mapPublishLogRow(row) {
   if (!row || typeof row !== "object") return null;
   const ev = firstText(row.event);
@@ -387,16 +401,50 @@ export function mapPublishLogRow(row) {
       ? (row.aborted ? "aborted" : "fail")
       : "fail";
   const message = firstText(row.message);
-  const job = firstText(row.job_id, row.content_ref, at);
+  const job = cdpQueueJobId(row);
+  const sig = nestedSignal(row);
+  const channel = firstText(row.channel, row.channelName, row.channel_name, sig.channel, sig.channelName);
+  const symbol = firstText(row.symbol, sig.symbol);
+  const direction = firstText(row.direction, sig.direction);
+  const cardOpenedAt = firstText(
+    row.cardOpenedAt,
+    row.card_opened_at,
+    row.openedAt,
+    row.signalAt,
+    sig.cardOpenedAt,
+    sig.openedAt,
+    sig.signalAt,
+  );
+  const cardId = firstText(row.cardId, row.card_id, sig.cardId, sig.card_id);
+  const successRaw = row.successCount != null ? row.successCount : row.success_count;
+  const totalRaw = row.total != null ? row.total : row.totalCount;
   const title = platform ? `${platform} ${result === "ok" ? "成功" : "失败"}` : (ev === "run_end" ? "发布结束" : ev);
-  const text = message || [ev, platform, result, row.success_count != null ? `${row.success_count}/${row.total ?? "?"}` : ""]
+  const text = message || [ev, platform, result, successRaw != null ? `${successRaw}/${totalRaw ?? "?"}` : ""]
     .filter(Boolean).join(" · ");
+  const card = { title, text, status: result, platform, reason: firstText(row.failure_category, row.step) };
+  if (channel) card.channel = channel;
+  if (symbol) card.symbol = symbol;
+  if (direction) card.direction = direction;
+  if (cardOpenedAt) card.cardOpenedAt = cardOpenedAt;
+  if (cardId) card.cardId = cardId;
+  const meta = { kind: "cdp", via: "cdp", event: ev, result, platform, jobId: job };
+  if (channel) meta.channel = channel;
+  if (symbol) meta.symbol = symbol;
+  if (direction) meta.direction = direction;
+  if (cardOpenedAt) meta.cardOpenedAt = cardOpenedAt;
+  if (cardId) meta.cardId = cardId;
+  if (successRaw != null && successRaw !== "" && Number.isFinite(Number(successRaw))) {
+    meta.successCount = Number(successRaw);
+  }
+  if (totalRaw != null && totalRaw !== "" && Number.isFinite(Number(totalRaw))) {
+    meta.total = Number(totalRaw);
+  }
   return priorityCard(
     `cdp:${ev}:${job}:${firstText(row.platform, "all")}`,
     AUTOSCRIPT_CDP_SOURCE.id,
     at,
-    { title, text, status: result, platform, reason: firstText(row.failure_category, row.step) },
-    { kind: "cdp", via: "cdp", event: ev, result, platform, jobId: job },
+    card,
+    meta,
   );
 }
 

@@ -22,6 +22,7 @@ import {
   stripCdpPlatformHeader,
 } from "./telegram-content-sanitize.js";
 import { recordTelegramCdpPublishSuccess } from "./kolvip-operate-cdp.js";
+import { cardChannelName, isoCardOpenedAt } from "./cdp-signal-fields.js";
 
 export { stripCdpPlatformHeader } from "./telegram-content-sanitize.js";
 
@@ -152,6 +153,7 @@ function skipCdp(card, opts, reason) {
  * @param {{ event?: string, log?: { info: Function, warn: Function, debug?: Function }, narrativeOverride?: string, ingestSourceRef?: string }} [opts]
  * @returns {boolean} 是否已发起请求
  */
+
 export function notifyTradeSignalAiPublish(card, opts = {}) {
   const channelId = String(card?.channelId ?? "").trim();
   const inSendWhitelist = isCdpSendChannel(channelId);
@@ -252,6 +254,8 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
   const base = String(config.tradeSignalAiPublishUrl || "http://127.0.0.1:8787").replace(/\/$/, "");
   const url = `${base}/api/v1/trade-signal/publish`;
   /** @type {Record<string, unknown>} */
+  const channelName = cardChannelName(card);
+  const cardOpenedAt = isoCardOpenedAt(card);
   const body = {
     symbol,
     direction,
@@ -264,6 +268,9 @@ export function notifyTradeSignalAiPublish(card, opts = {}) {
     note,
     cardId: card?.id ?? null,
     channelId,
+    channel: channelName,
+    channelName,
+    cardOpenedAt,
     async: true,
   };
   if (Array.isArray(config.tradeSignalAiPublishPlatforms) && config.tradeSignalAiPublishPlatforms.length) {

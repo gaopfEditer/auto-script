@@ -15,6 +15,7 @@ import {
   mapCollectUiMessage,
   mapPipelineAuditRow,
   mapPublishLogRow,
+  cdpQueueJobId,
   mapRangePendingItem,
   mapTradeAuditRow,
   matchKolvipAutotradeChannel,
@@ -188,6 +189,55 @@ test("CDP publish logs keep results and drop connect_ok noise", () => {
   assert.equal(fail.source, AUTOSCRIPT_CDP_SOURCE.id);
   assert.equal(fail.card.status, "fail");
   assert.equal(fail.card.platform, "X / Twitter");
+  assert.equal(fail.id, "cdp:platform_fail:abc:x");
+});
+
+test("run_end maps flat signal meta and sanitizes colon in content_ref job id", () => {
+  const withJob = mapPublishLogRow({
+    event: "run_end",
+    job_id: "791282228fe147959a99977a4d0f65bc",
+    content_ref: "body:d696ec2d9de5",
+    success_count: 2,
+    total: 4,
+    message: "发布结束 成功 2/4",
+    ts: "2026-11-27T10:57:19+08:00",
+    channel: "FX-黄金信号",
+    symbol: "XAU",
+    direction: "做空",
+    cardOpenedAt: "2026-11-27T02:50:00+08:00",
+    cardId: "3148",
+  });
+  assert.equal(withJob.id, "cdp:run_end:791282228fe147959a99977a4d0f65bc:all");
+  assert.equal(withJob.source, AUTOSCRIPT_CDP_SOURCE.id);
+  assert.equal(withJob.meta.event, "run_end");
+  assert.equal(withJob.meta.channel, "FX-黄金信号");
+  assert.equal(withJob.meta.symbol, "XAU");
+  assert.equal(withJob.meta.direction, "做空");
+  assert.equal(withJob.meta.cardOpenedAt, "2026-11-27T02:50:00+08:00");
+  assert.equal(withJob.meta.cardId, "3148");
+  assert.equal(withJob.meta.successCount, 2);
+  assert.equal(withJob.meta.total, 4);
+  assert.equal(withJob.card.channel, "FX-黄金信号");
+  assert.equal(withJob.card.symbol, "XAU");
+  assert.equal(withJob.card.direction, "做空");
+  assert.equal(withJob.card.cardId, "3148");
+  assert.equal(withJob.meta.jobId, "791282228fe147959a99977a4d0f65bc");
+
+  const noJob = mapPublishLogRow({
+    event: "run_end",
+    content_ref: "body:3913295ed88c",
+    success_count: 2,
+    total: 4,
+    message: "发布结束 成功 2/4",
+    ts: "2026-11-27T11:50:52+08:00",
+  });
+  assert.equal(cdpQueueJobId({ content_ref: "body:3913295ed88c" }), "body-3913295ed88c");
+  assert.equal(noJob.id, "cdp:run_end:body-3913295ed88c:all");
+  assert.equal(noJob.meta.jobId, "body-3913295ed88c");
+  assert.equal(noJob.meta.successCount, 2);
+  assert.equal(noJob.meta.total, 4);
+  assert.equal(noJob.meta.channel, undefined);
+  assert.equal(noJob.meta.cardId, undefined);
 });
 
 test("collect UI card/message mapping stays on whitelist for channel rows", () => {
