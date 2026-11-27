@@ -75,6 +75,7 @@ import {
 } from "./discord-signal-image-ocr.js";
 import { mysqlDatetimeToArchiveIso } from "./card-archive-mysql-time.js";
 import { notifyKolvipOperateCdpPublish } from "./kolvip-operate-cdp.js";
+import { notifyPlazaBotSignalCard } from "./plaza-bot-webhook.js";
 import { appendKolvipPipelineAudit, auditCardId } from "./kolvip-pipeline-audit-log.js";
 
 /** @param {Record<string, unknown>} row */
@@ -1282,6 +1283,14 @@ export function createDiscordSignalCardService(store, log, broadcast, deps = {})
     const clientCard = signalCardToClient(cardRow);
     broadcast?.("meta", { kind: "signal_card_created", card: clientCard });
     log.info(`信号卡片 #${cardId} channel=${channelId} styles=${Object.keys(cardsByStyle).join(",")}`);
+
+    void notifyPlazaBotSignalCard(clientCard, {
+      channelName: chCfg.name,
+      source: String(row.source ?? ""),
+      log,
+    }).catch((e) => {
+      log.warn(`[plaza-bot-webhook] ${/** @type {Error} */ (e).message}`);
+    });
 
     if (isAutoTradeChannel(channelId) || bitgetResult || weexResult) {
       const summarize = (r, platform) => {

@@ -9,6 +9,7 @@ import { config } from "./config.js";
 import { resolveCardSourcePostUrl } from "./card-source-post-url.js";
 import {
   formatTodayPnlPublishText,
+  formatPlazaEveningPnlText,
   postTodayPnlToOperatePublish,
 } from "./today-autotrade-pnl-publish.js";
 import { executionFromParsed, normalizeExecution } from "./discord-signal-execution.js";
@@ -18,6 +19,7 @@ import {
   resolveCardAlignedDisplayOutcome,
   resolveCardAlignedDisplayPnl,
   resolveTodayPnlEntryDisplay,
+  resolveTodayPnlMarkContext,
   sanitizeDisplayTpsl,
   TODAY_PNL_SIGNAL_DEDUPE_MS,
 } from "./today-autotrade-pnl-display.js";
@@ -208,6 +210,10 @@ export function attachSignalPlanFields(card, trade) {
   trade.entryPriceDisplay = entry.entryPriceDisplay;
   if ("rawPnlPct" in trade) delete trade.rawPnlPct;
   if ("slPrice" in trade) delete trade.slPrice;
+  const { execution, isShort, leverage } = resolveTodayPnlMarkContext(card);
+  const dir = String(execution?.direction ?? "").trim();
+  trade.direction = dir || (isShort ? "做空" : "做多");
+  if (Number.isFinite(leverage) && leverage > 0) trade.leverage = leverage;
   return trade;
 }
 
@@ -454,12 +460,27 @@ export function registerTodayAutotradePnlRoutes(app, { store }) {
         return;
       }
       const sumPnlUsdt = Number(body.sumPnlUsdt);
-      const text = formatTodayPnlPublishText({
-        dayLabel: body.dayLabel,
-        sumPnlUsdt: Number.isFinite(sumPnlUsdt) ? sumPnlUsdt : undefined,
-        tradeCount: rows.length,
-        rows,
-      });
+      const plazaStyle =
+        body.style === "plaza" ||
+        String(body.format ?? "").toLowerCase() === "plaza";
+      const text = plazaStyle
+        ? formatPlazaEveningPnlText({
+            rows,
+            moodLine: body.moodLine,
+            highlight: body.highlight !== false,
+            maxRows: body.maxRows,
+            minPnlPct: body.minPnlPct,
+            internalOrder:
+              body.internalOrder && typeof body.internalOrder === "object"
+                ? body.internalOrder
+                : undefined,
+          })
+        : formatTodayPnlPublishText({
+            dayLabel: body.dayLabel,
+            sumPnlUsdt: Number.isFinite(sumPnlUsdt) ? sumPnlUsdt : undefined,
+            tradeCount: rows.length,
+            rows,
+          });
       const title = String(body.title ?? "").trim() || `今日跟单结算 · ${String(body.dayLabel ?? "").trim() || "今日"}`;
       const platforms = Array.isArray(body.platforms)
         ? body.platforms.map((x) => String(x ?? "").trim()).filter(Boolean)

@@ -51,6 +51,7 @@ import {
   shouldSkipTelegramCardPushDuplicate,
 } from "./telegram-card-push-dedup.js";
 import { isCdpSendChannel } from "./telegram-channel-profiles.js";
+import { notifyPlazaBotSignalCard } from "./plaza-bot-webhook.js";
 import { sanitizeTelegramPushText } from "./telegram-content-sanitize.js";
 import { preferSingleLanguageSignalText } from "./message-text-format.js";
 import { recordTelegramCardAlertStats } from "./telegram-card-alert-stats.js";
@@ -1285,6 +1286,14 @@ export function createCardArchiveService(store, log, broadcast, deps = {}) {
       ingestSourceRef: ingestRef,
     });
     maybeRecordTelegramCardAlertStats(clientCard);
+
+    void notifyPlazaBotSignalCard(clientCard, {
+      channelName: String(clientCard.channelName ?? input.channelName ?? ""),
+      source: String(clientCard.source ?? input.source ?? ""),
+      log,
+    }).catch((e) => {
+      log.warn(`[plaza-bot-webhook] ${/** @type {Error} */ (e).message}`);
+    });
 
     /** @type {Awaited<ReturnType<typeof publishCardToChannelFeed>> | null} */
     let channelMessage = null;

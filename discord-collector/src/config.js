@@ -693,6 +693,10 @@ export const config = {
   webhookForwardsFile: (process.env.DISCORD_WEBHOOK_FORWARDS_FILE ?? "").trim()
     ? path.resolve(process.env.DISCORD_WEBHOOK_FORWARDS_FILE.trim())
     : path.join(_collectorRoot, "config", "channel-webhook-forwards.json"),
+  /** OpenMausBot 广场筛选 webhook（见 config/plaza-bot-webhook.json） */
+  plazaBotWebhookFile: (process.env.PLAZA_BOT_WEBHOOK_FILE ?? "").trim()
+    ? path.resolve(process.env.PLAZA_BOT_WEBHOOK_FILE.trim())
+    : path.join(_collectorRoot, "config", "plaza-bot-webhook.json"),
   webhookForwardTimeoutMs: Number(process.env.DISCORD_WEBHOOK_FORWARD_TIMEOUT_MS ?? 15_000),
   /** Node 发 Discord Webhook 用的 HTTP(S) 代理，需与 Chrome 一致，如 http://127.0.0.1:7890 */
   webhookForwardProxy: envProxy("DISCORD_WEBHOOK_PROXY", "COMMON_PROXY", "HTTPS_PROXY", "HTTP_PROXY"),

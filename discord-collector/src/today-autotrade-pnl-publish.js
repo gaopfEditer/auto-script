@@ -24,6 +24,174 @@ function fmtPctLine(v) {
 }
 
 /**
+ * @param {unknown} iso
+ * @returns {string} Asia/Shanghai HH:mm
+ */
+function fmtSignalTimeShanghai(iso) {
+  const s = String(iso ?? "").trim();
+  if (!s) return "";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
+/** @param {Record<string, unknown>} row */
+function fmtRowLeverage(row) {
+  const raw = row.leverage ?? row.leverageX ?? row.leverageLabel;
+  if (raw == null || raw === "") return "";
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0) return `${n}倍`;
+  const s = String(raw).trim();
+  if (!s) return "";
+  if (/倍|x/i.test(s)) return s;
+  return `${s}倍`;
+}
+
+/** 内部发车尾注：固定池 + 种子，避免天天同一句。 */
+const PLAZA_INTERNAL_QUIPS = [
+  "仓位不大，图个参与感。",
+  "懒得死磕，错了就认。",
+  "顺势试一把，别上头。",
+  "挂单睡觉，醒来看戏。",
+  "赚丑钱不丢人，亏认栽也算数。",
+  "深夜别梭，留点子弹。",
+  "小利叠加，比赌一把稳。",
+  "盘面抽动快，止损别装死。",
+  "不熟的不碰，熟人单也看价。",
+  "今日份发车，明日再说。",
+];
+
+/**
+ * @param {string} [seed]
+ * @param {string} [override]
+ */
+export function pickPlazaInternalQuip(seed, override) {
+  const custom = String(override ?? "").trim();
+  if (custom) return custom;
+  const s = String(seed ?? Date.now());
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return PLAZA_INTERNAL_QUIPS[Math.abs(h) % PLAZA_INTERNAL_QUIPS.length];
+}
+
+/**
+ * 晚间晒单：优先展示盈利较好的单子（默认 ≥8%，最多 4 笔，按收益率降序）。
+ *
+ * @param {Array<Record<string, unknown>>} rows
+ * @param {{ maxRows?: number, minPnlPct?: number }} [opts]
+ */
+export function pickPlazaEveningHighlightRows(rows, opts = {}) {
+  const maxRows = Math.max(1, Number(opts.maxRows ?? 4));
+  const minPnlPct = Number(opts.minPnlPct ?? 8);
+  const profitable = rows.filter((r) => Number(r.pnlPct) > 0);
+  profitable.sort((a, b) => Number(b.pnlPct) - Number(a.pnlPct));
+  const strong = profitable.filter((r) => Number(r.pnlPct) >= minPnlPct);
+  const picked = (strong.length ? strong : profitable).slice(0, maxRows);
+  return picked;
+}
+
+/**
+ * 内部发车：挑一笔盈利大的单子，行文与「今日发车」各行一致（不是四行开仓）。
+ * 默认取收益率第 2 名（与头条错开仍是大赚单）；仅 1 笔盈利则用第 1 名。
+ *
+ * @param {Array<Record<string, unknown>>} allRows
+ * @param {Array<Record<string, unknown>>} [_mainRows]
+ */
+export function pickPlazaInternalHighlightRow(allRows, _mainRows = []) {
+  const profitable = allRows.filter((r) => Number(r.pnlPct) > 0);
+  profitable.sort((a, b) => Number(b.pnlPct) - Number(a.pnlPct));
+  if (!profitable.length) return null;
+  return profitable.length >= 2 ? profitable[1] : profitable[0];
+}
+
+/** @param {Record<string, unknown>} r */
+function formatPlazaProfitLine(r) {
+  const sym = String(r.symbol ?? "")
+    .trim()
+    .replace(/USDT$/i, "");
+  const coin = sym.startsWith("#") ? sym : sym ? `#${sym}` : "#—";
+  const dir = String(r.direction ?? "").trim() || "—";
+  const lev = fmtRowLeverage(r);
+  const levPart = lev ? ` ${lev}` : "";
+  const pct = fmtPctLine(r.pnlPct);
+  const t = fmtSignalTimeShanghai(r.signalAt ?? r.orderAt);
+  const timePart = t ? ` · 发单 ${t}` : "";
+  return `${coin} ${dir}${levPart} ${pct}${timePart}`;
+}
+
+/**
+ * @param {Record<string, unknown>} order
+ * @param {Record<string, unknown> | null} autoRow
+ */
+function formatPlazaInternalDepartBlock(order, autoRow) {
+  const preset = String(order?.text ?? "").trim();
+  if (preset) return preset;
+  const hasManual =
+    order &&
+    typeof order === "object" &&
+    (order.symbol != null || order.pnlPct != null) &&
+  Number(order.pnlPct) > 0;
+  const row = hasManual ? order : autoRow;
+  if (!row || Number(row.pnlPct) <= 0) return "";
+  /** @type {string[]} */
+  const lines = ["内部发车", formatPlazaProfitLine(row)];
+  const customComments = Array.isArray(order?.comments)
+    ? order.comments.map((x) => String(x ?? "").trim()).filter(Boolean)
+    : [];
+  const oneComment = String(order?.comment ?? "").trim();
+  const quip =
+    customComments.length > 0
+      ? customComments.join("\n")
+      : pickPlazaInternalQuip(
+          String(order?.commentSeed ?? row.symbol ?? ""),
+          oneComment || undefined,
+        );
+  if (quip) {
+    lines.push("", quip);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * 广场晚间晒单：不带来源；只列当日盈利（默认 ≥8% 取前若干笔）。
+ *
+ * @param {{
+ *   rows?: Array<Record<string, unknown>>,
+ *   moodLine?: string,
+ *   highlight?: boolean,
+ *   maxRows?: number,
+ *   minPnlPct?: number,
+ *   internalOrder?: Record<string, unknown>,
+ * }} input
+ */
+export function formatPlazaEveningPnlText(input) {
+  const allRows = Array.isArray(input?.rows) ? input.rows : [];
+  const highlight = input?.highlight !== false;
+  const rows = highlight
+    ? pickPlazaEveningHighlightRows(allRows, {
+        maxRows: input?.maxRows,
+        minPnlPct: input?.minPnlPct,
+      })
+    : allRows;
+  const head =
+    rows.length > 1 ? `今日盈利 ${rows.length} 笔` : rows.length === 1 ? "今日盈利 1 笔" : "今日盈利";
+  const lines = [head];
+  for (const r of rows) {
+    lines.push(formatPlazaProfitLine(r));
+  }
+  const mood = String(input?.moodLine ?? "").trim();
+  if (mood) {
+    lines.push("", mood);
+  }
+  return lines.join("\n").trim();
+}
+
+/**
  * @param {{
  *   dayLabel?: string,
  *   sumPnlUsdt?: number,

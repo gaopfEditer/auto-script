@@ -13,3 +13,6 @@ oi_mornitor/__pycache__/
 oi_mornitor/**/__pycache__/
 oi_mornitor/data/
 oi_mornitor/frontend/node_modules/
+
+# OpenMausBot plaza webhook secret
+config/plaza-bot-webhook.json
